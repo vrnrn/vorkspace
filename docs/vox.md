@@ -262,9 +262,8 @@ Clippy. These are historical conversation/memory results. Current title-bar
 validation passed 133 focused tests, TypeScript, 24 Chromium/WebKit checks and
 two long-reply rechecks. Native same-window start/end and the silent switch were
 verified. An isolated synthetic-speech probe observed silent startup without
-app actions and reply activity returning to listening. Current screenshots and
-detailed results are recorded in `design-qa.md`. The MR checkpoint also passed
-the full web suite (5,313 tests, 13 skipped), native formatting and Clippy, and
+app actions and reply activity returning to listening. The MR checkpoint also
+passed the full web suite (5,313 tests, 13 skipped), native formatting and Clippy, and
 662 native tests (one ignored). These checks do not establish speed, battery,
 or memory improvements.
 
