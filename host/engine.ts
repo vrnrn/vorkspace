@@ -805,27 +805,32 @@ export class HostEngine {
               onEvent: (event) => this.event(session.id, runId!, event),
             };
             if (prompt === null) await provider.compact!(input);
-            else
-              await provider.send({
-                ...input,
-                text: prompt,
-                attachments: attachments
-                  ? await Promise.all(
-                      attachments.map(async (file) =>
-                        isVisionImage(file.mimeType) &&
-                        file.path &&
-                        file.size <= 20 * 1024 * 1024
-                          ? {
-                              ...file,
-                              data: (await readFile(file.path)).toString(
-                                "base64",
-                              ),
-                            }
-                          : file,
-                      ),
-                    )
-                  : undefined,
-              });
+            else {
+              let resolvedAttachments: typeof attachments | undefined;
+              if (attachments) {
+                resolvedAttachments = [];
+                for (const file of attachments) {
+                  if (this.closing || active.cancelled) break;
+                  resolvedAttachments.push(
+                    isVisionImage(file.mimeType) &&
+                      file.path &&
+                      file.size <= 20 * 1024 * 1024
+                      ? {
+                          ...file,
+                          data: (await readFile(file.path)).toString("base64"),
+                        }
+                      : file,
+                  );
+                }
+              }
+              if (!this.closing && !active.cancelled) {
+                await provider.send({
+                  ...input,
+                  text: prompt,
+                  attachments: resolvedAttachments,
+                });
+              }
+            }
           }
         } catch (reason) {
           error = reason instanceof Error ? reason.message : String(reason);
