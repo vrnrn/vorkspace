@@ -578,6 +578,7 @@ describe("settings navigation", () => {
       "providers",
       "mcp",
       "skills",
+      "vox",
       "monos",
       "inbox",
       "archive",

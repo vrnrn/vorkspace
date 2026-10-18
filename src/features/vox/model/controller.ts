@@ -140,7 +140,7 @@ export function createVoxController(host: Host): VoxRequestHandler {
         model: "codex:gpt-6.1-sol",
         modelSettings: {},
         runtimeMode: selected?.runtimeMode ?? "supervised",
-        title: "Vox",
+        title: "vox",
         blocks: [],
         ephemeral: true,
         cwd:

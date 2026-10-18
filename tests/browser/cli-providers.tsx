@@ -2,6 +2,35 @@ import { createRoot } from "react-dom/client";
 import "../../src/styles/index.css";
 
 const providers = ["claude", "codex", "pi", "omp", "antigravity"] as const;
+const voxSettings =
+  new URLSearchParams(location.search).get("section") === "vox";
+if (voxSettings)
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: {
+      enumerateDevices: async () => [
+        {
+          kind: "audioinput",
+          deviceId: "default",
+          label: "Default - AirPods Pro",
+        },
+        {
+          kind: "audioinput",
+          deviceId: "communications",
+          label: "AirPods Pro",
+        },
+        {
+          kind: "audioinput",
+          deviceId: "macbook",
+          label: "MacBook Pro Microphone",
+        },
+        { kind: "audioinput", deviceId: "airpods", label: "AirPods Pro" },
+      ],
+      getUserMedia: async () => {
+        throw new Error("settings must not capture audio");
+      },
+    },
+  });
 Object.assign(window, {
   __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
   __TAURI_INTERNALS__: {
@@ -86,7 +115,13 @@ createRoot(document.getElementById("root")!).render(
   ) : (
     <div className="h-screen">
       <SettingsView
-        section="providers"
+        section={
+          voxSettings
+            ? "vox"
+            : new URLSearchParams(location.search).get("section") === "general"
+              ? "general"
+              : "providers"
+        }
         cwd="/repo"
         sessions={[]}
         onClose={() => {}}

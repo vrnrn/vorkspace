@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>vorkspace uses your microphone when you start Vox.</string>
+	<string>vorkspace uses your microphone when you start vox.</string>
 	<key>NSDesktopFolderUsageDescription</key>
 	<string>vorkspace opens project folders you choose, including Desktop.</string>
 	<key>NSDocumentsFolderUsageDescription</key>

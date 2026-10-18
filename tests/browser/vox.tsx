@@ -16,6 +16,7 @@ import "../../src/styles/index.css";
 
 const metrics = {
   captures: 0,
+  captureInputs: [] as unknown[],
   stopped: 0,
   closed: 0,
   spawned: 0,
@@ -84,6 +85,13 @@ configureChildBackend({
 });
 
 let peer: MockPeer;
+let inputTrack: { enabled: boolean } | undefined;
+let outputAudio: HTMLAudioElement | undefined;
+const NativeAudio = window.Audio;
+window.Audio = function () {
+  outputAudio = new NativeAudio();
+  return outputAudio;
+} as typeof Audio;
 class MockPeer {
   connectionState = "new";
   localDescription = { sdp: "offer" };
@@ -113,14 +121,25 @@ class MockPeer {
 }
 Object.defineProperty(navigator, "mediaDevices", {
   value: {
-    getUserMedia: async () => {
+    enumerateDevices: async () => [
+      {
+        kind: "audioinput",
+        deviceId: "macbook",
+        label: "MacBook Pro Microphone",
+      },
+      { kind: "audioinput", deviceId: "airpods", label: "AirPods Pro" },
+    ],
+    getUserMedia: async (constraints: MediaStreamConstraints) => {
       metrics.captures++;
+      metrics.captureInputs.push(constraints.audio);
       const track = {
+        enabled: true,
         stop: () => {
           metrics.stopped++;
         },
         onended: null,
       };
+      inputTrack = track;
       return { getTracks: () => [track], getAudioTracks: () => [track] };
     },
   },
@@ -128,6 +147,11 @@ Object.defineProperty(navigator, "mediaDevices", {
 Object.assign(window, {
   RTCPeerConnection: MockPeer,
   voxMetrics: metrics,
+  voxNotify: notify,
+  voxNativeState: () => ({
+    muted: outputAudio?.muted,
+    micEnabled: inputTrack?.enabled,
+  }),
   connectVox: () => {
     peer.connectionState = "connected";
     peer.onconnectionstatechange?.();
@@ -179,7 +203,7 @@ function Fixture() {
   const [mono, setMono] = useState(false);
   composerId = mono ? "mono-helper" : owner;
   return (
-    <main className="flex min-h-screen flex-col justify-center gap-6 bg-background-base p-10 text-content">
+    <main className="flex min-h-screen flex-col gap-6 bg-background-base p-10 text-content">
       <TitleBar
         key={controlsKey}
         tabs={[]}
@@ -192,7 +216,32 @@ function Fixture() {
         onReorder={noop}
         voxControl={<VoxButton />}
       />
-      <div className="flex gap-4 text-sm">
+      <div className="flex flex-wrap gap-4 text-sm">
+        <button
+          onClick={() => {
+            if (!peer) return;
+            peer.connectionState = "connected";
+            peer.onconnectionstatechange?.();
+            notify("thread/realtime/transcript/delta", {
+              role: "user",
+              delta: "Put review the tests in Helper’s composer",
+            });
+            notify("thread/realtime/transcript/done", {
+              role: "user",
+              text: "Put review the tests in Helper’s composer.",
+            });
+            notify("thread/realtime/transcript/delta", {
+              role: "assistant",
+              delta: "draft ready in helper’s composer.",
+            });
+            notify("thread/realtime/transcript/done", {
+              role: "assistant",
+              text: "draft ready in helper’s composer. not sent.",
+            });
+          }}
+        >
+          Preview vox conversation
+        </button>
         <button onClick={() => setOwner("next")}>Switch chat</button>
         <button onClick={() => setEnabled(false)}>Hide chat</button>
         <button onClick={() => setRemote(true)}>Remote chat</button>

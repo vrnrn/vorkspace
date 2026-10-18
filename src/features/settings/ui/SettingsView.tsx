@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
+import {
+  allowVoxMicrophones,
+  findVoxMicrophone,
+  listVoxMicrophones,
+  loadVoxMicrophone,
+  saveVoxMicrophone,
+} from "../../vox/model/microphone";
 import { ModelVisibilityControl } from "../../providers/ui/ModelVisibilityControl";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
@@ -591,6 +598,7 @@ export function SettingsView({
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
               {section === "monos" ? <MonosPage /> : null}
+              {section === "vox" ? <VoxPage /> : null}
               {section === "mcp" ? (
                 <McpSettings cwd={cwd} recents={recents} />
               ) : null}
@@ -753,6 +761,109 @@ function SettingsSearch({
         </Popover>
       ) : null}
     </div>
+  );
+}
+
+function VoxPage() {
+  const [selected, setSelected] = useState(loadVoxMicrophone);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [allowing, setAllowing] = useState(false);
+  const discovery = useRef(0);
+  const refresh = useCallback(() => {
+    const token = ++discovery.current;
+    return listVoxMicrophones()
+      .then((next) => {
+        if (discovery.current === token) setDevices(next);
+      })
+      .catch(() => {
+        if (discovery.current === token)
+          setError(
+            "Could not list microphones. Check microphone access and try again.",
+          );
+      });
+  }, []);
+  useEffect(() => {
+    const update = () => {
+      void refresh();
+    };
+    update();
+    navigator.mediaDevices?.addEventListener?.("devicechange", update);
+    return () => {
+      discovery.current++;
+      navigator.mediaDevices?.removeEventListener?.("devicechange", update);
+    };
+  }, [refresh]);
+  const device = findVoxMicrophone(selected, devices);
+  const options = devices
+    .filter((entry) => entry.label)
+    .map((entry) => ({ value: entry.deviceId, label: entry.label }));
+  // The built-in default resolves to its real device in both settings and
+  // capture. Saved missing inputs remain visible without becoming menu aliases.
+  const selectedLabel =
+    selected.id === "system"
+      ? "System default"
+      : selected.id === "builtin" && !devices.some((entry) => entry.label)
+        ? "Built-in microphone"
+        : `${selected.id === "builtin" ? "Built-in microphone" : selected.label} (unavailable)`;
+  return (
+    <Group title="Audio">
+      <Row
+        id="vox-microphone"
+        label="Default microphone"
+        description="Used for your next Vox call. Your system input stays unchanged."
+      >
+        <Select
+          label="Default microphone"
+          value={device?.deviceId ?? selected.id}
+          valueLabel={selectedLabel}
+          options={options}
+          onOpen={refresh}
+          onChange={(id) => {
+            const next = {
+              id,
+              label: options.find((option) => option.value === id)!.label,
+            };
+            try {
+              saveVoxMicrophone(next);
+              setSelected(next);
+              setError(null);
+            } catch {
+              setError("Could not save the microphone. Try again.");
+            }
+          }}
+        />
+      </Row>
+      {devices.every((device) => !device.label) ? (
+        <Row
+          label="Microphone access"
+          description="Allow access to list connected microphones."
+        >
+          <SecondaryButton
+            disabled={allowing}
+            onClick={() => {
+              setAllowing(true);
+              setError(null);
+              void allowVoxMicrophones()
+                .then(refresh)
+                .catch(() =>
+                  setError(
+                    "Microphone access is unavailable. Allow it in System Settings and try again.",
+                  ),
+                )
+                .finally(() => setAllowing(false));
+            }}
+          >
+            {allowing ? "Requesting…" : "Allow microphone access"}
+          </SecondaryButton>
+        </Row>
+      ) : null}
+      {error ? (
+        <p role="alert" className="px-4 pb-3 text-[12px] text-content/70">
+          {error}
+        </p>
+      ) : null}
+    </Group>
   );
 }
 
@@ -1555,7 +1666,9 @@ function UpdateRow({
             href="https://github.com/hardbeat920/monocode"
             onClick={(event) => {
               event.preventDefault();
-              void openUrl("https://github.com/hardbeat920/monocode").catch(() => {});
+              void openUrl("https://github.com/hardbeat920/monocode").catch(
+                () => {},
+              );
             }}
             className="text-content/70 underline underline-offset-2 hover:text-content"
           >
@@ -3956,7 +4069,9 @@ function Group({
       <div className="flex items-end gap-4 pb-2.5">
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-4">
-            <h2 className="min-w-0 text-[13px] font-semibold text-content">{title}</h2>
+            <h2 className="min-w-0 text-[13px] font-semibold text-content">
+              {title}
+            </h2>
             {titleAction}
           </div>
           {description ? (
@@ -4230,12 +4345,15 @@ function Toggle({
 function Select({
   label,
   value,
+  valueLabel,
   options,
   onChange,
   onOpen,
 }: {
   label: string;
   value: string;
+  /** Display a saved unavailable value without adding it to the choices. */
+  valueLabel?: string;
   options: { value: string; label: string; icon?: ReactNode }[];
   onChange: (value: string) => void;
   onOpen?: () => void;
@@ -4321,7 +4439,7 @@ function Select({
       <button
         type="button"
         ref={trigger}
-        aria-label={`${label}: ${selected?.label ?? value}`}
+        aria-label={`${label}: ${selected?.label ?? valueLabel ?? value}`}
         aria-expanded={open}
         aria-haspopup="listbox"
         onClick={() => setOpen((prev) => !prev)}
@@ -4334,7 +4452,7 @@ function Select({
             </span>
           ) : null}
           <span className="min-w-0 truncate">
-            {selected ? selected.label : value}
+            {selected?.label ?? valueLabel ?? value}
           </span>
         </span>
         <ChevronDown

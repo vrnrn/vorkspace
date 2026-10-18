@@ -7,6 +7,9 @@ import {
 } from "../../../integrations/harness/core/child";
 import { JsonRpcClient } from "../../../integrations/harness/core/jsonRpc";
 import type { JsonRpcId } from "../../../integrations/harness/core/jsonRpc";
+import type { VoxDisplay } from "./display";
+import { VOX_MOODS, type VoxMood } from "./expressions";
+import { captureVoxMicrophone, VoxMicrophoneError } from "./microphone";
 import {
   VOX_ACTIONS,
   VOX_AGENT_INSTRUCTIONS,
@@ -22,6 +25,9 @@ type Options = {
   onError: (message: string) => void;
   execute: VoxRequestHandler;
   getContext?: VoxRequestHandler;
+  display?: VoxDisplay;
+  silent?: boolean;
+  micEnabled?: boolean;
 };
 
 // One call per renderer. A stopped generation keeps its own child identity so
@@ -30,7 +36,7 @@ let active: Vox | undefined;
 const CONNECT_TIMEOUT_MS = 30_000;
 
 /** Codex owns OAuth and voice delegation; the workspace owns app actions.
- * WebRTC owns audio. No PCM, metering, or transcript deltas cross React/IPC.
+ * WebRTC owns audio. Only bounded native caption text enters the display store.
  */
 export class Vox {
   private readonly id = `vorkspace-vox-${crypto.randomUUID()}`;
@@ -47,6 +53,8 @@ export class Vox {
   private threadId?: string;
   private acceptingAnswer = false;
   private connected = false;
+  private silent: boolean;
+  private micEnabled: boolean;
   private releaseBridge?: () => void;
   private readonly abort = new AbortController();
   private toolCalls = new Map<
@@ -54,7 +62,21 @@ export class Vox {
     { signature: string; result: Promise<string> }
   >();
 
-  constructor(private readonly options: Options) {}
+  constructor(private readonly options: Options) {
+    this.silent = options.silent ?? false;
+    this.micEnabled = options.micEnabled ?? true;
+  }
+
+  setSilent(silent: boolean) {
+    this.silent = silent;
+    if (this.audio) this.audio.muted = silent;
+  }
+
+  setMicEnabled(enabled: boolean) {
+    this.micEnabled = enabled;
+    for (const track of this.microphone?.getAudioTracks() ?? [])
+      track.enabled = enabled;
+  }
 
   async start(): Promise<void> {
     if (this.stopped || this.started) return;
@@ -88,20 +110,15 @@ export class Vox {
       );
     }
     const [microphone, binary, catalog] = await Promise.all([
-      navigator.mediaDevices
-        .getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-          },
-          video: false,
-        })
-        .then((stream) => {
-          if (this.stopped) stream.getTracks().forEach((track) => track.stop());
-          else this.microphone = stream;
-          return stream;
-        }),
+      captureVoxMicrophone(() => !this.stopped).then((stream) => {
+        if (this.stopped) stream.getTracks().forEach((track) => track.stop());
+        else {
+          this.microphone = stream;
+          for (const track of stream.getAudioTracks())
+            track.enabled = this.micEnabled;
+        }
+        return stream;
+      }),
       resolveCodexBinary(),
       this.options
         .getContext?.({
@@ -121,6 +138,7 @@ export class Vox {
     this.peer = peer;
     this.audio = new Audio();
     this.audio.autoplay = true;
+    this.audio.muted = this.silent;
     peer.ontrack = (event) => {
       if (this.stopped || !this.audio) return;
       this.audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
@@ -199,12 +217,12 @@ export class Vox {
     await rpc.request(
       "initialize",
       {
-        clientInfo: { name: "vorkspace", title: "Vox", version: "0.1.0" },
+        clientInfo: { name: "vorkspace", title: "vox", version: "0.1.0" },
         capabilities: {
           experimentalApi: true,
           // Suppress unused streams in app-server so they never enter stdout
-          // batching, IPC, or renderer parsing. Only call lifecycle and
-          // SDP notifications and tool requests are needed by the controller.
+          // batching, IPC, or renderer parsing. Only final native replies are
+          // needed; partial speech and all audio stay off the display path.
           optOutNotificationMethods: [
             "thread/realtime/started",
             "thread/realtime/itemAdded",
@@ -212,7 +230,9 @@ export class Vox {
             "thread/realtime/item/transcript/delta",
             "thread/realtime/item/completed",
             "thread/realtime/transcript/delta",
-            "thread/realtime/transcript/done",
+            ...(this.options.display
+              ? []
+              : ["thread/realtime/transcript/done"]),
             "thread/realtime/outputAudio/delta",
             "item/started",
             "item/completed",
@@ -289,6 +309,7 @@ export class Vox {
         const args = value.arguments as {
           action?: string;
           input?: Record<string, unknown>;
+          expression?: VoxMood;
         };
         if (
           !args ||
@@ -298,6 +319,11 @@ export class Vox {
           Array.isArray(args.input)
         )
           throw new Error("Invalid workspace action");
+        if (
+          args.expression !== undefined &&
+          !VOX_MOODS.includes(args.expression)
+        )
+          throw new Error("unknown vox expression");
         const signature = JSON.stringify(args);
         if (signature.length > 64_000)
           throw new Error("Voice request is too large");
@@ -312,6 +338,7 @@ export class Vox {
           const result = Promise.resolve().then(async () => {
             if (this.stopped)
               throw new Error("Vox stopped before this request was sent");
+            if (args.expression) this.options.display?.mood(args.expression);
             const output = await this.options.execute({
               sessionId: this.id,
               requestId: crypto.randomUUID(),
@@ -381,6 +408,7 @@ export class Vox {
     if (this.stopped || !params || typeof params !== "object") return;
     const value = params as Record<string, unknown>;
     if (value.threadId !== this.threadId) return;
+    this.options.display?.notification(method, value);
     if (method === "thread/realtime/sdp" && typeof value.sdp === "string") {
       if (this.acceptingAnswer) return;
       this.acceptingAnswer = true;
@@ -461,6 +489,7 @@ if (import.meta.hot) {
 }
 
 function voxError(error: unknown): string {
+  if (error instanceof VoxMicrophoneError) return error.message;
   if (
     error instanceof DOMException &&
     ["NotAllowedError", "NotFoundError", "NotReadableError"].includes(

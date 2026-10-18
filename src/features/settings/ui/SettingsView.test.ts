@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { SettingsView } from "./SettingsView";
+import {
+  loadVoxMicrophone,
+  saveVoxMicrophone,
+} from "../../vox/model/microphone";
 import { rememberNotificationProjects } from "../../notifications/model/notificationProjects";
 import { loadInboxConnectors } from "../../inbox/model/inboxConnectors";
 import { loadInboxMonos } from "../../inbox/model/inboxMonos";
@@ -120,6 +124,60 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
+  it("saves vox's microphone without capturing audio or changing the system input", async () => {
+    const capture = vi.fn();
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: capture,
+        enumerateDevices: async () => [
+          {
+            kind: "audioinput",
+            deviceId: "macbook",
+            label: "MacBook Pro Microphone",
+          },
+          { kind: "audioinput", deviceId: "airpods", label: "AirPods Pro" },
+        ],
+      },
+    });
+    await render("vox");
+    expect(container.textContent).toContain("MacBook Pro Microphone");
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label^="Default microphone:"]',
+        )!
+        .click(),
+    );
+    expect(
+      [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].map(
+        (button) => button.textContent?.trim(),
+      ),
+    ).toEqual(["MacBook Pro Microphone", "AirPods Pro"]);
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+        .find((button) => button.textContent?.trim() === "AirPods Pro")!
+        .click(),
+    );
+    expect(loadVoxMicrophone()).toEqual({
+      id: "airpods",
+      label: "AirPods Pro",
+    });
+    await render("general");
+    await render("vox");
+    expect(
+      container.querySelector('[aria-label^="Default microphone:"]')
+        ?.textContent,
+    ).toBe("AirPods Pro");
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it("retains an unavailable vox input instead of silently selecting another device", async () => {
+    saveVoxMicrophone({ id: "missing", label: "Desk Mic" });
+    await render("vox");
+    expect(container.textContent).toContain("Desk Mic (unavailable)");
+    expect(loadVoxMicrophone().id).toBe("missing");
+  });
+
   it("saves separate default Monos for Jira and GitLab and can clear them", async () => {
     const reviews = createMono();
     const tickets = createMono();
@@ -146,13 +204,15 @@ describe("settings pages", () => {
     await render("general");
     await render("inbox");
     expect(
-      container.querySelector('[aria-label^="GitLab default Mono:"]')?.textContent,
+      container.querySelector('[aria-label^="GitLab default Mono:"]')
+        ?.textContent,
     ).toBe("Review Mono");
     await act(async () =>
       updateMono(reviews.id, (mono) => ({ ...mono, name: "Renamed Mono" })),
     );
     expect(
-      container.querySelector('[aria-label^="GitLab default Mono:"]')?.textContent,
+      container.querySelector('[aria-label^="GitLab default Mono:"]')
+        ?.textContent,
     ).toBe("Renamed Mono");
     await chooseMono("GitLab", "No default Mono");
     expect(loadInboxMonos()).toEqual({ jira: tickets.id });
@@ -161,7 +221,8 @@ describe("settings pages", () => {
   it("explains how to choose a default when there are no Monos", async () => {
     await render("inbox");
     expect(
-      container.querySelector('[aria-label^="GitLab default Mono:"]')?.textContent,
+      container.querySelector('[aria-label^="GitLab default Mono:"]')
+        ?.textContent,
     ).toBe("No default Mono");
     expect(container.textContent).toContain("Create a Mono in Monos settings");
   });
@@ -239,9 +300,10 @@ describe("settings pages", () => {
       return undefined;
     });
     await render("inbox");
-    const toggle = () => container.querySelector<HTMLButtonElement>(
-      '[role="switch"][aria-label="Enable GitLab inbox connector"]',
-    )!;
+    const toggle = () =>
+      container.querySelector<HTMLButtonElement>(
+        '[role="switch"][aria-label="Enable GitLab inbox connector"]',
+      )!;
     await act(async () => toggle().click());
     expect(toggle().getAttribute("aria-checked")).toBe("false");
     expect(loadInboxConnectors().gitlab).toBe(false);
@@ -598,7 +660,9 @@ describe("settings pages", () => {
     const save = async (provider: "Codex" | "omp", path: string) => {
       const id = `${provider.toLowerCase()}-binary-path`;
       if (!document.querySelector(`#${id}`)) {
-        if (!document.querySelector(`[aria-label="Edit ${provider} CLI path"]`)) {
+        if (
+          !document.querySelector(`[aria-label="Edit ${provider} CLI path"]`)
+        ) {
           await act(async () =>
             container
               .querySelector<HTMLButtonElement>(
@@ -931,7 +995,9 @@ describe("settings pages", () => {
   it("shows path details for every Agent CLI", async () => {
     await render("providers");
     expect(
-      vi.mocked(invoke).mock.calls.some(([command]) => command === "harness_exec"),
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "harness_exec"),
     ).toBe(false);
     for (const harness of HARNESSES) {
       expect(
@@ -961,7 +1027,8 @@ describe("settings pages", () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "harness_resolve_codex") return { path: "/auto/codex" };
       if (command === "harness_exec") return "codex-cli 0.156.1";
-      if (command === "reveal_path") throw new Error("File manager unavailable");
+      if (command === "reveal_path")
+        throw new Error("File manager unavailable");
       return undefined;
     });
     await render("providers");

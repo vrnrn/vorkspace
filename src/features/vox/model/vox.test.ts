@@ -42,6 +42,7 @@ vi.mock("../../../integrations/harness/core/child", () => ({
 }));
 
 import { Vox } from "./vox";
+import { VoxDisplay } from "./display";
 
 class Peer {
   static instances: Peer[] = [];
@@ -70,7 +71,11 @@ class Peer {
     this.onconnectionstatechange?.();
   }
 }
-const track = () => ({ stop: vi.fn(), onended: null as (() => void) | null });
+const track = () => ({
+  stop: vi.fn(),
+  enabled: true,
+  onended: null as (() => void) | null,
+});
 function microphone() {
   const input = track();
   return { input, getTracks: () => [input], getAudioTracks: () => [input] };
@@ -110,7 +115,18 @@ beforeEach(() => {
   connected = vi.fn();
   error = vi.fn();
   execute = vi.fn(async () => ({ submitted: true }));
-  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+  vi.stubGlobal("navigator", {
+    mediaDevices: {
+      getUserMedia,
+      enumerateDevices: async () => [
+        {
+          kind: "audioinput",
+          deviceId: "macbook",
+          label: "MacBook Pro Microphone",
+        },
+      ],
+    },
+  });
   vi.stubGlobal("RTCPeerConnection", Peer);
   vi.stubGlobal(
     "Audio",
@@ -171,8 +187,9 @@ it("does no idle work and negotiates direct audio with an ephemeral, isolated de
   expect(peer.addTrack).toHaveBeenCalledWith(mic.input, mic);
   const prompt = host.requests.find((r) => r.method === "thread/realtime/start")
     ?.params?.prompt;
-  expect(prompt).toContain("You are Vox");
+  expect(prompt).toContain("You are vox");
   expect(prompt).toContain("Wait silently for the user's first spoken input");
+  expect(prompt).toContain("Your backing agent can look up the active session");
   expect(host.requests.some((r) => r.method === "turn/start")).toBe(false);
   expect(execute).not.toHaveBeenCalled();
   expect(peer.setRemoteDescription).toHaveBeenCalledExactlyOnceWith({
@@ -208,6 +225,7 @@ it("releases a late microphone grant without touching a replacement call", async
   );
   const old = create();
   const pending = old.start();
+  await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
   await old.stop();
   const next = create();
   await next.start();
@@ -274,6 +292,7 @@ function tool(
     prompt: "Fix the bug",
   },
   threadId = "vox-thread",
+  expression?: string,
 ) {
   [...host.lines.values()].at(-1)!(
     JSON.stringify({
@@ -284,7 +303,7 @@ function tool(
         callId,
         namespace: null,
         tool: "vorkspace",
-        arguments: { action, input },
+        arguments: { action, input, expression },
       },
     }),
   );
@@ -512,4 +531,134 @@ it("bounds startup and ignores late notifications after timeout", async () => {
   expect(mic.input.stop).toHaveBeenCalledOnce();
   notify("thread/realtime/sdp", { sdp: "late" });
   expect(Peer.instances[0].setRemoteDescription).toHaveBeenCalledOnce();
+});
+
+it("applies silent and mic preferences before a late microphone grant without renegotiating", async () => {
+  let grant!: (value: ReturnType<typeof microphone>) => void;
+  getUserMedia.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        grant = resolve;
+      }),
+  );
+  let audio!: { muted: boolean };
+  vi.stubGlobal(
+    "Audio",
+    class {
+      muted = false;
+      autoplay = false;
+      srcObject = null;
+      play = vi.fn(async () => {});
+      pause = vi.fn();
+      constructor() {
+        audio = this;
+      }
+    },
+  );
+  const call = create();
+  const pending = call.start();
+  call.setSilent(true);
+  call.setMicEnabled(false);
+  await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
+  grant(mic);
+  await pending;
+  expect(audio.muted).toBe(true);
+  expect(mic.input.enabled).toBe(false);
+  const count = host.requests.length;
+  call.setMicEnabled(true);
+  call.setSilent(false);
+  expect(audio.muted).toBe(false);
+  expect(mic.input.enabled).toBe(true);
+  expect(host.requests).toHaveLength(count);
+  expect(getUserMedia).toHaveBeenCalledOnce();
+  expect(host.spawn).toHaveBeenCalledOnce();
+  expect(mic.input.stop).not.toHaveBeenCalled();
+});
+
+it("subscribes to one native caption family and rejects stale-thread text and post-stop events", async () => {
+  const display = new VoxDisplay();
+  const call = create({ display });
+  await call.start();
+  const optOut = host.requests.find(
+    (request) => request.method === "initialize",
+  )?.params?.capabilities as { optOutNotificationMethods: string[] };
+  expect(optOut.optOutNotificationMethods).toContain(
+    "thread/realtime/item/started",
+  );
+  expect(optOut.optOutNotificationMethods).toContain(
+    "thread/realtime/item/transcript/delta",
+  );
+  expect(optOut.optOutNotificationMethods).toContain(
+    "thread/realtime/transcript/delta",
+  );
+  expect(optOut.optOutNotificationMethods).not.toContain(
+    "thread/realtime/transcript/done",
+  );
+  expect(optOut.optOutNotificationMethods).toContain(
+    "thread/realtime/outputAudio/delta",
+  );
+
+  notify("thread/realtime/transcript/done", {
+    role: "assistant",
+    text: "OriginalCase.ts",
+  });
+  notify("thread/realtime/transcript/done", {
+    threadId: "other",
+    role: "assistant",
+    text: "wrong thread",
+  });
+  expect(display.getSnapshot().lines[0].text).toBe("OriginalCase.ts");
+  await call.stop();
+  notify("thread/realtime/transcript/done", {
+    role: "assistant",
+    text: "stale result",
+  });
+  expect(display.getSnapshot().lines[0].text).toBe("OriginalCase.ts");
+  display.dispose();
+});
+
+it("accepts model moods alongside an existing action without changing its payload or replaying the action", async () => {
+  const display = new VoxDisplay();
+  await create({ display }).start();
+  tool(
+    "face-1",
+    "face-call",
+    "composer.write",
+    { text: "Review OriginalCase.ts" },
+    "vox-thread",
+    "curious",
+  );
+  await vi.waitFor(() =>
+    expect(
+      host.requests.find((request) => request.id === "face-1")?.result?.success,
+    ).toBe(true),
+  );
+  expect(display.getSnapshot().mood).toBe("curious");
+  expect(execute).toHaveBeenCalledWith(
+    expect.objectContaining({ input: { text: "Review OriginalCase.ts" } }),
+  );
+  tool(
+    "face-2",
+    "face-call",
+    "composer.write",
+    { text: "Review OriginalCase.ts" },
+    "vox-thread",
+    "curious",
+  );
+  tool(
+    "face-3",
+    "bad-face",
+    "composer.write",
+    { text: "never insert" },
+    "vox-thread",
+    "error",
+  );
+  await vi.waitFor(() =>
+    expect(
+      host.requests.find((request) => request.id === "face-3")?.result?.success,
+    ).toBe(false),
+  );
+  expect(execute).toHaveBeenCalledOnce();
+  expect(display.getSnapshot().mood).toBe("curious");
+  display.dispose();
 });

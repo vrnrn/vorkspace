@@ -196,7 +196,7 @@ it("delegates app operations with an explicit ephemeral controller scope", async
       projects: ["/local/project", "/local/other"],
       source: expect.objectContaining({
         id: "vox-controller",
-        title: "Vox",
+        title: "vox",
         ephemeral: true,
         blocks: [],
       }),

@@ -1,57 +1,63 @@
-import { useRef } from "react";
-import { Mic, Square } from "../../../shared/ui/icons";
+import { useId, useRef, useState } from "react";
 import { Popover } from "../../../shared/ui/Popover";
 import { useVox } from "./VoxProvider";
+import { VoxPanel } from "./VoxPanel";
 
 export function VoxButton() {
   const button = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const id = useId();
   const vox = useVox();
   if (!vox) return null;
-  const { state, error } = vox;
-  const label = state === "idle" ? "Start Vox" : "Stop Vox";
+  function close(focus = false) {
+    setOpen(false);
+    if (focus) button.current?.focus({ preventScroll: true });
+  }
   return (
     <div
-      className="relative flex shrink-0 items-center gap-1.5"
+      className="relative flex shrink-0 items-center"
       data-tauri-drag-region="false"
     >
-      {state !== "idle" ? (
-        <span role="status" className="text-[11px] text-content/70">
-          {state === "connecting" ? "Connecting…" : "Vox"}
-        </span>
-      ) : null}
       <button
         ref={button}
         type="button"
-        aria-label={label}
-        aria-pressed={state !== "idle"}
-        title={`${label} · control chats and Monos by voice`}
-        onClick={vox.toggle}
-        className={`grid size-6.5 place-items-center rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${state === "idle" ? "text-content/60 hover:bg-selection-hover hover:text-content" : "bg-selection-emphasis text-content"}`}
+        aria-label="vox"
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        aria-pressed={vox.state !== "idle"}
+        title={
+          vox.error
+            ? "vox · connection lost"
+            : vox.state === "idle"
+              ? "open vox"
+              : "vox · microphone session active"
+        }
+        onClick={() => {
+          if (open) close();
+          else {
+            setOpen(true);
+            if (vox.state === "idle" && !vox.error) vox.start();
+          }
+        }}
+        className={`h-7 rounded-md px-3 font-mono text-[15px] font-medium tracking-[-0.03em] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-content/40 ${vox.state === "idle" && !vox.error ? "bg-content/5 text-content/75 hover:bg-selection-hover hover:text-content" : "bg-selection-emphasis text-content"}`}
       >
-        {state === "idle" ? (
-          <Mic className="size-3.5" />
-        ) : (
-          <Square className="size-3 fill-current" />
-        )}
+        vox
       </button>
-      {error ? (
+      {open ? (
         <Popover
           anchor={button}
           side="bottom"
           align="end"
-          width={280}
-          onDismiss={vox.dismiss}
-          role="alert"
-          className="p-3 text-[12px] text-content"
+          width={340}
+          maxHeight={420}
+          role="dialog"
+          aria-label="vox"
+          id={id}
+          tabIndex={-1}
+          autoFocus
+          onDismiss={(reason) => close(reason === "escape")}
         >
-          <p>{error}</p>
-          <button
-            type="button"
-            onClick={vox.dismiss}
-            className="mt-2 rounded px-1 text-content/70 hover:text-content focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-          >
-            Dismiss
-          </button>
+          <VoxPanel vox={vox} onClose={() => close(true)} />
         </Popover>
       ) : null}
     </div>

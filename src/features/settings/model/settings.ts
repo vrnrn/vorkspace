@@ -27,6 +27,7 @@ export type SettingsSectionId =
   | "mcp"
   | "skills"
   | "monos"
+  | "vox"
   | "inbox"
   | "worktrees"
   | "archive";
@@ -117,6 +118,13 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     keywords: "skill instructions prompt",
   },
   {
+    id: "vox",
+    group: "agents",
+    label: "Vox",
+    description: "Voice controls for your workspace.",
+    keywords: "voice microphone mic audio input speech silent",
+  },
+  {
     id: "monos",
     group: "agents",
     label: "Monos",
@@ -172,6 +180,13 @@ export type SettingsEntry = {
 };
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
+  {
+    id: "vox-microphone",
+    section: "vox",
+    label: "Default microphone",
+    keywords:
+      "vox voice mic input device macbook built in airpods system audio",
+  },
   {
     id: "remote-machines",
     section: "connections",
@@ -452,7 +467,8 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     id: "gitlab",
     section: "inbox",
     label: "GitLab",
-    keywords: "token self-managed merge request connect default mono send chat destination",
+    keywords:
+      "token self-managed merge request connect default mono send chat destination",
   },
   {
     id: "jira",
