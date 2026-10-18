@@ -315,6 +315,23 @@ struct LiveChild {
 struct HarnessInner {
     children: HashMap<String, Arc<LiveChild>>,
     epochs: HashMap<String, u64>,
+    vox_starting: Option<String>,
+}
+
+/// One persistent Vox conversation has one writer across all app windows.
+/// Pending admission and installed children share this existing native owner.
+struct VoxSpawnReservation<'a> {
+    host: &'a HarnessHost,
+    id: String,
+}
+
+impl Drop for VoxSpawnReservation<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.host.lock_inner();
+        if inner.vox_starting.as_deref() == Some(self.id.as_str()) {
+            inner.vox_starting = None;
+        }
+    }
 }
 
 pub struct HarnessHost {
@@ -325,6 +342,25 @@ pub struct HarnessHost {
 }
 
 impl HarnessHost {
+    fn reserve_vox<'a>(&'a self, id: &str) -> Result<Option<VoxSpawnReservation<'a>>, String> {
+        if !id.starts_with("vorkspace-vox-") {
+            return Ok(None);
+        }
+        let mut inner = self.lock_inner();
+        if inner.vox_starting.is_some()
+            || inner
+                .children
+                .keys()
+                .any(|id| id.starts_with("vorkspace-vox-"))
+        {
+            return Err("Vox is already active in another window. End that call first.".into());
+        }
+        inner.vox_starting = Some(id.to_owned());
+        Ok(Some(VoxSpawnReservation {
+            host: self,
+            id: id.to_owned(),
+        }))
+    }
     pub(crate) fn runtime_binary_path(&self, provider: &str) -> Option<String> {
         self.runtime_binary_paths
             .lock()
@@ -347,6 +383,7 @@ impl HarnessHost {
             inner: Mutex::new(HarnessInner {
                 children: HashMap::new(),
                 epochs: HashMap::new(),
+                vox_starting: None,
             }),
             runtime_binary_paths: Mutex::new(None),
             kill_all_gen: AtomicU64::new(0),
@@ -992,6 +1029,7 @@ pub fn harness_spawn(
     }
 
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
+    let _vox = host.reserve_vox(&session_id)?;
     let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
     if let Some(prev) = prev {
         terminate(prev.pid);
@@ -2845,6 +2883,33 @@ mod tests {
             .install_spawn("s1".into(), epoch, kill_all, live)
             .is_none());
         assert_eq!(host.get("s1").map(|live| live.pid), Some(pid));
+        reap(child);
+    }
+
+    #[test]
+    fn vox_reservation_rejects_a_second_pending_window_and_releases_on_failure() {
+        let host = HarnessHost::new();
+        let first = host.reserve_vox("vorkspace-vox-first").unwrap();
+        assert!(host.reserve_vox("vorkspace-vox-second").is_err());
+        assert!(host.reserve_vox("ordinary-session").unwrap().is_none());
+        drop(first);
+        assert!(host.reserve_vox("vorkspace-vox-second").is_ok());
+    }
+
+    #[test]
+    fn vox_reservation_follows_the_installed_child_until_it_is_removed() {
+        let host = HarnessHost::new();
+        let id = "vorkspace-vox-first";
+        let reservation = host.reserve_vox(id).unwrap();
+        let (epoch, kill_all, _) = host.begin_spawn(id);
+        let (live, child) = live_child();
+        assert!(host
+            .install_spawn(id.into(), epoch, kill_all, live)
+            .is_none());
+        drop(reservation);
+        assert!(host.reserve_vox("vorkspace-vox-second").is_err());
+        host.kill_session(id);
+        assert!(host.reserve_vox("vorkspace-vox-second").is_ok());
         reap(child);
     }
 

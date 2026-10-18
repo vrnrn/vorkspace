@@ -76,6 +76,7 @@ import MessageMultiple01Icon from "@hugeicons/core-free-icons/MessageMultiple01I
 import Mic01Icon from "@hugeicons/core-free-icons/Mic01Icon";
 import MicOff01Icon from "@hugeicons/core-free-icons/MicOff01Icon";
 import VolumeXIcon from "@hugeicons/core-free-icons/VolumeXIcon";
+import VolumeHighIcon from "@hugeicons/core-free-icons/VolumeHighIcon";
 import MinusSignIcon from "@hugeicons/core-free-icons/MinusSignIcon";
 import MoreHorizontalIcon from "@hugeicons/core-free-icons/MoreHorizontalIcon";
 import Note01Icon from "@hugeicons/core-free-icons/Note01Icon";
@@ -237,6 +238,7 @@ export const Loader = wrap(Loading03Icon, "Loader");
 export const Mic = wrap(Mic01Icon, "Mic");
 export const MicOff = wrap(MicOff01Icon, "MicOff");
 export const VolumeX = wrap(VolumeXIcon, "VolumeX");
+export const Volume2 = wrap(VolumeHighIcon, "Volume2");
 export const LoaderCircle = wrap(Loading03Icon, "LoaderCircle");
 export const Lock = wrap(SquareLock02Icon, "Lock");
 export const Maximize2 = wrap(ArrowExpand01Icon, "Maximize2");

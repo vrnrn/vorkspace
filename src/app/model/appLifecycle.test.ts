@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, message } from "@tauri-apps/plugin-dialog";
+import { stopActiveVox } from "../../features/vox/model/vox";
 import { forgetHarnessSession } from "../../integrations/harness/core/registry";
 import { killAllChildren } from "../../integrations/harness/core/child";
 import { newSession } from "../../features/sessions/model/session";
@@ -10,6 +11,7 @@ import {
   closeBusyWindow,
   commitQuit,
   confirmReload,
+  flushVoxBeforeClose,
   reportQuitPoll,
   setQuitWorkspace,
 } from "./appLifecycle";
@@ -32,6 +34,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: vi.fn().mockResolvedValue(true),
+  message: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../features/vox/model/vox", () => ({
+  stopActiveVox: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("./windowTransferBootstrap", () => ({
   loadWindowTransfer: vi.fn().mockResolvedValue(null),
@@ -58,6 +64,37 @@ vi.mock("../../integrations/harness/core/registry", () => ({
 vi.mock("../../integrations/harness/core/child", () => ({
   killAllChildren: vi.fn().mockResolvedValue(undefined),
 }));
+
+describe("Vox close persistence", () => {
+  it("waits for the native voice flush before permitting close", async () => {
+    let saved!: () => void;
+    vi.mocked(stopActiveVox).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          saved = resolve;
+        }),
+    );
+    let closed = false;
+    const closing = flushVoxBeforeClose().then((ready) => {
+      closed = ready;
+    });
+    await vi.waitFor(() => expect(saved).toBeTypeOf("function"));
+    expect(closed).toBe(false);
+    saved();
+    await closing;
+    expect(closed).toBe(true);
+  });
+  it("cancels close and explains an unconfirmed transcript save", async () => {
+    vi.mocked(stopActiveVox).mockRejectedValueOnce(
+      new Error("save not confirmed"),
+    );
+    expect(await flushVoxBeforeClose()).toBe(false);
+    expect(message).toHaveBeenCalledWith(
+      expect.stringContaining("Closing was cancelled"),
+      expect.objectContaining({ title: "Vox conversation not saved" }),
+    );
+  });
+});
 
 describe("project choices through lifecycle saves", () => {
   beforeEach(() => {

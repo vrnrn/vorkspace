@@ -4,11 +4,18 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import type { Vox } from "../model/vox";
+import { loadVoxEnabled, subscribeVoxEnabled } from "../model/availability";
 import { VoxDisplay } from "../model/display";
 import type { VoxRequestHandler } from "../model/protocol";
+import { loadVoxSilent, subscribeVoxSilent } from "../model/replyMode";
+import {
+  resetSavedVoxConversation,
+  VOX_CONVERSATION_KEY,
+} from "../model/conversation";
 
 type Phase = "idle" | "connecting" | "live";
 export type VoxControls = {
@@ -16,72 +23,101 @@ export type VoxControls = {
   error: string | null;
   display: VoxDisplay;
   silent: boolean;
-  micEnabled: boolean;
+  resetConversation: () => Promise<void>;
   start: () => void;
   stop: () => void;
-  toggleSilent: () => void;
-  toggleMic: () => void;
+  end: () => Promise<void>;
 };
 const Context = createContext<VoxControls | null>(null);
 export const useVox = () => useContext(Context);
 
-/** The workspace owns the call; the mounted panel alone observes captions. */
-export function VoxProvider({
-  cwd,
-  execute,
-  children,
-}: {
+type Props = {
   cwd: string | (() => Promise<string>);
   execute: VoxRequestHandler;
   children: ReactNode;
-}) {
+};
+
+/** The workspace owns the call; titlebar controls observe its bounded display. */
+export function VoxProvider({ cwd, execute, children }: Props) {
+  const enabled = useSyncExternalStore(subscribeVoxEnabled, loadVoxEnabled);
   const connection = useRef<Vox | null>(null);
   const stopping = useRef<Promise<void> | undefined>(undefined);
   const generation = useRef(0);
   const phase = useRef<Phase>("idle");
-  const preferences = useRef({ silent: false, micEnabled: true });
   const executor = useRef(execute);
   executor.current = execute;
   const [display] = useState(() => new VoxDisplay());
   const [state, setState] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [silent, setSilent] = useState(false);
-  const [micEnabled, setMicEnabled] = useState(true);
+  const silent = useSyncExternalStore(subscribeVoxSilent, loadVoxSilent);
+  useEffect(() => {
+    connection.current?.setSilent(silent);
+  }, [silent]);
   function setPhase(next: Phase) {
     phase.current = next;
     setState(next);
   }
   function stop() {
-    generation.current++;
+    const token = ++generation.current;
     const current = connection.current;
     connection.current = null;
-    if (current) stopping.current = current.stop();
+    const saving = current?.stop() ?? stopping.current ?? Promise.resolve();
+    if (current)
+      stopping.current = saving.catch((error: unknown) => {
+        if (generation.current !== token) return;
+        setError(
+          error instanceof Error
+            ? error.message
+            : "vox's latest speech could not be saved.",
+        );
+      });
     display.finish();
     setPhase("idle");
+    return saving;
   }
   useEffect(() => {
+    if (!enabled) {
+      void stop().catch(() => undefined);
+    }
+  }, [enabled]);
+  useEffect(() => {
     const hidden = () => {
-      if (document.hidden) stop();
+      if (document.hidden) void stop().catch(() => undefined);
     };
-    const leaving = () => stop();
+    const leaving = () => {
+      void stop().catch(() => undefined);
+    };
+    const changed = (event: StorageEvent) => {
+      if (event.key !== VOX_CONVERSATION_KEY) return;
+      const revision = (raw: string | null) => {
+        try {
+          return raw ? JSON.parse(raw).revision : "initial";
+        } catch {
+          return null;
+        }
+      };
+      if (revision(event.oldValue) === revision(event.newValue)) return;
+      stop();
+      display.reset();
+    };
     document.addEventListener("visibilitychange", hidden);
     window.addEventListener("pagehide", leaving);
+    window.addEventListener("storage", changed);
     return () => {
       generation.current++;
-      void connection.current?.stop();
+      void connection.current?.stop().catch(() => undefined);
       connection.current = null;
       display.dispose();
       document.removeEventListener("visibilitychange", hidden);
       window.removeEventListener("pagehide", leaving);
+      window.removeEventListener("storage", changed);
     };
   }, [display]);
   async function start() {
-    if (phase.current !== "idle") return;
+    if (!loadVoxEnabled() || phase.current !== "idle") return;
     const token = ++generation.current;
     setError(null);
     setPhase("connecting");
-    preferences.current.micEnabled = true;
-    setMicEnabled(true);
     display.reset();
     try {
       const [{ Vox }, directory] = await Promise.all([
@@ -90,19 +126,33 @@ export function VoxProvider({
         // Old spawn/kill admission must settle before a successor owns audio.
         stopping.current,
       ]);
-      if (generation.current !== token) return;
+      if (generation.current !== token || !loadVoxEnabled()) return;
       const call = new Vox({
         cwd: directory,
-        ...preferences.current,
+        silent: loadVoxSilent(),
         display,
         execute: (request) => executor.current(request),
         getContext: (request) => executor.current(request),
         onConnected: () => {
           if (generation.current === token) setPhase("live");
         },
+        onStopped: (saving) => {
+          if (generation.current !== token) return;
+          connection.current = null;
+          setPhase("idle");
+          display.finish();
+          stopping.current = saving.catch((error: unknown) => {
+            if (generation.current !== token) return;
+            setError(
+              error instanceof Error
+                ? error.message
+                : "vox's latest speech could not be saved.",
+            );
+          });
+        },
         onError: (message) => {
           if (generation.current !== token) return;
-          stopping.current = call.stop();
+          stopping.current = call.stop().catch(() => undefined);
           connection.current = null;
           display.finish();
           setPhase("idle");
@@ -117,31 +167,29 @@ export function VoxProvider({
       setError("could not load vox. restart vorkspace and try again.");
     }
   }
-  return (
-    <Context.Provider
-      value={{
-        state,
-        error,
-        display,
-        silent,
-        micEnabled,
-        start: () => void start(),
-        stop,
-        toggleSilent: () => {
-          const next = !preferences.current.silent;
-          preferences.current.silent = next;
-          connection.current?.setSilent(next);
-          setSilent(next);
-        },
-        toggleMic: () => {
-          const next = !preferences.current.micEnabled;
-          preferences.current.micEnabled = next;
-          connection.current?.setMicEnabled(next);
-          setMicEnabled(next);
-        },
-      }}
-    >
-      {children}
-    </Context.Provider>
-  );
+  const controls: VoxControls = {
+    state,
+    error,
+    display,
+    silent,
+    resetConversation: () => {
+      stop();
+      const closed = stopping.current;
+      const reset = (async () => {
+        await closed?.catch(() => undefined);
+        resetSavedVoxConversation();
+        display.reset();
+        setError(null);
+      })();
+      // A concurrent click cannot resume the old conversation before reset.
+      stopping.current = reset.catch(() => undefined);
+      return reset;
+    },
+    start: () => void start(),
+    stop: () => {
+      void stop().catch(() => undefined);
+    },
+    end: stop,
+  };
+  return <Context.Provider value={controls}>{children}</Context.Provider>;
 }

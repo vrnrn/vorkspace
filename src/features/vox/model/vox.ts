@@ -11,6 +11,13 @@ import type { VoxDisplay } from "./display";
 import { VOX_MOODS, type VoxMood } from "./expressions";
 import { captureVoxMicrophone, VoxMicrophoneError } from "./microphone";
 import {
+  loadVoxConversation,
+  saveVoxConversation,
+  VoxConversationError,
+} from "./conversation";
+import { voxMemoryContext } from "./memory";
+import { recentVoxContext } from "./context";
+import {
   VOX_ACTIONS,
   VOX_AGENT_INSTRUCTIONS,
   VOX_INSTRUCTIONS,
@@ -23,6 +30,7 @@ type Options = {
   cwd: string;
   onConnected: () => void;
   onError: (message: string) => void;
+  onStopped?: (saving: Promise<void>) => void;
   execute: VoxRequestHandler;
   getContext?: VoxRequestHandler;
   display?: VoxDisplay;
@@ -33,6 +41,9 @@ type Options = {
 // One call per renderer. A stopped generation keeps its own child identity so
 // late permission/spawn completions cannot dispose a replacement call.
 let active: Vox | undefined;
+export async function stopActiveVox(): Promise<void> {
+  await active?.stop();
+}
 const CONNECT_TIMEOUT_MS = 30_000;
 
 /** Codex owns OAuth and voice delegation; the workspace owns app actions.
@@ -51,6 +62,13 @@ export class Vox {
   private stopping?: Promise<void>;
   private timeout?: ReturnType<typeof setTimeout>;
   private threadId?: string;
+  private resumed = false;
+  private opening?: Promise<void>;
+  private realtimeStarting?: Promise<unknown>;
+  private resolveClosed!: () => void;
+  private readonly closed = new Promise<void>((resolve) => {
+    this.resolveClosed = resolve;
+  });
   private acceptingAnswer = false;
   private connected = false;
   private silent: boolean;
@@ -109,7 +127,7 @@ export class Vox {
         "This webview does not support microphone capture and WebRTC.",
       );
     }
-    const [microphone, binary, catalog] = await Promise.all([
+    const [microphone, binary, catalog, memory] = await Promise.all([
       captureVoxMicrophone(() => !this.stopped).then((stream) => {
         if (this.stopped) stream.getTracks().forEach((track) => track.stop());
         else {
@@ -131,6 +149,7 @@ export class Vox {
         })
         .then(voxCatalog)
         .catch(() => "") ?? "",
+      voxMemoryContext(),
     ]);
     if (this.stopped) return;
 
@@ -167,6 +186,17 @@ export class Vox {
     // control events. Media stays on the peer, never on the JSON-RPC pipe.
     this.channel = peer.createDataChannel("oai-events");
     this.channel.onopen = () => this.publishConnected();
+    this.channel.onmessage = ({ data }) => {
+      if (this.stopped || typeof data !== "string" || data.length > 64_000)
+        return;
+      try {
+        const value: unknown = JSON.parse(data);
+        if (value && typeof value === "object" && !Array.isArray(value))
+          this.options.display?.realtime(value as Record<string, unknown>);
+      } catch {
+        // An unsupported control frame must never interrupt voice transport.
+      }
+    };
     this.channel.onclose = () =>
       this.fail("The Vox connection ended. Start Vox again to reconnect.");
     this.channel.onerror = () =>
@@ -199,6 +229,7 @@ export class Vox {
       this.id,
       (line) => rpc.pushLine(line),
       () => {
+        this.rpc?.close(new Error("The Codex voice helper exited"));
         this.fail(
           "The Codex voice helper exited. Check your Codex sign-in and try again.",
         );
@@ -211,6 +242,7 @@ export class Vox {
       this.options.cwd,
       { provider: "codex", id: "default" },
       "codex",
+      "mono",
     );
     await this.spawn;
     if (this.stopped) return;
@@ -248,23 +280,56 @@ export class Vox {
     );
     if (this.stopped) return;
     await rpc.notify("initialized");
-    const result = await rpc.request<{ thread: { id: string } }>(
-      "thread/start",
-      {
+    this.opening = (async () => {
+      const saved = loadVoxConversation();
+      this.resumed = !!saved.threadId;
+      const params = {
         cwd: this.options.cwd,
         model: "gpt-6.1-sol",
         config: { model_reasoning_effort: "low" },
-        ephemeral: true,
         approvalPolicy: "never",
         sandbox: "read-only",
-        developerInstructions: VOX_AGENT_INSTRUCTIONS,
-        dynamicTools: [VOX_TOOL],
-      },
-      CONNECT_TIMEOUT_MS,
-    );
+        developerInstructions: [VOX_AGENT_INSTRUCTIONS, memory].join("\n\n"),
+      };
+      // Resume failures never silently replace a long-lived conversation.
+      const result = await rpc
+        .request<{ thread: { id: string } }>(
+          saved.threadId ? "thread/resume" : "thread/start",
+          saved.threadId
+            ? { ...params, threadId: saved.threadId, excludeTurns: true }
+            : { ...params, dynamicTools: [VOX_TOOL] },
+          CONNECT_TIMEOUT_MS,
+        )
+        .catch((error) => {
+          if (saved.threadId)
+            throw new VoxConversationError(
+              "vox's saved conversation could not be resumed. try again or reset it in settings → vox.",
+            );
+          throw error;
+        });
+      const id = result.thread?.id?.trim();
+      if (!id || (saved.threadId && id !== saved.threadId))
+        throw new VoxConversationError(
+          "vox's saved conversation could not be resumed. try again or reset it in settings → vox.",
+        );
+      // Complete this save even if End arrives while thread/start is pending.
+      // No voice session starts until its durable identity is recorded.
+      saveVoxConversation(saved, id);
+      this.threadId = id;
+    })();
+    await this.opening;
     if (this.stopped) return;
-    this.threadId = result.thread.id;
-    await rpc.request(
+    const initialItems = this.resumed
+      ? recentVoxContext(
+          await rpc.request(
+            "thread/turns/list",
+            { threadId: this.threadId, limit: 4, itemsView: "full" },
+            CONNECT_TIMEOUT_MS,
+          ),
+        )
+      : [];
+    if (this.stopped) return;
+    this.realtimeStarting = rpc.request(
       "thread/realtime/start",
       {
         threadId: this.threadId,
@@ -273,10 +338,15 @@ export class Vox {
         model: "gpt-live-1-codex",
         transport: { type: "webrtc", sdp },
         includeStartupContext: false,
-        prompt: [VOX_INSTRUCTIONS, catalog].filter(Boolean).join("\n\n"),
+        initialItems,
+        flushTranscriptTailOnSessionEnd: true,
+        prompt: [VOX_INSTRUCTIONS, catalog, memory]
+          .filter(Boolean)
+          .join("\n\n"),
       },
       CONNECT_TIMEOUT_MS,
     );
+    await this.realtimeStarting;
   }
 
   private async request(
@@ -405,9 +475,11 @@ export class Vox {
   }
 
   private notification(method: string, params: unknown): void {
-    if (this.stopped || !params || typeof params !== "object") return;
+    if (!params || typeof params !== "object") return;
     const value = params as Record<string, unknown>;
     if (value.threadId !== this.threadId) return;
+    if (method === "thread/realtime/closed") this.resolveClosed();
+    if (this.stopped) return;
     this.options.display?.notification(method, value);
     if (method === "thread/realtime/sdp" && typeof value.sdp === "string") {
       if (this.acceptingAnswer) return;
@@ -431,7 +503,7 @@ export class Vox {
 
   private fail(message: string): void {
     if (this.stopped) return;
-    void this.stop();
+    void this.stop().catch(() => undefined);
     this.options.onError(message);
   }
 
@@ -447,6 +519,7 @@ export class Vox {
     this.microphone = undefined;
     if (this.channel) {
       this.channel.onopen = null;
+      this.channel.onmessage = null;
       this.channel.onclose = null;
       this.channel.onerror = null;
       this.channel.close();
@@ -466,8 +539,47 @@ export class Vox {
       this.audio.srcObject = null;
       this.audio = undefined;
     }
-    this.rpc?.close();
     this.stopping = (async () => {
+      let saveError: VoxConversationError | undefined;
+      // Media is already off. Keep RPC alive until native transcript-tail
+      // persistence finishes; the stop acknowledgement alone is not a flush.
+      await this.opening?.catch(() => undefined);
+      if (
+        this.threadId &&
+        this.realtimeStarting &&
+        this.rpc &&
+        !this.rpc.isClosed
+      ) {
+        await this.realtimeStarting.catch(() => undefined);
+        try {
+          await this.rpc.request(
+            "thread/realtime/stop",
+            { threadId: this.threadId },
+            5_000,
+          );
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              this.closed,
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(
+                  () => reject(new Error("Vox transcript save timed out")),
+                  5_000,
+                );
+              }),
+            ]);
+          } finally {
+            clearTimeout(timer);
+          }
+        } catch {
+          // Earlier native history remains intact; surface uncertainty rather
+          // than claiming that the final speech was durably recorded.
+          saveError = new VoxConversationError(
+            "vox stopped, but saving the latest speech could not be confirmed. earlier conversation and memories are kept.",
+          );
+        }
+      }
+      this.rpc?.close();
       // harness_kill closes the server-side call too. Wait for spawn admission
       // before killing so Stop during process startup cannot leak a helper.
       if (this.spawn) {
@@ -477,19 +589,27 @@ export class Vox {
       this.releaseBridge?.();
       this.releaseBridge = undefined;
       if (active === this) active = undefined;
+      if (saveError) throw saveError;
     })();
+    this.options.onStopped?.(this.stopping);
     return this.stopping;
   }
 }
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    void active?.stop();
+    void active?.stop().catch(() => undefined);
   });
 }
 
 function voxError(error: unknown): string {
-  if (error instanceof VoxMicrophoneError) return error.message;
+  if (String(error).includes("Vox is already active in another window"))
+    return "vox is already active in another window. end that call first.";
+  if (
+    error instanceof VoxMicrophoneError ||
+    error instanceof VoxConversationError
+  )
+    return error.message;
   if (
     error instanceof DOMException &&
     ["NotAllowedError", "NotFoundError", "NotReadableError"].includes(

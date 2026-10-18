@@ -12,6 +12,14 @@ const host = vi.hoisted(() => ({
   spawn: vi.fn(async (..._args: unknown[]) => {}),
   kill: vi.fn(async (_id: string) => {}),
   release: vi.fn(),
+  closeOnStop: true,
+  resumeError: undefined as string | undefined,
+  threadGate: undefined as Promise<void> | undefined,
+  history: { data: [] } as { data: unknown[] },
+}));
+vi.mock("./memory", () => ({
+  voxMemoryContext: async () =>
+    "<vox_memory>prefers concise answers</vox_memory>",
 }));
 vi.mock("../../../integrations/harness/core/child", () => ({
   acquireHarnessBridge: async () => host.release,
@@ -26,6 +34,24 @@ vi.mock("../../../integrations/harness/core/child", () => ({
     const request = JSON.parse(line);
     host.requests.push(request);
     if (request.id === undefined) return;
+    if (request.method === "thread/start" && host.threadGate)
+      await host.threadGate;
+    if (request.method === "thread/resume" && host.resumeError) {
+      host.lines.get(id)!(
+        JSON.stringify({
+          id: request.id,
+          error: { code: -32000, message: host.resumeError },
+        }),
+      );
+      return;
+    }
+    if (request.method === "thread/realtime/stop" && host.closeOnStop)
+      host.lines.get(id)!(
+        JSON.stringify({
+          method: "thread/realtime/closed",
+          params: { threadId: "vox-thread" },
+        }),
+      );
     if (request.method === "thread/realtime/start") {
       // Real Codex can notify before acknowledging the start request.
       host.lines.get(id)!(
@@ -35,14 +61,18 @@ vi.mock("../../../integrations/harness/core/child", () => ({
         }),
       );
     }
-    const result =
-      request.method === "thread/start" ? { thread: { id: "vox-thread" } } : {};
+    const result = ["thread/start", "thread/resume"].includes(request.method)
+      ? { thread: { id: "vox-thread" } }
+      : request.method === "thread/turns/list"
+        ? host.history
+        : {};
     host.lines.get(id)!(JSON.stringify({ id: request.id, result }));
   },
 }));
 
 import { Vox } from "./vox";
 import { VoxDisplay } from "./display";
+import { loadVoxConversation, resetSavedVoxConversation } from "./conversation";
 
 class Peer {
   static instances: Peer[] = [];
@@ -56,6 +86,7 @@ class Peer {
     onopen: null as (() => void) | null,
     onclose: null as (() => void) | null,
     onerror: null,
+    onmessage: null as ((event: { data: unknown }) => void) | null,
     close: vi.fn(),
   };
   createDataChannel = vi.fn(() => this.channel);
@@ -76,6 +107,7 @@ const track = () => ({
   enabled: true,
   onended: null as (() => void) | null,
 });
+
 function microphone() {
   const input = track();
   return { input, getTracks: () => [input], getAudioTracks: () => [input] };
@@ -108,6 +140,15 @@ beforeEach(() => {
   host.lines.clear();
   host.exits.clear();
   host.requests.length = 0;
+  host.closeOnStop = true;
+  host.resumeError = undefined;
+  host.threadGate = undefined;
+  host.history = { data: [] };
+  const saved = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => saved.get(key) ?? null,
+    setItem: (key: string, value: string) => saved.set(key, value),
+  });
   Peer.instances = [];
   calls = [];
   mic = microphone();
@@ -144,7 +185,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("does no idle work and negotiates direct audio with an ephemeral, isolated default-account helper", async () => {
+it("does no idle work and negotiates direct audio with a durable private default-account conversation", async () => {
   const call = create();
   expect(getUserMedia).not.toHaveBeenCalled();
   expect(host.spawn).not.toHaveBeenCalled();
@@ -156,6 +197,7 @@ it("does no idle work and negotiates direct audio with an ephemeral, isolated de
     "/repo",
     { provider: "codex", id: "default" },
     "codex",
+    "mono",
   ]);
   expect(
     host.requests.find((r) => r.method === "initialize")?.params,
@@ -171,7 +213,6 @@ it("does no idle work and negotiates direct audio with an ephemeral, isolated de
   expect(
     host.requests.find((r) => r.method === "thread/start")?.params,
   ).toMatchObject({
-    ephemeral: true,
     sandbox: "read-only",
     approvalPolicy: "never",
   });
@@ -182,6 +223,8 @@ it("does no idle work and negotiates direct audio with an ephemeral, isolated de
     model: "gpt-live-1-codex",
     outputModality: "audio",
     includeStartupContext: false,
+    initialItems: [],
+    flushTranscriptTailOnSessionEnd: true,
     transport: { type: "webrtc", sdp: "offer" },
   });
   expect(peer.addTrack).toHaveBeenCalledWith(mic.input, mic);
@@ -192,6 +235,10 @@ it("does no idle work and negotiates direct audio with an ephemeral, isolated de
   expect(prompt).toContain("Your backing agent can look up the active session");
   expect(host.requests.some((r) => r.method === "turn/start")).toBe(false);
   expect(execute).not.toHaveBeenCalled();
+  expect(
+    host.requests.find((r) => r.method === "thread/start")?.params,
+  ).not.toHaveProperty("ephemeral");
+  expect(prompt).toContain("prefers concise answers");
   expect(peer.setRemoteDescription).toHaveBeenCalledExactlyOnceWith({
     type: "answer",
     sdp: "answer",
@@ -660,5 +707,182 @@ it("accepts model moods alongside an existing action without changing its payloa
   );
   expect(execute).toHaveBeenCalledOnce();
   expect(display.getSnapshot().mood).toBe("curious");
+  display.dispose();
+});
+
+it("resumes the same conversation after ending a call without creating a replacement", async () => {
+  const first = create();
+  await first.start();
+  await first.stop();
+  host.history = {
+    data: [
+      {
+        items: [
+          {
+            type: "userMessage",
+            content: [{ type: "text", text: "my project is orbit" }],
+          },
+        ],
+      },
+    ],
+  };
+  await create().start();
+  expect(
+    host.requests.filter((request) => request.method === "thread/start"),
+  ).toHaveLength(1);
+  expect(
+    host.requests.find((request) => request.method === "thread/resume")?.params,
+  ).toMatchObject({ threadId: "vox-thread", excludeTurns: true });
+  expect(
+    host.requests
+      .filter((request) => request.method === "thread/turns/list")
+      .map((request) => request.params),
+  ).toEqual([{ threadId: "vox-thread", limit: 4, itemsView: "full" }]);
+  expect(
+    host.requests
+      .filter((request) => request.method === "thread/realtime/start")
+      .at(-1)?.params,
+  ).toMatchObject({
+    includeStartupContext: false,
+    initialItems: [
+      {
+        role: "assistant",
+        text: expect.stringContaining("my project is orbit"),
+      },
+    ],
+  });
+  expect(loadVoxConversation().threadId).toBe("vox-thread");
+});
+
+it("keeps saved history selected when resume fails instead of starting an empty thread", async () => {
+  const first = create();
+  await first.start();
+  await first.stop();
+  const saved = loadVoxConversation();
+  host.resumeError = "missing native history";
+  const retry = create();
+  await retry.start();
+  await retry.stop();
+  expect(error).toHaveBeenCalledWith(
+    expect.stringContaining("saved conversation could not be resumed"),
+  );
+  expect(loadVoxConversation()).toEqual(saved);
+  expect(
+    host.requests.filter((request) => request.method === "thread/start"),
+  ).toHaveLength(1);
+});
+
+it("waits for native transcript persistence after the stop acknowledgement before killing the helper", async () => {
+  host.closeOnStop = false;
+  const call = create();
+  await call.start();
+  const stopping = call.stop();
+  await vi.waitFor(() =>
+    expect(
+      host.requests.some(
+        (request) => request.method === "thread/realtime/stop",
+      ),
+    ).toBe(true),
+  );
+  expect(mic.input.stop).toHaveBeenCalledOnce();
+  expect(host.kill).not.toHaveBeenCalled();
+  notify("thread/realtime/closed");
+  await stopping;
+  expect(host.kill).toHaveBeenCalledOnce();
+});
+
+it("reports uncertain saving but releases resources and allows a later call", async () => {
+  const call = create();
+  await call.start();
+  host.closeOnStop = false;
+  vi.useFakeTimers();
+  const stopping = call.stop();
+  const failure = expect(stopping).rejects.toThrow(
+    "saving the latest speech could not be confirmed",
+  );
+  await vi.advanceTimersByTimeAsync(5_001);
+  await failure;
+  expect(host.kill).toHaveBeenCalledOnce();
+  expect(host.release).toHaveBeenCalledOnce();
+  calls = calls.filter((item) => item !== call);
+  host.closeOnStop = true;
+  await create().start();
+  expect(
+    host.requests.filter((request) => request.method === "thread/resume"),
+  ).toHaveLength(1);
+});
+
+it("records a newly created identity even when End arrives before its acknowledgement", async () => {
+  let finish!: () => void;
+  host.threadGate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const call = create();
+  const starting = call.start();
+  await vi.waitFor(() =>
+    expect(
+      host.requests.some((request) => request.method === "thread/start"),
+    ).toBe(true),
+  );
+  const stopping = call.stop();
+  expect(host.kill).not.toHaveBeenCalled();
+  finish();
+  await Promise.all([starting, stopping]);
+  expect(loadVoxConversation().threadId).toBe("vox-thread");
+  expect(
+    host.requests.some((request) => request.method === "thread/realtime/start"),
+  ).toBe(false);
+  await create().start();
+  expect(
+    host.requests.some((request) => request.method === "thread/resume"),
+  ).toBe(true);
+});
+
+it("does not restore a retired conversation after reset races a creation acknowledgement", async () => {
+  let finish!: () => void;
+  host.threadGate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const call = create();
+  const starting = call.start();
+  await vi.waitFor(() =>
+    expect(
+      host.requests.some((request) => request.method === "thread/start"),
+    ).toBe(true),
+  );
+  resetSavedVoxConversation();
+  const reset = loadVoxConversation();
+  finish();
+  await starting;
+  await call.stop();
+  expect(loadVoxConversation()).toEqual(reset);
+  expect(reset.threadId).toBeUndefined();
+});
+
+it("observes bounded playback control frames on the existing channel and ignores late frames after End", async () => {
+  const display = new VoxDisplay();
+  const call = create({ display });
+  await call.start();
+  const receive = Peer.instances[0].channel.onmessage!;
+  receive({
+    data: JSON.stringify({
+      type: "output_transcript.added",
+      start_ms: 0,
+    }),
+  });
+  expect(display.getSnapshot().activity).toBe("replying");
+  receive({ data: "invalid" });
+  receive({ data: "x".repeat(9_000) });
+  expect(display.getSnapshot().activity).toBe("replying");
+  await call.stop();
+  display.finish();
+  receive({
+    data: JSON.stringify({
+      type: "output_transcript.added",
+      start_ms: 1000,
+    }),
+  });
+  expect(display.getSnapshot().activity).toBe("listening");
+  expect(Peer.instances[0].channel.onmessage).toBeNull();
   display.dispose();
 });

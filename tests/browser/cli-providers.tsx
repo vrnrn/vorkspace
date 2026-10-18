@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { voxMemoryFixture } from "./voxMemoryFixture";
 import "../../src/styles/index.css";
 
 const providers = ["claude", "codex", "pi", "omp", "antigravity"] as const;
@@ -41,6 +42,13 @@ Object.assign(window, {
     transformCallback: () => 1,
     unregisterCallback: () => {},
     invoke: async (command: string, args?: Record<string, unknown>) => {
+      if (command.startsWith("mono_")) return voxMemoryFixture(command, args);
+      if (command === "plugin:dialog|message")
+        return (window as unknown as { voxConfirm?: boolean }).voxConfirm ===
+          false
+          ? "Cancel"
+          : ((args?.buttons as { OkCancelCustom?: string[] })
+              ?.OkCancelCustom?.[0] ?? "Yes");
       if (command.startsWith("harness_resolve_"))
         return { path: `/dummy/${command.slice("harness_resolve_".length)}` };
       if (command === "harness_exec")

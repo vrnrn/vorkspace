@@ -14,6 +14,7 @@ import {
   writeComposer,
 } from "../../sessions/model/composerControl";
 import type { Session } from "../../sessions/model/session";
+import { handleVoxMemory } from "./memory";
 import {
   VOX_ACTIONS,
   type VoxRequest,
@@ -52,6 +53,8 @@ export function createVoxController(host: Host): VoxRequestHandler {
       (path) => looksLikeProject(path) && !isRemoteProjectPath(path),
     );
     const { action, input } = request;
+    if (action.startsWith("memory."))
+      return handleVoxMemory(request, () => assertVoxCurrent(request));
     if (action === "workspace.current")
       return {
         session: selected

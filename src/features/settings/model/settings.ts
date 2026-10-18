@@ -181,11 +181,35 @@ export type SettingsEntry = {
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
   {
+    id: "vox-enabled",
+    section: "vox",
+    label: "Enable Vox",
+    keywords: "enable disable voice codex chatgpt live voice access off",
+  },
+  {
+    id: "vox-memory",
+    section: "vox",
+    label: "Memory",
+    keywords: "remember facts forget delete saved preferences",
+  },
+  {
+    id: "vox-conversation",
+    section: "vox",
+    label: "Long-term conversation",
+    keywords: "history reset session voice",
+  },
+  {
     id: "vox-microphone",
     section: "vox",
     label: "Default microphone",
     keywords:
       "vox voice mic input device macbook built in airpods system audio",
+  },
+  {
+    id: "vox-silent",
+    section: "vox",
+    label: "Silent replies",
+    keywords: "voice speaker sound mute text bubble vox",
   },
   {
     id: "remote-machines",

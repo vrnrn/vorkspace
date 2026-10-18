@@ -47,14 +47,17 @@ it("publishes final replies immediately and runs no work for a closed panel", ()
   expect(store.getSnapshot().lines[0].text).toBe("OriginalCase.ts is ready");
   close();
   done(store, "assistant", "another reply");
-  expect(store.getSnapshot().lines).toHaveLength(2);
+  expect(store.getSnapshot().lines.map((line) => line.text)).toEqual([
+    "another reply",
+  ]);
   expect(notify).toHaveBeenCalledOnce();
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it("keeps repeated native replies and rejects empty or duplicate event families", () => {
+it("replaces the last native reply, including repeats, and rejects empty or duplicate event families", () => {
   const store = create();
   done(store, "assistant", "again");
+  const first = store.getSnapshot().lines[0].id;
   done(store, "assistant", "again");
   done(store, "assistant", " ");
   done(store, "unknown", "wrong role");
@@ -65,20 +68,17 @@ it("keeps repeated native replies and rejects empty or duplicate event families"
       text: "duplicate family",
     },
   });
-  expect(store.getSnapshot().lines.map((line) => line.text)).toEqual([
-    "again",
-    "again",
-  ]);
+  expect(store.getSnapshot().lines.map((line) => line.text)).toEqual(["again"]);
+  expect(store.getSnapshot().lines[0].id).not.toBe(first);
 });
 
-it("bounds retained reply count and text cost and clears them on a new call", () => {
+it("retains only the latest bounded reply and clears it on a new call", () => {
   const store = create();
-  for (let n = 0; n < 30; n++) done(store, "assistant", "x".repeat(20_000));
+  for (let n = 0; n < 30; n++)
+    done(store, "assistant", `${n} ${"x".repeat(20_000)}`);
   const { lines } = store.getSnapshot();
-  expect(lines.length).toBeLessThanOrEqual(12);
-  expect(
-    lines.reduce((sum, line) => sum + line.text.length, 0),
-  ).toBeLessThanOrEqual(16_000);
+  expect(lines).toHaveLength(1);
+  expect(lines[0].text).toMatch(/^29 /);
   expect(
     lines.every((line) => line.text.length <= 4_000 && line.truncated),
   ).toBe(true);
@@ -110,4 +110,43 @@ it("keeps actual activity authoritative over model moods and clears moods withou
       (face) => face.face === face.face.toLowerCase(),
     ),
   ).toBe(true);
+});
+
+it("tracks native playback boundaries without letting old replies or backing-agent completion stop a newer speaking face", () => {
+  const store = create();
+  store.realtime({
+    type: "turn.created",
+    turn: { id: "old", role: "assistant", start_ms: 0, end_ms: 200 },
+  });
+  expect(store.getSnapshot().activity).toBe("replying");
+  store.notification("turn/completed", {});
+  expect(store.getSnapshot().activity).toBe("replying");
+  store.realtime({
+    type: "turn.created",
+    turn: { id: "user", role: "user", start_ms: 200, end_ms: 400 },
+  });
+  expect(store.getSnapshot().activity).toBe("listening");
+  store.realtime({
+    type: "turn.done",
+    turn: { id: "user", role: "user", start_ms: 200, end_ms: 800 },
+  });
+  expect(store.getSnapshot().activity).toBe("thinking");
+  store.realtime({ type: "output_transcript.added", start_ms: 1000 });
+  store.realtime({
+    type: "turn.done",
+    turn: { id: "old", role: "assistant", start_ms: 0, end_ms: 200 },
+  });
+  store.notification("turn/completed", {});
+  expect(store.getSnapshot().activity).toBe("replying");
+  store.realtime({
+    type: "turn.done",
+    turn: { id: "new", role: "assistant", start_ms: 1000, end_ms: 2000 },
+  });
+  expect(store.getSnapshot().activity).toBe("listening");
+  store.realtime({
+    type: "turn.created",
+    turn: { id: "last", role: "assistant", start_ms: 2000, end_ms: 2200 },
+  });
+  store.finish();
+  expect(store.getSnapshot().activity).toBe("listening");
 });

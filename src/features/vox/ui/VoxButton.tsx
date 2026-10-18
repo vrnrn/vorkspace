@@ -1,63 +1,94 @@
-import { useId, useRef, useState } from "react";
+import { useVox, type VoxControls } from "./VoxProvider";
+import { useId, useRef, useState, useSyncExternalStore } from "react";
+import { loadVoxEnabled, subscribeVoxEnabled } from "../model/availability";
+import { voxFace } from "../model/expressions";
 import { Popover } from "../../../shared/ui/Popover";
-import { useVox } from "./VoxProvider";
-import { VoxPanel } from "./VoxPanel";
+import { VoxFace } from "./VoxFace";
 
 export function VoxButton() {
-  const button = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(false);
-  const id = useId();
   const vox = useVox();
-  if (!vox) return null;
-  function close(focus = false) {
-    setOpen(false);
-    if (focus) button.current?.focus({ preventScroll: true });
-  }
+  const enabled = useSyncExternalStore(subscribeVoxEnabled, loadVoxEnabled);
+  if (!enabled || !vox) return null;
+  return <VoxTitleControl vox={vox} />;
+}
+
+function VoxTitleControl({ vox }: { vox: VoxControls }) {
+  const button = useRef<HTMLButtonElement>(null);
+  const id = useId();
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const snapshot = useSyncExternalStore(
+    vox.display.subscribe,
+    vox.display.getSnapshot,
+  );
+  const active = vox.state !== "idle";
+  const reply = snapshot.lines[0];
+  const message = vox.error
+    ? { id: `error:${vox.error}`, text: vox.error, truncated: false }
+    : vox.silent && active
+      ? reply
+      : undefined;
+  const bubble = message && message.id !== dismissed;
+  const face = voxFace({ ...vox, ...snapshot, micEnabled: true });
+  const motion = !active
+    ? "off"
+    : vox.state === "connecting"
+      ? "connecting"
+      : snapshot.activity === "replying"
+        ? "talking"
+        : snapshot.activity === "thinking"
+          ? "thinking"
+          : "idle";
+  const status = vox.error
+    ? "connection lost"
+    : vox.state === "connecting"
+      ? "connecting…"
+      : !active
+        ? "off"
+        : snapshot.activity;
   return (
     <div
       className="relative flex shrink-0 items-center"
       data-tauri-drag-region="false"
     >
       <button
-        ref={button}
         type="button"
+        ref={button}
         aria-label="vox"
-        aria-expanded={open}
-        aria-controls={open ? id : undefined}
-        aria-pressed={vox.state !== "idle"}
+        aria-describedby={id}
+        aria-pressed={active}
         title={
           vox.error
-            ? "vox · connection lost"
+            ? "vox · connection lost · click to retry"
             : vox.state === "idle"
-              ? "open vox"
-              : "vox · microphone session active"
+              ? "start vox"
+              : "end vox"
         }
-        onClick={() => {
-          if (open) close();
-          else {
-            setOpen(true);
-            if (vox.state === "idle" && !vox.error) vox.start();
-          }
-        }}
-        className={`h-7 rounded-md px-3 font-mono text-[15px] font-medium tracking-[-0.03em] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-content/40 ${vox.state === "idle" && !vox.error ? "bg-content/5 text-content/75 hover:bg-selection-hover hover:text-content" : "bg-selection-emphasis text-content"}`}
+        onClick={active ? vox.stop : vox.start}
+        className={`grid h-7 min-w-14 place-items-center rounded-md px-2.5 font-mono text-[18px] font-medium tracking-[-0.03em] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-content/40 ${active ? "bg-selection-emphasis text-content" : "bg-content/5 text-content/75 hover:bg-selection-hover hover:text-content"}`}
       >
-        vox
+        <VoxFace id={face} motion={motion} />
+        <span id={id} role="status" className="sr-only">
+          {status}
+        </span>
       </button>
-      {open ? (
+      {bubble ? (
         <Popover
           anchor={button}
           side="bottom"
           align="end"
-          width={340}
-          maxHeight={420}
-          role="dialog"
-          aria-label="vox"
-          id={id}
-          tabIndex={-1}
-          autoFocus
-          onDismiss={(reason) => close(reason === "escape")}
+          gap={8}
+          width={280}
+          maxHeight={180}
+          autoFocus={false}
+          onDismiss={() => setDismissed(message.id)}
+          role={vox.error ? "alert" : "status"}
+          aria-label={vox.error ? "vox notice" : "vox reply"}
+          aria-live="polite"
+          tabIndex={0}
+          className="select-text overflow-y-auto overscroll-contain whitespace-pre-wrap break-words px-3 py-2.5 text-[12px] leading-relaxed text-content lowercase focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-content/40"
         >
-          <VoxPanel vox={vox} onClose={() => close(true)} />
+          {message.text}
+          {message.truncated ? "…" : ""}
         </Popover>
       ) : null}
     </div>

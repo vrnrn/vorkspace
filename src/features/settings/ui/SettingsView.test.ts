@@ -110,7 +110,22 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   onSelectSection = vi.fn();
-  vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
+  vi.mocked(invoke)
+    .mockReset()
+    .mockImplementation(async (command) =>
+      command === "mono_load"
+        ? {
+            id: "vox",
+            dir: "/fixture/vox",
+            soul: "",
+            soulHash: "empty",
+            memory: "",
+            memoryHash: "empty",
+            memoryPath: "/fixture/vox/MEMORY.md",
+            topics: [],
+          }
+        : undefined,
+    );
 });
 
 afterEach(async () => {

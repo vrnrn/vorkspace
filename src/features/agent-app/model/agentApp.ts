@@ -587,7 +587,7 @@ async function handleSoul(
  * from the top when the user saved the same file in between.
  */
 async function editAgentFile<T>(
-  host: AgentAppHost,
+  host: AgentMemoryHost,
   monoId: string,
   path: AgentFilePath,
   edit: (text: string) => { text: string; result: T },
@@ -616,7 +616,7 @@ async function editAgentFile<T>(
  * saved MEMORY.md in between, the trim waits for the next write.
  */
 async function keepMemoryInBudget(
-  host: AgentAppHost,
+  host: AgentMemoryHost,
   monoId: string,
   keep: string,
   date: string,
@@ -645,6 +645,22 @@ async function handleMemory(
 ): Promise<unknown> {
   const monoId = host.monoOf?.(source.id)?.id;
   if (!monoId) throw new Error("Memory belongs to the Mono's conversation");
+  return handleAgentMemory(monoId, action, input, host);
+}
+
+export type AgentMemoryHost = Pick<
+  AgentAppHost,
+  "agentFiles" | "readAgentFile" | "writeAgentFile" | "now"
+>;
+
+/** The caller supplies an authorized owner; tool input can never choose it. */
+export async function handleAgentMemory(
+  monoId: string,
+  action: string,
+  input: Record<string, unknown>,
+  host: AgentMemoryHost,
+): Promise<unknown> {
+  fields(action, input);
   const path = memoryPath(input.topic);
   const date = memoryDate(host.now?.() ?? new Date());
   const until = optionalString(input.until, "until", 10);

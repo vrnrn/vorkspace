@@ -1,89 +1,61 @@
-# vox — settings alignment and physical microphone choices
+# vox — expressive title-bar control
 
-final result: passed
+## scope and direction contract
 
-## scope and source truth
+This is a code-led Operate refinement of Vorkspace's existing desktop chrome.
+The user clarified that “menu bar Vox” means the top-right control inside
+Vorkspace. The earlier independent-window experiment remains reverted.
 
-This is a scoped UI review, not certification of physical microphone reliability
-or a whole-app performance budget. The user superseded the original panel brief:
-keep vox grayscale, remove the display of their speech, use the MacBook mic by
-default, and provide a dedicated Vox settings section with an input selector. The latest
-correction limits lowercase styling to the Vox panel: Settings follows the
-incumbent capitalization and layout, and the menu lists physical inputs once
-without built-in/system aliases.
+- Thesis: Vox lives in its existing title-bar slot; its three glyphs carry call state and personality.
+- Own-world: shared grayscale content, native app glass, existing title-bar fills, monospace glyph artwork, standard Settings casing and spacing.
+- Story: click to connect, speak, click again to end. Silent mode is configured in Settings; the latest native reply appears beneath Vox.
+- First viewport: one 28-point-high, 56-point-minimum-width face control. A content-sized reply bubble is aligned beneath its right edge, capped at 280 × 180; no microphone or speaker controls remain in the title bar.
+- Form: the incumbent title-bar control and shared Popover. Ordinary extension, no new visual world or generated imagery. Signature interaction: static `vox` when stopped, sparse blinks/glances when listening, distinct thinking and talking glyph sequences during a live call.
+- Finish: bounded visual inspection, a fresh finish review, updated feature documentation, and a verified local app-only install. The reviewed checkpoint is prepared for an MR; merging and releasing remain separate actions.
 
-The original composition remains the source target:
-`/Users/vrana/.codex/visualizations/2026/10/18/01a14c7f-2c0d-74f1-a260-7e71bdc4f73e/vox-panel-preview.html`.
-Its capture is `.impeccable/review/vox-approved-preview.jpg` (799 × 1033 pixels).
-The latest explicit instructions override its lavender/blue and user captions.
-Existing `SettingsView` groups, rows, and selectors own the settings design.
+## ownership and continuity
 
-## visual evidence
+- The workspace VoxProvider remains the microphone, WebRTC, and helper owner. Settings injects the same control into its title bar when there is no compact global title bar, avoiding duplicate controls. Replacing or removing title-bar controls does not restart or end a call. Normal workspace hiding/closing and Quit retain existing graceful stop behavior.
+- Enable Vox remains the first Settings option, default off, with “Requires Codex with ChatGPT live voice access.” Disabling preserves saved conversation and memory without remounting workspace content.
+- Settings → Vox → Audio now persists Silent replies. Changing it updates the current native audio element's `muted` property and applies to subsequent calls and restarts. It does not change microphone input or negotiate another connection.
+- VoxButton observes the existing bounded display store. Replies use shared Popover placement and glass, leave focus alone, and can be dismissed by click-away or Escape. The capped bubble scrolls vertically, contains overscroll, and supports keyboard focus with a visible ring without autofocus. Only the latest completed native assistant reply is displayed in silent mode; a later reply can reappear after dismissal. User speech and partial transcripts are not displayed. Underlying case is retained; Vox copy renders lowercase.
+- A call that is connecting or live mounts CSS glyph sequences. Stopped calls render only `vox` and mount no animations. Hiding the workspace stops its call; removing the control removes its animations. Reduce Motion uses a static state-specific glyph. No animation timer, React frame updates, PCM processing, audio meter, or worker was added.
+- VoxDisplay observes Codex live voice's existing WebRTC control events (`output_transcript.added`, `turn.created`, `turn.done`) for coarse reply activity. It retains identities and timestamps, not the event's speech text. An old assistant completion cannot stop a newer reply. Backing-agent completion cannot override ongoing voice output.
+- Conversation identity, four-turn/3,000-character initial context, transcript-tail flush, native single-writer admission, and Mono-style reserved Vox memory storage remain unchanged. Final displayed reply retention remains capped at 4,000 UTF-16 characters.
 
-- `.impeccable/review/vox-final-replies-chromium.png`: 1000 × 800 pixels; grayscale face, assistant reply only, silent replies enabled.
-- `.impeccable/review/vox-settings-corrected-chromium.png`: 1000 × 800 pixels; standard Settings capitalization and exactly two physical choices.
-- `.impeccable/review/vox-settings-corrected-webkit.png`: 1000 × 800 pixels; same state in WebKit.
-- `.impeccable/review/vox-settings-corrected-iab.jpg`: 1280 × 720 pixels; corrected open selector at the user browser size.
-- `.impeccable/review/settings-general-baseline-iab.jpg`: 1280 × 720 pixels; incumbent General settings as visual authority for this correction.
-- User-supplied `codex-clipboard-915ab78c-a674-4d23-93d4-0de13c4cf6f0.png`: the rejected lowercase/four-option state, primary evidence superseding the earlier review.
+## current verification
 
-Each capture was opened and validated. Reference and rendered implementation were
-viewed together in a single comparison input. These are 1:1 CSS-pixel captures;
-surrounding preview/fixture canvases differ, so panel comparison uses their native
-340px square regions rather than full-canvas pixel similarity. Panel face, footer,
-reply text, and the settings row/options are readable at capture size and were
-inspected directly. Device names and caption content in browser fixtures are
-synthetic. No raster artwork or image substitutions are involved.
+- All 133 focused Vox, Settings, and app-lifecycle tests passed; TypeScript passed. At the MR checkpoint, the full web suite passed 5,313 tests with 13 skipped; native formatting, Clippy, and 662 native tests passed with one ignored. The local broken Rustup Clippy shim was bypassed with the installed toolchain, without repository changes.
+- All 24 Chromium/WebKit checks passed; after the final scroll fix, both focused silent-reply checks passed again with a 30-line reply and real wheel scrolling reaching the final sentence. They cover existing routing/composer/history/memory contracts, persisted silent mode, one-connection silent-mode changes, no extra mic controls, reply bubble placement and dismissal, latest-reply replacement, glyph changes, no animations while stopped, and Reduce Motion.
+- Deterministic animation checks paused CSS timelines and sampled glyph visibility: one visible frame per sample, three distinct idle glyphs and at least three talking glyphs. Removing the title-bar control removes its animation effects while preserving the call.
+- A real authenticated Codex/WebRTC probe with isolated temporary storage and synthetic speech observed zero startup audio energy, no startup app actions, a completed reply, and the display moving from replying back to listening. The working native channel uses Codex's live turn events rather than the standard Realtime output-buffer event names. Temporary credential copies were removed after the probe. This validates protocol activity, not physical microphone performance or word-level lip sync.
+- Native CUA in the isolated development app confirmed same-window title-bar start/end, static stopped Vox, and the Silent replies switch changing on. It also confirmed the control remains available in Settings. Only the isolated Dev app was quit; no production app restart was performed.
+- The active design hook reported no deterministic findings for the new Vox CSS. Its edit ceiling suppressed further hints for VoxButton; no extra detector was run. Visual review still judges the rendered result.
 
-## findings
+## current visual evidence
 
-No actionable P0/P1/P2 visual differences remain. A fresh Impeccable review of the user's correction returned
-`disposition: ship`; no material fixes. It confirmed that Vox and General share
-the same 160px content inset, heading position, content width, and row padding at
-1280 × 720 pixels. Documentation handoff confirmed that this
-extends the incumbent UI system without creating a new design system.
+These 1000 × 800 browser fixture captures use production components with fake
+native audio/storage. The named six were opened together; fixtures' navigation
+buttons are test controls, not app product copy.
 
-| required surface     | result                                                                                                                                                                                                                                                                                                         |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| fonts and typography | Existing body typography, compact lowercase controls/replies, and the approved 76px mono letter/symbol face. Settings hierarchy follows incumbent headings and rows.                                                                                                                                           |
-| spacing and layout   | Existing anchored 340px square panel and 16px inset; bounded reply area, stable footer. Settings uses existing Group/Row/Select composition with no clipped options at reviewed widths.                                                                                                                        |
-| colors and tokens    | Face/focus now use grayscale content tokens. Shared glass, selection, borders, and theme behavior remain. No new global palette or surface material.                                                                                                                                                           |
-| image/asset quality  | User-requested text faces and existing Hugeicons. No generated art, custom glyph icons, new fonts, or image approximations.                                                                                                                                                                                    |
-| copy and content     | Only the Vox panel uses lowercase; Settings follows the app's capitalization and native device labels. User speech is absent from the panel; raw reply and app-action payload case is preserved underneath presentation. Selector states that the next call uses the preference and system input is unchanged. |
+- `.impeccable/review/vox-titlebar-silent-{chromium,webkit}.png`: face control with a compact reply bubble directly below it.
+- `.impeccable/review/vox-titlebar-settings-{chromium,webkit}.png`: persisted Silent replies within the shared Audio group, after the first General opt-in.
+- `.impeccable/review/vox-titlebar-off-chromium.png`: static `vox` control, no reply bubble or animated frames.
+- `.impeccable/review/vox-titlebar-talking-webkit.png`: the compact face during native reply activity.
+- `.impeccable/review/vox-titlebar-long-{chromium,webkit}.png`: bounded 180px bubble scrolled to a readable final sentence. Both were opened.
+- `.impeccable/review/vox-titlebar-native-{off,settings}.png`: native app title-bar placement and standard Settings; both were opened. The Settings capture includes the existing resource-pressure toast and computer-use pointer annotation.
 
-## functional evidence and ownership
+The fresh finish review found one material gap: the height-capped bubble clipped long replies. Adding scroll, keyboard focus, and a visible focus ring resolved it. The reviewer scored the fix resolved and returned ship, based on both long-reply captures and wheel-scroll tests.
 
-- Partial transcript notifications are suppressed in Codex before stdout/IPC. The display stores only native completed assistant replies. User final text is discarded; it can reset a model mood without creating a caption. There are no caption batching timers or per-word panel updates.
-- Retention remains bounded to 12 replies, 4,000 UTF-16 characters per reply and 16,000 total, with truncation. Nothing is persisted as chat history.
-- Silent replies and mic-off independently control the existing speaker element and input track. Closing/reopening the panel preserves the call and replies; end releases it.
-- Settings → Vox is indexed in navigation/search. Its menu lists only actual named inputs; built-in/system aliases are absent. The built-in default resolves to its physical device using the same resolver as capture. Explicit device selections persist for the next call. A saved missing device remains readable in the trigger without adding another choice. Previously saved system-default preferences remain honored until changed. Settings enumeration never captures audio on mount/open and listens for device changes only while mounted.
-- Built-in selection resolves the internal microphone and requests its exact device ID. Missing or removed inputs fail with settings recovery rather than falling back to AirPods. Hidden device labels can require one permission-only capture, stopped before any peer/helper starts. Cancellation prevents later admission and releases a late permission grant.
-- Routing instructions now require active-chat/history/status requests to look up the app state through the backing agent rather than claiming that the selected chat is invisible.
-- Fourteen Chromium/WebKit checks passed, including settings reload/next-call capture constraints, no user captions, call continuity, and independent mic/speaker controls. Browser page errors were collected in the new settings scenario and were empty.
-- Before this correction, the full web suite passed 5,290 tests with 13 existing live-provider skips. This correction passed 109 targeted settings/microphone tests and all 14 Chromium/WebKit checks, including alias filtering, native capitalization, persistence, and next-call exact-device capture. TypeScript and the app-only Apple Silicon build passed.
-- An isolated native macOS WKWebView plus the real harness and Codex returned a complete synthetic greeting reply and a second spoken-turn response. A separate live browser probe waited for a completed backing turn and its final spoken/text answer using synthetic chat history, rather than accepting an acknowledgement filler as proof of completion.
-- The final production-prompt probe completed `workspace.current` and `sessions.read`, then returned the synthetic session's last reply after the backing turn finished. Silent startup produced no reply or backing turn, and no user text entered the displayed reply list.
-- The corrected signed bundle was installed at `/Users/vrana/Applications/vorkspace.app` and passed strict signature verification. Its executable matches the built bundle (SHA-256 `dcfa1e16e2ac635276da184a24be5467d9d9f13b7331e0da607dc82edf3494c0`). The previous bundle is retained for rollback; the running app was left untouched. No updater artifacts or DMG were built.
+The earlier compact-panel and memory-settings captures remain historical
+references. Pre-existing absent PRODUCT.md/DESIGN.md artifacts remain outside
+this narrow extension; no project-wide design system repair is included.
 
-## comparison and investigation history
+## local build and limits
 
-The first panel review passed its original visual brief. User feedback superseded
-that brief and reported stalled input. The current review replaces the earlier
-blue/two-sided-caption and lowercase/four-option settings evidence: color and user speech display were removed,
-partial notifications were suppressed, and a dedicated input setting was added.
-The system input was observed to be AirPods; the user explicitly selected the
-MacBook microphone for vox. Bluetooth route trouble is a hypothesis, not a proven
-root cause. Real synthetic calls established a working response path but did not
-reproduce the physical-input failure.
-
-One browser run was interrupted by a Vite reload while temporary native-probe
-files were removed. The frozen-file rerun passed all fourteen cases. An omitted
-settings-rail icon was caught by TypeScript and added using the existing mic icon.
-
-## remaining scope
-
-The user's original AirPods stall has not been established by a physical
-AirPods/MacBook A/B test. Repeated synthetic calls and unit/browser checks are not
-a latency or memory benchmark. Remote model routing and silent startup remain
-provider behavior. The local installed app must be relaunched to load the changes.
-No MR, push, release, or DMG is part of this work.
+Local app-only Apple Silicon build passed and was installed at `/Users/vrana/Applications/vorkspace.app`. Strict signature verification passed before and after installation; the installed executable matches the build, SHA-256 `cb790b4760a916398bf31c1067e7a80d25dd864ac6fb29c1c1a03a4311c44b4d`. The prior bundle is retained at `/var/folders/0w/0ycdskvx3y51rxg3x9d4n7lh0000gn/T/vorkspace-before-vox-titlebar-hzx7fh_o/vorkspace.app`. The known non-fatal rust-objcopy/libLLVM warning did not prevent compilation, bundling, or verification. The running production app was left untouched; relaunch loads the installed changes. The app install is local only; no release or DMG was published. The reviewed source checkpoint is prepared on `codex/vox` for the MR.
+These checks establish functional contracts and animation admission. They do
+not establish a measured latency, memory, or battery improvement. A crash or
+force kill can still lose native speech that has not flushed. Native call and
+conversation persistence behavior remains covered by the earlier isolated
+conversation-resume probe (including the “cobalt lantern” recall and reset).

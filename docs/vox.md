@@ -1,35 +1,47 @@
 # vox
 
-vox is vorkspace's central voice and app controller. Click **vox** in the
-workspace title bar to start it and open its small square panel. It waits
-silently for spoken input, without a greeting or an automatic task. The panel
-shows a simple face and vox's completed replies; your speech is not displayed.
-Close or Escape hides the panel while the call continues; reopening it retains
-recent captions. **end**
-stops the call. Switching chats, projects, or Monos keeps the call connected.
-Minimizing/hiding the document, leaving the window, a lost device, or a failed
-connection releases it.
+vox is vorkspace's central voice and app controller. It is off by default.
+Enable it in **Settings → Vox → General → Enable Vox**, beside “Requires Codex
+with ChatGPT live voice access.” Turning it off hides the launch control and
+gracefully ends any call, keeping conversation and memories.
 
-**silent replies** mutes vox's speaker while leaving your microphone and native
-text replies active. **mic on / mic off** independently controls input. These
-switches reuse the existing connection. Silent replies remains selected across
-calls in this workspace window; each new call starts with the mic enabled.
-The panel inherits vorkspace's shared popover, theme, and icon system, using
-grayscale content tones for the face and controls. Its copy and displayed
-replies are lowercase; underlying replies and app-action payloads retain their
-original case.
+Vox lives in Vorkspace's top-right title bar. Its compact three-glyph face is the
+control: click to start or retry, then click again to end. It waits silently for
+spoken input, without a greeting or automatic task. There is no separate panel,
+microphone mute button, or speaker button. Switching chats, projects, or Monos
+keeps the call connected; hiding or closing the workspace gracefully stops it.
+Replacing or removing the title-bar control alone does not end or restart a call.
+Settings retains the control when the compact global title bar is absent.
+
+**Settings → Vox → Audio → Silent replies** mutes the current audio element and
+persists for subsequent calls and app restarts. It does not change the microphone
+or restart the connection. While a call is active in silent mode, only its latest
+completed native assistant reply appears beneath the face in the shared glass
+Popover. The bubble is 280 px wide and at most 180 px high, supports text selection
+and wheel/keyboard scrolling, and leaves focus alone. Click-away or Escape hides
+that bubble only; a later reply can appear again. User speech and partial text are
+never displayed. Errors use a separate notice even with spoken replies enabled.
+Vox's visible copy and reply display are lowercase; underlying replies and app
+action payloads retain their original case. Settings keeps standard app casing.
+
+The title-bar face uses incumbent grayscale fills, monospace glyphs, and shared
+focus treatment. Stopped calls show static `vox`. Connecting, thinking, talking,
+and live idle states use distinct CSS glyph sequences, including sparse idle
+blinks and glances. Reduced Motion shows a static state-specific glyph. Animation
+effects exist only while a call is on and the control is mounted.
 
 vox defaults to the MacBook's built-in microphone rather than following the
 system input. **Settings → Vox** lists connected microphones once, using their
 native names and the existing settings layout and capitalization. Lowercase
-styling belongs to the Vox panel, not the surrounding app. The built-in default
+styling belongs to the Vox control and reply bubble, not the surrounding app. The built-in default
 resolves to the actual MacBook microphone without adding an alias to the menu.
 The menu contains only discovered hardware inputs, without built-in or system
 default aliases. A missing saved input remains named in the selector without
 adding an unavailable menu entry. An older system-default preference remains
 honored until an explicit device is selected. The saved app preference applies
-to the next call and does not change macOS's input. A missing or unplugged selected input
-stops the call with an actionable error instead of falling back to another mic.
+to the next call and does not change macOS's input. A missing or unplugged
+selected input stops the call with an actionable error instead of falling back
+to another mic.
 Opening Settings only lists devices; its permission button captures briefly
 only when clicked. On a first call with hidden device labels, vox may briefly
 request permission, stop that temporary stream, and then capture the exact
@@ -50,15 +62,29 @@ current roster before acting. Duplicate names require clarification or an ID.
 Questions about the current chat, history, status, or available sessions also
 delegate to that agent for a fresh lookup instead of guessing visible context.
 
-The controller has its own temporary conversation. It uses the default Codex
+The controller has its own persistent conversation, independent of the selected
+chat or project. It uses the default Codex
 CLI ChatGPT sign-in, gpt-live-1-codex for audio, and GPT-6.1 Sol with low reasoning
 effort for delegated app actions. Target sessions and Monos retain their own
 models, permissions, drafts, follow-up behavior, and execution/persistence paths.
 Composer writes leave the text unsent and append by default, preserving existing
 text and attachments. Explicit replacement requires the exact text previously
-read; intervening typing wins. Completed assistant replies are held only in bounded
-memory and are not saved by vorkspace; user transcripts are discarded. Messages
-sent to target chats are saved normally.
+read; intervening typing wins. Native conversation history retains both sides of
+the voice exchange; user speech remains absent from the UI. Its lightweight
+display keeps only the latest completed assistant reply. Messages sent to target
+chats are saved normally.
+
+Ending a call, helper process replacement, renderer reload, and app restart
+resume the same saved native thread. A failed resume reports an error rather
+than silently starting over. **Settings → Vox → Reset conversation** asks for
+confirmation, ends the current call, and starts a fresh native identity on the
+next call. It keeps saved memories and detaches the old history; it does not
+erase that history from disk.
+
+Vox can remember lasting facts and preferences through its own memory tools.
+**Settings → Vox → Memory** uses the existing Mono memory interface to list,
+add, edit, and delete them. Saved facts load on the next call and survive a
+conversation reset. Settings retains the app's standard layout and casing.
 
 This first slice sends one-way messages. Acceptance does not mean the work is
 finished; ask Vox to read the target's reply when needed. No background polling
@@ -67,19 +93,24 @@ work already accepted by a target continues under that target's ownership.
 
 ## Module boundaries
 
-| Owner                                                 | Responsibility                                                                                    |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `src/features/vox/ui/VoxProvider.tsx`                 | One workspace call, lazy loading, mic/speaker preferences, stop on hide/unmount.                  |
-| `src/features/vox/ui/VoxButton.tsx`                   | Title-bar trigger and shared anchored popover; panel visibility does not own the call.            |
-| `src/features/vox/ui/VoxPanel.tsx`                    | Grayscale face, completed native replies, controls, accessible status, and follow-tail scrolling. |
-| `src/features/vox/model/display.ts`                   | Bounded completed-reply authority; immediate notifications only to a mounted panel.               |
-| `src/features/vox/model/expressions.ts`               | Lowercase face IDs, emotions, and connection/activity priority.                                   |
-| `src/features/vox/model/vox.ts`                       | Microphone, WebRTC, Codex protocol, request receipts, resource cleanup.                           |
-| `src/features/vox/model/microphone.ts`                | Saved input selection, exact-device capture, permission bootstrap, and missing-input errors.      |
-| `src/features/vox/model/protocol.ts`                  | Vox identity, silent startup and routing instructions, bounded tool contract.                     |
-| `src/features/vox/model/controller.ts`                | Fresh local scope, target resolution, navigation, composer commands, explicit app capability.     |
-| Existing app-action handler and target session        | Message/run acceptance, provider permissions, queueing and history.                               |
-| Mounted session/Mono composer and durable draft store | Live input, attachments, conflict handling and persistence.                                       |
+| Owner                                                 | Responsibility                                                                                 |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `src/features/vox/model/availability.ts`              | Default-off persisted availability and local/cross-window preference notifications. |
+| `src/features/vox/model/replyMode.ts`                 | Persisted Silent replies preference and change notifications. |
+| `src/features/vox/ui/VoxProvider.tsx`                 | Workspace call, microphone/WebRTC/helper ownership, preferences, graceful stop. |
+| `src/features/vox/ui/VoxButton.tsx`                   | Title-bar start/end control, shared reply bubble, and error notice. |
+| `src/features/vox/ui/VoxFace.tsx` and `ui/vox.css`      | State glyph sequences and reduced-motion fallback. |
+| `src/features/vox/model/display.ts`                   | Bounded completed-reply authority; immediate notifications to mounted controls and coarse voice activity.            |
+| `src/features/vox/model/expressions.ts`               | Lowercase face IDs, emotions, and connection/activity priority.                                |
+| `src/features/vox/model/vox.ts`                       | Microphone, WebRTC, Codex protocol, request receipts, resource cleanup.                        |
+| `src/features/vox/model/conversation.ts`              | Revision-guarded persistent native thread identity and reset.                                  |
+| `src/features/vox/model/context.ts`                   | Bounded voice context from the same native conversation only.                                  |
+| `src/features/vox/model/memory.ts`                    | Vox-owned memory through existing Mono file and memory operations.                             |
+| `src/features/vox/model/microphone.ts`                | Saved input selection, exact-device capture, permission bootstrap, and missing-input errors.   |
+| `src/features/vox/model/protocol.ts`                  | Vox identity, silent startup and routing instructions, bounded tool contract.                  |
+| `src/features/vox/model/controller.ts`                | Fresh local scope, target resolution, navigation, composer commands, explicit app capability.  |
+| Existing app-action handler and target session        | Message/run acceptance, provider permissions, queueing and history.                            |
+| Mounted session/Mono composer and durable draft store | Live input, attachments, conflict handling and persistence.                                    |
 
 The app shell supplies navigation and existing app-action callbacks. It does not
 own Vox's target-selection policy. Composer editing stays in the sessions
@@ -89,20 +120,49 @@ introduced for Vox.
 
 ## Ownership and cost
 
-- The workspace owns one call per renderer, independently of the title-bar
-  control and the selected chat. Transport code loads only after a click.
+- The workspace provider owns one call independently of the mounted title-bar
+  control. Removing the control removes its visual effects and display observer,
+  while the call continues. Hiding or closing the workspace stops it gracefully.
+  A native harness reservation admits one Vox writer across app windows,
+  protecting its persistent conversation. Transport loads only after starting.
+- Availability defaults off. Disabling ends the call and hides the control
+  without remounting workspace content or resetting durable conversation and
+  memory. Enabling alone does not capture or connect.
+- CSS sequences animate glyph visibility without an animation clock, React frame
+  updates, audio meter, PCM processing, or worker. Coarse live activity comes
+  from the observed WebRTC `output_transcript.added`, `turn.created`, and
+  `turn.done` events. The activity store keeps identities and timestamps, not
+  those events' speech text. Old completion cannot stop a newer reply, and
+  backing-agent completion cannot override ongoing voice output.
 - Codex app-server owns authentication, voice delegation, and speaking its
   backing agent's result. WebRTC owns microphone encoding and speaker playback.
   No PCM, meters, or backing-agent token stream enters React. Displayed replies
   come only from native V3 `thread/realtime/transcript/done` assistant events,
-  verified with Codex 0.163.0. User transcripts are discarded and all transcript
+  verified with Codex 0.163.0. User text is excluded from the display; all transcript
   deltas are suppressed before stdout/IPC. There is no second recognizer,
   transcription request, or reconstructed text from backing-agent output.
 - The reply store publishes current reads and notifications immediately, with
-  no notification timer. Only the open panel subscribes. Retention is bounded
-  to 12 parts, 4,000 UTF-16 characters per part and 16,000 in total, with explicit
-  truncation. Ending a call retains recent replies; starting a new one clears
-  them. These replies are a temporary display, not durable chat history.
+  no notification timer or per-word partial subscription. Only a mounted title-bar control
+  subscribes. Retention is one completed assistant reply, capped at 4,000 UTF-16
+  characters with explicit truncation. Completion replaces the previous reply;
+  the bubble renders it only during an active call in silent mode. Ending a call retains this temporary
+  value in memory; starting a new call clears it. This display projection is
+  separate from durable native conversation history.
+- Codex stores the conversation in the private Mono store using the default
+  account. The saved thread identity is revision guarded so reset or replacement
+  cannot publish an obsolete identity. Recent voice context reads at most four
+  turns from that thread and projects at most 3,000 UTF-16 characters into native
+  `initialItems`. `includeStartupContext:false` avoids a generic workspace scan
+  and unrelated or retired thread context. Full backing-agent history remains
+  retained.
+- Stopping requests native transcript-tail flushing and waits for
+  `thread/realtime/closed` before killing the helper. Ending releases media before waiting for persistence. Disabling Vox, normal window
+  close, and app Quit wait for graceful shutdown. A failed flush is reported; a force kill or
+  crash may lose speech that has not yet flushed.
+- Saved facts reuse Mono file storage under the reserved `vox` owner, including
+  its budgets, compare-and-swap writes, secret filters, archive, and search.
+  `memory.read/search/add/replace/remove` target only Vox files. Loading saved
+  facts on the next call adds no polling, recognizer, or speech service.
 - The microphone owner resolves the saved selection before call setup and pins
   explicit devices with an exact device ID. Cancelled device lookup or permission
   completion cannot open a later capture. Unplugging the active input stops the
@@ -114,15 +174,16 @@ introduced for Vox.
 - Sixteen faces are defined centrally with identifiers and emotions. Eleven
   moods can accompany an existing app tool call through an optional expression
   field, without extra calls just for animation. Connection, mic-off, and
-  thinking/error states take priority over model moods. A short face transition
-  respects reduced-motion preferences; no continuous animation loop runs.
+  thinking/error states take priority over model moods. CSS sequences reflect
+  connecting, thinking, talking, and idle activity; Reduced Motion disables them.
 - The backing agent gets one dynamic `vorkspace` tool. An explicit in-process
   capability extends the existing app-action handler across known local
   projects and allows messages to Monos as the user. Normal CLI callers keep
   their existing project and Mono restrictions. One Codex app-server helper runs
   per call; no second controller daemon, model download, or new credential store
   is introduced.
-- The voice helper is ephemeral and read-only, with command/edit approvals
+- The helper process is per-call; its native conversation is persistent. Its
+  shell sandbox is read-only, with command/edit approvals
   declined. It is instructed to use the app tool and leave coding to targets.
   Its messages never run through a target's provider connection.
 - Tool calls validate the owning thread, action, and lifecycle. Before dispatch,
@@ -152,12 +213,17 @@ replacement, cancellation, and explicit controller versus ordinary CLI scope.
 Browser tests exercise the real title bar and composer in Chromium and WebKit:
 session and Mono draft editing without sending, draft preservation, navigation,
 title-bar replacement, tool delivery, errors in both themes, completed assistant
-replies without user speech, square panel geometry, retained replies after
-closing, and independent mic/silent controls on one connection. Microphone tests
+reply text only in silent mode, no user speech, shared bubble placement and
+dismissal, long-reply scrolling, latest-reply replacement, title-bar start/end,
+glyph visibility, animation removal when stopped/unmounted, Reduced Motion, and
+persisted silent-mode changes on one connection. Microphone tests
 cover saved preferences across reload, next-call exact-device constraints,
 missing inputs, cancellation, permission cleanup, and unplugging an active input.
-Store tests cover final-only replies, discarded user transcripts, bounded
-retention, immediate reads/notifications, and idle cost. Real
+Store tests cover final-only replies, user text excluded from display, bounded
+retention, immediate reads/notifications, and idle cost. Conversation tests cover
+resume, reset, stale identity publication, same-thread context, native writer
+reservation, and memory ownership. Settings checks include memory editing and
+reset errors beside the Conversation action. Real
 Codex/ChatGPT calls with synthetic speech routed a question to a named test Mono
 and filled its test composer without sending. These used synthetic app targets
 and returned non-silent speaker audio. They validate the protocol path; they are
@@ -180,13 +246,27 @@ history. These observations do not establish the cause of the reported input
 stall or compare physical AirPods and MacBook microphones. The built-in default
 addresses the suspected input route; no end-to-end latency benchmark was run.
 
+A production-code WebRTC probe resumed the same conversation after End, a new
+helper process, and renderer reload, recalling “cobalt lantern”. Reset created a
+fresh native thread with empty initial context. All three calls stayed silent
+before input. This isolated integration used synthetic speech and targets.
+
 ## Review (2026-10-17)
 
 The original controller validation passed 5,272 web tests (13 existing
 live-provider tests skipped), TypeScript, ten Chromium/WebKit checks, and the
-live silent-start and named-Mono routing probe. The panel adds the caption,
-expression, and playback-control checks described above; its current results
-are recorded in `design-qa.md`.
+live silent-start and named-Mono routing probe. Current conversation/memory
+validation passed 5,307 web tests (13 skipped),
+18 Chromium/WebKit checks, two native cross-window reservation tests, and
+Clippy. These are historical conversation/memory results. Current title-bar
+validation passed 133 focused tests, TypeScript, 24 Chromium/WebKit checks and
+two long-reply rechecks. Native same-window start/end and the silent switch were
+verified. An isolated synthetic-speech probe observed silent startup without
+app actions and reply activity returning to listening. Current screenshots and
+detailed results are recorded in `design-qa.md`. The MR checkpoint also passed
+the full web suite (5,313 tests, 13 skipped), native formatting and Clippy, and
+662 native tests (one ignored). These checks do not establish speed, battery,
+or memory improvements.
 
 - Traced startup through microphone permission, helper spawn, thread creation,
   SDP, connection, delegation, app acceptance and cleanup. The old preview naming

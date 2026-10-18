@@ -827,6 +827,7 @@ import {
   persistQuitState,
   reapWindowRuntime,
   setQuitWorkspace,
+  flushVoxBeforeClose,
   type ResumedWorkspace,
 } from "./model/appLifecycle";
 
@@ -2371,6 +2372,7 @@ function Workspace({
         // Listening here makes close our job. Letting the default path run
         // calls JS `window.destroy`, which Tauri denies without a permission.
         event.preventDefault();
+        if (!(await flushVoxBeforeClose())) return;
         if (
           IS_MAC &&
           (await invoke<boolean>("mono_chat_keep_alive").catch(() => false))
@@ -14018,6 +14020,7 @@ function Workspace({
               ) : null}
               {settingsOpen ? (
                 <SettingsView
+                  titlebarControl={compactTitleBar ? undefined : <VoxButton />}
                   section={settingsSection}
                   anchor={settingsAnchor}
                   notificationProjectPath={notificationProjectPath}

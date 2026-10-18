@@ -9,6 +9,10 @@ import {
 } from "../../src/features/sessions/model/composerControl";
 import { VoxProvider } from "../../src/features/vox/ui/VoxProvider";
 import { VoxButton } from "../../src/features/vox/ui/VoxButton";
+import { saveVoxEnabled } from "../../src/features/vox/model/availability";
+import { voxMemoryFixture } from "./voxMemoryFixture";
+import { handleVoxMemory } from "../../src/features/vox/model/memory";
+import { SettingsView } from "../../src/features/settings/ui/SettingsView";
 import { TitleBar } from "../../src/app/shell/TitleBar";
 import { applyThemePreference } from "../../src/features/settings/model/appearance";
 import { setHarnessModels } from "../../src/features/sessions/model/models";
@@ -27,6 +31,8 @@ const metrics = {
   submitted: 0,
   contextReads: 0,
 };
+// Voice interaction fixtures explicitly opt in; production defaults to off.
+saveVoxEnabled(true);
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
 let child = "";
 function notify(method: string, params: Record<string, unknown>) {
@@ -66,15 +72,16 @@ configureChildBackend({
       if (request.id !== undefined) {
         if (request.method === "thread/realtime/start")
           notify("thread/realtime/sdp", { sdp: "answer" });
+        if (request.method === "thread/realtime/stop")
+          notify("thread/realtime/closed", {});
         listeners.get("harness-stdout")?.({
           payload: {
             sessionId: child,
             line: JSON.stringify({
               id: request.id,
-              result:
-                request.method === "thread/start"
-                  ? { thread: { id: "preview-thread" } }
-                  : {},
+              result: ["thread/start", "thread/resume"].includes(request.method)
+                ? { thread: { id: "preview-thread" } }
+                : {},
             }),
           },
         });
@@ -101,14 +108,16 @@ class MockPeer {
     peer = this;
   }
   addTrack() {}
+  channel = {
+    readyState: "open",
+    onopen: null,
+    onclose: null,
+    onerror: null,
+    onmessage: null as ((event: { data: string }) => void) | null,
+    close() {},
+  };
   createDataChannel() {
-    return {
-      readyState: "open",
-      onopen: null,
-      onclose: null,
-      onerror: null,
-      close() {},
-    };
+    return this.channel;
   }
   async createOffer() {
     return { type: "offer", sdp: "offer" };
@@ -148,6 +157,8 @@ Object.assign(window, {
   RTCPeerConnection: MockPeer,
   voxMetrics: metrics,
   voxNotify: notify,
+  voxRealtime: (value: Record<string, unknown>) =>
+    peer.channel.onmessage?.({ data: JSON.stringify(value) }),
   voxNativeState: () => ({
     muted: outputAudio?.muted,
     micEnabled: inputTrack?.enabled,
@@ -181,8 +192,15 @@ Object.assign(window, {
       currentWebview: { label: "main" },
     },
     transformCallback: () => 0,
-    invoke: async (command: string) =>
-      command === "composer_draft_get" ? null : [],
+    invoke: async (command: string, args?: Record<string, unknown>) =>
+      command.startsWith("mono_")
+        ? voxMemoryFixture(command, args)
+        : command === "plugin:dialog|message"
+          ? ((args?.buttons as { OkCancelCustom?: string[] })
+              ?.OkCancelCustom?.[0] ?? "Yes")
+          : command === "composer_draft_get"
+            ? null
+            : [],
   },
 });
 applyThemePreference(
@@ -200,23 +218,48 @@ function Fixture() {
   const [enabled, setEnabled] = useState(true);
   const [remote, setRemote] = useState(false);
   const [controlsKey, setControlsKey] = useState(0);
+  const [showControls, setShowControls] = useState(true);
   const [mono, setMono] = useState(false);
+  const [settings, setSettings] = useState(false);
   composerId = mono ? "mono-helper" : owner;
+  if (settings)
+    return (
+      <div className="h-screen">
+        <SettingsView
+          titlebarControl={<VoxButton />}
+          section="vox"
+          cwd="/repo"
+          sessions={[]}
+          onClose={() => setSettings(false)}
+          onSelectSection={noop}
+          onOpenSession={noop}
+          onArchiveSession={noop}
+          onDeleteSession={noop}
+          onOpenWhatsNew={noop}
+        />
+      </div>
+    );
   return (
-    <main className="flex min-h-screen flex-col gap-6 bg-background-base p-10 text-content">
-      <TitleBar
-        key={controlsKey}
-        tabs={[]}
-        activeId=""
-        cwd="/repo"
-        onToggleSidebar={noop}
-        onSelect={noop}
-        onClose={noop}
-        onCloseMany={noop}
-        onReorder={noop}
-        voxControl={<VoxButton />}
-      />
-      <div className="flex flex-wrap gap-4 text-sm">
+    <main className="flex min-h-screen flex-col gap-6 bg-background-base text-content">
+      {showControls ? (
+        <TitleBar
+          key={controlsKey}
+          tabs={[]}
+          activeId=""
+          cwd="/repo"
+          onToggleSidebar={noop}
+          onSelect={noop}
+          onClose={noop}
+          onCloseMany={noop}
+          onReorder={noop}
+          voxControl={<VoxButton />}
+        />
+      ) : (
+        <div className="h-10 border-b border-stroke px-5 py-2 text-sm">
+          Settings
+        </div>
+      )}
+      <div className="flex flex-wrap gap-4 pl-10 pr-[254px] text-sm">
         <button
           onClick={() => {
             if (!peer) return;
@@ -248,7 +291,11 @@ function Fixture() {
         <button onClick={() => setControlsKey((key) => key + 1)}>
           Move controls
         </button>
+        <button onClick={() => setShowControls((value) => !value)}>
+          Toggle controls
+        </button>
         <button onClick={() => setMono(true)}>Mono composer</button>
+        <button onClick={() => setSettings(true)}>Vox settings</button>
       </div>
       {mono ? (
         <MonoComposer
@@ -290,7 +337,12 @@ function Fixture() {
 createRoot(document.getElementById("root")!).render(
   <VoxProvider
     cwd="/repo"
-    execute={async ({ action, input, signal }) => {
+    execute={async (request) => {
+      const { action, input, signal } = request;
+      if (action.startsWith("memory."))
+        return handleVoxMemory(request, () => {
+          if (!request.isCurrent()) throw new Error("stopped");
+        });
       if (action === "workspace.current") {
         metrics.contextReads++;
         return { monos: [{ id: "helper", name: "Helper" }] };

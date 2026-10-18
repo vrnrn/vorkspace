@@ -138,6 +138,7 @@ export function setQuitWorkspace(
  * Exiting is `confirm_quit`'s job, once every window has reported ready.
  */
 export async function handleQuitRequested(): Promise<boolean> {
+  if (!(await flushVoxBeforeClose())) return false;
   if (liveWorkspace) {
     liveWorkspace.flush();
     quitting = true;
@@ -173,6 +174,21 @@ export async function handleQuitRequested(): Promise<boolean> {
     return true;
   } catch {
     quitting = false;
+    return false;
+  }
+}
+
+/** Retire voice only after Codex confirms that its final speech is on disk. */
+export async function flushVoxBeforeClose(): Promise<boolean> {
+  try {
+    const { stopActiveVox } = await import("../../features/vox/model/vox");
+    await stopActiveVox();
+    return true;
+  } catch {
+    await message(
+      "Vox could not confirm saving its latest speech. Earlier conversation and memories are kept. Closing was cancelled; check the Vox notice before trying again.",
+      { title: "Vox conversation not saved", kind: "error" },
+    ).catch(() => undefined);
     return false;
   }
 }

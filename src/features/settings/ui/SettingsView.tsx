@@ -1,6 +1,22 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
+import { MemoryPage, useMonoFiles } from "../../monos/ui/MonoFilePages";
+import {
+  resetSavedVoxConversation,
+  VOX_MEMORY_ID,
+} from "../../vox/model/conversation";
+import { useVox } from "../../vox/ui/VoxProvider";
+import {
+  loadVoxSilent,
+  saveVoxSilent,
+  subscribeVoxSilent,
+} from "../../vox/model/replyMode";
+import {
+  loadVoxEnabled,
+  saveVoxEnabled,
+  subscribeVoxEnabled,
+} from "../../vox/model/availability";
 import {
   allowVoxMicrophones,
   findVoxMicrophone,
@@ -444,6 +460,7 @@ type Props = {
     sessionIds: readonly string[],
   ) => Promise<boolean>;
   besideRail?: boolean;
+  titlebarControl?: ReactNode;
   onClose: () => void;
   /** Lets search jump to a setting that lives on another page. */
   onSelectSection?: (section: SettingsSectionId) => void;
@@ -470,6 +487,7 @@ export function SettingsView({
   onCheckWorktreeRemoval,
   onDeleteWorktreeSessions,
   besideRail = false,
+  titlebarControl,
   onClose,
   onSelectSection,
   onOpenSession,
@@ -562,6 +580,7 @@ export function SettingsView({
             </button>
           ) : null}
           <SettingsSearch onReveal={onReveal} />
+          {titlebarControl}
         </div>
         {IS_MAC ? null : <WindowControls />}
       </div>
@@ -765,6 +784,16 @@ function SettingsSearch({
 }
 
 function VoxPage() {
+  const vox = useVox();
+  const enabled = useSyncExternalStore(subscribeVoxEnabled, loadVoxEnabled);
+  const silent = useSyncExternalStore(subscribeVoxSilent, loadVoxSilent);
+  const [applying, setApplying] = useState(false);
+  const [availabilityError, setAvailabilityError] = useState<string | null>(
+    null,
+  );
+  const files = useMonoFiles(VOX_MEMORY_ID, "idle");
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const [selected, setSelected] = useState(loadVoxMicrophone);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -807,63 +836,168 @@ function VoxPage() {
         ? "Built-in microphone"
         : `${selected.id === "builtin" ? "Built-in microphone" : selected.label} (unavailable)`;
   return (
-    <Group title="Audio">
-      <Row
-        id="vox-microphone"
-        label="Default microphone"
-        description="Used for your next Vox call. Your system input stays unchanged."
-      >
-        <Select
-          label="Default microphone"
-          value={device?.deviceId ?? selected.id}
-          valueLabel={selectedLabel}
-          options={options}
-          onOpen={refresh}
-          onChange={(id) => {
-            const next = {
-              id,
-              label: options.find((option) => option.value === id)!.label,
-            };
-            try {
-              saveVoxMicrophone(next);
-              setSelected(next);
-              setError(null);
-            } catch {
-              setError("Could not save the microphone. Try again.");
-            }
-          }}
-        />
-      </Row>
-      {devices.every((device) => !device.label) ? (
+    <>
+      <Group title="General">
         <Row
-          label="Microphone access"
-          description="Allow access to list connected microphones."
+          id="vox-enabled"
+          label="Enable Vox"
+          description="Requires Codex with ChatGPT live voice access."
+        >
+          <Toggle
+            label="Enable Vox"
+            on={enabled}
+            disabled={applying}
+            onChange={(next) => {
+              setApplying(true);
+              setAvailabilityError(null);
+              void (async () => {
+                try {
+                  saveVoxEnabled(next);
+                  if (!next && vox) await vox.end();
+                } catch (error) {
+                  setAvailabilityError(
+                    `Could not apply Vox's setting. ${String(error)}`,
+                  );
+                } finally {
+                  setApplying(false);
+                }
+              })();
+            }}
+          />
+        </Row>
+        {availabilityError ? (
+          <p role="alert" className="px-4 pb-3 text-[12px] text-content/70">
+            {availabilityError}
+          </p>
+        ) : null}
+      </Group>
+      <Group title="Audio">
+        <Row
+          id="vox-silent"
+          label="Silent replies"
+          description="Show replies below Vox instead of playing them aloud."
+        >
+          <Toggle
+            label="Silent replies"
+            on={silent}
+            onChange={(next) => {
+              try {
+                saveVoxSilent(next);
+                setError(null);
+              } catch {
+                setError("Could not save the reply mode. Try again.");
+              }
+            }}
+          />
+        </Row>
+        <Row
+          id="vox-microphone"
+          label="Default microphone"
+          description="Used for your next Vox call. Your system input stays unchanged."
+        >
+          <Select
+            label="Default microphone"
+            value={device?.deviceId ?? selected.id}
+            valueLabel={selectedLabel}
+            options={options}
+            onOpen={refresh}
+            onChange={(id) => {
+              const next = {
+                id,
+                label: options.find((option) => option.value === id)!.label,
+              };
+              try {
+                saveVoxMicrophone(next);
+                setSelected(next);
+                setError(null);
+              } catch {
+                setError("Could not save the microphone. Try again.");
+              }
+            }}
+          />
+        </Row>
+        {devices.every((device) => !device.label) ? (
+          <Row
+            label="Microphone access"
+            description="Allow access to list connected microphones."
+          >
+            <SecondaryButton
+              disabled={allowing}
+              onClick={() => {
+                setAllowing(true);
+                setError(null);
+                void allowVoxMicrophones()
+                  .then(refresh)
+                  .catch(() =>
+                    setError(
+                      "Microphone access is unavailable. Allow it in System Settings and try again.",
+                    ),
+                  )
+                  .finally(() => setAllowing(false));
+              }}
+            >
+              {allowing ? "Requesting…" : "Allow microphone access"}
+            </SecondaryButton>
+          </Row>
+        ) : null}
+        {error ? (
+          <p role="alert" className="px-4 pb-3 text-[12px] text-content/70">
+            {error}
+          </p>
+        ) : null}
+      </Group>
+      <Group title="Conversation">
+        <Row
+          id="vox-conversation"
+          label="Long-term conversation"
+          description="Vox resumes the same conversation across calls and app restarts. Resetting starts a fresh conversation and keeps saved memories."
         >
           <SecondaryButton
-            disabled={allowing}
+            disabled={resetting}
             onClick={() => {
-              setAllowing(true);
-              setError(null);
-              void allowVoxMicrophones()
-                .then(refresh)
-                .catch(() =>
-                  setError(
-                    "Microphone access is unavailable. Allow it in System Settings and try again.",
-                  ),
-                )
-                .finally(() => setAllowing(false));
+              void (async () => {
+                const confirmed = await ask(
+                  "Start a fresh Vox conversation? Saved memories will be kept.",
+                  {
+                    title: "Reset Vox conversation",
+                    kind: "warning",
+                    okLabel: "Reset conversation",
+                    cancelLabel: "Cancel",
+                  },
+                );
+                if (!confirmed) return;
+                setResetting(true);
+                setResetError(null);
+                try {
+                  if (vox) await vox.resetConversation();
+                  else resetSavedVoxConversation();
+                } catch {
+                  setResetError(
+                    "Could not reset Vox's conversation. Try again.",
+                  );
+                } finally {
+                  setResetting(false);
+                }
+              })();
             }}
           >
-            {allowing ? "Requesting…" : "Allow microphone access"}
+            {resetting ? "Resetting…" : "Reset conversation"}
           </SecondaryButton>
         </Row>
-      ) : null}
-      {error ? (
-        <p role="alert" className="px-4 pb-3 text-[12px] text-content/70">
-          {error}
-        </p>
-      ) : null}
-    </Group>
+        {resetError ? (
+          <p role="alert" className="px-4 pb-3 text-[12px] text-content/70">
+            {resetError}
+          </p>
+        ) : null}
+      </Group>
+      <Group
+        id="vox-memory"
+        title="Memory"
+        description="What Vox remembers across conversations. Add, edit or delete memories just like a Mono."
+      >
+        <MemoryPage monoId={VOX_MEMORY_ID} files={files} embedded />
+      </Group>
+    </>
   );
 }
 
