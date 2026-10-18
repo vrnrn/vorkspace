@@ -10,7 +10,7 @@ use crate::fs::{expand_home, list_project_files_sync_cancellable, MAX_TEXT_FILE_
 
 const MAX_MATCHES: usize = 500;
 const MAX_FILE_BYTES: u64 = 512 * 1024;
-// ponytail: 4 MiB holds 500 normal previews; raise only if match previews stop being bounded.
+// 4 MiB holds 500 normal previews; raise only if match previews stop being bounded.
 const MAX_GIT_GREP_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Deserialize)]

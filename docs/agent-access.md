@@ -11,10 +11,10 @@ Type `/operator` at the start of a composer message to enable vorkspace access i
 - `sessions.list` shows project sessions and their archived status. `sessions.read` returns up to three recent user/assistant exchanges, with a cursor for older exchanges and a per-message character cap. `sessions.send` submits a follow-up to an idle session, while `sessions.draft` saves an unsent message for the user to review. `folders.list` and `folders.move` organize project sessions in sidebar folders, including a new folder.
 - `sessions.stop`, `sessions.archive` and `sessions.delete` take a `sessionId` to manage another session in the project. Monos can select an assigned project with `project`. Stop cancels the current turn and pauses queued messages; archive stops and saves the conversation for later restoration; delete stops and permanently removes the conversation. Open files, terminals and worktrees are kept. These actions cannot target the caller, Mono chats, habit runs or orchestration workers. Reuse the same request ID when retrying a call.
 - When a Mono successfully stops, archives or deletes a session it is monitoring, its pending completion report for that session is dismissed, including any queued report. The Mono confirms the action in its current reply. Reports for other sessions and other Monos are kept. Rejected launches or follow-ups return a CLI error without a later completion report.
-- `notes.list` returns titles and short previews; `notes.read` returns one full note by ID.
+- `notes.list` returns titles and short previews; `notes.read` returns one full note by ID; `notes.write` creates a new note or updates an existing note by ID.
 
 ## Orchestration workers
 
 Orchestration workers keep their existing scoped `control` workflow and do not receive this app access.
 
-Return to the [README](../README.md) for a quick start.
+See the [ELI5 version](eli5/agent-access.md) or return to the [README](../README.md) for a quick start.

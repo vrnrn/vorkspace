@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   configureChildBackend,
   acquireHarnessBridge,
@@ -220,7 +220,7 @@ Connect another computer using an SSH forward to the loopback port.`);
   }
   const releaseOwner = await acquireHostOwner(directory);
   const backend = new HostChildBackend();
-  let cleanup = () => {
+  const cleanup = () => {
     rmSync(statePath, { force: true });
     store.close();
     releaseOwner();
@@ -239,15 +239,18 @@ Connect another computer using an SSH forward to the loopback port.`);
     }
     const engine = new HostEngine(store, hostProviders);
     const secret = randomBytes(32).toString("base64url");
+    const expectedAuth = Buffer.from(`Bearer ${secret}`);
     let stopping = false;
     let stop: () => Promise<void>;
     // A separate local administrative credential cannot be used as a paired
     // client credential, and is never sent to the desktop.
     const server = createHostServer(engine, available, (request, response) => {
+      const providedAuth = Buffer.from(request.headers.authorization ?? "");
       if (
         request.method !== "POST" ||
         request.headers.origin ||
-        request.headers.authorization !== `Bearer ${secret}`
+        providedAuth.length !== expectedAuth.length ||
+        !timingSafeEqual(providedAuth, expectedAuth)
       ) {
         response.writeHead(403).end();
         return;
@@ -302,11 +305,6 @@ Connect another computer using an SSH forward to the loopback port.`);
     console.log(
       `Providers: ${available.join(", ") || "none found; install and authenticate a supported provider on this host"}`,
     );
-    cleanup = () => {
-      rmSync(statePath, { force: true });
-      store.close();
-      releaseOwner();
-    };
   } catch (error) {
     await backend.close();
     cleanup();

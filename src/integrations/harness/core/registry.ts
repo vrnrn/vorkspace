@@ -3,7 +3,7 @@ import {
   runLocalSubmission,
   submissionPayload,
 } from "./localSubmissions";
-import { hasHeadlessChildBackend } from "./child";
+import { hasHeadlessChildBackend, transferProviderSession } from "./child";
 import type {
   Block,
   HarnessId,
@@ -11,7 +11,6 @@ import type {
   TurnIntent,
 } from "../../../features/sessions/model/session";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { transferProviderSession } from "./child";
 import type { GeneratedSessionTitle } from "../../../features/sessions/model/sessionTitle";
 import type { PrContent } from "../../../features/source-control/model/gitText";
 import { hasLiveCatalog } from "../../../features/sessions/model/models";

@@ -1,5 +1,5 @@
 import type { Plugin } from "prettier";
-import { basename } from "../../platform/tauri/fs";
+import { basename } from "./paths";
 
 type ParserName =
   | "babel"

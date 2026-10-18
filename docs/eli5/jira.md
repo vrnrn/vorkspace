@@ -1,0 +1,39 @@
+# Jira Cloud Inbox (ELI5)
+
+Instead of constantly switching between your web browser and your code editor to read Jira tickets, Vorkspace can bring your **Jira Cloud** tickets right into its **Inbox**.
+
+For the full setup guide, see [Jira Cloud inbox](../jira.md).
+
+---
+
+## 1. How to Connect
+
+Go to **Settings → Inbox → Jira** and enter:
+- Your Jira website address (like `yourcompany.atlassian.net`)
+- Your work email
+- An Atlassian API token (a special password you create in your Atlassian account settings)
+
+Vorkspace saves that token in a private file on your computer that only your user account can read.
+
+---
+
+## 2. What You Can Do with Tickets
+
+Once connected, open **Inbox** and pick **Jira**:
+- Read ticket descriptions and the latest 50 comments.
+- Reply with a comment straight from Vorkspace.
+- Click to **ask an AI agent** about the ticket or **start coding** on it—Vorkspace automatically hands the ticket's title, ID, and description to the agent so you don't have to copy-paste!
+
+---
+
+## 3. Two Ways to Filter Your Tickets
+
+In Jira Settings, you can choose how Vorkspace picks which tickets to show:
+- **By Project**: Simply check the boxes next to the Jira projects you care about.
+- **By JQL (Jira Query Language)**: Write a custom search rule (like *"only show open tickets assigned to me in project ENG"*).
+
+---
+
+## 4. Automatic Agent Triggers
+
+You can set up an **Automation** (`Jira → Issue appeared`) so that whenever a new matching ticket shows up in your Jira inbox, an AI agent automatically starts investigating or preparing a fix in your local project!

@@ -3410,8 +3410,34 @@ fn with_temp_markdown(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("monocode-comment-{stamp}.md"));
-    std::fs::write(&path, body).map_err(|error| error.to_string())?;
+    let pid = std::process::id();
+    let temp_dir = std::env::temp_dir();
+    let mut created = None;
+    for attempt in 0..100 {
+        let candidate = temp_dir.join(format!("monocode-comment-{pid}-{stamp}-{attempt}.md"));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&candidate) {
+            Ok(file) => {
+                created = Some((candidate, file));
+                break;
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    let (path, mut file) =
+        created.ok_or_else(|| "Could not create temporary markdown file".to_string())?;
+    if let Err(error) = file.write_all(body.as_bytes()) {
+        let _ = std::fs::remove_file(&path);
+        return Err(error.to_string());
+    }
+    drop(file);
     let path_str = path.to_string_lossy().into_owned();
     let result = run(&path_str);
     let _ = std::fs::remove_file(&path);
@@ -4338,28 +4364,23 @@ fn git_pr_create_for(root: &Path, input: &GitPrCreateInput) -> Result<String, St
     if title.is_empty() {
         return Err("Pull request title cannot be empty".into());
     }
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let body_path = std::env::temp_dir().join(format!("monocode-pr-{stamp}.md"));
-    std::fs::write(&body_path, input.body.trim()).map_err(|e| e.to_string())?;
-    let result = gh_checked(
-        root,
-        &[
-            "pr",
-            "create",
-            "--title",
-            title,
-            "--body-file",
-            &body_path.to_string_lossy(),
-            "--base",
-            input.base.trim(),
-            "--head",
-            input.head.trim(),
-        ],
-    );
-    let _ = std::fs::remove_file(&body_path);
+    let result = with_temp_markdown(input.body.trim(), |body_path| {
+        gh_checked(
+            root,
+            &[
+                "pr",
+                "create",
+                "--title",
+                title,
+                "--body-file",
+                body_path,
+                "--base",
+                input.base.trim(),
+                "--head",
+                input.head.trim(),
+            ],
+        )
+    });
     result.and_then(|output| {
         output
             .lines()

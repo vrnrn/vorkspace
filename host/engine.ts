@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { realpath, stat } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 import { renameHostWorktreeBranch, resolveHostWorktree } from "./git-worktrees";
 import {
@@ -806,21 +805,32 @@ export class HostEngine {
               onEvent: (event) => this.event(session.id, runId!, event),
             };
             if (prompt === null) await provider.compact!(input);
-            else
-              await provider.send({
-                ...input,
-                text: prompt,
-                attachments: attachments?.map((file) =>
-                  isVisionImage(file.mimeType) &&
-                  file.path &&
-                  file.size <= 20 * 1024 * 1024
-                    ? {
-                        ...file,
-                        data: readFileSync(file.path).toString("base64"),
-                      }
-                    : file,
-                ),
-              });
+            else {
+              let resolvedAttachments: typeof attachments | undefined;
+              if (attachments) {
+                resolvedAttachments = [];
+                for (const file of attachments) {
+                  if (this.closing || active.cancelled) break;
+                  resolvedAttachments.push(
+                    isVisionImage(file.mimeType) &&
+                      file.path &&
+                      file.size <= 20 * 1024 * 1024
+                      ? {
+                          ...file,
+                          data: (await readFile(file.path)).toString("base64"),
+                        }
+                      : file,
+                  );
+                }
+              }
+              if (!this.closing && !active.cancelled) {
+                await provider.send({
+                  ...input,
+                  text: prompt,
+                  attachments: resolvedAttachments,
+                });
+              }
+            }
           }
         } catch (reason) {
           error = reason instanceof Error ? reason.message : String(reason);

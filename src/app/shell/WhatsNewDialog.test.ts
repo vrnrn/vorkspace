@@ -1,12 +1,23 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { releaseNotesForVersion } from "../model/releaseNotes";
 import { WhatsNewBody } from "./WhatsNewDialog";
-import { releaseNotesLoader } from "../model/releaseNotesLoader";
+
+const FIXTURE = `## [0.1.25] - 2026-03-10
+
+- Added faster workspace startup and incremental session saves.
+`;
+
+vi.mock("../model/releaseNotesLoader", () => ({
+  releaseNotesLoader: {
+    get: (version: string) => releaseNotesForVersion(version, FIXTURE),
+    load: async (version: string) => releaseNotesForVersion(version, FIXTURE),
+  },
+}));
 
 describe("WhatsNewBody", () => {
   it("renders the version notes without the changelog heading", async () => {
-    await releaseNotesLoader.load("0.1.25");
     const markup = renderToStaticMarkup(
       createElement(WhatsNewBody, { version: "0.1.25" }),
     );

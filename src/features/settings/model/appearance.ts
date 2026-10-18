@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { hslToRgb, isHexColor, type Rgb } from "../../../shared/lib/colorUtils";
+import { clamp } from "../../../shared/lib/numbers";
 import { IS_LINUX, IS_MAC } from "../../../platform/tauri/platform";
 import { readFlag, writeFlag } from "./storageFlags";
 import { applyUiScale, loadUiScale } from "./uiScale";
@@ -185,10 +186,6 @@ export const CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT =
 export const CHAT_BACKGROUND_SESSION_OPACITY_DEFAULT =
   CHAT_BACKGROUND_OPACITY_DEFAULT;
 export const CHAT_BACKGROUND_SCOPE_DEFAULT: ChatBackgroundScope = "all";
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
 
 function readNumber(key: string): number | null {
   try {

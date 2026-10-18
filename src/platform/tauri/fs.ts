@@ -694,10 +694,4 @@ export function writeTextFile(path: string, content: string): Promise<void> {
   return invoke<void>("write_text_file", { path, content });
 }
 
-/** Last path segment, or `/` for the filesystem root. */
-export function basename(path: string): string {
-  const trimmed = slash(path).replace(/\/+$/, "") || "/";
-  if (/^[A-Za-z]:$/.test(trimmed)) return trimmed;
-  const parts = trimmed.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? trimmed;
-}
+export { basename } from "../../shared/lib/paths";

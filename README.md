@@ -35,10 +35,15 @@ vorkspace is still early. If something breaks, [report a bug](https://github.com
 
 ## Guides
 
-- [Provider setup](docs/providers.md)
-- [Installation](docs/install.md)
-- [Agent access with /operator](docs/agent-access.md)
-- [Remote sessions, experimental](docs/remote-access.md)
+- [Architecture overview](docs/architecture.md) ([ELI5](docs/eli5/architecture.md))
+- [Provider setup](docs/providers.md) ([ELI5](docs/eli5/providers.md))
+- [Installation](docs/install.md) ([ELI5](docs/eli5/install.md))
+- [Agent access with /operator](docs/agent-access.md) ([ELI5](docs/eli5/agent-access.md))
+- [Vox voice controller](docs/vox.md) ([ELI5](docs/eli5/vox.md))
+- [Jira Cloud inbox](docs/jira.md) ([ELI5](docs/eli5/jira.md))
+- [Ticket context links](docs/ticket-context.md) ([ELI5](docs/eli5/ticket-context.md))
+- [Remote sessions (experimental)](docs/remote-access.md) ([ELI5](docs/eli5/remote-access.md))
+- [Building from source](docs/building.md) ([ELI5](docs/eli5/building.md))
 
 ## Build from source
 

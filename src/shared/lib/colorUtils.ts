@@ -1,3 +1,5 @@
+import { clamp } from "./numbers";
+
 export const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
 export type Hsv = { h: number; s: number; v: number };
@@ -87,8 +89,4 @@ export function hslToRgb(
   ][Math.floor(h / 60) % 6];
   const channel = (value: number) => Math.round(clamp(value + m, 0, 1) * 255);
   return { r: channel(r), g: channel(g), b: channel(b) };
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }

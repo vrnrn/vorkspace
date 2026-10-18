@@ -1,5 +1,6 @@
 import { loadProjectFiles, rankProjectFiles, type RankedFile } from "./fileIndex";
 import type { ProjectFile } from "../../../platform/tauri/fs";
+import { clamp } from "../../../shared/lib/numbers";
 import { isMarkdownBlockquotePosition } from "../../sessions/model/quoteDraft";
 
 export type MentionToken = {
@@ -380,8 +381,4 @@ function isMentionableRelative(relative: string): boolean {
 
 function isSpace(ch: string): boolean {
   return ch === " " || ch === "\n" || ch === "\t" || ch === "\r";
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }

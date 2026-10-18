@@ -434,7 +434,7 @@ fn spawn_windows(
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    // ponytail: caps bridge traffic at 125 emits/s; use a timed
+                    // Caps bridge traffic at 125 emits/s; use a timed
                     // drain only if sustained PTY throughput becomes limiting.
                     thread::sleep(PTY_COALESCE);
                     emit_pty_data(&data_app, &data_id, &buf[..n]);

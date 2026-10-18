@@ -1,4 +1,5 @@
 import { fuzzyMatch } from "../../../shared/lib/fuzzy";
+import { clamp } from "../../../shared/lib/numbers";
 import { isMarkdownBlockquotePosition } from "../../sessions/model/quoteDraft";
 import type { Skill } from "./skills";
 
@@ -99,8 +100,4 @@ export function replaceSlashToken(
 
 function isSpace(ch: string): boolean {
   return ch === " " || ch === "\n" || ch === "\t" || ch === "\r";
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
