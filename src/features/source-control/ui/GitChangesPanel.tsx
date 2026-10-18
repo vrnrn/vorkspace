@@ -30,7 +30,9 @@ import {
   type ReactNode,
 } from "react";
 import { Popover } from "../../../shared/ui/Popover";
+import { PaneHeader } from "../../../shared/ui/PaneHeader";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { WorkingTreeDiffSurface } from "./workingTreeDiffSurface";
 import {
   GitHistoryGraph,
   GraphResizeSash,
@@ -105,6 +107,8 @@ type AmendTarget = { branch: string | null; head: string | null };
 type Props = {
   cwd: string;
   enabled: boolean;
+  showGraph?: boolean;
+  compactHeader?: boolean;
   textHarness?: HarnessId;
   selectedPath?: string;
   selectedKind?: GitFileDiffKind;
@@ -117,6 +121,8 @@ type Props = {
 export function GitChangesPanel({
   cwd,
   enabled,
+  showGraph = true,
+  compactHeader = false,
   textHarness,
   selectedPath,
   selectedKind,
@@ -130,7 +136,7 @@ export function GitChangesPanel({
     if (!enabled) return;
     // Opening Changes signals an upcoming review. Warm its optional surface
     // while the file list loads, so the first file opens during streaming too.
-    void import("./WorkingTreeDiff").catch(() => {});
+    void WorkingTreeDiffSurface.preload().catch(() => {});
   }, [enabled]);
   const files = index?.files ?? [];
   const paneRef = useRef<HTMLDivElement>(null);
@@ -170,6 +176,7 @@ export function GitChangesPanel({
   };
 
   useLayoutEffect(() => {
+    if (!showGraph) return;
     const pane = paneRef.current;
     if (!pane || pane.clientHeight < GRAPH_PANEL_MIN + 160) return;
     const max = pane.clientHeight - 160;
@@ -177,7 +184,7 @@ export function GitChangesPanel({
       setGraphHeight(max);
       saveGraphPanelHeight(max);
     }
-  }, [graphHeight]);
+  }, [graphHeight, showGraph]);
 
   if (!cwd || cwd === "~") {
     return (
@@ -190,10 +197,13 @@ export function GitChangesPanel({
       ref={paneRef}
       className="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
     >
-      <header className="flex h-9 shrink-0 items-center gap-2 border-b border-stroke px-3">
-        <span className="text-[12px] font-medium text-content">Changes</span>
+      <PaneHeader compact={compactHeader} role="toolbar" aria-label="Changes">
+        <span className="shrink-0">Changes</span>
         {status ? (
-          <span role="status" className="text-[11px] text-content/50">
+          <span
+            role="status"
+            className="min-w-0 truncate text-[11px] text-content/50"
+          >
             {status}
           </span>
         ) : null}
@@ -221,7 +231,7 @@ export function GitChangesPanel({
               aria-expanded={branchMenuOpen}
               disabled={busy !== null}
               onClick={() => setBranchMenuOpen((open) => !open)}
-              className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10 hover:text-content disabled:opacity-40 aria-expanded:bg-content/10 aria-expanded:text-content"
+              className="grid size-6 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/5 hover:text-content disabled:opacity-40 aria-expanded:bg-content/10 aria-expanded:text-content"
             >
               {busy === "pull" ? (
                 <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
@@ -266,7 +276,7 @@ export function GitChangesPanel({
         ) : (
           <span className="ml-auto" />
         )}
-      </header>
+      </PaneHeader>
       <ChangedFiles
         cwd={cwd}
         textHarness={textHarness}
@@ -287,39 +297,43 @@ export function GitChangesPanel({
           window.setTimeout(() => invalidateWatchedFiles(paths), 150);
         }}
       />
-      {graphExpanded ? (
-        <GraphResizeSash
-          height={graphHeight}
-          onHeightPaint={setGraphHeight}
-          onHeightCommit={(next) => {
-            setGraphHeight(next);
-            saveGraphPanelHeight(next);
-          }}
-          maxHeight={() => {
-            const pane = paneRef.current;
-            if (!pane) return GRAPH_PANEL_DEFAULT * 2;
-            return Math.max(GRAPH_PANEL_MIN, pane.clientHeight - 160);
-          }}
-        />
+      {showGraph ? (
+        <>
+          {graphExpanded ? (
+            <GraphResizeSash
+              height={graphHeight}
+              onHeightPaint={setGraphHeight}
+              onHeightCommit={(next) => {
+                setGraphHeight(next);
+                saveGraphPanelHeight(next);
+              }}
+              maxHeight={() => {
+                const pane = paneRef.current;
+                if (!pane) return GRAPH_PANEL_DEFAULT * 2;
+                return Math.max(GRAPH_PANEL_MIN, pane.clientHeight - 160);
+              }}
+            />
+          ) : null}
+          <div
+            className={`shrink-0 overflow-hidden border-t border-stroke ${
+              graphExpanded ? "min-h-0" : "h-7"
+            }`}
+            style={graphExpanded ? { height: graphHeight } : undefined}
+          >
+            <GitHistoryGraph
+              cwd={cwd}
+              enabled={enabled}
+              expanded={graphExpanded}
+              selectedSha={selectedSha}
+              onToggleExpanded={() => {
+                graphOpen = !graphExpanded;
+                setGraphExpanded(graphOpen);
+              }}
+              onOpenCommit={onOpenCommit}
+            />
+          </div>
+        </>
       ) : null}
-      <div
-        className={`shrink-0 overflow-hidden border-t border-stroke ${
-          graphExpanded ? "min-h-0" : "h-7"
-        }`}
-        style={graphExpanded ? { height: graphHeight } : undefined}
-      >
-        <GitHistoryGraph
-          cwd={cwd}
-          enabled={enabled}
-          expanded={graphExpanded}
-          selectedSha={selectedSha}
-          onToggleExpanded={() => {
-            graphOpen = !graphExpanded;
-            setGraphExpanded(graphOpen);
-          }}
-          onOpenCommit={onOpenCommit}
-        />
-      </div>
     </div>
   );
 }

@@ -16,6 +16,7 @@ import { forEachConcurrent } from "../../../shared/lib/concurrent";
 import type { UnifiedFileDiff } from "../model/unifiedDiff";
 import { prepareUnifiedDiff } from "../model/diffWorker";
 import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
+import { pruneMap } from "../model/stableDiff";
 
 type Props = {
   cwd: string;
@@ -31,6 +32,8 @@ type Props = {
 type LoadedDiff = {
   binary: boolean;
   tooLarge: boolean;
+  original: string;
+  current: string;
   unified: UnifiedFileDiff | null;
   error?: string;
 };
@@ -53,6 +56,8 @@ export function SessionChangesDiff({
   const [files, setFiles] = useState<CheckpointFile[] | null>(null);
   const [diffs, setDiffs] = useState<Map<string, LoadedDiff>>(new Map());
   const [error, setError] = useState<string | null>(null);
+  const diffsRef = useRef(diffs);
+  diffsRef.current = diffs;
   const loadedScope = useRef("");
 
   useEffect(() => {
@@ -67,7 +72,8 @@ export function SessionChangesDiff({
     let generation = 0;
     let controller = new AbortController();
     const key = `${cwd}\0${sessionId}\0${scope ?? ""}`;
-    if (loadedScope.current !== key) {
+    const sameScope = loadedScope.current === key;
+    if (!sameScope) {
       loadedScope.current = key;
       setFiles(null);
       setDiffs(new Map());
@@ -87,10 +93,7 @@ export function SessionChangesDiff({
             : status.files;
           setFiles(scoped);
           const retained = new Set(scoped.map((file) => file.relative));
-          setDiffs(
-            (existing) =>
-              new Map([...existing].filter(([id]) => retained.has(id))),
-          );
+          setDiffs((existing) => pruneMap(existing, retained));
           setError(null);
           await forEachConcurrent(
             prioritizeFile(scoped, focusRef.current),
@@ -103,23 +106,38 @@ export function SessionChangesDiff({
                   cwd,
                   file.relative,
                 );
-                loaded = {
-                  binary: diff.binary,
-                  tooLarge: diff.tooLarge,
-                  unified:
-                    !diff.binary && !diff.tooLarge
-                      ? await prepareUnifiedDiff(
-                          diff.original,
-                          diff.current,
-                          signal,
-                          file.path === focusRef.current ? 0 : 1,
-                        )
-                      : null,
-                };
+                const previous = diffsRef.current.get(file.relative);
+                if (
+                  previous &&
+                  !previous.error &&
+                  previous.original === diff.original &&
+                  previous.current === diff.current &&
+                  previous.binary === diff.binary &&
+                  previous.tooLarge === diff.tooLarge
+                ) {
+                  loaded = previous;
+                } else
+                  loaded = {
+                    binary: diff.binary,
+                    tooLarge: diff.tooLarge,
+                    original: diff.original,
+                    current: diff.current,
+                    unified:
+                      !diff.binary && !diff.tooLarge
+                        ? await prepareUnifiedDiff(
+                            diff.original,
+                            diff.current,
+                            signal,
+                            file.path === focusRef.current ? 0 : 1,
+                          )
+                        : null,
+                  };
               } catch (caught: unknown) {
                 loaded = {
                   binary: false,
                   tooLarge: false,
+                  original: "",
+                  current: "",
                   unified: null,
                   error:
                     caught instanceof Error ? caught.message : String(caught),
@@ -127,6 +145,7 @@ export function SessionChangesDiff({
               }
               if (disposed || current !== generation) return;
               setDiffs((existing) => {
+                if (existing.get(file.relative) === loaded) return existing;
                 const next = new Map(existing);
                 next.set(file.relative, loaded);
                 return next;
@@ -230,6 +249,7 @@ export function SessionChangesDiff({
   return (
     <UnifiedDiffView
       files={models}
+      visible={visible}
       focusPath={focusPath}
       totals={totals}
       initialExpansion={initialExpansion}

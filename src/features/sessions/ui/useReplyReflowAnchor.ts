@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
+import { layoutTransitionActive } from "../../../shared/lib/layoutTransition";
 import { innerScrollerTakes } from "../../../shared/hooks/useLockOverscroll";
 
 type Anchor = {
@@ -96,6 +97,17 @@ export function useReplyReflowAnchor(
       }
       adjustedTop = undefined;
       const now = performance.now();
+      // Starting a pane slide can briefly clamp the native offset before
+      // resize observers see its animated width. Keep the saved character
+      // unless input identifies this scroll as the reader's own movement.
+      if (
+        anchor &&
+        layoutTransitionActive() &&
+        !draggingScroll &&
+        !waitingForScroll &&
+        now >= manualUntil
+      )
+        return;
       if (draggingScroll || waitingForScroll || now < manualUntil) {
         // Momentum can outlast the wheel event that began it. Keep the
         // gesture active until scrolling itself has been quiet, otherwise

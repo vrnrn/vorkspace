@@ -219,11 +219,16 @@ export function PromptOutline({
     }
     const target = anchor.closest<HTMLElement>(TURN) ?? anchor;
     revealMeasuredTurn(target);
+    // Clear of a top fade, where the transcript sets one.
+    const inset = Math.max(
+      SCROLL_INSET_PX,
+      Number.parseFloat(getComputedStyle(scroller).scrollPaddingTop) || 0,
+    );
     const align = () => {
       const delta =
         target.getBoundingClientRect().top -
         scroller.getBoundingClientRect().top -
-        SCROLL_INSET_PX;
+        inset;
       if (Math.abs(delta) > 2) scroller.scrollTop += delta;
     };
     align();

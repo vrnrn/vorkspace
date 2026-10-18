@@ -11,6 +11,14 @@ type WorkspaceFixture = Window & {
   readerAnchorTop: (anchor: ReaderAnchor) => number;
 };
 
+// Keep the layout invitation from covering workspace controls during measurements.
+// Invitation behavior is covered separately by layout-opt-in.spec.ts.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("monocode.newLayoutPromptDismissed", "1");
+  });
+});
+
 test("switches six large sessions through the workspace shortcut", async ({
   page,
 }, testInfo) => {

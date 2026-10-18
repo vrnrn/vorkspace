@@ -153,6 +153,8 @@ export type SessionPaneProps = {
   monoLaunchedSessions?: ReadonlyMap<string, LaunchedSessionView>;
   /** The launched session open in the Mono's sidebar. */
   openMonoSessionId?: string;
+  /** Shows plan usage by a Mono's composer; off where a footer shows it. */
+  monoComposerUsage?: boolean;
   recents: RecentProject[];
   hideProjectPicker?: boolean;
   onFocus: (sessionId: string) => void;
@@ -361,6 +363,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onOpenMonoSession,
   monoLaunchedSessions,
   openMonoSessionId,
+  monoComposerUsage = true,
   onOpenPlan,
   onBuildPlan,
   onSecondOpinion,
@@ -778,6 +781,12 @@ const LocalSessionPane = memo(function LocalSessionPane({
         onUsageLimitResumeAtReset(session.id, enabled)
       }
       onUsageLimitDismiss={() => onUsageLimitDismiss(session.id)}
+      providerAccountId={session.providerAccountId}
+      onUsageLimitAccountChange={
+        onUsageLimitAccountChange
+          ? (accountId) => onUsageLimitAccountChange(session.id, accountId)
+          : undefined
+      }
       onOpenFile={onOpenFile}
       busy={!!session.busy}
       editLastTurnSupported={editLastTurnSupported}
@@ -818,6 +827,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       ) : null}
       {inSplit ? (
         <div
+          data-split-header=""
           className={`flex h-9 shrink-0 touch-none items-center gap-1.5 border-b border-stroke px-2 select-none ${
             onPaneDragStart ? "cursor-grab active:cursor-grabbing" : ""
           }`}
@@ -1203,20 +1213,22 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     // with the usage-limit notice, not here. A narrow chat
                     // drops it first, then shows the model controls as icons.
                     tools={
-                      <div className="flex shrink-0 items-center gap-0.5 text-[11px] text-content/55 @max-md:hidden">
-                        <UsageChips
-                          providers={monoUsageProviders(session.harness)}
-                          session={{
-                            id: session.id,
-                            harness: session.harness,
-                            model: session.model,
-                            providerAccountId: session.providerAccountId,
-                          }}
-                          project={session.cwd}
-                          accountPicker={false}
-                          variant="composer"
-                        />
-                      </div>
+                      monoComposerUsage ? (
+                        <div className="flex shrink-0 items-center gap-0.5 text-[11px] text-content/55 @max-md:hidden">
+                          <UsageChips
+                            providers={monoUsageProviders(session.harness)}
+                            session={{
+                              id: session.id,
+                              harness: session.harness,
+                              model: session.model,
+                              providerAccountId: session.providerAccountId,
+                            }}
+                            project={session.cwd}
+                            accountPicker={false}
+                            variant="composer"
+                          />
+                        </div>
+                      ) : undefined
                     }
                     controls={
                       <>

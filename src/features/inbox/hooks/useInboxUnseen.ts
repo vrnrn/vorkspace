@@ -51,6 +51,7 @@ import {
   loadJiraInboxFilter,
 } from "../model/jira";
 import type { RecentProject } from "../../projects/model/recents";
+import { inProjectScope } from "../../projects/model/projectScope";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import { playCue } from "../../settings/model/sounds";
 import {
@@ -78,6 +79,7 @@ const POLL_TICK_MS = 30_000;
 
 type ProjectSeenEntry = InboxSeenEntry & NotificationSubject & {
   provider: InboxProvider;
+  projectPath: string;
 };
 
 function seenEntries(items: readonly InboxItem[]): ProjectSeenEntry[] {
@@ -85,6 +87,7 @@ function seenEntries(items: readonly InboxItem[]): ProjectSeenEntry[] {
     key: inboxItemKey(item),
     updatedAt: item.updatedAt,
     provider: item.provider,
+    projectPath: item.projectPath,
     ...inboxNotificationSubject(item),
   }));
 }
@@ -113,7 +116,12 @@ export function useInboxActivity(
   recents: RecentProject[],
   cwd: string,
   sessions: readonly SessionSummary[],
-  options?: { onAppeared?: (items: InboxItem[]) => void },
+  options?: {
+    onAppeared?: (items: InboxItem[]) => void;
+    /** Only this project's items (and project-less ones) light the badge.
+     * Polling, chimes and linked sessions still cover every project. */
+    scopeProject?: string;
+  },
 ): InboxActivity {
   const enabledConnectors = useInboxConnectors();
   const [unseen, setUnseen] = useState(false);
@@ -126,6 +134,9 @@ export function useInboxActivity(
   const notifications = useRef(new InboxNotificationTracker());
   const sessionsRef = useRef(sessions);
   const onAppearedRef = useRef(options?.onAppeared);
+  const scopeProject = options?.scopeProject;
+  const scopeRef = useRef(scopeProject);
+  scopeRef.current = scopeProject;
   const lastPulledAt = useRef<number | null>(null);
 
   const applyUnseen = useCallback(() => {
@@ -137,6 +148,7 @@ export function useInboxActivity(
         entriesRef.current.filter(
           (entry) =>
             enabled[entry.provider] &&
+            inProjectScope(entry.projectPath, scopeRef.current) &&
             allowsProjectNotificationIndicator(entry, preferences),
         ),
       ),
@@ -154,6 +166,10 @@ export function useInboxActivity(
   useLayoutEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+
+  useEffect(() => {
+    applyUnseen();
+  }, [applyUnseen, scopeProject]);
 
   useLayoutEffect(() => {
     onAppearedRef.current = options?.onAppeared;

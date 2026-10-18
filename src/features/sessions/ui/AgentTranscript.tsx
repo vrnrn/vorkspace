@@ -37,6 +37,10 @@ import { GeneratedImage } from "./GeneratedImage";
 import { settleCatchUpFades } from "./wordFade";
 import { revealMeasuredTurn, useMeasuredHistory } from "./useMeasuredHistory";
 import {
+  layoutTransitionActive,
+  onLayoutTransitionEnd,
+} from "../../../shared/lib/layoutTransition";
+import {
   ownStepBlock,
   ToolDetailSession,
   useToolDetail,
@@ -766,8 +770,12 @@ function AgentTranscriptComponent({
     const observer = new ResizeObserver(onResize);
     observer.observe(inner);
     observer.observe(el);
+    const stopTransitionEnd = onLayoutTransitionEnd(onResize);
     onResize();
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      stopTransitionEnd();
+    };
   }, [bottomAligned, scrollerEl, followTranscript, setShowJump, visible]);
 
   useTurnScrollAnchor(scrollerEl, visible, stickToBottom, rememberScroll);
@@ -5439,14 +5447,35 @@ function pinToBottom(el: HTMLElement | null) {
   el.scrollTop = el.scrollHeight;
 }
 
-/** Keep the live turn's min-height in lockstep with the visible transcript. */
+/**
+ * Keep the live turn's min-height in lockstep with the visible transcript.
+ * The content's top padding comes off too, so an anchored prompt rests as far
+ * below the top fade as the first message does.
+ */
 function syncTranscriptViewport(el: HTMLElement | null) {
   if (!el || el.clientHeight <= 0) return;
   const inner = el.querySelector<HTMLElement>("[data-transcript-content]");
-  const pad = inner
-    ? Number.parseFloat(getComputedStyle(inner).paddingBottom) || 0
+  const style = inner ? getComputedStyle(inner) : null;
+  const pad = style
+    ? (Number.parseFloat(style.paddingBottom) || 0) +
+      (Number.parseFloat(style.paddingTop) || 0)
     : 0;
   const next = `${Math.max(0, el.clientHeight - pad)}px`;
+  const anchors = inner?.querySelectorAll<HTMLElement>(
+    ":scope > .transcript-turn-anchor",
+  );
+  // Changing the inherited value restyles the whole history. While a pane
+  // slides, only the anchored turn follows; the rest catches up once at
+  // the end.
+  if (layoutTransitionActive()) {
+    anchors?.forEach((anchor) =>
+      anchor.style.setProperty("--transcript-viewport", next),
+    );
+    return;
+  }
+  anchors?.forEach((anchor) =>
+    anchor.style.removeProperty("--transcript-viewport"),
+  );
   if (el.style.getPropertyValue("--transcript-viewport") === next) return;
   el.style.setProperty("--transcript-viewport", next);
 }

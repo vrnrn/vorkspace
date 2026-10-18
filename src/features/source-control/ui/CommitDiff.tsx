@@ -30,6 +30,11 @@ export function CommitDiff({ cwd, sha, visible = true }: Props) {
   const [diffs, setDiffs] = useState<Map<string, LoadedDiff>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const loadedScope = useRef("");
+  // Commit hashes are immutable. Tab visibility must not refetch or reparse
+  // an already-complete review; interrupted loads can resume cached files.
+  const completedScope = useRef("");
+  const diffsRef = useRef(diffs);
+  diffsRef.current = diffs;
 
   useEffect(() => {
     if (!visible) return;
@@ -43,14 +48,18 @@ export function CommitDiff({ cwd, sha, visible = true }: Props) {
     let generation = 0;
     const controller = new AbortController();
     const scope = `${cwd}\0${sha}`;
-    if (loadedScope.current !== scope) {
+    const sameScope = loadedScope.current === scope;
+    if (!sameScope) {
+      completedScope.current = "";
       loadedScope.current = scope;
       setFiles(null);
       setDiffs(new Map());
     }
+    if (completedScope.current === scope) return;
 
     const run = () => {
       const current = ++generation;
+      let failed = false;
       void gitCommitFiles(cwd, sha)
         .then(async (listed) => {
           if (disposed || current !== generation) return;
@@ -65,6 +74,10 @@ export function CommitDiff({ cwd, sha, visible = true }: Props) {
             listed,
             DIFF_LOAD_CONCURRENCY,
             async (file, index) => {
+              const cached = sameScope
+                ? diffsRef.current.get(file.relative)
+                : undefined;
+              if (cached && !cached.error) return;
               let loaded: LoadedDiff;
               try {
                 const diff = await gitCommitFileDiff(cwd, sha, file.relative);
@@ -83,6 +96,7 @@ export function CommitDiff({ cwd, sha, visible = true }: Props) {
                   unified,
                 };
               } catch (caught: unknown) {
+                failed = true;
                 loaded = {
                   binary: false,
                   tooLarge: false,
@@ -100,6 +114,8 @@ export function CommitDiff({ cwd, sha, visible = true }: Props) {
             },
             () => !disposed && current === generation,
           );
+          if (!disposed && current === generation && !failed)
+            completedScope.current = scope;
         })
         .catch((caught: unknown) => {
           if (disposed || current !== generation) return;
@@ -178,5 +194,5 @@ export function CommitDiff({ cwd, sha, visible = true }: Props) {
     );
   }
 
-  return <UnifiedDiffView files={models} totals={totals} />;
+  return <UnifiedDiffView files={models} totals={totals} visible={visible} />;
 }

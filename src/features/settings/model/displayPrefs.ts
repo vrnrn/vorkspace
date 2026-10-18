@@ -82,6 +82,14 @@ export const loadPacedReveal = pacedReveal.load;
 export const savePacedReveal = pacedReveal.save;
 export const usePacedReveal = pacedReveal.useFlag;
 
+const newLayoutPromptDismissed = flagStore(
+  "monocode.newLayoutPromptDismissed",
+  false,
+  "monocode:newlayoutpromptdismissedchange",
+);
+export const saveNewLayoutPromptDismissed = newLayoutPromptDismissed.save;
+export const useNewLayoutPromptDismissed = newLayoutPromptDismissed.useFlag;
+
 /** Usage meters fill with what is left instead of what is used. */
 export const loadShowRemainingUsage = showRemainingUsage.load;
 export const saveShowRemainingUsage = showRemainingUsage.save;
