@@ -20,11 +20,13 @@ import { installNativeContextMenuGuard } from "./shared/lib/nativeContextMenu";
 import { consumeInstalledUpdate } from "./app/model/updateNotice";
 import { initializeProviderBinaryPaths } from "./features/providers/model/providerBinaryPaths";
 import { markBootWorkspaceReady } from "./bootSplash";
+import { migrateBotStorage } from "./features/bots/model/botStorageMigration";
 // Lets file commands reach a connected machine for `remote://` paths.
 import "./features/connections/model/remoteCommands";
 import "./styles/index.css";
 
 performance.mark("monocode:bootstrap");
+migrateBotStorage();
 // Let local boot IPC overlap loading/evaluating the workspace UI.
 const appLoaded = import("./app/App");
 

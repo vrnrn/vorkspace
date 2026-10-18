@@ -1065,6 +1065,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     crate::bot_transcript::ensure_tables(conn)?;
     crate::composer_drafts::ensure_table(conn)?;
     crate::local_submissions::ensure_table(conn)?;
+    crate::bot_storage_migration::migrate_database(conn)?;
     Ok(())
 }
 

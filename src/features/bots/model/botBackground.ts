@@ -1,5 +1,6 @@
 import { CHAT_BACKGROUND_OPACITY_DEFAULT } from "../../settings/model/appearance";
 import { clearProjectChatBackground } from "../../projects/model/chatBackground";
+import { migrateBotStorage } from "./botStorageMigration";
 import {
   clearProjectChatBackgroundSetting,
   loadProjectChatBackgroundSettings,
@@ -11,6 +12,7 @@ import {
  * folder has, so the project background dialog can edit it as is.
  */
 export function botBackgroundKey(botId: string): string {
+  migrateBotStorage();
   return `bot:${botId}`;
 }
 

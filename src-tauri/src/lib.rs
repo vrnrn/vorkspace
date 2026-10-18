@@ -7,6 +7,7 @@ mod background_work;
 mod bot;
 #[cfg(target_os = "macos")]
 mod bot_chat;
+mod bot_storage_migration;
 mod bot_transcript;
 mod chat_background;
 mod checkpoint;
@@ -297,6 +298,8 @@ pub fn run() {
         .manage(window_transfer::WindowTransferState::new())
         .manage(ticket_links::PendingTicketLinks::default())
         .setup(move |app| {
+            harness::reap_orphaned_harness_processes();
+            bot_storage_migration::migrate_directories(&app.path().app_data_dir()?)?;
             #[cfg(target_os = "macos")]
             if let Some(config) = &launch_window {
                 tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
@@ -315,7 +318,6 @@ pub fn run() {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 app.deep_link().register_all()?;
             }
-            harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
             control::init(app.handle())?;
             reminders::init(app.handle());

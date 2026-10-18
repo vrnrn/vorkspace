@@ -21,6 +21,7 @@ import {
   watchSystemColorScheme,
 } from "../settings/model/appearance";
 import { FloatingBotChat } from "./ui/FloatingBotChat";
+import { migrateBotStorage } from "./model/botStorageMigration";
 import { homeDir } from "../../platform/tauri/fs";
 import { setHomeDir } from "../../shared/lib/paths";
 import { installNativeContextMenuGuard } from "../../shared/lib/nativeContextMenu";
@@ -54,6 +55,7 @@ function applyFloatingAppearance() {
     .catch(() => undefined);
 }
 
+migrateBotStorage();
 applyFloatingAppearance();
 watchSystemColorScheme();
 installNativeContextMenuGuard();

@@ -19,6 +19,7 @@ import {
   projectMascot,
 } from "../../projects/model/projectMascots";
 import { removeBotBackground } from "./botBackground";
+import { migrateBotStorage } from "./botStorageMigration";
 
 /** The project palette's colors, plus indigo for a Bot's ninth preset. */
 export const BOT_COLORS = [
@@ -90,6 +91,7 @@ let migrated = false;
  * keeping its conversation, name and look. One never claimed is dropped.
  */
 export function migrateLegacyBotStorage(): void {
+  migrateBotStorage();
   if (migrated) return;
   migrated = true;
   try {

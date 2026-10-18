@@ -345,22 +345,26 @@ macTest("apply copies monos to bots while keeping monos intact", (t) => {
   );
 });
 
-macTest("refuses to clobber an existing bots directory", (t) => {
+macTest("recovers missing Bot owners while preserving existing owners", (t) => {
   const f = fixture(t);
   f.put(`${profile}/monocode.db`, "session secret");
   f.put(`${profile}/monos/one/SOUL.md`, "legacy soul");
+  f.put(`${profile}/monos/existing/SOUL.md`, "older soul");
   f.put(`${profile}/bots/existing/SOUL.md`, "existing bot soul");
   const dry = f.run();
   assert.equal(dry.status, 0, dry.stderr);
-  assert.doesNotMatch(dry.stdout, /monos -> bots/);
+  assert.match(dry.stdout, /monos -> bots/);
   const result = f.run(["--apply"]);
   assert.equal(result.status, 0, result.stderr);
-  assert.doesNotMatch(result.stdout, /monos -> bots/);
+  assert.match(result.stdout, /monos -> bots/);
   assert.equal(
     readFileSync(join(f.home, profile, "bots/existing/SOUL.md"), "utf8"),
     "existing bot soul",
   );
-  assert.equal(existsSync(join(f.home, profile, "bots/one")), false);
+  assert.equal(
+    readFileSync(join(f.home, profile, "bots/one/SOUL.md"), "utf8"),
+    "legacy soul",
+  );
   assert.equal(
     readFileSync(join(f.home, profile, "monos/one/SOUL.md"), "utf8"),
     "legacy soul",
@@ -405,31 +409,37 @@ macTest("recovery copies monos to bots inside staging before publication", (t) =
   assert.equal(existsSync(join(f.backup, "recovery-source", "bots")), false);
 });
 
-macTest("recovery does not copy monos if source already contains bots", (t) => {
-  const f = fixture(t);
-  const source = join(f.root, "legacy profile");
-  mkdirSync(source);
-  writeFileSync(join(source, "monocode.db"), "recovered db");
-  mkdirSync(join(source, "monos/one"), { recursive: true });
-  writeFileSync(join(source, "monos/one/SOUL.md"), "old soul");
-  mkdirSync(join(source, "bots/two"), { recursive: true });
-  writeFileSync(join(source, "bots/two/SOUL.md"), "new soul");
-  const destination = join(f.home, profile);
-  const args = ["--source", source, "--destination", destination];
+macTest(
+  "recovery fills missing Bot owners when the source already contains bots",
+  (t) => {
+    const f = fixture(t);
+    const source = join(f.root, "legacy profile");
+    mkdirSync(source);
+    writeFileSync(join(source, "monocode.db"), "recovered db");
+    mkdirSync(join(source, "monos/one"), { recursive: true });
+    writeFileSync(join(source, "monos/one/SOUL.md"), "old soul");
+    mkdirSync(join(source, "bots/two"), { recursive: true });
+    writeFileSync(join(source, "bots/two/SOUL.md"), "new soul");
+    const destination = join(f.home, profile);
+    const args = ["--source", source, "--destination", destination];
 
-  const dry = f.run(args);
-  assert.equal(dry.status, 0, dry.stderr);
-  assert.doesNotMatch(dry.stdout, /monos -> bots/);
+    const dry = f.run(args);
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(dry.stdout, /monos -> bots/);
 
-  const result = f.run([...args, "--apply"]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.doesNotMatch(result.stdout, /monos -> bots/);
-  assert.equal(
-    readFileSync(join(destination, "bots/two/SOUL.md"), "utf8"),
-    "new soul",
-  );
-  assert.equal(existsSync(join(destination, "bots/one")), false);
-});
+    const result = f.run([...args, "--apply"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /monos -> bots/);
+    assert.equal(
+      readFileSync(join(destination, "bots/two/SOUL.md"), "utf8"),
+      "new soul",
+    );
+    assert.equal(
+      readFileSync(join(destination, "bots/one/SOUL.md"), "utf8"),
+      "old soul",
+    );
+  },
+);
 
 macTest("ignores symlink monos and does not create bots", (t) => {
   const f = fixture(t);
@@ -573,42 +583,43 @@ macTest(
   },
 );
 
-macTest("refuses to clobber an existing codex-bots directory", (t) => {
-  const f = fixture(t);
-  f.put(`${profile}/monocode.db`, "session secret");
-  f.put(
-    `${profile}/codex-monos/account-1/session.json`,
-    "legacy session",
-  );
-  f.put(
-    `${profile}/codex-bots/existing/session.json`,
-    "existing session",
-  );
-  const dry = f.run();
-  assert.equal(dry.status, 0, dry.stderr);
-  assert.doesNotMatch(dry.stdout, /codex-monos -> codex-bots/);
-  const result = f.run(["--apply"]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.doesNotMatch(result.stdout, /codex-monos -> codex-bots/);
-  assert.equal(
-    readFileSync(
-      join(f.home, profile, "codex-bots/existing/session.json"),
-      "utf8",
-    ),
-    "existing session",
-  );
-  assert.equal(
-    existsSync(join(f.home, profile, "codex-bots/account-1")),
-    false,
-  );
-  assert.equal(
-    readFileSync(
-      join(f.home, profile, "codex-monos/account-1/session.json"),
-      "utf8",
-    ),
-    "legacy session",
-  );
-});
+macTest(
+  "recovers missing Codex accounts while preserving existing accounts",
+  (t) => {
+    const f = fixture(t);
+    f.put(`${profile}/monocode.db`, "session secret");
+    f.put(`${profile}/codex-monos/account-1/session.json`, "legacy session");
+    f.put(`${profile}/codex-bots/existing/session.json`, "existing session");
+    f.put(`${profile}/codex-monos/existing/session.json`, "older session");
+    const dry = f.run();
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(dry.stdout, /codex-monos -> codex-bots/);
+    const result = f.run(["--apply"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /codex-monos -> codex-bots/);
+    assert.equal(
+      readFileSync(
+        join(f.home, profile, "codex-bots/existing/session.json"),
+        "utf8",
+      ),
+      "existing session",
+    );
+    assert.equal(
+      readFileSync(
+        join(f.home, profile, "codex-bots/account-1/session.json"),
+        "utf8",
+      ),
+      "legacy session",
+    );
+    assert.equal(
+      readFileSync(
+        join(f.home, profile, "codex-monos/account-1/session.json"),
+        "utf8",
+      ),
+      "legacy session",
+    );
+  },
+);
 
 macTest(
   "recovery copies codex-monos to codex-bots inside staging before publication",
@@ -674,7 +685,7 @@ macTest(
 );
 
 macTest(
-  "recovery does not copy codex-monos if source already contains codex-bots",
+  "recovery fills missing Codex accounts when the source already contains codex-bots",
   (t) => {
     const f = fixture(t);
     const source = join(f.root, "legacy profile");
@@ -695,21 +706,18 @@ macTest(
 
     const dry = f.run(args);
     assert.equal(dry.status, 0, dry.stderr);
-    assert.doesNotMatch(dry.stdout, /codex-monos -> codex-bots/);
+    assert.match(dry.stdout, /codex-monos -> codex-bots/);
 
     const result = f.run([...args, "--apply"]);
     assert.equal(result.status, 0, result.stderr);
-    assert.doesNotMatch(result.stdout, /codex-monos -> codex-bots/);
+    assert.match(result.stdout, /codex-monos -> codex-bots/);
     assert.equal(
-      readFileSync(
-        join(destination, "codex-bots/new/session.json"),
-        "utf8",
-      ),
+      readFileSync(join(destination, "codex-bots/new/session.json"), "utf8"),
       "new codex session",
     );
     assert.equal(
-      existsSync(join(destination, "codex-bots/old")),
-      false,
+      readFileSync(join(destination, "codex-bots/old/session.json"), "utf8"),
+      "old codex session",
     );
   },
 );
@@ -1593,4 +1601,152 @@ macTest(
   },
 );
 
+macTest(
+  "recovers Bot files after Vox created the destination and remains idempotent",
+  (t) => {
+    const f = fixture(t);
+    f.put(`${profile}/monos/resident/SOUL.md`, "saved soul");
+    f.put(`${profile}/monos/resident/MEMORY.md`, "saved memory");
+    f.put(`${profile}/monos/index.json`, "saved index");
+    f.put(`${profile}/bots/vox/MEMORY.md`, "new vox memory");
+    const result = f.run(["--apply"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      readFileSync(join(f.home, profile, "bots/resident/SOUL.md"), "utf8"),
+      "saved soul",
+    );
+    assert.equal(
+      readFileSync(join(f.home, profile, "bots/vox/MEMORY.md"), "utf8"),
+      "new vox memory",
+    );
+    assert.equal(
+      readFileSync(join(f.home, profile, "bots/index.json"), "utf8"),
+      "saved index",
+    );
+    writeFileSync(
+      join(f.home, profile, "bots/resident/SOUL.md"),
+      "edited soul",
+    );
+    const again = f.run(["--apply", "--backup-dir", `${f.backup}-2`]);
+    assert.equal(again.status, 0, again.stderr);
+    assert.doesNotMatch(again.stdout, /monos -> bots/);
+    assert.equal(
+      readFileSync(join(f.home, profile, "bots/resident/SOUL.md"), "utf8"),
+      "edited soul",
+    );
+  },
+);
 
+macTest(
+  "offline migration converts nested background and shortcut keys once",
+  (t) => {
+    const f = fixture(t);
+    const db = join(
+      f.home,
+      "Library/WebKit/com.monocode.desktop/WebsiteData/LocalStorage/localstorage.sqlite3",
+    );
+    mkdirSync(join(db, ".."), { recursive: true });
+    execSqlite(
+      db,
+      "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB NOT NULL ON CONFLICT FAIL);",
+    );
+    putLocalstorageJson(db, "monocode:project-chat-backgrounds", {
+      "mono:one": { path: "/old.png" },
+      "mono:two": { path: "/older.png" },
+      "bot:two": { path: "/new.png" },
+      "/repo": { path: "/repo.png" },
+    });
+    putLocalstorageJson(db, "monocode.keybindingOverrides", {
+      "App: Toggle Mono": { disabled: true },
+      "App: Search": { shortcut: "Command+KeyY" },
+    });
+    const result = f.run(["--apply"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(
+      getLocalstorageJson(db, "monocode:project-chat-backgrounds"),
+      {
+        "bot:one": { path: "/old.png" },
+        "bot:two": { path: "/new.png" },
+        "/repo": { path: "/repo.png" },
+      },
+    );
+    assert.deepEqual(getLocalstorageJson(db, "monocode.keybindingOverrides"), {
+      "App: Toggle Bot": { disabled: true },
+      "App: Search": { shortcut: "Command+KeyY" },
+    });
+    const dry = f.run(["--backup-dir", `${f.backup}-2`]);
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.doesNotMatch(dry.stdout, /Legacy localStorage migration/);
+  },
+);
+
+macTest(
+  "recovered history restores sidebar and search flags after an empty-window save",
+  (t) => {
+    const f = fixture(t);
+    const db = join(f.home, profile, "monocode.db");
+    mkdirSync(join(db, ".."), { recursive: true });
+    execSqlite(
+      db,
+      `CREATE TABLE sessions (id TEXT PRIMARY KEY, blocks_json TEXT, has_user_message INTEGER, is_draft INTEGER);
+    CREATE TABLE mono_transcripts (session_id TEXT PRIMARY KEY);
+    CREATE TABLE mono_turns (session_id TEXT, seq INTEGER);
+    CREATE TABLE mono_blocks (session_id TEXT, seq INTEGER, block_id TEXT, block_json TEXT, search_text TEXT, is_user INTEGER, is_draft INTEGER);
+    INSERT INTO sessions VALUES ('chat','[]',0,0);
+    INSERT INTO mono_transcripts VALUES ('chat');
+    INSERT INTO mono_turns VALUES ('chat',1);
+    INSERT INTO mono_blocks VALUES ('chat',1,'draft','{"id":"draft","role":"user","draft":true,"text":"Saved"}','saved',1,1);`,
+    );
+    const result = f.run(["--apply"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      execSqlite(
+        db,
+        "SELECT has_user_message, is_draft FROM sessions WHERE id='chat';",
+      ),
+      "1|1\n",
+    );
+  },
+);
+
+macTest(
+  "a later backup respects the app's completed handoff and explicit deletions",
+  (t) => {
+    const f = fixture(t);
+    const wk = join(
+      f.home,
+      "Library/WebKit/com.monocode.desktop/WebsiteData/LocalStorage/localstorage.sqlite3",
+    );
+    mkdirSync(join(wk, ".."), { recursive: true });
+    execSqlite(
+      wk,
+      "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB NOT NULL ON CONFLICT FAIL);",
+    );
+    putLocalstorageJson(wk, "monocode:mono-roster", [{ id: "deleted" }]);
+    putLocalstorageJson(wk, "monocode:bot-roster", []);
+    putLocalstorageJson(wk, "vorkspace.botStorageMigration.v1", 1);
+    const db = join(f.home, profile, "monocode.db");
+    mkdirSync(join(db, ".."), { recursive: true });
+    execSqlite(
+      db,
+      `CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER);
+    INSERT INTO schema_migrations VALUES (22,1);
+    CREATE TABLE mono_transcripts(session_id TEXT PRIMARY KEY);
+    INSERT INTO mono_transcripts VALUES ('deleted');`,
+    );
+    const result = f.run(["--apply"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(
+      result.stdout,
+      /Legacy (SQLite|localStorage) migration/,
+    );
+    assert.deepEqual(getLocalstorageJson(wk, "monocode:bot-roster"), []);
+    assert.equal(
+      execSqlite(
+        db,
+        "SELECT COUNT(*) FROM sqlite_master WHERE name='bot_transcripts';",
+      ),
+      "0\n",
+    );
+  },
+);

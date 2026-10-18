@@ -14,6 +14,7 @@ import {
   shortcutTokens,
 } from "../../quick-composer/model/quickComposerShortcut";
 import { readFlag, writeFlag } from "./storageFlags";
+import { migrateBotStorage } from "../../bots/model/botStorageMigration";
 
 const SECTION_KEY = "monocode.settingsSection";
 
@@ -1360,6 +1361,7 @@ function parseKeybindingOverrides(raw: string | null): KeybindingOverrides {
 
 /** Cached per raw value: this runs several times on every keydown. Returns a fresh object. */
 export function loadKeybindingOverrides(): KeybindingOverrides {
+  migrateBotStorage();
   try {
     const storage = localStorage;
     const raw = storage.getItem(KEYBINDING_OVERRIDES_KEY);

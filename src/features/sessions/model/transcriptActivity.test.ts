@@ -126,6 +126,15 @@ describe("groupBotChatTurns", () => {
     durationMs: 25_000,
   });
 
+  it("keeps saved completion receipts from before the Bot rename in the same turn", () => {
+    const prompt = { ...completion("old", at + minute), appRequestId: "mono-completion-old" };
+    const blocks: Block[] = [
+      {id:"user",role:"user",text:"Please check",startedAt:at},
+      note("reply", "Checking"), prompt, note("report", "Done"),
+    ];
+    expect(groupBotChatTurns(blocks).map(turn => turn.map(block => block.id))).toEqual([["user", "reply", "old", "report"]]);
+  });
+
   it("continues the message above with a reply the Bot sends on its own", () => {
     const blocks: Block[] = [
       { id: "thanks", role: "user", text: "thanks :)", startedAt: at },

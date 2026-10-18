@@ -393,7 +393,7 @@ export function isBotCompletionPrompt(block: Block): boolean {
     !!block.internal &&
     (!!block.botSessionCompletion ||
       (block.role === "user" &&
-        !!block.appRequestId?.startsWith("bot-completion-")))
+        /^(?:bot|mono)-completion-/.test(block.appRequestId ?? "")))
   );
 }
 

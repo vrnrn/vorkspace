@@ -162,6 +162,12 @@ sub localstorage_migrations {
     }
     close $kh or die "Failed to read ItemTable\n";
 
+    # After the app has claimed the new namespace, an empty collection can be
+    # an explicit deletion. A later backup must never resurrect the old roster.
+    if (exists $rows{'vorkspace.botStorageMigration.v1'}) {
+        return () if decode('UTF-16LE', pack('H*', $rows{'vorkspace.botStorageMigration.v1'})) eq '1';
+    }
+
     # Only known collections can be launch-initialized empty destinations.
     # Scalars, malformed JSON and mismatched shapes may be deliberate new data.
     my %collections = (
@@ -175,6 +181,12 @@ sub localstorage_migrations {
         'monocode.inboxMonos.v1' => 'HASH',
     );
     my @copies;
+    for my $key ('monocode:project-chat-backgrounds', 'monocode.keybindingOverrides') {
+        next unless exists $rows{$key};
+        my $raw = pack("H*", $rows{$key});
+        my $converted = transform_localstorage_value($key, $raw);
+        push @copies, [$key, $key, $rows{$key}, $rows{$key}] if $converted ne $raw;
+    }
     for my $old (keys %rows) {
         my $new = $EXACT_KEYS{$old};
         my $kind = $collections{$old};
@@ -246,6 +258,19 @@ sub transform_localstorage_value {
                 }
             }
         }
+    } elsif ($key eq 'monocode:project-chat-backgrounds' || $key eq 'monocode.keybindingOverrides') {
+        return $raw_bytes unless ref($data) eq 'HASH';
+        my $changed = 0;
+        for my $old (keys %$data) {
+            my $new = $old;
+            $new =~ s/^mono:/bot:/ if $key eq 'monocode:project-chat-backgrounds';
+            $new = 'App: Toggle Bot' if $key eq 'monocode.keybindingOverrides' && $old eq 'App: Toggle Mono';
+            next if $old eq $new;
+            $data->{$new} = $data->{$old} unless exists $data->{$new};
+            delete $data->{$old};
+            $changed = 1;
+        }
+        return $raw_bytes unless $changed;
     } else {
         return $raw_bytes;
     }
@@ -341,6 +366,12 @@ sub pending_transcripts_query {
 sub check_monocode_db_pending {
     my ($db) = @_;
     return 0 unless is_sqlite3($db);
+    if (table_exists($db, 'schema_migrations')) {
+        open my $fh, "-|", "/usr/bin/sqlite3", "-batch", $db, "SELECT 1 FROM schema_migrations WHERE version=22;" or die $!;
+        my $done = <$fh>;
+        close $fh or die "Failed to read migration state\n";
+        return 0 if $done;
+    }
 
     my $transcripts = pending_transcripts_query($db);
     if (defined $transcripts) {
@@ -431,6 +462,10 @@ CREATE INDEX IF NOT EXISTS bot_blocks_user ON bot_blocks(session_id, is_user, is
 
         my $has_turns = table_exists($db, 'mono_turns');
         my $has_blocks = table_exists($db, 'mono_blocks');
+        my %session_columns;
+        open my $columns, "-|", "/usr/bin/sqlite3", "-batch", "-tabs", $db, "PRAGMA table_info(sessions);" or die $!;
+        while (<$columns>) { my @p = split /\t/; $session_columns{$p[1]} = 1 if @p > 1; }
+        close $columns or die "Failed to read session schema\n";
 
         for my $sid (@sids) {
             my $h_sid = unpack("H*", encode("UTF-8", $sid));
@@ -455,6 +490,10 @@ CREATE INDEX IF NOT EXISTS bot_blocks_user ON bot_blocks(session_id, is_user, is
                 }
                 close $bp;
             }
+            my @flags;
+            push @flags, "has_user_message = EXISTS(SELECT 1 FROM bot_blocks WHERE session_id = CAST(X'$h_sid' AS TEXT) AND is_user = 1)" if $session_columns{has_user_message};
+            push @flags, "is_draft = EXISTS(SELECT 1 FROM bot_blocks WHERE session_id = CAST(X'$h_sid' AS TEXT) AND is_user = 1 AND is_draft = 1)" if $session_columns{is_draft};
+            push @sql, "UPDATE sessions SET " . join(", ", @flags) . " WHERE id = CAST(X'$h_sid' AS TEXT);" if @flags;
         }
     }
 
@@ -589,20 +628,59 @@ if ($action eq 'check-localstorage') {
 }
 PERL
 }
+legacy_dir_pending() {
+  local source=$1 target=$2 child
+  [ -d "$source" ] && [ ! -L "$source" ] || return 1
+  [ -e "$target" ] || [ -L "$target" ] || return 0
+  [ -d "$target" ] && [ ! -L "$target" ] || return 1
+  for child in "$source"/* "$source"/.[!.]* "$source"/..?*; do
+    [ -e "$target/$(basename "$child")" ] || [ -L "$target/$(basename "$child")" ] || return 0
+  done
+  return 1
+}
+
+# A missing owner is published as one complete unit. Never mix legacy files
+# into an owner that already exists, including an explicitly empty owner.
+copy_legacy_dir() {
+  local source=$1 target=$2 child payload target_child
+  [ -d "$source" ] && [ ! -L "$source" ] || return 0
+  if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+    staging_legacy=$(mktemp -d "$(dirname "$target")/.vorkspace-$(basename "$target").XXXXXXXX")
+    ditto "$source" "$staging_legacy"
+    chmod 700 "$staging_legacy"
+    apps_closed
+    /usr/bin/perl -e '(-e $ARGV[1] || -l $ARGV[1]) and die "Bots destination changed; refusing to overwrite\n"; rename $ARGV[0], $ARGV[1] or die "Bots destination changed; refusing to overwrite: $!\n"' -- "$staging_legacy" "$target"
+    staging_legacy=''
+  elif [ -d "$target" ] && [ ! -L "$target" ]; then
+    for child in "$source"/* "$source"/.[!.]* "$source"/..?*; do
+      target_child="$target/$(basename "$child")"
+      [ ! -e "$target_child" ] && [ ! -L "$target_child" ] || continue
+      staging_legacy=$(mktemp -d "$(dirname "$target")/.vorkspace-$(basename "$target").XXXXXXXX")
+      payload="$staging_legacy/payload"
+      if [ -L "$child" ]; then cp -pP "$child" "$payload"
+      else ditto "$child" "$payload"; fi
+      apps_closed
+      /usr/bin/perl -e '
+        (-e $ARGV[1] || -l $ARGV[1]) and die "Bots destination changed; refusing to overwrite\n";
+        if (-d $ARGV[0] && !-l $ARGV[0]) { rename $ARGV[0], $ARGV[1] or die "Bots destination changed: $!\n"; }
+        else { link $ARGV[0], $ARGV[1] or die "Bots destination changed: $!\n"; }
+      ' -- "$payload" "$target_child"
+      rm -rf "$staging_legacy"
+      staging_legacy=''
+    done
+  fi
+}
 legacy_copies=()
 for pair in 'monos:bots' 'codex-monos:codex-bots'; do
   src_dir="${pair%%:*}"
   dst_dir="${pair##*:}"
   if [ -n "$source_profile" ]; then
-    if [ -d "$source_profile/$src_dir" ] && [ ! -L "$source_profile/$src_dir" ] && \
-       [ ! -e "$source_profile/$dst_dir" ] && [ ! -L "$source_profile/$dst_dir" ] && \
-       [ ! -e "$destination/$dst_dir" ] && [ ! -L "$destination/$dst_dir" ]; then
+    if legacy_dir_pending "$source_profile/$src_dir" "$source_profile/$dst_dir"; then
       legacy_copies+=("$pair")
     fi
   else
     profile="$home/Library/Application Support/com.monocode.desktop"
-    if [ -d "$profile/$src_dir" ] && [ ! -L "$profile/$src_dir" ] && \
-       [ ! -e "$profile/$dst_dir" ] && [ ! -L "$profile/$dst_dir" ]; then
+    if legacy_dir_pending "$profile/$src_dir" "$profile/$dst_dir"; then
       legacy_copies+=("$pair")
     fi
   fi
@@ -678,14 +756,7 @@ if [ -z "$source_profile" ]; then
   for pair in 'monos:bots' 'codex-monos:codex-bots'; do
     src_dir="${pair%%:*}"
     dst_dir="${pair##*:}"
-    if [ -d "$profile/$src_dir" ] && [ ! -L "$profile/$src_dir" ] && [ ! -e "$profile/$dst_dir" ] && [ ! -L "$profile/$dst_dir" ]; then
-      staging_legacy=$(mktemp -d "$profile/.vorkspace-$dst_dir.XXXXXXXX")
-      ditto "$profile/$src_dir" "$staging_legacy"
-      chmod 700 "$staging_legacy"
-      apps_closed
-      /usr/bin/perl -e 'rename $ARGV[0], $ARGV[1] or die "Bots destination changed; refusing to overwrite: $!\n"' -- "$staging_legacy" "$profile/$dst_dir"
-      staging_legacy=''
-    fi
+    copy_legacy_dir "$profile/$src_dir" "$profile/$dst_dir"
   done
   if [ "$legacy_localstorage" -eq 1 ]; then
     apps_closed
@@ -706,10 +777,7 @@ if [ -n "$source_profile" ]; then
   for pair in 'monos:bots' 'codex-monos:codex-bots'; do
     src_dir="${pair%%:*}"
     dst_dir="${pair##*:}"
-    if [ -d "$staging/$src_dir" ] && [ ! -L "$staging/$src_dir" ] && [ ! -e "$staging/$dst_dir" ] && [ ! -L "$staging/$dst_dir" ]; then
-      ditto "$staging/$src_dir" "$staging/$dst_dir"
-      chmod 700 "$staging/$dst_dir"
-    fi
+    copy_legacy_dir "$staging/$src_dir" "$staging/$dst_dir"
   done
   if [ "$legacy_localstorage" -eq 1 ]; then
     run_migration_perl apply-localstorage "$staging"
