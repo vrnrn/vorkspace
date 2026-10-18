@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- An opt-in workspace layout with theme palettes, project-scoped views, reorderable project tools and a Git history sidebar. Adapted from MonoCode upstream changes through `e53e09aa` by Nick (hardbeat920) and contributors.
+- Usage-limited Claude and Codex conversations can continue under another account, carrying native context when complete and retaining a transcript handoff otherwise.
+
+### Changed
+
+- Review diffs retain their state and use bounded rendering and worker highlighting. File mentions share unchanged indexes, and cold views can open while conversations stream.
+
+### Fixed
+
+- Account changes preserve original resume state until a complete transfer succeeds. Reader anchors account for pane transitions, operator-started sessions remain visible, and resource monitoring stays active independently of approval toasts.
+
 ## [0.13.8] - 2026-10-17
 
 ### Fixed
