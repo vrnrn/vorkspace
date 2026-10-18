@@ -12,6 +12,7 @@ import { loadVoxEnabled, subscribeVoxEnabled } from "../model/availability";
 import { VoxDisplay } from "../model/display";
 import type { VoxRequestHandler } from "../model/protocol";
 import { loadVoxSilent, subscribeVoxSilent } from "../model/replyMode";
+import { registerVoxCloser } from "../model/lifecycle";
 import {
   resetSavedVoxConversation,
   VOX_CONVERSATION_KEY,
@@ -57,20 +58,36 @@ export function VoxProvider({ cwd, execute, children }: Props) {
     phase.current = next;
     setState(next);
   }
+  function rememberStop(saving: Promise<void>) {
+    if (stopping.current !== saving) {
+      stopping.current = saving;
+      // Observe failures for the UI without replacing the rejecting promise
+      // awaited by repeated End/close calls. Retire completed cleanup so a
+      // reported failure cannot permanently lock the workspace open.
+      void saving.then(
+        () => {
+          if (stopping.current === saving) stopping.current = undefined;
+        },
+        (error: unknown) => {
+          if (stopping.current !== saving) return;
+          stopping.current = undefined;
+          if (phase.current !== "idle") return;
+          setError(
+            error instanceof Error
+              ? error.message
+              : "vox's latest speech could not be saved.",
+          );
+        },
+      );
+    }
+    return saving;
+  }
   function stop() {
-    const token = ++generation.current;
+    ++generation.current;
     const current = connection.current;
     connection.current = null;
     const saving = current?.stop() ?? stopping.current ?? Promise.resolve();
-    if (current)
-      stopping.current = saving.catch((error: unknown) => {
-        if (generation.current !== token) return;
-        setError(
-          error instanceof Error
-            ? error.message
-            : "vox's latest speech could not be saved.",
-        );
-      });
+    rememberStop(saving);
     display.finish();
     setPhase("idle");
     return saving;
@@ -81,6 +98,7 @@ export function VoxProvider({ cwd, execute, children }: Props) {
     }
   }, [enabled]);
   useEffect(() => {
+    const releaseCloser = registerVoxCloser(stop);
     const hidden = () => {
       if (document.hidden) void stop().catch(() => undefined);
     };
@@ -97,13 +115,14 @@ export function VoxProvider({ cwd, execute, children }: Props) {
         }
       };
       if (revision(event.oldValue) === revision(event.newValue)) return;
-      stop();
+      void stop().catch(() => undefined);
       display.reset();
     };
     document.addEventListener("visibilitychange", hidden);
     window.addEventListener("pagehide", leaving);
     window.addEventListener("storage", changed);
     return () => {
+      releaseCloser();
       generation.current++;
       void connection.current?.stop().catch(() => undefined);
       connection.current = null;
@@ -124,9 +143,10 @@ export function VoxProvider({ cwd, execute, children }: Props) {
         import("../model/vox"),
         typeof cwd === "function" ? cwd() : cwd,
         // Old spawn/kill admission must settle before a successor owns audio.
-        stopping.current,
+        stopping.current?.catch(() => undefined),
       ]);
       if (generation.current !== token || !loadVoxEnabled()) return;
+      stopping.current = undefined;
       const call = new Vox({
         cwd: directory,
         silent: loadVoxSilent(),
@@ -141,18 +161,11 @@ export function VoxProvider({ cwd, execute, children }: Props) {
           connection.current = null;
           setPhase("idle");
           display.finish();
-          stopping.current = saving.catch((error: unknown) => {
-            if (generation.current !== token) return;
-            setError(
-              error instanceof Error
-                ? error.message
-                : "vox's latest speech could not be saved.",
-            );
-          });
+          rememberStop(saving);
         },
         onError: (message) => {
           if (generation.current !== token) return;
-          stopping.current = call.stop().catch(() => undefined);
+          rememberStop(call.stop());
           connection.current = null;
           display.finish();
           setPhase("idle");
@@ -163,7 +176,7 @@ export function VoxProvider({ cwd, execute, children }: Props) {
       await call.start();
     } catch {
       if (generation.current !== token) return;
-      stop();
+      void stop().catch(() => undefined);
       setError("could not load vox. restart vorkspace and try again.");
     }
   }
@@ -173,17 +186,15 @@ export function VoxProvider({ cwd, execute, children }: Props) {
     display,
     silent,
     resetConversation: () => {
-      stop();
-      const closed = stopping.current;
+      const closed = stop();
       const reset = (async () => {
-        await closed?.catch(() => undefined);
+        await closed.catch(() => undefined);
         resetSavedVoxConversation();
         display.reset();
         setError(null);
       })();
       // A concurrent click cannot resume the old conversation before reset.
-      stopping.current = reset.catch(() => undefined);
-      return reset;
+      return rememberStop(reset);
     },
     start: () => void start(),
     stop: () => {

@@ -41,9 +41,6 @@ type Options = {
 // One call per renderer. A stopped generation keeps its own child identity so
 // late permission/spawn completions cannot dispose a replacement call.
 let active: Vox | undefined;
-export async function stopActiveVox(): Promise<void> {
-  await active?.stop();
-}
 const CONNECT_TIMEOUT_MS = 30_000;
 
 /** Codex owns OAuth and voice delegation; the workspace owns app actions.

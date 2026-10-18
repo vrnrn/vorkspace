@@ -136,6 +136,35 @@ test("a service failure releases the call and shows an actionable error in eithe
   }
 });
 
+test("a dismissed error appears again when the retry fails the same way", async ({
+  page,
+}) => {
+  await page.goto("/tests/browser/vox.html");
+  const control = page.getByRole("button", { name: "vox", exact: true });
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await control.click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as any).voxMetrics.writes.filter(
+              (method: string) => method === "thread/realtime/start",
+            ).length,
+        ),
+      )
+      .toBe(attempt);
+    await page.evaluate(() => (window as any).failVox());
+    await expect(page.getByRole("alert")).toContainText(
+      "chatgpt voice is unavailable",
+    );
+    await expect
+      .poll(() => page.evaluate(() => (window as any).voxMetrics.killed))
+      .toBe(attempt);
+    await page.locator("textarea").click();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  }
+});
+
 test("Vox survives chat navigation and titlebar replacement", async ({
   page,
 }) => {

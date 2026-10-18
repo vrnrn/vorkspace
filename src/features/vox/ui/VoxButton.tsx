@@ -63,7 +63,13 @@ function VoxTitleControl({ vox }: { vox: VoxControls }) {
               ? "start vox"
               : "end vox"
         }
-        onClick={active ? vox.stop : vox.start}
+        onClick={() => {
+          if (active) vox.stop();
+          else {
+            setDismissed(null);
+            vox.start();
+          }
+        }}
         className={`grid h-7 min-w-14 place-items-center rounded-md px-2.5 font-mono text-[18px] font-medium tracking-[-0.03em] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-content/40 ${active ? "bg-selection-emphasis text-content" : "bg-content/5 text-content/75 hover:bg-selection-hover hover:text-content"}`}
       >
         <VoxFace id={face} motion={motion} />

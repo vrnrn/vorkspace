@@ -56,6 +56,7 @@ import {
 } from "../../features/projects/model/recents";
 import type { ProjectReturnMemory } from "../../features/projects/model/projectReturn";
 import { flushComposerDrafts } from "../../features/sessions/model/draftCache";
+import { stopVox } from "../../features/vox/model/lifecycle";
 
 async function flushDraftsBeforeQuit(): Promise<void> {
   try {
@@ -181,8 +182,7 @@ export async function handleQuitRequested(): Promise<boolean> {
 /** Retire voice only after Codex confirms that its final speech is on disk. */
 export async function flushVoxBeforeClose(): Promise<boolean> {
   try {
-    const { stopActiveVox } = await import("../../features/vox/model/vox");
-    await stopActiveVox();
+    await stopVox();
     return true;
   } catch {
     await message(
@@ -523,6 +523,7 @@ async function confirmAndCloseWindow(
       );
       if (!ok) return;
     }
+    if (!(await flushVoxBeforeClose())) return;
     quitting = true;
     try {
       await persistQuitState(

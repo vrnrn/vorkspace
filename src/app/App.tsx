@@ -2372,11 +2372,11 @@ function Workspace({
         // Listening here makes close our job. Letting the default path run
         // calls JS `window.destroy`, which Tauri denies without a permission.
         event.preventDefault();
-        if (!(await flushVoxBeforeClose())) return;
         if (
           IS_MAC &&
           (await invoke<boolean>("mono_chat_keep_alive").catch(() => false))
         ) {
+          if (!(await flushVoxBeforeClose())) return;
           flushHarnessEvents();
           void persistLiveTranscripts(sessionsRef.current);
           void hideCurrentWindow();
@@ -2384,16 +2384,18 @@ function Workspace({
         }
         const toTray = loadCloseToTray();
         if (hasInFlightSessions(sessionsRef.current)) {
-          flushHarnessEvents();
           if (!toTray && !IS_MAC) {
             void closeBusyWindow();
             return;
           }
+          if (!(await flushVoxBeforeClose())) return;
+          flushHarnessEvents();
           // Not `persistQuitState`: that marks the live turns interrupted.
           void persistLiveTranscripts(sessionsRef.current);
           void hideCurrentWindow();
           return;
         }
+        if (!(await flushVoxBeforeClose())) return;
         void persistQuitState(
           sessionsRef.current,
           tabsRef.current,

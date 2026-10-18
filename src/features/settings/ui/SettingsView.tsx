@@ -904,7 +904,7 @@ function VoxPage() {
             onChange={(id) => {
               const next = {
                 id,
-                label: options.find((option) => option.value === id)!.label,
+                label: options.find((option) => option.value === id)?.label ?? id,
               };
               try {
                 saveVoxMicrophone(next);
