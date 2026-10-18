@@ -86,7 +86,7 @@ export function planMacRelease(version, releases, env, tags = []) {
       }
     }
   }
-  const notes = `Personal Apple Silicon Mac build from vrnrn/vorkspace. Uses ad hoc Apple signing and signed in-app updates. See CHANGELOG.md for changes.\n\nBuild: ${build}\nWorkflow: ${workflow}\n`;
+  const notes = `Personal Apple Silicon Mac build from vrnrn/vorkspace. Uses ad hoc Apple signing and signed in-app updates.\n\nBuild: ${build}\nWorkflow: ${workflow}\n`;
   return { version, tag: `mac-v${version}`, build, workflow, notes };
 }
 

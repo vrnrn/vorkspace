@@ -1,115 +1,101 @@
-# Engineering reasoning
+# Staff Engineering Reasoning & Operating Guide
 
-Keep this guide timeless and principle based. Record task plans, progress, completed changes, roadmaps, and proposed work separately.
+Keep this guide timeless and principle-based. Record task plans, progress, completed changes, roadmaps, and point-in-time work logs outside the repository.
 
-Work from observable behavior, explicit ownership, and evidence. Preserve correctness, continuity, and durable state while removing unnecessary work. Treat implementation choices as hypotheses to test, not patterns to repeat automatically.
+Work from observable behavior, explicit ownership, and verifiable evidence. Preserve correctness, user continuity, security boundaries, and durable state while removing unnecessary work. Treat every mechanism—whether a cache, worker, queue, or abstraction—as a hypothesis to test against the problem's constraints, not a pattern to repeat by reflex.
 
-## Define the problem before choosing a mechanism
+---
 
-For nontrivial work, establish:
+## 1. Frame the Problem & Trace the System
 
-1. **The experience:** What action or condition triggers the problem? What must the user see, retain, or be able to do?
-2. **The invariant:** What must remain true before, during, and after the change?
-3. **The authority:** Which boundary owns the state or effect? Which other representations are derived, delayed, partial, or displayed?
-4. **The failing transition:** Under what ordering, lifecycle change, or workload does the invariant stop holding?
-5. **The cause:** Which work, dependency, ownership ambiguity, or timing assumption produces the failure?
-6. **The intervention:** What is the smallest coherent change at the owning boundary?
-7. **The proof:** What observation would demonstrate success, and what would disprove the proposed explanation?
+Before writing code or choosing a mechanism for nontrivial work, establish the causal chain proportional to the change's blast radius:
 
-Keep the depth proportional to the problem. A small fix may need only a short explanation. A change spanning ownership or durability boundaries needs explicit contracts and tradeoffs before a large implementation.
+1. **The experience:** What user action, workload, or system condition triggers the problem? What must the user see, retain, or be able to do?
+2. **The invariant:** What contract must hold before, during, and after the transition?
+3. **The authority:** Which boundary owns the authoritative state or effect? Which other representations are derived, delayed, partial, or purely decorative?
+4. **The failing transition:** Under what ordering, lifecycle overlap, failure mode, or scale does the invariant break?
+5. **The root cause:** Which unnecessary work, hidden coupling, ownership ambiguity, or timing assumption produces the failure?
+6. **The intervention:** What is the smallest coherent change at the owning boundary that closes the entire causal gap?
+7. **The proof:** What deterministic test or measurement demonstrates success, and what observation would falsify the diagnosis?
 
-## Trace the whole path
+### Trace the whole path
+Follow an operation end to end: from user intent through admission, state mutation, notification, computation, presentation, persistence, and subprocess or network effects. Trace both the happy path and what happens when the operation is interrupted, repeated, superseded, or recovered after a crash.
 
-Follow an operation from intent through state changes, notifications, computation, presentation, persistence, and external effects. Inspect both the forward path and what happens when it is interrupted, repeated, superseded, or recovered.
+### Fix at the owning boundary, not the visible symptom
+Distinguish where a defect surfaces from the boundary responsible for it. A rendering glitch can originate in identity, scheduling, storage, or process lifecycle ownership. A short patch that masks the symptom while leaving the race intact is worse than a slightly broader fix with one clear owner; conversely, a broad refactor requires evidence that the existing boundary cannot carry the contract.
 
-Distinguish the location where a symptom appears from the boundary responsible for it. A presentation defect can originate in identity, scheduling, storage, or lifecycle ownership. Fixing the visible symptom alone can move the failure elsewhere.
+---
 
-Choose the smallest change that closes the entire causal gap. A short patch that leaves the race intact is not simpler than a slightly broader fix with one clear owner. A broad refactor needs evidence that the existing boundary cannot carry the required contract.
+## 2. Make Ownership & Continuity Precise
 
-## Make ownership precise
+### Single clear authority per scope
+- **Explicit ownership:** Give every authoritative state or side effect one clear owner within its domain. Separate authorities may exist across runtimes (renderer, native core, remote daemon, provider CLI); define their synchronization protocol rather than collapsing everything into a monolithic coordinator.
+- **Atomic publication:** Publish a complete, internally consistent state before notifying subscribers. Coalescing or throttling notifications must never make authoritative reads stale.
+- **Freshness vs. cadence:** Decouple data freshness from UI presentation frequency so high-frequency producers (streaming tokens, terminal output, resource polls) wake only the consumers whose relevant slice changed.
+- **Orthogonal lifecycle states:** Keep visibility, activity, attachment, warm retention, and disposal distinct. Hiding a surface or parking an idle process does not imply discarding its state.
+- **Clean ownership transfer:** Make hand-offs atomic and explicit. Once a successor claims a resource or session, the previous owner must never overwrite or clean it up.
 
-- Give each authoritative state or effect a clear owner within its scope. Separate authorities can exist in different runtimes or domains; define how they synchronize rather than merging everything into a global coordinator.
-- Publish a complete, consistent state before notifying consumers. Reducing notification frequency must not make authoritative reads stale.
-- Separate data freshness from presentation frequency. Different consumers can need different update rates without maintaining conflicting truths.
-- Distinguish visibility, activity, attachment, retention, and disposal. One transition does not imply all the others.
-- Make ownership transfer explicit. An old owner must not clean up or overwrite a resource after a new owner has taken responsibility for it.
+### Continuity of user meaning
+- **Preserve semantic identity:** Protect what the user is actually working with—session identity, focus, selection, scroll anchor, and unfinished drafts—rather than incidental coordinates or transient DOM nodes.
+- **User intent is authoritative:** Deliberate user input takes precedence over automatic behavior, background refreshes, and delayed programmatic events.
+- **Zero-defect intermediate frames:** Inspect the entire visible transition. A momentary collapse, flash, scroll jump, replayed animation, or stale frame is a bug even if the final state converges.
+- **Invalidation-aware representations:** If a derived representation depends on geometry, ordering, theme, or configuration, define explicitly when it becomes invalid and how it is reconstructed without losing user context.
 
-## Preserve meaning and continuity
+---
 
-Preserve the thing the user is interacting with, not merely an incidental coordinate or representation. Identity, selection, focus, reading position, and unfinished input can matter even when the final content is unchanged.
+## 3. Concurrency, Durability & Security Boundaries
 
-Treat user actions as authoritative when they conflict with automatic behavior. Distinguish deliberate input from programmatic corrections and delayed events.
+### Design asynchronous work as a complete lifecycle
+Define admission, concurrency, priority, identity, cancellation, publication, failure, and cleanup together:
+- **Admission & priority:** Acquire admission before consuming scarce execution resources. Never trap urgent user control actions behind optional background work.
+- **Epoch & identity validation:** Carry enough version, epoch, and owner identity to verify whether an in-flight result still belongs to the current owner and input. Re-validate at every `await` boundary and immediately before publication—being valid when a task started never guarantees it is valid when it finishes.
+- **Cancellation semantics:** Distinguish abandonment from continuation. Specify what cancellation guarantees: preventing publication, removing queued jobs, interrupting active subprocesses, or releasing locks. Retain reusable checkpoints only at stable boundaries where both input and interpretation remain compatible.
+- **Failure recovery:** Every failure path must release locks, clean up temporary resources, and leave the owner ready for subsequent work.
 
-Check the entire visible transition. A temporary collapse, replay, jump, or stale frame remains a defect even when the final state becomes correct. Preserve identity where rebuilding would repeat effects or discard meaningful state.
+### Protect durable truth from partial views
+- **Distinct absence states:** Missing, unknown, unavailable, empty, and explicitly deleted carry different meanings; never conflate them in storage or wire schemas.
+- **Safe partial reads:** A displayed or memory-bounded view may intentionally omit large payloads. Protect omitted data at the persistence boundary so a partial read followed by a write merges against durable state rather than clobbering unloaded fields.
+- **Root-last atomic commits:** When persisting or migrating multi-file or multi-table state (transcripts, rollouts, subagent edges, checkpoints), write through flushed temporary files (`fsync` + atomic `rename`) and publish the resumable root marker last so readers never observe a half-written state.
+- **Honest external uncertainty:** A local call, timeout, or disconnect does not prove whether an external process or remote host executed an effect once, zero times, or partially. Use durable submission receipts and idempotency keys rather than blind replay.
 
-Choose representations that survive the transformations the feature permits. If a representation depends on geometry, ordering, interpretation, or configuration, define when it becomes invalid and how it is reconstructed.
+### Enforce trust and isolation boundaries
+- **Boundary validation:** Validate untrusted identifiers, paths, and external payloads at the trust boundary before constructing filesystem paths, SQL queries, or subprocess arguments.
+- **Safe filesystem & process primitives:** Enforce project-root containment on file mutations where applicable, create temporary or credential files exclusively with owner-only permissions (`O_EXCL` / `0600`), isolate child processes in dedicated process groups or job objects, and keep untrusted HTML/artifact previews inside opaque sandboxed origins without IPC access.
 
-## Remove work before moving it
+---
 
-First determine whether the work is necessary. Then consider narrowing its scope, reusing compatible results, deferring it, or moving it away from an interactive path.
+## 4. Performance & Resource Economics
 
-- Update only consumers whose relevant information changed.
-- Avoid rebuilding unchanged history or copying entire structures for a small change.
-- Separate essential readiness from optional enrichment, while preserving required recovery ordering.
-- Admit intentional prefetch with explicit priority, cancellation, and bounds.
-- Measure the full cost of an optimization, including coordination, copying, invalidation, and reconstruction.
+### Remove work before moving it
+First determine whether work is necessary at all. Only then narrow its scope, reuse compatible results, defer it, or move it off the interactive thread:
+- Update only subscribers whose observed slice changed.
+- Avoid rebuilding unchanged history, re-flattening static trees, or copying whole transcripts for incremental appends.
+- Separate essential interactive readiness from optional decorative enrichment (such as syntax highlighting or link previews) while preserving recovery ordering.
+- Account for the full cost of any cache, worker, or queue—including serialization, coordination, invalidation, and retained memory. Moving work changes *where* it runs; it does not automatically reduce total cost.
 
-A cache, worker, queue, or extra state layer is a tradeoff, not an improvement by definition. Moving work changes where it happens; it does not necessarily reduce its total cost.
+### Budget the resource that actually matters
+- Bound the real bottleneck: retained bytes, DOM/layout weight, active child processes, IPC broadcast fan-out, queued payloads, and reconstruction latency—not merely entry counts. Label estimates clearly as estimates.
+- Retain warm state when measured latency gains justify its footprint, and evict inactive, reconstructible state through its owner while protecting active turns and unsaved user input. Prevent a single oversized item from evicting the entire hot working set.
+- Separate resource observation from the authority to act: a pressure sample can surface diagnostics or park idle caches, but destructive termination requires re-validating current ownership at the point of action.
 
-## Design asynchronous work as a lifecycle
+---
 
-Define admission, concurrency, priority, identity, cancellation, publication, failure, and cleanup together.
+## 5. Verification, Edge Transitions & Documentation Hygiene
 
-- Acquire admission before occupying scarce execution resources. Keep urgent control actions from being trapped behind optional background work.
-- Carry enough identity and version information to determine whether a result still belongs to the current owner and input.
-- Validate again when publishing. Being valid when a task started does not make its result valid when it finishes.
-- Distinguish abandonment from continuation. Cancel work with no remaining purpose, but retain reusable progress when a compatible successor can consume it.
-- Reuse progress only when both the input and its interpretation remain compatible. Choose checkpoints at stable boundaries and invalidate them deliberately.
-- Specify what cancellation actually does: prevent publication, remove queued work, stop active computation, or release resources. Those are different guarantees.
-- Give failures a cleanup and recovery path. A failed operation must not retain ownership indefinitely or prevent later useful work.
+### Match evidence to the claim
+Exercise the changed contract directly with deterministic tests and representative measurements:
+- **Reuse & caching:** Compare against a straightforward reference across mutated inputs, invalidations, and configuration switches; verify both output equivalence and work skipped.
+- **Notifications & state:** Verify both reduced wakeups and immediately consistent authoritative reads.
+- **Async lifecycles:** Deterministically control completion order, cancellation, stale publication, replacement, failure, and crash recovery.
+- **Partial data & durability:** Exercise the full read → modify → save → reopen/resume cycle, including interrupted writes.
+- **Performance:** Measure against a clear baseline with repeated samples across every process or thread that pays the cost.
 
-## Protect durable truth from partial views
+Control scheduling whenever timing is not the property under test. Never "fix" an unexplained test failure by weakening an assertion or inflating a timeout. Keep claims strictly within the evidence: functional correctness does not prove latency; fewer renders do not prove lower memory; component microbenchmarks do not prove end-to-end responsiveness.
 
-A displayed or lazily loaded representation may intentionally omit information. Missing, unknown, unavailable, empty, and explicitly deleted are different meanings.
+### Stress the transitions between states
+Explicitly review overlapping transitions derived from the ownership model: active ↔ idle, current ↔ superseded, warm ↔ reconstructed, normal ↔ resource-pressured, partial ↔ complete, local ↔ remote, and steady operation overlapping with navigation, resize, cancellation, or save. Extend an existing owner before introducing a competing mechanism, and preserve the rationale behind non-obvious invariants so future simplification does not silently remove a safety guarantee.
 
-Define how a partial read participates in a later write before making the read cheaper. Preserve information that the caller never loaded. Place that protection at the persistence boundary rather than relying on every caller to reconstruct complete data correctly.
-
-Preserve write ordering, deletion semantics, ownership checks, migrations, and interrupted-operation recovery. Delayed enrichment must merge against current state rather than replacing newer work with an older snapshot.
-
-Represent uncertain external outcomes honestly. A local record, acknowledgement, or retry does not by itself prove that an external effect happened exactly once. Recovery must respect that uncertainty.
-
-## Budget the resource that matters
-
-Choose bounds that match the cost: retained bytes, object or layout weight, active execution, queued payloads, or reconstruction latency. Entry counts alone rarely describe all of them. Label estimates as estimates.
-
-Retain reusable state when its measured benefit justifies its cost. Release inactive, reconstructible state through its owner, while protecting active work and unsaved input. Avoid allowing one oversized item to displace every inexpensive useful item.
-
-Measure both sides of the tradeoff. More aggressive eviction can increase latency without meaningfully reducing memory. Detached, deferred, or background-owned resources can still consume substantial capacity.
-
-Separate observation from authority to act. A resource snapshot can inform a decision without authorizing a destructive operation. Revalidate current identity and ownership at the point of action; keep explicit control actions distinct from established lifecycle cleanup.
-
-## Match evidence to the claim
-
-Use tests and measurements that exercise the changed contract directly:
-
-- For reuse, compare with a straightforward reference across changed inputs, invalidation, and configuration changes. Check identity and work performed where those are part of the benefit.
-- For notification changes, verify both reduced updates and immediately correct authoritative reads.
-- For asynchronous work, control completion order, cancellation, stale results, replacement, failure, and recovery.
-- For retention, inspect identity, lifecycle effects, actual retained cost, eviction, and reconstruction.
-- For partial data, test the complete read, modify, save, and reopen cycle.
-- For presentation, observe intermediate frames and real interaction in the relevant rendering environments.
-- For performance, use representative workloads, a clear baseline, repeated samples, and measurements covering every process or execution context that owns the cost.
-
-Control scheduling when timing is not the property under test. Avoid fixing an unexplained failure by weakening an assertion or extending a timeout until it disappears.
-
-Keep conclusions within the evidence. Functional correctness does not establish a latency budget. Fewer updates do not prove lower memory use. Smaller delivery size does not prove faster presentation. A component measurement does not establish a whole-system improvement.
-
-## Review transitions and tradeoffs
-
-Exercise the transitions relevant to the change: active and inactive, current and superseded, warm and reconstructed, normal and pressured, partial and complete, successful and interrupted, new and existing data.
-
-Look for interactions between them. A change that works during steady operation may fail when completion, navigation, cancellation, resizing, or saving overlap. Choose cases from the actual ownership and lifecycle model rather than accumulating hypothetical checks.
-
-Extend an existing owner before adding a competing mechanism. Revisit an earlier decision when evidence changes, but understand the contract it protected before replacing it.
-
-Explain the result through the problem, owning boundary, chosen tradeoff, evidence, and remaining uncertainty. Preserve the reasons behind non-obvious decisions so future simplification does not silently remove a correctness guarantee.
+### Keep documentation grounded and paired with ELI5 companions
+- **Ground in live truth:** Every document in `docs/` must reflect the actual features, commands, flags, file paths, and architecture of the current codebase.
+- **No changelogs or work logs:** Keep only timeless product and architecture documentation in the repository. Never commit `CHANGELOG.md`, upstream import logs, QA notes, or point-in-time work logs; fold lasting architectural or product changes directly into the relevant docs.
+- **1-to-1 ELI5 companions:** Every technical document at `docs/<name>.md` must have a matching plain-English companion at `docs/eli5/<name>.md`. Whenever you add, update, or remove a document in `docs/`, create, update, or remove its `docs/eli5/<name>.md` counterpart in the same change.

@@ -1,5 +1,4 @@
 import { useLayoutEffect, useMemo, useRef, type RefObject } from "react";
-import { basename } from "../../platform/tauri/fs";
 import { MOD } from "../../platform/tauri/platform";
 import { useProjectAppearance } from "../../features/projects/hooks/useProjectAppearance";
 import {
@@ -8,7 +7,7 @@ import {
   type RecentProject,
 } from "../../features/projects/model/recents";
 import { resolveTabGroupLabel } from "../../features/workspace/model/tabGroups";
-import { projectKey, projectName } from "../../shared/lib/paths";
+import { basename, projectKey, projectName } from "../../shared/lib/paths";
 import { Plus, Settings } from "../../shared/ui/icons";
 import { IconButton } from "./TitleBar";
 

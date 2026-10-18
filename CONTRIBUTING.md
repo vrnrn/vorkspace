@@ -27,7 +27,7 @@ npm run tauri dev
 - `tests/browser/` - browser fixtures and cross-feature interaction tests
 - `scripts/` - small maintenance, development, packaging, and release commands; focused script tests live alongside them
 
-The [historical architecture review](https://github.com/vrnrn/vorkspace/blob/mac-v0.13.7/docs/archive-architecture-review.md) preserves deferred ideas for search continuation, structured cleanup outcomes, and reconciling Git mutations with observed repository state.
+See [docs/architecture.md](docs/architecture.md) ([ELI5](docs/eli5/architecture.md)) for a full system breakdown.
 
 `src/integrations/harness/` is the most useful place to start if you want to fix something real. Each folder under `providers/` has an adapter (`claudeAdapter.ts`) that implements the shared `HarnessAdapter` lifecycle from `core/registry.ts`, and a protocol module (`claudeProtocol.ts`) that translates the CLI’s output into vorkspace’s own event types. The protocol modules are pure functions with unit tests beside them, so you can fix a Codex parsing bug with only Claude Code installed. That’s for the providers we already ship - please don’t add a new one yet.
 
@@ -65,13 +65,9 @@ These render the actual transcript and stylesheet in Chromium and WebKit, checki
 
 ## New providers
 
-I’m pausing new harnesses until the current ones share the same patterns - session lifecycle, catalog probes, usage, approvals, and how slash commands and skills are wired. A PR that adds another provider will be closed for now, even if the work is good. Fixes, tests, and protocol bugs on Claude, Codex, Cursor, Grok, OpenCode, Antigravity, Pi, omp, fx, Hermes Agent, and Devin are still the best kind of contribution.
+I’m pausing new harnesses until the current ones share the same patterns - session lifecycle, catalog probes, usage, approvals, and how slash commands and skills are wired. A PR that adds another provider will be closed for now, even if the work is good. Fixes, tests, and protocol bugs on Claude Code, Codex, Antigravity, Pi, and omp are still the best kind of contribution.
 
 When the pause lifts, this section goes away.
-
-## Upstream changes
-
-This fork imports upstream bug fixes and features as patches while retaining its detached history. Read the reviewed baseline, commit dispositions and preservation rules in [Upstream patch imports](docs/upstream-imports.md) before preparing the next import.
 
 ## Pull requests
 

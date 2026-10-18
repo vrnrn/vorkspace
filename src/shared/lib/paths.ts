@@ -314,13 +314,18 @@ export function displayPath(path: string, cwd?: string): string {
   return normalized;
 }
 
-/** Folder name for tab labels — `~` when the cwd is home. */
-export function projectName(cwd: string): string {
-  if (!cwd || prettyCwd(cwd) === "~") return "~";
-  const trimmed = trimSlash(cwd);
+/** Last path segment, or `/` for the filesystem root. */
+export function basename(path: string): string {
+  const trimmed = trimSlash(path);
   if (/^[A-Za-z]:$/.test(trimmed)) return trimmed;
   const parts = trimmed.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? trimmed;
+}
+
+/** Folder name for tab labels — `~` when the cwd is home. */
+export function projectName(cwd: string): string {
+  if (!cwd || prettyCwd(cwd) === "~") return "~";
+  return basename(cwd);
 }
 
 /**

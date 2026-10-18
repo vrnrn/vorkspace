@@ -26,7 +26,12 @@ export function createReleaseNotesLoader(read: () => Promise<string>) {
   };
 }
 
+const changelogModules = import.meta.glob<string>("../../../CHANGELOG.md", {
+  query: "?raw",
+  import: "default",
+});
+
 export const releaseNotesLoader = createReleaseNotesLoader(async () => {
-  const module = await import("../../../CHANGELOG.md?raw");
-  return module.default;
+  const load = changelogModules["../../../CHANGELOG.md"];
+  return load ? await load() : "";
 });

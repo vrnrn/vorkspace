@@ -16,6 +16,14 @@ Once a provider is installed and signed in, open a project folder in vorkspace, 
 
 In **Settings → Providers**, use **Models** beside an agent to choose which models appear in pickers, favorites, and recent choices. Search for a model and uncheck it to hide it; **Show all** restores the list. The Global/project scope applies to model visibility too, and a model hidden globally stays hidden in every project. Existing conversations keep their selected model.
 
+## Multiple accounts & usage-limit continuation
+
+In **Settings → Providers**, you can add multiple **Claude Code** and **Codex** accounts (each isolated under its own provider home directory) and switch the active account globally or per conversation.
+
+When a Claude Code or Codex conversation (or a Mono using one of those providers) hits a rate or usage limit, vorkspace offers **Switch account** / **Choose another account** directly in the usage-limit banner:
+- **Native context transfer**: For local sessions, vorkspace stops the limited CLI process, copies the conversation's native transcript/rollout files, subagent trees, file-history checkpoints, and closed subagent state into the newly selected account's home directory, and resumes the exact conversation byte-for-byte.
+- **Transcript handoff fallback**: When native context cannot be copied directly (for example, when using a custom shared `CODEX_SQLITE_HOME`, a private Mono store, or a remote host), vorkspace carries the conversation forward using a structured transcript handoff on the next turn.
+
 To run vorkspace from a checkout, see [building from source](building.md). Return to the [README](../README.md) for desktop downloads.
 
 ## GitHub Copilot credentials

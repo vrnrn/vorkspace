@@ -1,4 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { clamp } from "../../../shared/lib/numbers";
 
 const UI_SCALE_KEY = "monocode.uiScale";
 
@@ -13,10 +14,6 @@ export const UI_SCALE_PERCENTS = Array.from(
 
 /** Fired on `window` whenever the UI scale changes (detail: number). */
 export const UI_SCALE_CHANGE_EVENT = "monocode:uiscalechange";
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
 
 function roundStep(value: number) {
   return Math.round(value * 10) / 10;
