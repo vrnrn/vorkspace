@@ -150,7 +150,12 @@ fn transfer_codex(from: &Path, to: &Path, id: &str) -> Result<(), String> {
 
     let mut files = vec![root];
     let mut index = 0;
-    let mut pending: Vec<String> = descendant_threads(&sqlite_home, id)?;
+    // Spawned agents may never have written a rollout; inherited history is
+    // required to reconstruct a fork and must never be silently omitted.
+    let mut pending: Vec<(String, bool)> = descendant_threads(&sqlite_home, id)?
+        .into_iter()
+        .map(|thread| (thread, false))
+        .collect();
     loop {
         while index < files.len() {
             // Compressed rollouts can retain a plain JSONL append tail.
@@ -167,29 +172,35 @@ fn transfer_codex(from: &Path, to: &Path, id: &str) -> Result<(), String> {
             }
             if let Some(base) = history_base(&path)? {
                 validate_thread_id(&base)?;
-                pending.push(base);
+                pending.push((base, true));
             }
             index += 1;
         }
-        let Some(thread) = pending.pop() else { break };
+        let Some((thread, required)) = pending.pop() else {
+            break;
+        };
         if files.iter().any(|path| rollout_matches(path, &thread)) {
             continue;
         }
         // A spawned agent that never wrote a rollout has nothing to resume.
         if let Some(path) = find(&thread)? {
             files.push(path);
+        } else if required {
+            return Err(format!(
+                "Could not find required Codex history base {thread}"
+            ));
         }
     }
 
+    // Commit closure state before publishing the resumable root. Every retry
+    // revalidates/reapplies it, including when an older root already exists.
+    if let Some(db) = edge_db {
+        apply_agent_edges(&db, edges)?;
+    }
     for path in files.iter().rev() {
         let dest = rollout_dest(to, path)?;
         copy_durable(path, &dest)
             .map_err(|e| format!("Could not carry the Codex conversation over: {e}"))?;
-    }
-    // Closed agents are recorded only in SQLite. Without them, resuming would
-    // treat finished subagents as still open.
-    if let Some(db) = edge_db {
-        apply_agent_edges(&db, edges)?;
     }
     Ok(())
 }
@@ -346,11 +357,100 @@ mod tests {
         let fixture = Fixture::new();
         let sessions = fixture.from().join("sessions");
         std::fs::create_dir_all(&sessions).unwrap();
-        std::fs::write(sessions.join("rollout-root.jsonl"), "root").unwrap();
+        std::fs::write(
+            sessions.join("rollout-2026-10-18T10-00-00-root.jsonl"),
+            "root",
+        )
+        .unwrap();
         let db = rusqlite::Connection::open(fixture.from().join("state_5.sqlite")).unwrap();
         db.execute_batch("CREATE TABLE thread_spawn_edges(parent_thread_id TEXT NOT NULL, child_thread_id TEXT PRIMARY KEY, status TEXT NOT NULL); INSERT INTO thread_spawn_edges VALUES ('root','child','closed');").unwrap();
         let error = transfer_codex(&fixture.from(), &fixture.to(), "root").unwrap_err();
         assert!(error.contains("initialized"), "{error}");
         assert!(!fixture.to().join("sessions").exists());
+    }
+    #[test]
+    fn refuses_a_missing_required_history_base_before_publishing_the_root() {
+        let fixture = Fixture::new();
+        let sessions = fixture.from().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let meta = serde_json::json!({"type":"session_meta","payload":{"id":"root","history_base":{"thread_id":"missing-base"}}});
+        std::fs::write(
+            sessions.join("rollout-2026-10-18T10-00-00-root.jsonl"),
+            format!("{meta}\n"),
+        )
+        .unwrap();
+        let error = transfer_codex(&fixture.from(), &fixture.to(), "root").unwrap_err();
+        assert!(
+            error.contains("required Codex history base missing-base"),
+            "{error}"
+        );
+        assert!(!fixture.to().join("sessions").exists());
+    }
+
+    #[test]
+    fn allows_a_spawned_descendant_that_never_wrote_a_rollout() {
+        let fixture = Fixture::new();
+        let sessions = fixture.from().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            sessions.join("rollout-2026-10-18T10-00-00-root.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+        let db = rusqlite::Connection::open(fixture.from().join("state_5.sqlite")).unwrap();
+        db.execute_batch("CREATE TABLE thread_spawn_edges(parent_thread_id TEXT NOT NULL, child_thread_id TEXT PRIMARY KEY, status TEXT NOT NULL); INSERT INTO thread_spawn_edges VALUES ('root','never-written','open');").unwrap();
+        transfer_codex(&fixture.from(), &fixture.to(), "root").unwrap();
+        assert!(fixture
+            .to()
+            .join("sessions")
+            .join("2026")
+            .join("10")
+            .join("18")
+            .join("rollout-2026-10-18T10-00-00-root.jsonl")
+            .is_file());
+    }
+
+    #[test]
+    fn retries_closure_failures_without_publishing_or_replacing_the_root() {
+        let fixture = Fixture::new();
+        let sessions = fixture.from().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            sessions.join("rollout-2026-10-18T10-00-00-root.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+        let source = rusqlite::Connection::open(fixture.from().join("state_5.sqlite")).unwrap();
+        source.execute_batch("CREATE TABLE thread_spawn_edges(parent_thread_id TEXT NOT NULL, child_thread_id TEXT PRIMARY KEY, status TEXT NOT NULL); INSERT INTO thread_spawn_edges VALUES ('root','child','closed');").unwrap();
+        let dest_sessions = fixture
+            .to()
+            .join("sessions")
+            .join("2026")
+            .join("10")
+            .join("18");
+        std::fs::create_dir_all(&dest_sessions).unwrap();
+        let dest_root = dest_sessions.join("rollout-2026-10-18T10-00-00-root.jsonl");
+        std::fs::write(&dest_root, "previous complete transcript").unwrap();
+        let dest = rusqlite::Connection::open(fixture.to().join("state_5.sqlite")).unwrap();
+        dest.execute_batch("CREATE TABLE unrelated(value TEXT);")
+            .unwrap();
+        for _ in 0..2 {
+            assert!(transfer_codex(&fixture.from(), &fixture.to(), "root").is_err());
+            assert_eq!(
+                std::fs::read_to_string(&dest_root).unwrap(),
+                "previous complete transcript"
+            );
+        }
+        dest.execute_batch("CREATE TABLE thread_spawn_edges(parent_thread_id TEXT NOT NULL, child_thread_id TEXT PRIMARY KEY, status TEXT NOT NULL);").unwrap();
+        transfer_codex(&fixture.from(), &fixture.to(), "root").unwrap();
+        assert_eq!(std::fs::read_to_string(&dest_root).unwrap(), "{}\n");
+        let status: String = dest
+            .query_row(
+                "SELECT status FROM thread_spawn_edges WHERE child_thread_id='child'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "closed");
     }
 }

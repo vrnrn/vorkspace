@@ -243,11 +243,11 @@ describe("Inbox activity polling", () => {
   it("badges only the scoped project's items and ones tied to no project", async () => {
     const team: InboxItem = {
       ...remote,
-      provider: "linear",
-      kind: "linear",
-      repo: "",
+      provider: "github",
+      kind: "issue",
+      repo: "acme/team",
       number: 7,
-      url: "https://linear.app/acme/issue/APP-7",
+      url: "https://github.com/acme/team/issues/7",
       projectPath: "",
     };
     const appEntry = { key: inboxItemKey(remote), updatedAt: remote.updatedAt };

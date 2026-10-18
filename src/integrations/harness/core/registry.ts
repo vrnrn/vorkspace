@@ -543,7 +543,7 @@ export function bindHarnessSession(
  * Continue a provider conversation under another account of the same provider.
  * The old process stops first so its transcript is complete, then the native
  * transcript is copied to the new account and the thread resumes from it.
- * Throws when the transcript cannot be carried, leaving the thread unbound.
+ * Throws when context cannot be carried, retaining the original resume binding.
  */
 export function transferHarnessSessionAccount(input: {
   harness: "claude" | "codex";
