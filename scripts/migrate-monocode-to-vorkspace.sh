@@ -149,29 +149,57 @@ sub find_webkit_dbs {
     return @dbs;
 }
 
-sub webkit_db_has_unmigrated {
+sub localstorage_migrations {
     my ($file) = @_;
-    return 0 unless table_exists($file, 'ItemTable');
+    return () unless table_exists($file, 'ItemTable');
 
-    open my $kh, "-|", "/usr/bin/sqlite3", "-batch", "-tabs", $file, "SELECT key FROM ItemTable;" or return 0;
-    my %keys;
+    open my $kh, "-|", "/usr/bin/sqlite3", "-batch", "-tabs", $file, "SELECT key, hex(value) FROM ItemTable;" or die "Failed to query ItemTable: $!\n";
+    my %rows;
     while (<$kh>) {
         chomp;
-        $keys{$_} = 1 if length $_;
+        my ($key, $hex) = split /\t/, $_, 2;
+        $rows{$key} = $hex if defined $key && defined $hex;
     }
-    close $kh;
+    close $kh or die "Failed to read ItemTable\n";
 
-    for my $old (keys %EXACT_KEYS) {
+    # Only known collections can be launch-initialized empty destinations.
+    # Scalars, malformed JSON and mismatched shapes may be deliberate new data.
+    my %collections = (
+        'monocode:mono-roster' => 'ARRAY',
+        'monocode:mono-handed' => 'HASH',
+        'monocode:monos' => 'HASH',
+        'monocode:mono-profiles' => 'HASH',
+        'monocode:mono-declined-habits' => 'ARRAY',
+        'monocode:mono-channels' => 'ARRAY',
+        'monocode:mono-rotations' => 'HASH',
+        'monocode.inboxMonos.v1' => 'HASH',
+    );
+    my @copies;
+    for my $old (keys %rows) {
         my $new = $EXACT_KEYS{$old};
-        return 1 if exists $keys{$old} && !exists $keys{$new};
-    }
-    for my $k (keys %keys) {
-        if ($k =~ /^monocode:mono-channel-messages:(.+)$/) {
-            my $new_k = "monocode:bot-channel-messages:$1";
-            return 1 if !exists $keys{$new_k};
+        my $kind = $collections{$old};
+        if ($old =~ /^monocode:mono-channel-messages:(.+)$/) {
+            $new = "monocode:bot-channel-messages:$1";
+            $kind = 'ARRAY';
         }
+        next unless defined $new;
+        if (exists $rows{$new}) {
+            next unless defined $kind;
+            my $source = eval { JSON::PP->new->decode(decode("UTF-16LE", pack("H*", $rows{$old}))) };
+            my $dest = eval { JSON::PP->new->decode(decode("UTF-16LE", pack("H*", $rows{$new}))) };
+            next unless ref($source) eq $kind && ref($dest) eq $kind;
+            my $source_count = $kind eq 'ARRAY' ? scalar(@$source) : scalar(keys %$source);
+            my $dest_count = $kind eq 'ARRAY' ? scalar(@$dest) : scalar(keys %$dest);
+            next unless $source_count && !$dest_count;
+        }
+        push @copies, [$old, $new, $rows{$old}, $rows{$new}];
     }
-    return 0;
+    return @copies;
+}
+
+sub webkit_db_has_unmigrated {
+    my @copies = localstorage_migrations(@_);
+    return @copies ? 1 : 0;
 }
 
 sub transform_localstorage_value {
@@ -230,34 +258,19 @@ sub transform_localstorage_value {
 
 sub apply_webkit_db {
     my ($file) = @_;
-    return unless webkit_db_has_unmigrated($file);
-
-    open my $kh, "-|", "/usr/bin/sqlite3", "-batch", "-tabs", $file, "SELECT key, hex(value) FROM ItemTable;" or die "Failed to query ItemTable: $!\n";
-    my %rows;
-    while (<$kh>) {
-        chomp;
-        my ($k, $hex) = split /\t/, $_, 2;
-        $rows{$k} = $hex if defined $k && defined $hex;
-    }
-    close $kh;
-
     my @statements;
-    for my $old_k (keys %rows) {
-        my $new_k;
-        if (exists $EXACT_KEYS{$old_k}) {
-            $new_k = $EXACT_KEYS{$old_k};
-        } elsif ($old_k =~ /^monocode:mono-channel-messages:(.+)$/) {
-            $new_k = "monocode:bot-channel-messages:$1";
-        }
-        next unless defined $new_k;
-        next if exists $rows{$new_k};
-
-        my $raw_val = pack("H*", $rows{$old_k});
+    for my $copy (localstorage_migrations($file)) {
+        my ($old_k, $new_k, $old_hex, $dest_hex) = @$copy;
+        my $raw_val = pack("H*", $old_hex);
         my $new_val = transform_localstorage_value($old_k, $raw_val);
         my $new_hex = unpack("H*", $new_val);
         my $esc_k = $new_k;
         $esc_k =~ s/'/''/g;
-        push @statements, "INSERT OR IGNORE INTO ItemTable (key, value) VALUES ('$esc_k', X'$new_hex');";
+        if (defined $dest_hex) {
+            push @statements, "UPDATE ItemTable SET value = X'$new_hex' WHERE key = '$esc_k' AND hex(value) = '$dest_hex';";
+        } else {
+            push @statements, "INSERT OR IGNORE INTO ItemTable (key, value) VALUES ('$esc_k', X'$new_hex');";
+        }
     }
 
     if (@statements) {
@@ -302,16 +315,36 @@ sub transform_block_data {
     }
 }
 
+sub pending_transcripts_query {
+    my ($db) = @_;
+    return undef unless table_exists($db, 'mono_transcripts');
+    my @empty_destination;
+    my @legacy_content;
+    for my $suffix (qw(blocks turns)) {
+        if (table_exists($db, "bot_$suffix")) {
+            push @empty_destination, "NOT EXISTS (SELECT 1 FROM bot_$suffix WHERE session_id = legacy.session_id)";
+        }
+        if (table_exists($db, "mono_$suffix")) {
+            push @legacy_content, "EXISTS (SELECT 1 FROM mono_$suffix WHERE session_id = legacy.session_id)";
+        }
+    }
+    if (table_exists($db, 'bot_transcripts')) {
+        # A marker alone can come from opening a session whose blocks_json was
+        # already cleared. Recover only if BOTH destination indexes are empty;
+        # populated or partial Bot history is ambiguous and must stay intact.
+        my $has_legacy_content = @legacy_content ? join(" OR ", @legacy_content) : '0';
+        push @empty_destination, "(NOT EXISTS (SELECT 1 FROM bot_transcripts WHERE session_id = legacy.session_id) OR $has_legacy_content)";
+    }
+    return "SELECT legacy.session_id FROM mono_transcripts legacy" . (@empty_destination ? " WHERE " . join(" AND ", @empty_destination) : "");
+}
+
 sub check_monocode_db_pending {
     my ($db) = @_;
     return 0 unless is_sqlite3($db);
 
-    if (table_exists($db, 'mono_transcripts')) {
-        my $has_bot = table_exists($db, 'bot_transcripts');
-        my $sql = $has_bot
-            ? "SELECT 1 FROM mono_transcripts WHERE session_id NOT IN (SELECT session_id FROM bot_transcripts) LIMIT 1;"
-            : "SELECT 1 FROM mono_transcripts LIMIT 1;";
-        open my $ch, "-|", "/usr/bin/sqlite3", "-batch", $db, $sql or return 0;
+    my $transcripts = pending_transcripts_query($db);
+    if (defined $transcripts) {
+        open my $ch, "-|", "/usr/bin/sqlite3", "-batch", $db, "$transcripts LIMIT 1;" or return 0;
         my $unmigrated = <$ch>; close $ch;
         return 1 if $unmigrated;
     }
@@ -389,11 +422,8 @@ CREATE TABLE IF NOT EXISTS bot_blocks (
 CREATE INDEX IF NOT EXISTS bot_blocks_user ON bot_blocks(session_id, is_user, is_draft);
 };
 
-    if (table_exists($db, 'mono_transcripts')) {
-        my $has_bot = table_exists($db, 'bot_transcripts');
-        my $q = $has_bot
-            ? "SELECT session_id FROM mono_transcripts WHERE session_id NOT IN (SELECT session_id FROM bot_transcripts);"
-            : "SELECT session_id FROM mono_transcripts;";
+    my $q = pending_transcripts_query($db);
+    if (defined $q) {
         open my $p, "-|", "/usr/bin/sqlite3", "-batch", "-tabs", $db, $q or die "Failed to query mono_transcripts: $!\n";
         my @sids;
         while (<$p>) { chomp; push @sids, $_ if length $_; }

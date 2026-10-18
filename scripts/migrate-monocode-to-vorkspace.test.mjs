@@ -867,6 +867,313 @@ function getSqliteHexJson(dbPath, query) {
 }
 
 macTest(
+  "recovers a launch-initialized empty Bot roster and collection keys",
+  (t) => {
+    const f = fixture(t);
+    const wkRelative =
+      "Library/WebKit/com.monocode.desktop/WebsiteData/Default/LocalStorage/localstorage.sqlite3";
+    const db = join(f.home, wkRelative);
+    mkdirSync(join(db, ".."), { recursive: true });
+    execSqlite(
+      db,
+      "CREATE TABLE ItemTable (key TEXT UNIQUE, value BLOB NOT NULL);",
+    );
+    const roster = [
+      { id: "old-bot", sessionId: "old-session", projects: ["/code/app"] },
+    ];
+    const cases = [
+      ["monocode:mono-roster", "monocode:bot-roster", [], roster, roster],
+      [
+        "monocode:mono-handed",
+        "monocode:bot-handed",
+        {},
+        { "/code/app": true },
+        { "/code/app": true },
+      ],
+      [
+        "monocode:monos",
+        "monocode:bots",
+        {},
+        { "/code/app": "old-session" },
+        { "/code/app": "old-session" },
+      ],
+      [
+        "monocode:mono-profiles",
+        "monocode:bot-profiles",
+        {},
+        { "/code/app": { name: "Old" } },
+        { "/code/app": { name: "Old" } },
+      ],
+      [
+        "monocode:mono-declined-habits",
+        "monocode:bot-declined-habits",
+        [],
+        ["habit"],
+        ["habit"],
+      ],
+      [
+        "monocode:mono-channels",
+        "monocode:bot-channels",
+        [],
+        [{ id: "c1", monoIds: ["old-bot"] }],
+        [{ id: "c1", botIds: ["old-bot"] }],
+      ],
+      [
+        "monocode:mono-channel-messages:c1",
+        "monocode:bot-channel-messages:c1",
+        [],
+        [{ id: "msg", from: { kind: "mono", monoId: "old-bot" } }],
+        [{ id: "msg", from: { kind: "bot", botId: "old-bot" } }],
+      ],
+      [
+        "monocode:mono-rotations",
+        "monocode:bot-rotations",
+        {},
+        { "old-session": { summary: "brief" } },
+        { "old-session": { summary: "brief" } },
+      ],
+      [
+        "monocode.inboxMonos.v1",
+        "monocode.inboxBots.v1",
+        {},
+        { jira: "old-bot" },
+        { jira: "old-bot" },
+      ],
+    ];
+    for (const [oldKey, newKey, empty, legacy] of cases) {
+      putLocalstorageJson(db, oldKey, legacy);
+      putLocalstorageJson(db, newKey, empty);
+    }
+    const before = execSqlite(db, ".dump");
+    const dry = f.run();
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(dry.stdout, /Legacy localStorage migration/);
+    assert.equal(execSqlite(db, ".dump"), before);
+    const apply = f.run(["--apply"]);
+    assert.equal(apply.status, 0, apply.stderr);
+    for (const [oldKey, newKey, empty, legacy, expected] of cases) {
+      assert.deepEqual(getLocalstorageJson(db, newKey), expected, newKey);
+      assert.deepEqual(getLocalstorageJson(db, oldKey), legacy, oldKey);
+      assert.deepEqual(
+        getLocalstorageJson(join(f.backup, wkRelative), newKey),
+        empty,
+      );
+    }
+    const after = execSqlite(db, ".dump");
+    const again = f.run(["--apply", "--backup-dir", `${f.backup}-2`]);
+    assert.equal(again.status, 0, again.stderr);
+    assert.doesNotMatch(again.stdout, /Legacy localStorage migration/);
+    assert.equal(execSqlite(db, ".dump"), after);
+  },
+);
+
+macTest(
+  "preserves populated, scalar, malformed and mismatched Bot storage destinations",
+  (t) => {
+    const f = fixture(t);
+    const db = join(
+      f.home,
+      "Library/WebKit/com.monocode.desktop/localstorage.sqlite3",
+    );
+    mkdirSync(join(db, ".."), { recursive: true });
+    execSqlite(
+      db,
+      "CREATE TABLE ItemTable (key TEXT UNIQUE, value BLOB NOT NULL);",
+    );
+    const cases = [
+      [
+        "monocode:mono-roster",
+        "monocode:bot-roster",
+        [{ id: "new-bot" }],
+        [{ id: "old-bot" }],
+      ],
+      [
+        "monocode:mono-handed",
+        "monocode:bot-handed",
+        { new: true },
+        { old: true },
+      ],
+      [
+        "monocode:mono-channels",
+        "monocode:bot-channels",
+        [{ id: "new-channel" }],
+        [{ id: "old-channel" }],
+      ],
+      [
+        "monocode:mono-channel-messages:populated",
+        "monocode:bot-channel-messages:populated",
+        [{ id: "new-msg" }],
+        [{ id: "old-msg" }],
+      ],
+      [
+        "monocode:mono-channel-messages:wrong-type",
+        "monocode:bot-channel-messages:wrong-type",
+        {},
+        [{ id: "old-msg" }],
+      ],
+      [
+        "monocode:mono-channel-messages:invalid",
+        "monocode:bot-channel-messages:invalid",
+        null,
+        [{ id: "old-msg" }],
+      ],
+      ["monocode:mono-rotations", "monocode:bot-rotations", {}, []],
+      ["monocode:mono-declined-habits", "monocode:bot-declined-habits", [], []],
+      ["monocode.monosEnabled", "monocode.botsEnabled", false, true],
+      ["monocode:open-mono", "monocode:open-bot", "", "old-bot"],
+    ];
+    for (const [oldKey, newKey, destination, source] of cases) {
+      putLocalstorageJson(db, oldKey, source);
+      putLocalstorageJson(db, newKey, destination);
+    }
+    execSqlite(
+      db,
+      "UPDATE ItemTable SET value = X'6E006F00740020006A0073006F006E00' WHERE key = 'monocode:bot-channel-messages:invalid';",
+    );
+    // Force apply to visit this database even though the other pairs need no copy.
+    putLocalstorageJson(db, "monocode:mono-channel-messages:missing", [
+      { id: "copy" },
+    ]);
+    const before = execSqlite(
+      db,
+      "SELECT key, hex(value) FROM ItemTable WHERE key NOT LIKE '%:missing' ORDER BY key;",
+    );
+    const apply = f.run(["--apply"]);
+    assert.equal(apply.status, 0, apply.stderr);
+    assert.equal(
+      execSqlite(
+        db,
+        "SELECT key, hex(value) FROM ItemTable WHERE key NOT LIKE '%:missing' ORDER BY key;",
+      ),
+      before,
+    );
+    const dry = f.run(["--backup-dir", `${f.backup}-2`]);
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.doesNotMatch(dry.stdout, /Legacy localStorage migration/);
+  },
+);
+
+for (const destination of [
+  "empty-marker",
+  "blocks",
+  "turns",
+  "both",
+  "unmarked-blocks",
+]) {
+  macTest(
+    `legacy indexed transcript recovery handles ${destination} destination`,
+    (t) => {
+      const f = fixture(t);
+      const db = join(f.home, profile, "monocode.db");
+      mkdirSync(join(db, ".."), { recursive: true });
+      execSqlite(
+        db,
+        `
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, blocks_json TEXT);
+      CREATE TABLE mono_transcripts (session_id TEXT PRIMARY KEY REFERENCES sessions(id));
+      CREATE TABLE mono_turns (session_id TEXT, seq INTEGER, PRIMARY KEY (session_id, seq));
+      CREATE TABLE mono_blocks (session_id TEXT, seq INTEGER, block_id TEXT, block_json TEXT, search_text TEXT, is_user INTEGER, is_draft INTEGER, PRIMARY KEY (session_id, seq), UNIQUE (session_id, block_id));
+      CREATE TABLE bot_transcripts (session_id TEXT PRIMARY KEY REFERENCES sessions(id));
+      CREATE TABLE bot_turns (session_id TEXT, seq INTEGER, PRIMARY KEY (session_id, seq));
+      CREATE TABLE bot_blocks (session_id TEXT, seq INTEGER, block_id TEXT, block_json TEXT, search_text TEXT, is_user INTEGER, is_draft INTEGER, PRIMARY KEY (session_id, seq), UNIQUE (session_id, block_id));
+      INSERT INTO sessions VALUES ('s1', '[]'), ('empty-legacy', '[]');
+      INSERT INTO mono_transcripts VALUES ('s1'), ('empty-legacy');
+      INSERT INTO mono_turns VALUES ('s1', 1), ('s1', 7);
+      INSERT INTO mono_blocks VALUES ('s1', 1, 'b1', '{"id":"b1","role":"user","monoHabit":{"id":"habit"}}', 'old search', 1, 1), ('s1', 7, 'b7', '{"id":"b7","role":"assistant","text":"old reply"}', 'old reply', 0, 0);
+      INSERT INTO bot_transcripts VALUES ('empty-legacy');
+    `,
+      );
+      if (destination !== "unmarked-blocks")
+        execSqlite(db, "INSERT INTO bot_transcripts VALUES ('s1');");
+      if (["blocks", "both", "unmarked-blocks"].includes(destination)) {
+        execSqlite(
+          db,
+          `INSERT INTO bot_blocks VALUES ('s1', 1, 'b1', '{"id":"b1","role":"user","text":"new Bot history"}', 'new search', 1, 0);`,
+        );
+      }
+      if (["turns", "both"].includes(destination))
+        execSqlite(db, "INSERT INTO bot_turns VALUES ('s1', 3);");
+      const botState = () =>
+        execSqlite(
+          db,
+          "SELECT session_id FROM bot_transcripts WHERE session_id = 's1'; SELECT * FROM bot_turns WHERE session_id = 's1' ORDER BY seq; SELECT * FROM bot_blocks WHERE session_id = 's1' ORDER BY seq;",
+        );
+      const before = botState();
+      const legacy = execSqlite(
+        db,
+        "SELECT * FROM mono_blocks ORDER BY seq; SELECT * FROM mono_turns ORDER BY seq;",
+      );
+      const dry = f.run();
+      assert.equal(dry.status, 0, dry.stderr);
+      assert.equal(
+        /Legacy SQLite migration/.test(dry.stdout),
+        destination === "empty-marker",
+      );
+      assert.equal(botState(), before);
+      // Visit populated destinations in the same transaction as another migration.
+      execSqlite(
+        db,
+        "INSERT INTO sessions VALUES ('needs-marker', '[]'); INSERT INTO mono_transcripts VALUES ('needs-marker');",
+      );
+      const apply = f.run(["--apply"]);
+      assert.equal(apply.status, 0, apply.stderr);
+      assert.equal(
+        execSqlite(
+          db,
+          "SELECT session_id FROM bot_transcripts WHERE session_id = 'needs-marker';",
+        ),
+        "needs-marker\n",
+      );
+      if (destination === "empty-marker") {
+        assert.equal(
+          execSqlite(db, "SELECT seq FROM bot_turns ORDER BY seq;"),
+          "1\n7\n",
+        );
+        assert.equal(
+          execSqlite(
+            db,
+            "SELECT seq, block_id, search_text, is_user, is_draft FROM bot_blocks ORDER BY seq;",
+          ),
+          "1|b1|old search|1|1\n7|b7|old reply|0|0\n",
+        );
+        assert.deepEqual(
+          getSqliteHexJson(
+            db,
+            "SELECT hex(block_json) FROM bot_blocks WHERE seq = 1;",
+          ),
+          { id: "b1", role: "user", botHabit: { id: "habit" } },
+        );
+        assert.equal(
+          execSqlite(
+            join(f.backup, profile, "monocode.db"),
+            "SELECT count(*) FROM bot_blocks;",
+          ),
+          "0\n",
+        );
+      } else {
+        assert.equal(botState(), before);
+      }
+      assert.equal(
+        execSqlite(db, "SELECT blocks_json FROM sessions WHERE id = 's1';"),
+        "[]\n",
+      );
+      assert.equal(
+        execSqlite(
+          db,
+          "SELECT * FROM mono_blocks ORDER BY seq; SELECT * FROM mono_turns ORDER BY seq;",
+        ),
+        legacy,
+      );
+      const after = execSqlite(db, ".dump");
+      const again = f.run(["--apply", "--backup-dir", `${f.backup}-2`]);
+      assert.equal(again.status, 0, again.stderr);
+      assert.doesNotMatch(again.stdout, /Legacy SQLite migration/);
+      assert.equal(execSqlite(db, ".dump"), after);
+    },
+  );
+}
+
+macTest(
   "migrates WebKit localStorage mono keys to bot keys with UTF-16LE encoding and channel transformations",
   (t) => {
     const f = fixture(t);
