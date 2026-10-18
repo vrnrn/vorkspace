@@ -86,6 +86,7 @@ import {
   MAX_PEER_AUTONOMOUS_HOPS,
   postChannelMessage,
   resolveMonoPeer,
+  resolveUniqueMonoPeer,
   type MonoChannel,
   type MonoChannelMessage,
   type MonoPeerSummary,
@@ -107,6 +108,11 @@ export type AppSessionPlacement = {
 };
 
 export type AgentAppHost = {
+  /** Explicit workspace controller capability; never inferred from a session ID. */
+  workspaceController?: {
+    projects: readonly string[];
+    sendMono(monoId: string, message: string, requestId: string): Promise<unknown>;
+  };
   start(
     launch: QuickLaunch,
     id: string,
@@ -345,7 +351,7 @@ function requireProject(
   input: Record<string, unknown>,
   host: AgentAppHost,
 ): string {
-  const mono = host.monoOf?.(source.id);
+  const mono = host.workspaceController ?? host.monoOf?.(source.id);
   const named = optionalString(input.project, "project", 4096);
   if (!mono) {
     if (named) throw new Error("project is only for a Mono");
@@ -581,7 +587,7 @@ async function handleSoul(
  * from the top when the user saved the same file in between.
  */
 async function editAgentFile<T>(
-  host: AgentAppHost,
+  host: AgentMemoryHost,
   monoId: string,
   path: AgentFilePath,
   edit: (text: string) => { text: string; result: T },
@@ -610,7 +616,7 @@ async function editAgentFile<T>(
  * saved MEMORY.md in between, the trim waits for the next write.
  */
 async function keepMemoryInBudget(
-  host: AgentAppHost,
+  host: AgentMemoryHost,
   monoId: string,
   keep: string,
   date: string,
@@ -639,6 +645,22 @@ async function handleMemory(
 ): Promise<unknown> {
   const monoId = host.monoOf?.(source.id)?.id;
   if (!monoId) throw new Error("Memory belongs to the Mono's conversation");
+  return handleAgentMemory(monoId, action, input, host);
+}
+
+export type AgentMemoryHost = Pick<
+  AgentAppHost,
+  "agentFiles" | "readAgentFile" | "writeAgentFile" | "now"
+>;
+
+/** The caller supplies an authorized owner; tool input can never choose it. */
+export async function handleAgentMemory(
+  monoId: string,
+  action: string,
+  input: Record<string, unknown>,
+  host: AgentMemoryHost,
+): Promise<unknown> {
+  fields(action, input);
   const path = memoryPath(input.topic);
   const date = memoryDate(host.now?.() ?? new Date());
   const until = optionalString(input.until, "until", 10);
@@ -1006,7 +1028,7 @@ async function handleMonos(
   host: AgentAppHost,
 ): Promise<unknown> {
   const callerMonoId = host.monoOf?.(source.id)?.id;
-  if (!callerMonoId)
+  if (!callerMonoId && !host.workspaceController)
     throw new Error("Only a Mono can list, read or message peer Monos");
   switch (action) {
     case "monos.list": {
@@ -1017,9 +1039,9 @@ async function handleMonos(
     }
     case "monos.read": {
       const query = requiredString(input.mono, "mono", 256);
-      const targetMono = resolveMonoPeer(query, callerMonoId);
+      const targetMono = host.workspaceController ? resolveUniqueMonoPeer(query) : resolveMonoPeer(query, callerMonoId);
       if (!targetMono) {
-        if (resolveMonoPeer(query)?.id === callerMonoId)
+        if (callerMonoId && resolveMonoPeer(query)?.id === callerMonoId)
           throw new Error("Use your own conversation history rather than monos.read on yourself");
         throw new Error("No Mono found matching that name or id; run monos.list");
       }
@@ -1050,15 +1072,20 @@ async function handleMonos(
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
         throw new Error("Invalid request ID");
       const query = requiredString(input.to, "to", 256);
-      const targetMono = resolveMonoPeer(query, callerMonoId);
+      const targetMono = host.workspaceController ? resolveUniqueMonoPeer(query) : resolveMonoPeer(query, callerMonoId);
       if (!targetMono) {
-        if (resolveMonoPeer(query)?.id === callerMonoId)
+        if (callerMonoId && resolveMonoPeer(query)?.id === callerMonoId)
           throw new Error("Cannot send a peer message to yourself");
         throw new Error("No Mono found matching that name or id; run monos.list");
       }
       const message = requiredString(input.message, "message", 60_000);
       if (consumeOperatorCommand(message).matched)
         throw new Error("Peer messages cannot include /operator");
+      if (host.workspaceController) {
+        if (input.expectReply !== undefined && input.expectReply !== false) throw new Error("Vox messages are one-way. Use monos.read when the user asks for the reply.");
+        const result = await host.workspaceController.sendMono(targetMono.id, message, `vox-${source.id}-${requestId}`);
+        return { to: { id: targetMono.id, name: monoLook(targetMono).name }, submitted: true, result, note: "Message accepted in the Mono's chat. This is acceptance, not completion." };
+      }
       const expectReply = input.expectReply ?? true;
       if (typeof expectReply !== "boolean")
         throw new Error("expectReply must be true or false");
@@ -1073,7 +1100,7 @@ async function handleMonos(
       const effectiveExpectReply =
         expectReply && nextHop < MAX_PEER_AUTONOMOUS_HOPS;
       const result = await host.monos.send({
-        fromMonoId: callerMonoId,
+        fromMonoId: callerMonoId!,
         toMonoId: targetMono.id,
         text: message,
         requestId: `peer-${source.id}-${requestId}`,

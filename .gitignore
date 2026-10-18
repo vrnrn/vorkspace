@@ -65,3 +65,5 @@ Desktop.ini
 # Local visual checks and design detector cache
 /output/
 /.impeccable/hook.cache.json
+/.impeccable/review/
+/design-qa.md

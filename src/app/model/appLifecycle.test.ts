@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, message } from "@tauri-apps/plugin-dialog";
+import { stopVox } from "../../features/vox/model/lifecycle";
 import { forgetHarnessSession } from "../../integrations/harness/core/registry";
 import { killAllChildren } from "../../integrations/harness/core/child";
 import { newSession } from "../../features/sessions/model/session";
@@ -10,6 +11,7 @@ import {
   closeBusyWindow,
   commitQuit,
   confirmReload,
+  flushVoxBeforeClose,
   reportQuitPoll,
   setQuitWorkspace,
 } from "./appLifecycle";
@@ -32,6 +34,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: vi.fn().mockResolvedValue(true),
+  message: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../features/vox/model/lifecycle", () => ({
+  stopVox: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("./windowTransferBootstrap", () => ({
   loadWindowTransfer: vi.fn().mockResolvedValue(null),
@@ -58,6 +64,35 @@ vi.mock("../../integrations/harness/core/registry", () => ({
 vi.mock("../../integrations/harness/core/child", () => ({
   killAllChildren: vi.fn().mockResolvedValue(undefined),
 }));
+
+describe("Vox close persistence", () => {
+  it("waits for the native voice flush before permitting close", async () => {
+    let saved!: () => void;
+    vi.mocked(stopVox).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          saved = resolve;
+        }),
+    );
+    let closed = false;
+    const closing = flushVoxBeforeClose().then((ready) => {
+      closed = ready;
+    });
+    await vi.waitFor(() => expect(saved).toBeTypeOf("function"));
+    expect(closed).toBe(false);
+    saved();
+    await closing;
+    expect(closed).toBe(true);
+  });
+  it("cancels close and explains an unconfirmed transcript save", async () => {
+    vi.mocked(stopVox).mockRejectedValueOnce(new Error("save not confirmed"));
+    expect(await flushVoxBeforeClose()).toBe(false);
+    expect(message).toHaveBeenCalledWith(
+      expect.stringContaining("Closing was cancelled"),
+      expect.objectContaining({ title: "Vox conversation not saved" }),
+    );
+  });
+});
 
 describe("project choices through lifecycle saves", () => {
   beforeEach(() => {
@@ -258,6 +293,7 @@ describe("closing a busy window", () => {
     try {
       await closeBusyWindow();
       expect(ask).toHaveBeenCalled();
+      expect(stopVox).toHaveBeenCalledOnce();
       expect(forgetHarnessSession).toHaveBeenCalledWith("pi", session.id);
       expect(killAllChildren).not.toHaveBeenCalled();
       expect(invoke).toHaveBeenCalledWith("destroy_window");
@@ -276,8 +312,44 @@ describe("closing a busy window", () => {
     vi.mocked(ask).mockResolvedValue(false);
     try {
       await closeBusyWindow();
+      expect(stopVox).not.toHaveBeenCalled();
       expect(forgetHarnessSession).not.toHaveBeenCalled();
       expect(killAllChildren).not.toHaveBeenCalled();
+      expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+  });
+
+  it("keeps Vox running until the close confirmation succeeds", async () => {
+    const { release } = workspace();
+    let confirm!: (confirmed: boolean) => void;
+    vi.mocked(ask).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          confirm = resolve;
+        }),
+    );
+    try {
+      const closing = closeBusyWindow();
+      expect(stopVox).not.toHaveBeenCalled();
+      confirm(true);
+      await closing;
+      expect(stopVox).toHaveBeenCalledOnce();
+      expect(invoke).toHaveBeenCalledWith("destroy_window");
+    } finally {
+      release();
+    }
+  });
+
+  it("keeps the confirmed window open if Vox cannot confirm its save", async () => {
+    const { release } = workspace();
+    vi.mocked(stopVox).mockRejectedValueOnce(new Error("save not confirmed"));
+    try {
+      await closeBusyWindow();
+      expect(ask).toHaveBeenCalled();
+      expect(stopVox).toHaveBeenCalledOnce();
+      expect(forgetHarnessSession).not.toHaveBeenCalled();
       expect(invoke).not.toHaveBeenCalled();
     } finally {
       release();

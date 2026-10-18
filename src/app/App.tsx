@@ -98,6 +98,14 @@ import {
 } from "react";
 import { useStableValue } from "../shared/hooks/useStableValue";
 import { Sidebar } from "./shell/Sidebar";
+import { VoxProvider } from "../features/vox/ui/VoxProvider";
+import { VoxButton } from "../features/vox/ui/VoxButton";
+import type { VoxRequestHandler } from "../features/vox/model/protocol";
+import {
+  assertVoxCurrent,
+  createVoxController,
+  type VoxAppContext,
+} from "../features/vox/model/controller";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
 import { ResourcePressureNotice } from "../features/notifications/ui/ResourcePressureNotice";
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
@@ -819,6 +827,7 @@ import {
   persistQuitState,
   reapWindowRuntime,
   setQuitWorkspace,
+  flushVoxBeforeClose,
   type ResumedWorkspace,
 } from "./model/appLifecycle";
 
@@ -2367,6 +2376,7 @@ function Workspace({
           IS_MAC &&
           (await invoke<boolean>("mono_chat_keep_alive").catch(() => false))
         ) {
+          if (!(await flushVoxBeforeClose())) return;
           flushHarnessEvents();
           void persistLiveTranscripts(sessionsRef.current);
           void hideCurrentWindow();
@@ -2374,16 +2384,18 @@ function Workspace({
         }
         const toTray = loadCloseToTray();
         if (hasInFlightSessions(sessionsRef.current)) {
-          flushHarnessEvents();
           if (!toTray && !IS_MAC) {
             void closeBusyWindow();
             return;
           }
+          if (!(await flushVoxBeforeClose())) return;
+          flushHarnessEvents();
           // Not `persistQuitState`: that marks the live turns interrupted.
           void persistLiveTranscripts(sessionsRef.current);
           void hideCurrentWindow();
           return;
         }
+        if (!(await flushVoxBeforeClose())) return;
         void persistQuitState(
           sessionsRef.current,
           tabsRef.current,
@@ -11125,17 +11137,28 @@ function Workspace({
   stopSessionRef.current = onStop;
   const removeSessionRef = useRef(onRemoveHistorySession);
   removeSessionRef.current = onRemoveHistorySession;
+  const voxAppRequestRef = useRef<VoxRequestHandler | null>(null);
+  const openVoxMonoRef = useRef(onOpenMono);
+  openVoxMonoRef.current = onOpenMono;
+  const openVoxSessionRef = useRef(onSelectHistorySession);
+  openVoxSessionRef.current = onSelectHistorySession;
 
   useEffect(() => {
-    const listening = listen<{
+    type AppRequest = {
       id: string;
       namespace: string;
       sessionId: string;
       requestId: string;
       action: string;
       input: Record<string, unknown>;
-    }>("monocode-control-request", ({ payload }) => {
+    };
+    const handleRequest = (payload: AppRequest, vox?: VoxAppContext) => {
       const handle = async () => {
+        const assertCurrent = () => {
+          if (vox) assertVoxCurrent(vox.request);
+        };
+        assertCurrent();
+        const workspaceProjects = vox?.projects;
         if (payload.namespace === "control") {
           return orchestrator.handle(
             payload.sessionId,
@@ -11146,9 +11169,10 @@ function Workspace({
         }
         if (payload.namespace !== "app")
           throw new Error("Unknown CLI namespace");
-        const source = sessionsRef.current.find(
-          (session) => session.id === payload.sessionId,
-        );
+        const source: Session | undefined =
+          vox?.source ?? sessionsRef.current.find(
+            (session) => session.id === payload.sessionId,
+          );
         if (
           !source ||
           source.inboxAsk ||
@@ -11172,7 +11196,7 @@ function Workspace({
             ? findMono(sourceChannelMember.monoId)
             : undefined);
         const canAccessProject = (cwd: string) =>
-          canAccessAgentAppProject(source, cwd, sourceMono?.projects);
+          canAccessAgentAppProject(source, cwd, workspaceProjects ?? sourceMono?.projects);
         const sourceTurn = turnGen.current.get(source.id) ?? 0;
         const sourceTurns =
           isMonoSession(source.id) || Boolean(sourceChannelMember)
@@ -11250,6 +11274,25 @@ function Workspace({
           payload.action,
           payload.input,
           {
+            ...(vox && workspaceProjects ? { workspaceController: {
+              projects: workspaceProjects,
+              sendMono: async (monoId: string, message: string, requestId: string) => {
+                const target = await ensureMonoSession(monoId, {
+                  home: homeDir, load: ensureOpenSessionRef.current, create: newDefaultSession,
+                  add: (created) => updateSessionState(sessionsRef, setSessions, (sessions) => sessions.some((session) => session.id === created.id) ? sessions : [...sessions, created]),
+                });
+                if (!target) throw new Error("That Mono's conversation is unavailable");
+                assertCurrent();
+                const existing = sessionsRef.current.find((session) => session.id === target.id)?.blocks.find((block) => block.appRequestId === requestId);
+                if (existing) {
+                  if (existing.text !== message) throw new Error("Request ID was reused with different input");
+                  return { alreadySubmitted: true };
+                }
+                const accepted = await submitSessionRef.current(target.id, message, [], { appRequestId: requestId });
+                if (!accepted) throw new Error("That Mono could not accept the message");
+                return { alreadySubmitted: false };
+              },
+            } } : {}),
             start: async (launch, id, placement, notifyMonoId) => {
               const rememberLaunch = () => {
                 const created =
@@ -11306,6 +11349,7 @@ function Workspace({
               try {
                 // A Mono's sessions open from its chat, not as workspace
                 // tabs, unless it places one beside an open pane.
+                assertCurrent();
                 await launchQuickSessionRef.current(
                   launch,
                   id,
@@ -11402,7 +11446,7 @@ function Workspace({
                 rememberFollowUp();
                 return { alreadySubmitted: true };
               }
-              if (target.busy)
+              if (target.busy && !vox)
                 throw new Error("Session is busy; try again when it finishes");
               if (sessionDraftBlock(target))
                 throw new Error(
@@ -11417,6 +11461,7 @@ function Workspace({
                     prompt,
                   )
                 : undefined;
+              assertCurrent();
               const accepted = onSettled
                 ? await submitWithSettlement({
                     submit: (onSettled) =>
@@ -11492,6 +11537,7 @@ function Workspace({
                 isHabitRun(id)
               )
                 throw new Error("Session is unavailable in this project");
+              assertCurrent();
               await flushSync(() => stopSessionRef.current(id));
               flushHarnessEvents();
               dismissCompletion(id);
@@ -11635,7 +11681,39 @@ function Workspace({
         }
         return promise;
       };
-      void handle()
+      return handle();
+    };
+    const voxHandler = createVoxController({
+      snapshot: () => ({
+        selected: sessionsRef.current.find(
+          (session) => session.id === activeSessionIdRef.current,
+        ),
+        projects: [
+          ...loadRecents().map((project) => project.path),
+          ...sessionsRef.current.map((session) => session.cwd),
+          ...listMonos().flatMap((mono) => mono.projects),
+        ],
+        cwd: projectCwdRef.current,
+      }),
+      getSession: async (id) =>
+        sessionsRef.current.find((session) => session.id === id) ??
+        await getSession(id),
+      openMono: async (id) => {
+        setSettingsOpen(false);
+        await openVoxMonoRef.current(id);
+      },
+      openSession: async (id) => {
+        setSettingsOpen(false);
+        await openVoxSessionRef.current(id);
+      },
+      dispatch: (request, context) => handleRequest(
+        { id: request.requestId, namespace: "app", ...request },
+        context,
+      ),
+    });
+    voxAppRequestRef.current = voxHandler;
+    const listening = listen<AppRequest>("monocode-control-request", ({ payload }) => {
+      void handleRequest(payload)
         .then(
           (result) =>
             invoke("control_reply", {
@@ -11654,6 +11732,8 @@ function Workspace({
         .catch(console.error);
     });
     return () => {
+      if (voxAppRequestRef.current === voxHandler)
+        voxAppRequestRef.current = null;
       void listening.then((unlisten) => unlisten());
     };
   }, []);
@@ -13367,6 +13447,7 @@ function Workspace({
   const compactTitleBar = compactTitleNavigation && !monoCovers;
   const workspaceTitleBar = (
     <TitleBar
+      voxControl={<VoxButton />}
       // A Mono in full view stands apart from the project's tabs.
       tabs={monoCovers ? NO_TITLE_TABS : titleTabs}
       mono={
@@ -13414,6 +13495,7 @@ function Workspace({
   );
 
   return (
+    <VoxProvider cwd={homeDir} execute={(request) => voxAppRequestRef.current?.(request) ?? Promise.reject(new Error("Workspace controls are not ready"))}>
     <SessionStateContext.Provider value={sessionState}>
     <OrchestrationActions.Provider value={orchestrationActions}>
       <OrchestrationWorkers.Provider value={orchestrationWorkers}>
@@ -13940,6 +14022,7 @@ function Workspace({
               ) : null}
               {settingsOpen ? (
                 <SettingsView
+                  titlebarControl={compactTitleBar ? undefined : <VoxButton />}
                   section={settingsSection}
                   anchor={settingsAnchor}
                   notificationProjectPath={notificationProjectPath}
@@ -14098,6 +14181,7 @@ function Workspace({
       </OrchestrationWorkers.Provider>
     </OrchestrationActions.Provider>
     </SessionStateContext.Provider>
+    </VoxProvider>
   );
 }
 function conversationTitle(session: Session): string {

@@ -187,6 +187,7 @@ import {
 } from "../model/mcpPicker";
 import { getComposerMcpTags, setComposerMcpTags } from "../model/draftCache";
 import { useDurableComposerDraft } from "../hooks/useDurableComposerDraft";
+import { useComposerControl } from "../hooks/useComposerControl";
 import { ComposerDraftRecovery } from "./ComposerDraftRecovery";
 import { type McpConnection } from "../../settings/model/mcp";
 import {
@@ -681,7 +682,33 @@ export function Composer({
     },
   });
 
-  // A leading mode command in the text shows the same pill as picking the mode.
+  // Programmatic edits use this composer's normal draft and attachment owner.
+  useComposerControl({
+    sessionId,
+    enabled: enabled && !disabled && !worktreeRemoved,
+    field: ref,
+    write: (text) => {
+      const field = ref.current;
+      if (!field) return;
+      field.value = text;
+      field.setSelectionRange(text.length, text.length);
+      draftRevisionRef.current++;
+      setDraft(text);
+      setSlash(null);
+      setMention(null);
+      setCreatingSkill(false);
+      setSelectedMcp((current) =>
+        current.filter((tag) => taggedMcpServers(text, [tag]).length > 0),
+      );
+      onDraftChange?.(text);
+      syncHasValue(text, attachmentsRef.current);
+      resizeComposer(field);
+      durableDraft.capture();
+      field.focus({ preventScroll: true });
+    },
+  });
+
+  // A leading mode command shows the same pill as picking the mode.
   const operatorActive =
     operatorSelected || leadingMode?.name === OPERATOR_COMMAND.name;
   const orchestrationActive =

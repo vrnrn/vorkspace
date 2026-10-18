@@ -92,10 +92,12 @@ export function MemoryPage({
   monoId,
   files,
   onBack,
+  embedded = false,
 }: {
   monoId: string;
   files: MonoFiles | undefined;
   onBack?: () => void;
+  embedded?: boolean;
 }) {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<MemoryFact>();
@@ -133,20 +135,37 @@ export function MemoryPage({
     save((memory) => withoutLine(memory, factIndex(memory, line)));
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-mono-memory>
-      <PageHeader title="Memory" onBack={onBack}>
-        {files ? (
-          <IconButton
-            label="Add memory"
-            disabled={adding}
-            onClick={() => {
-              setEditing(undefined);
-              setAdding(true);
-            }}
-          >
-            <Plus className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-        ) : null}
-      </PageHeader>
+      {embedded ? (
+        <div className="flex justify-end px-4 pt-3">
+          {files ? (
+            <IconButton
+              label="Add memory"
+              disabled={adding}
+              onClick={() => {
+                setEditing(undefined);
+                setAdding(true);
+              }}
+            >
+              <Plus className="size-3.5" strokeWidth={1.75} />
+            </IconButton>
+          ) : null}
+        </div>
+      ) : (
+        <PageHeader title="Memory" onBack={onBack}>
+          {files ? (
+            <IconButton
+              label="Add memory"
+              disabled={adding}
+              onClick={() => {
+                setEditing(undefined);
+                setAdding(true);
+              }}
+            >
+              <Plus className="size-3.5" strokeWidth={1.75} />
+            </IconButton>
+          ) : null}
+        </PageHeader>
+      )}
       {saveError ? (
         <p role="alert" className="px-4 py-2 text-[12px] text-red-400">
           {saveError}
@@ -381,6 +400,8 @@ function FactEditor({
             void commit(false);
           }
           if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
             closed.current = true;
             onClose();
           }

@@ -28,6 +28,7 @@ import {
   setComposerDraft,
 } from "../../sessions/model/draftCache";
 import { useDurableComposerDraft } from "../../sessions/hooks/useDurableComposerDraft";
+import { useComposerControl } from "../../sessions/hooks/useComposerControl";
 import { ComposerDraftRecovery } from "../../sessions/ui/ComposerDraftRecovery";
 import { useFileDrop } from "../../sessions/hooks/useFileDrop";
 import { resizeComposer } from "../../sessions/model/composerResize";
@@ -215,6 +216,20 @@ export function MonoComposer({
       setText(payload.text);
       setAttachments(payload.attachments);
       onDraftChange?.(payload.text);
+    },
+  });
+  useComposerControl({
+    sessionId,
+    enabled: enabled && !submitting,
+    field,
+    write: (text) => {
+      if (field.current) {
+        field.current.value = text;
+        field.current.setSelectionRange(text.length, text.length);
+      }
+      update(text);
+      durableDraft.capture();
+      field.current?.focus({ preventScroll: true });
     },
   });
   const emojiButton = useRef<HTMLButtonElement>(null);
