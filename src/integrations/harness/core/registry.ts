@@ -564,7 +564,8 @@ export function transferHarnessSessionAccount(input: {
     input.isCurrent?.() !== false;
   return queueSessionOperation(input.threadId, async () => {
     if (!current()) return false;
-    await requireHarness(input.harness).forgetSession(input.threadId);
+    // Keep the old resume state until the new account owns the session.
+    await requireHarness(input.harness).stopSession(input.threadId);
     if (!current()) return false;
     await transferProviderSession(
       input.harness,

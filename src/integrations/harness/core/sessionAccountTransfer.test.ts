@@ -32,7 +32,9 @@ function setup(id: string) {
     steerTurn: vi.fn(async () => {}),
     cancelTurn: vi.fn(async () => {}),
     respondApproval: vi.fn(),
-    stopSession: vi.fn(async () => {}),
+    stopSession: vi.fn(async () => {
+      order.push("stop");
+    }),
     forgetSession: vi.fn(async () => {
       order.push("forget");
     }),
@@ -66,7 +68,7 @@ describe("account transfer ownership", () => {
       await copy.promise;
     });
     const transfer = transferHarnessSessionAccount(input);
-    await vi.waitFor(() => expect(order).toEqual(["forget", "copy"]));
+    await vi.waitFor(() => expect(order).toEqual(["stop", "copy"]));
     const sending = sendHarnessTurn({
       harness: "codex",
       sessionId: input.threadId,
@@ -80,7 +82,7 @@ describe("account transfer ownership", () => {
     copy.resolve();
     await expect(transfer).resolves.toBe(true);
     await sending;
-    expect(order).toEqual(["forget", "copy", "bind", "send"]);
+    expect(order).toEqual(["stop", "copy", "bind", "send"]);
     expect(adapter.bindSession).toHaveBeenCalledWith(
       input.threadId,
       "provider-thread",
@@ -129,5 +131,43 @@ describe("account transfer ownership", () => {
     vi.mocked(transferProviderSession).mockResolvedValueOnce(undefined);
     await expect(transferHarnessSessionAccount(input)).resolves.toBe(true);
     expect(adapter.bindSession).toHaveBeenCalledTimes(1);
+  });
+  it("retains the original conversation when a queued send supersedes the copy", async () => {
+    const { input, adapter } = setup("transfer-original-resume");
+    let resumedAccount = "old";
+    adapter.forgetSession = vi.fn(async () => {
+      resumedAccount = "";
+    });
+    adapter.bindSession = vi.fn((_id, _provider, _cwd, account) => {
+      resumedAccount = account ?? "";
+    });
+    const sentFrom: string[] = [];
+    adapter.sendTurn = vi.fn(async () => {
+      sentFrom.push(resumedAccount);
+    });
+    const copy = deferred();
+    vi.mocked(transferProviderSession).mockReturnValue(copy.promise);
+    let current = true;
+    const transfer = transferHarnessSessionAccount({
+      ...input,
+      isCurrent: () => current,
+    });
+    await vi.waitFor(() => expect(transferProviderSession).toHaveBeenCalled());
+    current = false;
+    const sending = sendHarnessTurn({
+      harness: "codex",
+      sessionId: input.threadId,
+      cwd: "/project",
+      text: "Continue",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: vi.fn(),
+    });
+    copy.resolve();
+    await expect(transfer).resolves.toBe(false);
+    await sending;
+    expect(sentFrom).toEqual(["old"]);
+    expect(adapter.forgetSession).not.toHaveBeenCalled();
+    expect(adapter.bindSession).not.toHaveBeenCalled();
   });
 });
