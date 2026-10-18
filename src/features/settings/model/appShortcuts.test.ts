@@ -28,9 +28,9 @@ describe("resolveAppShortcut", () => {
     });
   });
 
-  it("toggles the mono with Mod+I", () => {
+  it("toggles the bot with Mod+I", () => {
     expect(resolveAppShortcut(key({ key: "i", metaKey: true }))).toBe(
-      "App: Toggle Mono",
+      "App: Toggle Bot",
     );
     expect(
       resolveAppShortcut(key({ key: "I", metaKey: true, shiftKey: true })),

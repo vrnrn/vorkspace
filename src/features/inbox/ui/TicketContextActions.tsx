@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { InboxItem } from "../model/githubTasks";
-import { useInboxMonos } from "../model/inboxMonos";
+import { useInboxBots } from "../model/inboxBots";
 import {
   ticketContextLink,
   type TicketChatTarget,
 } from "../model/ticketContext";
-import type { PickerMono } from "../../projects/ui/SearchableProjectPicker";
-import { MonoRailMascot } from "../../monos/ui/MonoRailMascot";
+import type { PickerBot } from "../../projects/ui/SearchableProjectPicker";
+import { BotRailMascot } from "../../bots/ui/BotRailMascot";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { sameProjectPath } from "../../projects/model/recents";
@@ -26,33 +26,33 @@ export function TicketContextActions({
   item,
   cwd,
   projects,
-  monos = [],
+  bots = [],
   busy = false,
   onStart,
 }: {
   item: InboxItem;
   cwd: string;
   projects: readonly TicketProjectOption[];
-  monos?: readonly PickerMono[];
+  bots?: readonly PickerBot[];
   busy?: boolean;
   onStart?: (
     item: InboxItem,
     body?: string,
-    monoId?: string,
+    botId?: string,
   ) => void | Promise<void>;
 }) {
-  const defaults = useInboxMonos();
-  const defaultMonoId =
+  const defaults = useInboxBots();
+  const defaultBotId =
     item.provider === "jira" || item.provider === "gitlab"
       ? defaults[item.provider]
       : undefined;
-  const defaultMono = monos.find((mono) => mono.id === defaultMonoId);
+  const defaultBot = bots.find((bot) => bot.id === defaultBotId);
   const [selection, setSelection] = useState<{
     url: string;
     target: TicketChatTarget;
   }>();
-  const defaultTarget: TicketChatTarget = defaultMono
-    ? { kind: "mono", id: defaultMono.id }
+  const defaultTarget: TicketChatTarget = defaultBot
+    ? { kind: "bot", id: defaultBot.id }
     : projects.length
       ? {
           kind: "project",
@@ -61,8 +61,8 @@ export function TicketContextActions({
               sameProjectPath(p.path, item.projectPath || cwd),
             )?.path || projects[0].path,
         }
-      : monos.length
-        ? { kind: "mono", id: monos[0].id }
+      : bots.length
+        ? { kind: "bot", id: bots[0].id }
         : { kind: "project", path: "" };
   const target = selection?.url === item.url ? selection.target : defaultTarget;
   const [open, setOpen] = useState(false);
@@ -85,9 +85,9 @@ export function TicketContextActions({
     target.kind === "project"
       ? projects.find((p) => sameProjectPath(p.path, target.path))
       : undefined;
-  const mono =
-    target.kind === "mono" ? monos.find((m) => m.id === target.id) : undefined;
-  const valid = target.kind === "mono" ? !!mono : !!project;
+  const bot =
+    target.kind === "bot" ? bots.find((m) => m.id === target.id) : undefined;
+  const valid = target.kind === "bot" ? !!bot : !!project;
   const select = (next: TicketChatTarget) => {
     setSelection({ url: item.url, target: next });
     setOpen(false);
@@ -105,8 +105,8 @@ export function TicketContextActions({
         className="size-3.5 shrink-0"
       />
     );
-  const monoMark = (m: PickerMono) => (
-    <MonoRailMascot
+  const botMark = (m: PickerBot) => (
+    <BotRailMascot
       name={m.mascot}
       color={m.color}
       status={m.status}
@@ -116,7 +116,7 @@ export function TicketContextActions({
   const matches = (name: string) =>
     name.toLowerCase().includes(query.trim().toLowerCase());
   const filteredProjects = projects.filter((p) => matches(p.name));
-  const filteredMonos = monos.filter((m) => matches(m.name));
+  const filteredBots = bots.filter((m) => matches(m.name));
   return (
     <>
       {onStart ? (
@@ -136,7 +136,7 @@ export function TicketContextActions({
                     ? { ...item, projectPath: target.path }
                     : item,
                   undefined,
-                  target.kind === "mono" ? target.id : undefined,
+                  target.kind === "bot" ? target.id : undefined,
                 );
               } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
@@ -154,13 +154,13 @@ export function TicketContextActions({
             aria-label="Choose chat destination"
             aria-haspopup="dialog"
             aria-expanded={open}
-            disabled={sending || (!projects.length && !monos.length)}
+            disabled={sending || (!projects.length && !bots.length)}
             onClick={() => setOpen(!open)}
             className="inline-flex h-7 max-w-48 items-center gap-1.5 rounded-md border border-content/10 bg-content/5 px-2 text-[12px] text-content/80 hover:bg-content/10 hover:text-content disabled:opacity-40"
           >
-            {mono ? monoMark(mono) : project ? projectMark(project) : null}
+            {bot ? botMark(bot) : project ? projectMark(project) : null}
             <span className="min-w-0 truncate">
-              {mono?.name ?? project?.name ?? "Choose destination"}
+              {bot?.name ?? project?.name ?? "Choose destination"}
             </span>
             <ChevronDown className="size-3 shrink-0" />
           </button>
@@ -193,8 +193,8 @@ export function TicketContextActions({
                 <Search className="size-3.5 text-content/60" />
                 <input
                   ref={focusSearch}
-                  aria-label="Find project or Mono"
-                  placeholder="Find project or Mono"
+                  aria-label="Find project or Bot"
+                  placeholder="Find project or Bot"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/60"
@@ -202,7 +202,7 @@ export function TicketContextActions({
               </div>
               <div
                 role="listbox"
-                aria-label="Projects and Monos"
+                aria-label="Projects and Bots"
                 className="max-h-64 overflow-y-auto p-1"
               >
                 {filteredProjects.length ? (
@@ -232,23 +232,23 @@ export function TicketContextActions({
                     ))}
                   </div>
                 ) : null}
-                {filteredMonos.length ? (
-                  <div role="group" aria-label="Monos">
+                {filteredBots.length ? (
+                  <div role="group" aria-label="Bots">
                     <p className="px-2 py-1.5 text-[11px] font-medium text-content/60">
-                      Monos
+                      Bots
                     </p>
-                    {filteredMonos.map((m) => (
+                    {filteredBots.map((m) => (
                       <button
                         key={m.id}
                         type="button"
                         role="option"
                         aria-selected={
-                          target.kind === "mono" && target.id === m.id
+                          target.kind === "bot" && target.id === m.id
                         }
                         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-content/80 hover:bg-content/8 focus-visible:bg-selection focus-visible:outline-none"
-                        onClick={() => select({ kind: "mono", id: m.id })}
+                        onClick={() => select({ kind: "bot", id: m.id })}
                       >
-                        {monoMark(m)}
+                        {botMark(m)}
                         <span className="min-w-0 flex-1 truncate">
                           {m.name}
                         </span>
@@ -256,7 +256,7 @@ export function TicketContextActions({
                     ))}
                   </div>
                 ) : null}
-                {!filteredProjects.length && !filteredMonos.length ? (
+                {!filteredProjects.length && !filteredBots.length ? (
                   <p className="px-2 py-3 text-[12px] text-content/60">
                     No matching destinations
                   </p>

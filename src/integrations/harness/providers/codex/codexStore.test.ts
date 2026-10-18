@@ -9,7 +9,7 @@ const mock = vi.hoisted(() => ({
   spawn: vi.fn(async (..._args: unknown[]) => undefined),
   kill: vi.fn(async (_id: string) => undefined),
   prepare: vi.fn(async (..._args: unknown[]) => ({
-    home: "/mono/default",
+    home: "/bot/default",
     hasThread: false,
   })),
   copy: vi.fn(async (..._args: unknown[]) => undefined),
@@ -17,8 +17,8 @@ const mock = vi.hoisted(() => ({
 
 vi.mock("../../core/child", () => ({
   acquireHarnessBridge: async () => mock.release,
-  prepareMonoCodexStore: mock.prepare,
-  copyMonoCodexThreads: mock.copy,
+  prepareBotCodexStore: mock.prepare,
+  copyBotCodexThreads: mock.copy,
   spawnChild: mock.spawn,
   killChild: mock.kill,
   watchChild: (id: string, line: (line: string) => void) =>
@@ -75,9 +75,9 @@ vi.mock("../../core/child", () => ({
   },
 }));
 
-import { codexConfigOverrides, prepareCodexMonoContext } from "./codexStore";
+import { codexConfigOverrides, prepareCodexBotContext } from "./codexStore";
 const input = {
-  sessionId: "mono-chat",
+  sessionId: "bot-chat",
   path: "/codex",
   cwd: "/project",
   providerAccountId: "account",
@@ -89,7 +89,7 @@ beforeEach(() => {
   mock.archived = false;
   mock.missing = false;
   vi.clearAllMocks();
-  mock.prepare.mockResolvedValue({ home: "/mono/default", hasThread: false });
+  mock.prepare.mockResolvedValue({ home: "/bot/default", hasThread: false });
   mock.copy.mockResolvedValue(undefined);
 });
 
@@ -102,30 +102,30 @@ it("omits nested unset settings while preserving typed account configuration", (
           inherit: null,
           include_only: null,
           exclude: ["TOKEN"],
-          set: { MONO: "yes" },
+          set: { BOT: "yes" },
         },
         agents: {
           helper: { config_file: "/account/helper.toml", description: null },
         },
         enabled: false,
       },
-      "/mono",
+      "/bot",
     ),
   ).toEqual({
-    shell_environment_policy: { exclude: ["TOKEN"], set: { MONO: "yes" } },
+    shell_environment_policy: { exclude: ["TOKEN"], set: { BOT: "yes" } },
     agents: { helper: { config_file: "/account/helper.toml" } },
     enabled: false,
-    sqlite_home: "/mono",
+    sqlite_home: "/bot",
   });
 });
 
 it("uses the account's resolved settings with an isolated SQLite home", async () => {
-  const prepared = await prepareCodexMonoContext(input);
+  const prepared = await prepareCodexBotContext(input);
   expect(prepared).toEqual({
     config: {
       instructions: "Shared account instructions",
       model_instructions_file: "/ordinary/instructions.md",
-      sqlite_home: "/mono/default",
+      sqlite_home: "/bot/default",
     },
     hasThread: false,
   });
@@ -148,7 +148,7 @@ it("uses the account's resolved settings with an isolated SQLite home", async ()
 });
 
 it("archives the old root and retains all native descendants before resuming privately", async () => {
-  const prepared = await prepareCodexMonoContext({
+  const prepared = await prepareCodexBotContext({
     ...input,
     threadId: "root",
   });
@@ -180,9 +180,9 @@ it("archives the old root and retains all native descendants before resuming pri
 });
 
 it("does not reopen the ordinary home for an already migrated startup thread", async () => {
-  mock.prepare.mockResolvedValue({ home: "/mono/default", hasThread: true });
+  mock.prepare.mockResolvedValue({ home: "/bot/default", hasThread: true });
   await expect(
-    prepareCodexMonoContext({
+    prepareCodexBotContext({
       ...input,
       threadId: "root",
       migrationOnly: true,
@@ -194,7 +194,7 @@ it("does not reopen the ordinary home for an already migrated startup thread", a
 
 it("can migrate an archived legacy root without archiving it twice", async () => {
   mock.archived = true;
-  await prepareCodexMonoContext({ ...input, threadId: "root" });
+  await prepareCodexBotContext({ ...input, threadId: "root" });
   expect(mock.copy).toHaveBeenCalledOnce();
   expect(mock.sent.some((r) => r.method === "thread/archive")).toBe(false);
 });
@@ -202,7 +202,7 @@ it("can migrate an archived legacy root without archiving it twice", async () =>
 it("restores the original root if retaining its context fails", async () => {
   mock.copy.mockRejectedValueOnce(new Error("Disk full"));
   await expect(
-    prepareCodexMonoContext({ ...input, threadId: "root" }),
+    prepareCodexBotContext({ ...input, threadId: "root" }),
   ).rejects.toThrow("Disk full");
   expect(mock.sent.at(-1)).toMatchObject({
     method: "thread/unarchive",
@@ -213,22 +213,22 @@ it("restores the original root if retaining its context fails", async () => {
   expect(mock.handlers.size).toBe(0);
   // Failed work releases the lock and can be retried.
   await expect(
-    prepareCodexMonoContext({ ...input, threadId: "root" }),
+    prepareCodexBotContext({ ...input, threadId: "root" }),
   ).resolves.toMatchObject({ hasThread: true });
 });
 
 it("keeps normal recovery available when an old thread was already removed", async () => {
   mock.missing = true;
   await expect(
-    prepareCodexMonoContext({ ...input, threadId: "deleted" }),
+    prepareCodexBotContext({ ...input, threadId: "deleted" }),
   ).resolves.toMatchObject({ hasThread: false });
   expect(mock.copy).not.toHaveBeenCalled();
   expect(mock.sent.some((r) => r.method === "thread/archive")).toBe(false);
 });
 
 it("coalesces an overlapping startup migration and send preparation", async () => {
-  const first = prepareCodexMonoContext({ ...input, threadId: "root" });
-  const second = prepareCodexMonoContext({ ...input, threadId: "root" });
+  const first = prepareCodexBotContext({ ...input, threadId: "root" });
+  const second = prepareCodexBotContext({ ...input, threadId: "root" });
   expect(second).toBe(first);
   await Promise.all([first, second]);
   expect(mock.copy).toHaveBeenCalledOnce();

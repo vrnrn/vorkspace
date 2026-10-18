@@ -29,7 +29,7 @@ const SPRING_MAX_LEAD_PX = 32;
 const SPRING_SETTLE_GRACE_MS = 500;
 /** Longest stretch of time one growth sample is spread over. */
 const SPRING_MAX_SAMPLE_FRAMES = 60;
-/** Mono replies can appear together; keep their glide below 1080px/second. */
+/** Bot replies can appear together; keep their glide below 1080px/second. */
 const CHAT_FOLLOW_MAX_SPEED = 18;
 
 export type FollowSpring = { velocity: number; growth: number };
@@ -106,7 +106,7 @@ export function useBottomChatMotion(
    * off the main thread; pinning would snap it back to the end.
    */
   holdUntil?: RefObject<number>,
-  /** Preserve the full movement and bound its speed for whole Mono replies. */
+  /** Preserve the full movement and bound its speed for whole Bot replies. */
   smoothReveals = false,
   /** Acknowledge native offsets written by the animation, including handoff. */
   onScrollAdjust?: (scroller: HTMLDivElement) => void,
@@ -297,7 +297,7 @@ export function useBottomChatMotion(
         } else {
           const limit = Math.max(0, height * 0.75);
           // Capping a whole reply's offset skips the rest of its movement
-          // immediately. Mono keeps that distance in the bounded glide.
+          // immediately. Bot keeps that distance in the bounded glide.
           offset = Math.max(
             -limit,
             smoothReveals ? offset + shift : Math.min(limit, offset + shift),

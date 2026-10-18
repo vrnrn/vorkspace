@@ -69,7 +69,7 @@
   --color-skill: #e8c547;
   --color-mention: #38bdf8;
   --font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Bot",
     "Courier New", monospace;
   --font-sans:
     system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
@@ -124,16 +124,16 @@
 
 /* Static so Tailwind always emits it: only xterm reads it, via JS. */
 @theme static {
-  /* Terminal-only stack. JetBrains Mono Nerd Font leads so prompt text and
-     icons share one face; the Nerd Font families after the system monos fill
+  /* Terminal-only stack. JetBrains Bot Nerd Font leads so prompt text and
+     icons share one face; the Nerd Font families after the system bots fill
      Private Use Area glyphs (powerline arrows, git/folder icons) because
      WebKit's fallback never reaches user-installed icon fonts on its own. */
   --font-terminal:
-    "JetBrainsMono NFM", "JetBrainsMono Nerd Font Mono", "JetBrainsMono NF",
-    ui-monospace, SFMono-Regular, Menlo, Monaco, "Symbols Nerd Font Mono",
-    "Symbols Nerd Font", "MesloLGS NF", "MesloLGS Nerd Font Mono",
-    "FiraCode Nerd Font Mono", "Hack Nerd Font Mono",
-    "CaskaydiaCove Nerd Font Mono", Consolas, "Liberation Mono", "Courier New",
+    "JetBrainsMono NFM", "JetBrainsMono Nerd Font Bot", "JetBrainsMono NF",
+    ui-monospace, SFMono-Regular, Menlo, Monaco, "Symbols Nerd Font Bot",
+    "Symbols Nerd Font", "MesloLGS NF", "MesloLGS Nerd Font Bot",
+    "FiraCode Nerd Font Bot", "Hack Nerd Font Bot",
+    "CaskaydiaCove Nerd Font Bot", Consolas, "Liberation Bot", "Courier New",
     monospace;
 }
 
@@ -461,7 +461,7 @@ html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
   mask-image: radial-gradient(circle at 15px 1px, transparent 5px, black 5.5px);
 }
 
-/* The same cut-out, for the Mono overview's 14px tab icons. */
+/* The same cut-out, for the Bot overview's 14px tab icons. */
 .overview-tab-icon-with-dot {
   -webkit-mask-image: radial-gradient(
     circle at 13px 1px,
@@ -899,7 +899,7 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   flex-shrink: 0;
 }
 
-/* Match the Mono transcript's soft edge fade on overflowing tab text. */
+/* Match the Bot transcript's soft edge fade on overflowing tab text. */
 .tab-label[data-overflow="true"] {
   --tab-label-mask: linear-gradient(
     to right,
@@ -959,16 +959,16 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   padding-bottom: 2.5rem;
 }
 
-.mono-transcript-fades {
-  --mono-transcript-mask: linear-gradient(
+.bot-transcript-fades {
+  --bot-transcript-mask: linear-gradient(
     to bottom,
     transparent,
     #000 1.5rem,
     #000 calc(100% - 2rem),
     transparent
   );
-  -webkit-mask-image: var(--mono-transcript-mask);
-  mask-image: var(--mono-transcript-mask);
+  -webkit-mask-image: var(--bot-transcript-mask);
+  mask-image: var(--bot-transcript-mask);
 }
 
 .agent-transcript
@@ -1007,14 +1007,14 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   }
 }
 
-/* A Mono's turn keeps its actions the way a sent message does: in a fixed
+/* A Bot's turn keeps its actions the way a sent message does: in a fixed
  * gap under the turn, shown on hover, so revealing them shifts nothing. One
  * whose panel is open stays visible. */
 @media (hover: hover) and (pointer: fine) {
   /* Leave breathing room above the buttons. Keep the gap while a
    * completion report reopens the same turn and its
    * actions are temporarily absent. Shrinking it makes the chat dip first. */
-  .transcript-turn-mono {
+  .transcript-turn-bot {
     position: relative;
     padding-bottom: 1.5rem;
   }
@@ -2161,7 +2161,7 @@ html:not(.theme-light) .markdown-code-token {
 }
 
 /* The agent's name pill, which the mascot stands on. */
-.mono-pill {
+.bot-pill {
   border-color: color-mix(in srgb, var(--color-content) 14%, transparent);
   background: color-mix(in srgb, var(--color-content) 6%, transparent);
 }
@@ -2199,9 +2199,9 @@ html:not(.theme-light) .markdown-code-token {
   animation: agent-chat-fade-in 240ms ease-out both;
 }
 
-/* A Mono's reaction: frosted glass a shade lighter than the bubble it sits
+/* A Bot's reaction: frosted glass a shade lighter than the bubble it sits
    on, so the corner it covers reads as one surface, not two tints. */
-.mono-reaction-badge {
+.bot-reaction-badge {
   background: color-mix(
     in srgb,
     var(--color-content) 17%,
@@ -2217,15 +2217,15 @@ html:not(.theme-light) .markdown-code-token {
 
 /* In light mode the bubble is the darker surface, so the reaction is the
    page's own base colour lifted off it by the shadow. */
-html.theme-light .mono-reaction-badge {
+html.theme-light .bot-reaction-badge {
   background: var(--color-background-base);
   box-shadow:
     0 0 0 1px var(--color-background-base),
     0 1px 4px rgb(0 0 0 / 0.12);
 }
 
-/* A Mono's reaction lands on the message with a small bounce. */
-.mono-reaction-in {
+/* A Bot's reaction lands on the message with a small bounce. */
+.bot-reaction-in {
   animation: agent-chat-bubble-in 320ms cubic-bezier(0.2, 1.4, 0.4, 1) both;
   transform-origin: 50% 50%;
 }
@@ -2258,7 +2258,7 @@ html.theme-light .mono-reaction-badge {
   .agent-chat-bubble-in-left,
   .agent-chat-bubble-in-right,
   .agent-chat-fade-in,
-  .mono-reaction-in {
+  .bot-reaction-in {
     animation: none;
   }
 
@@ -2292,7 +2292,7 @@ html.theme-light.has-user-accent .agent-chat-user-bubble {
   color: var(--color-content);
 }
 
-html.theme-light .mono-pill {
+html.theme-light .bot-pill {
   background: #fff;
   border-color: rgb(0 0 0 / 0.06);
   box-shadow:
@@ -2305,38 +2305,38 @@ html.theme-light .mono-pill {
    paragraph itself would match every block. */
 /* A habit run's report, read inside its row on the habit page: the row's
    own size and rhythm, with lists hung just inside the text's left edge. */
-.mono-run-report.agent-markdown {
+.bot-run-report.agent-markdown {
   font-size: 12px;
   line-height: 20px;
 }
 
-.mono-run-report.agent-markdown p,
-.mono-run-report.agent-markdown li {
+.bot-run-report.agent-markdown p,
+.bot-run-report.agent-markdown li {
   margin-block: 0;
 }
 
-.mono-run-report.agent-markdown > * + * {
+.bot-run-report.agent-markdown > * + * {
   margin-top: 8px;
 }
 
-.mono-run-report.agent-markdown [data-streamdown="ordered-list"],
-.mono-run-report.agent-markdown [data-streamdown="unordered-list"] {
+.bot-run-report.agent-markdown [data-streamdown="ordered-list"],
+.bot-run-report.agent-markdown [data-streamdown="unordered-list"] {
   margin-block: 0;
   padding-inline-start: 14px;
 }
 
-.mono-run-report.agent-markdown li + li {
+.bot-run-report.agent-markdown li + li {
   margin-top: 2px;
 }
 
 /* The activity panel's steps and what was said between them read at the
    size of the commands they run. */
-.mono-activity-steps .text-sm {
+.bot-activity-steps .text-sm {
   font-size: 13px;
   line-height: 20px;
 }
 
-.mono-activity-prose .mono-run-report.agent-markdown {
+.bot-activity-prose .bot-run-report.agent-markdown {
   font-size: 13px;
 }
 
@@ -2560,7 +2560,7 @@ html.theme-light .mono-pill {
 }
 
 /*
- * Soft edges like the Mono transcript's, but only on a side with more to
+ * Soft edges like the Bot transcript's, but only on a side with more to
  * scroll to: a window resting at the top has nothing above it to fade into.
  * The lengths are registered so an edge eases in and out instead of popping.
  */
@@ -3037,31 +3037,31 @@ html.theme-light .mono-pill {
   }
 }
 
-.mono-details-panel[data-open="false"] {
+.bot-details-panel[data-open="false"] {
   display: none;
 }
 
-/* A Mono's activity rolls through one clipped line without moving the chat. */
-.mono-work-ticker {
+/* A Bot's activity rolls through one clipped line without moving the chat. */
+.bot-work-ticker {
   height: 24px;
   overflow: hidden;
 }
 
-.mono-work-ticker-track {
+.bot-work-ticker-track {
   display: flex;
   flex-direction: column;
 }
 
-.mono-work-ticker-row {
+.bot-work-ticker-row {
   height: 24px;
   flex-shrink: 0;
 }
 
-.mono-work-ticker-track[data-moving="true"] {
-  animation: mono-work-tick 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
+.bot-work-ticker-track[data-moving="true"] {
+  animation: bot-work-tick 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-@keyframes mono-work-tick {
+@keyframes bot-work-tick {
   from {
     transform: translateY(0);
   }
@@ -3071,7 +3071,7 @@ html.theme-light .mono-pill {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mono-work-ticker-track[data-moving="true"] {
+  .bot-work-ticker-track[data-moving="true"] {
     animation: none;
     transform: translateY(-24px);
   }

@@ -17,7 +17,7 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
 /** White marks that must follow `currentColor` so they stay visible in light mode. */
 export const MONOCHROME_HARNESSES = new Set<HarnessId>(["pi"]);
 
-function MonoIcon({
+function BotIcon({
   className,
   children,
   viewBox = "-4 -4 37 37",
@@ -47,13 +47,13 @@ export function HarnessIcon({
 }) {
   if (harness === "pi") {
     return (
-      <MonoIcon className={className}>
+      <BotIcon className={className}>
         <path
           fillRule="evenodd"
           d="M1 1H22V14.4997H14.9998V21.2499H8.0002V28H1V1ZM8.0002 7.75014V14.4997H14.9998V7.75014H8.0002Z"
         />
         <path d="M22 15H28V28H22V15Z" />
-      </MonoIcon>
+      </BotIcon>
     );
   }
   return (

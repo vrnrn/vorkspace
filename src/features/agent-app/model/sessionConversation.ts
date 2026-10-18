@@ -34,8 +34,8 @@ export function sessionConversationPage(
     if (
       block.role === "user" &&
       (!block.internal ||
-        block.monoSessionCompletion ||
-        block.monoPeerMessage) &&
+        block.botSessionCompletion ||
+        block.botPeerMessage) &&
       !block.draft
     ) {
       exchanges.push({ user: block, assistants: [] });
@@ -65,12 +65,12 @@ export function sessionConversationPage(
     turns: selected.map(({ user, assistants }) => ({
       turnId: user.id,
       user: capped(
-        user.monoSessionCompletion
-          ? user.monoSessionCompletion.sessionCount
-            ? `vorkspace: results from ${user.monoSessionCompletion.sessionCount} sessions`
-            : `vorkspace: session ${user.monoSessionCompletion.status}: ${user.monoSessionCompletion.title}`
-          : user.monoPeerMessage
-            ? `vorkspace peer message from ${user.monoPeerMessage.fromName}: ${user.monoPeerMessage.text}`
+        user.botSessionCompletion
+          ? user.botSessionCompletion.sessionCount
+            ? `vorkspace: results from ${user.botSessionCompletion.sessionCount} sessions`
+            : `vorkspace: session ${user.botSessionCompletion.status}: ${user.botSessionCompletion.title}`
+          : user.botPeerMessage
+            ? `vorkspace peer message from ${user.botPeerMessage.fromName}: ${user.botPeerMessage.text}`
             : operatorUserPrompt(user),
         maxChars,
       ),

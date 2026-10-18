@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { configureChildBackend } from "../../src/integrations/harness/core/child";
 import { Composer } from "../../src/features/sessions/ui/Composer";
-import { MonoComposer } from "../../src/features/monos/ui/MonoComposer";
+import { BotComposer } from "../../src/features/bots/ui/BotComposer";
 import {
   readComposer,
   writeComposer,
@@ -193,7 +193,7 @@ Object.assign(window, {
     },
     transformCallback: () => 0,
     invoke: async (command: string, args?: Record<string, unknown>) =>
-      command.startsWith("mono_")
+      command.startsWith("bot_")
         ? voxMemoryFixture(command, args)
         : command === "plugin:dialog|message"
           ? ((args?.buttons as { OkCancelCustom?: string[] })
@@ -219,9 +219,9 @@ function Fixture() {
   const [remote, setRemote] = useState(false);
   const [controlsKey, setControlsKey] = useState(0);
   const [showControls, setShowControls] = useState(true);
-  const [mono, setMono] = useState(false);
+  const [bot, setBot] = useState(false);
   const [settings, setSettings] = useState(false);
-  composerId = mono ? "mono-helper" : owner;
+  composerId = bot ? "bot-helper" : owner;
   if (settings)
     return (
       <div className="h-screen">
@@ -294,12 +294,12 @@ function Fixture() {
         <button onClick={() => setShowControls((value) => !value)}>
           Toggle controls
         </button>
-        <button onClick={() => setMono(true)}>Mono composer</button>
+        <button onClick={() => setBot(true)}>Bot composer</button>
         <button onClick={() => setSettings(true)}>Vox settings</button>
       </div>
-      {mono ? (
-        <MonoComposer
-          sessionId="mono-helper"
+      {bot ? (
+        <BotComposer
+          sessionId="bot-helper"
           name="Helper"
           persistDraft={false}
           enabled={enabled}
@@ -345,7 +345,10 @@ createRoot(document.getElementById("root")!).render(
         });
       if (action === "workspace.current") {
         metrics.contextReads++;
-        return { monos: [{ id: "helper", name: "Helper" }] };
+        return {
+          bots: [{ id: "helper", name: "Helper" }],
+          bots: [{ id: "helper", name: "Helper" }],
+        };
       }
       metrics.actions.push({ action, input });
       const id =

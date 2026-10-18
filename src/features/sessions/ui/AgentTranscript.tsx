@@ -64,15 +64,15 @@ import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
-import type { MonoLook } from "../../monos/model/mono";
+import type { BotLook } from "../../bots/model/bot";
 import {
-  monoSpawnedSessions,
+  botSpawnedSessions,
   type LaunchedSessionView,
-} from "../../monos/model/monoSpawnedSessions";
-import type { MonoSpawnedSession } from "../model/session";
-import { LaunchedSessionCard } from "../../monos/ui/LaunchedSessionCard";
-import type { MessageDelivery } from "../../monos/model/monoMessaging";
-import { monoReactionBlocks } from "../../monos/model/monoReaction";
+} from "../../bots/model/botSpawnedSessions";
+import type { BotSpawnedSession } from "../model/session";
+import { LaunchedSessionCard } from "../../bots/ui/LaunchedSessionCard";
+import type { MessageDelivery } from "../../bots/model/botMessaging";
+import { botReactionBlocks } from "../../bots/model/botReaction";
 import type { ApprovalDecision } from "../../../integrations/harness";
 import {
   isHarnessAuthError,
@@ -117,8 +117,8 @@ import { useBottomChatMotion } from "../hooks/useBottomChatMotion";
 import { useTranscriptSelection } from "../hooks/useTranscriptSelection";
 import type { TranscriptLayout } from "../../settings/model/appearance";
 import { AgentMarkdown } from "./AgentMarkdown";
-import { MonoWorkTicker } from "./MonoWorkTicker";
-import { monoWorkStatus } from "../model/monoWorkStatus";
+import { BotWorkTicker } from "./BotWorkTicker";
+import { botWorkStatus } from "../model/botWorkStatus";
 import { isEmojiOnlyMessage } from "../model/emojiMessage";
 import { attachmentPreviewSrc } from "../model/attachments";
 import { TranscriptSelectionMenu } from "./TranscriptSelectionMenu";
@@ -152,8 +152,8 @@ import {
   workKind,
   workSummaryLine,
   joinedTurnStart,
-  monoTurnLatestStart,
-  monoTurnRuns,
+  botTurnLatestStart,
+  botTurnRuns,
   opensNewStretch,
   type ActivityPhase,
   type ActivityPhaseKind,
@@ -219,20 +219,20 @@ type Props = {
   onReturnToLatest?: () => void;
   busy?: boolean;
   cwd?: string;
-  /** Who the turns are by, in place of the model: a Mono's name. */
+  /** Who the turns are by, in place of the model: a Bot's name. */
   agentName?: string;
-  /** A Mono's mascot and color, in place of the provider's mark. */
-  agentMascot?: Pick<MonoLook, "mascot" | "color">;
+  /** A Bot's mascot and color, in place of the provider's mark. */
+  agentMascot?: Pick<BotLook, "mascot" | "color">;
   /** Keeps short conversations at the bottom and skips prompt-to-top anchoring. */
   bottomAligned?: boolean;
   /** Keeps process in the activity trail, with live progress in the header. */
   inlineWork?: boolean;
   messageDeliveries?: ReadonlyMap<string, MessageDelivery>;
   onRetryMessage?: (blockId: string) => void;
-  /** Inspect a Mono turn in the activity sidebar. */
+  /** Inspect a Bot turn in the activity sidebar. */
   onShowWork?: (turnId: string, blocks: Block[]) => void;
   activeWorkTurnId?: string;
-  /** Open one of a Mono turn's launched sessions in the sidebar. */
+  /** Open one of a Bot turn's launched sessions in the sidebar. */
   onOpenSession?: (turnId: string, blocks: Block[], sessionId: string) => void;
   /** Launched sessions' live status by id, where this window tracks it. */
   launchedSessions?: ReadonlyMap<string, LaunchedSessionView>;
@@ -341,11 +341,11 @@ function AgentTranscriptComponent({
   onScrollerChange,
   managed = false,
 }: Props) {
-  const isMonoChat = !!agentMascot;
+  const isBotChat = !!agentMascot;
   const blocks = useMemo(() => {
-    // A Mono's reaction sits on the message it answers, not in a bubble.
-    const chatBlocks = isMonoChat
-      ? monoReactionBlocks(sourceBlocks)
+    // A Bot's reaction sits on the message it answers, not in a bubble.
+    const chatBlocks = isBotChat
+      ? botReactionBlocks(sourceBlocks)
       : sourceBlocks;
     if (!harness || !supportsHarnessLogin(harness)) return chatBlocks;
     const visibleBlocks = chatBlocks.filter(
@@ -359,7 +359,7 @@ function AgentTranscriptComponent({
     return visibleBlocks.length === chatBlocks.length
       ? chatBlocks
       : visibleBlocks;
-  }, [harness, isMonoChat, sourceBlocks]);
+  }, [harness, isBotChat, sourceBlocks]);
   const editableUserBlockId = useMemo(
     () => lastUserTurnBlock(blocks)?.id,
     [blocks],
@@ -533,7 +533,7 @@ function AgentTranscriptComponent({
     (el: HTMLDivElement | null) => {
       scroller.current = el;
       setScrollerEl(el);
-      // The Mono already has overscroll-none. Prefer native scrolling where
+      // The Bot already has overscroll-none. Prefer native scrolling where
       // supported so its first wheel event need not wait on a blocking listener.
       const nativeOverscroll =
         bottomAligned && CSS.supports?.("overscroll-behavior", "none");
@@ -796,7 +796,7 @@ function AgentTranscriptComponent({
   // A scheduled update can land while the chat's own turn is still running.
   const activeTurnIndex = turns.reduce(
     (latest, turn, index) =>
-      turn[0].monoHabit || turn[0].role === "handoff" ? latest : index,
+      turn[0].botHabit || turn[0].role === "handoff" ? latest : index,
     -1,
   );
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
@@ -1124,7 +1124,7 @@ function AgentTranscriptComponent({
   return (
     <div
       ref={setScroller}
-      className={`agent-transcript h-full overflow-y-auto overscroll-none [overflow-anchor:none] font-mono text-[13px] leading-5${bottomAligned ? " mono-transcript-fades scrollbar-none" : ""}`}
+      className={`agent-transcript h-full overflow-y-auto overscroll-none [overflow-anchor:none] font-mono text-[13px] leading-5${bottomAligned ? " bot-transcript-fades scrollbar-none" : ""}`}
     >
       <TranscriptContent bottomAligned={bottomAligned}>
         {onReturnToLatest ? (
@@ -1175,18 +1175,18 @@ function AgentTranscriptComponent({
         ) : null}
         {visibleTurns.map((turn, turnIndex) => {
           const isLastTurn = firstVisibleTurn + turnIndex === turns.length - 1;
-          // A Mono's own follow-up replies join the turn they follow; each
+          // A Bot's own follow-up replies join the turn they follow; each
           // run keeps its prompt, but the turn reads as one message.
-          const runs = inlineWork ? monoTurnRuns(turn) : [turn];
+          const runs = inlineWork ? botTurnRuns(turn) : [turn];
           const userBlock = inlineWork
-            ? monoTurnUserBlock(runs[0], messageDeliveries)
+            ? botTurnUserBlock(runs[0], messageDeliveries)
             : turnUserBlock(turn, managed);
           const lastRun =
             runs.length > 1
-              ? monoTurnUserBlock(runs[runs.length - 1], messageDeliveries)
+              ? botTurnUserBlock(runs[runs.length - 1], messageDeliveries)
               : userBlock;
-          const habit = turn[0].monoHabit;
-          // Older saved reports may have lost their habit tag. A Mono's
+          const habit = turn[0].botHabit;
+          // Older saved reports may have lost their habit tag. A Bot's
           // standalone reply still needs its identity and response actions.
           const standaloneReply =
             !userBlock && !!(agentName || habit) && turn.some(isProseBlock);
@@ -1195,7 +1195,7 @@ function AgentTranscriptComponent({
               ? sumDurations(
                   runs.map(
                     (run) =>
-                      monoTurnUserBlock(run, messageDeliveries)?.durationMs,
+                      botTurnUserBlock(run, messageDeliveries)?.durationMs,
                   ),
                 )
               : userBlock?.durationMs;
@@ -1226,9 +1226,9 @@ function AgentTranscriptComponent({
           const previousAt = !previousTurn
             ? undefined
             : inlineWork
-              ? monoTurnLatestStart(previousTurn)
+              ? botTurnLatestStart(previousTurn)
               : (turnUserBlock(previousTurn, managed)?.startedAt ??
-                previousTurn[0].monoHabit?.at ??
+                previousTurn[0].botHabit?.at ??
                 previousTurn[0].startedAt);
           const stampAt =
             daySeparators &&
@@ -1256,10 +1256,10 @@ function AgentTranscriptComponent({
           // Work the turn has already answered for folds away behind one line,
           // leaving the prompt and the answer to it.
           const turnId = turn[0].id;
-          const spawnedSessions = inlineWork ? monoSpawnedSessions(turn) : [];
+          const spawnedSessions = inlineWork ? botSpawnedSessions(turn) : [];
           const launchCards = launchAnchors(items, spawnedSessions);
           const renderLaunches = (
-            launches: readonly MonoSpawnedSession[],
+            launches: readonly BotSpawnedSession[],
             key: string,
             spacing: string,
           ) => (
@@ -1295,7 +1295,7 @@ function AgentTranscriptComponent({
           // the last: the mark, and the clock beside it. It never moves, so a
           // turn settling does not shuffle the layout around the answer.
           const live = visible && !settled && !preparingHandoff;
-          // A Mono's turns are its own, whichever model ran them.
+          // A Bot's turns are its own, whichever model ran them.
           const turnModelName =
             agentName ??
             turnModel?.name ??
@@ -1321,7 +1321,7 @@ function AgentTranscriptComponent({
                 modelName={turnModelName}
               />
             ) : agentMascot && agentName ? (
-              // A Mono signs its settled turns with just its mascot and name.
+              // A Bot signs its settled turns with just its mascot and name.
               <span className="font-medium text-content/80">{agentName}</span>
             ) : durationMs != null ? (
               formatWorkingDuration(durationMs, turnModelName, true)
@@ -1330,7 +1330,7 @@ function AgentTranscriptComponent({
             ) : (
               workSummaryLine(summarizedWork)
             );
-          // A Mono that only reacted answered on the message itself.
+          // A Bot that only reacted answered on the message itself.
           const reactedOnly =
             inlineWork &&
             !live &&
@@ -1338,7 +1338,7 @@ function AgentTranscriptComponent({
               (item) => item.type === "block" && item.block.role === "user",
             ) &&
             items.some(
-              (item) => item.type === "block" && !!item.block.monoReaction,
+              (item) => item.type === "block" && !!item.block.botReaction,
             );
           const showFoldLine =
             !reactedOnly &&
@@ -1410,7 +1410,7 @@ function AgentTranscriptComponent({
               />
             ) : item.type !== "block" ? (
               inlineWork ? (
-                <MonoWorkApprovals
+                <BotWorkApprovals
                   key={item.blocks[0].id}
                   blocks={item.blocks}
                   cwd={cwd}
@@ -1450,7 +1450,7 @@ function AgentTranscriptComponent({
                 }
                 layout={transcriptLayout}
                 bubbleTail={!!agentMascot}
-                localMedia={isMonoChat}
+                localMedia={isBotChat}
                 compactFollowUp={isCompactFollowUp(item, itemIndex)}
                 stackedOnPrevious={
                   itemIndex === 0
@@ -1516,7 +1516,7 @@ function AgentTranscriptComponent({
           const foldLineRow = (
             <TurnRow key="work-fold" folded={!showFoldLine}>
               {inlineWork ? (
-                <MonoTurnHeader
+                <BotTurnHeader
                   blocks={turn}
                   title={foldTitle}
                   name={turnModelName}
@@ -1563,7 +1563,7 @@ function AgentTranscriptComponent({
               id={turnId}
               // A stacked message sits as close as one in the same turn, so
               // the gap between turns gives way.
-              className={`transcript-turn flex min-w-0 flex-col${inlineWork && !reactedOnly ? " transcript-turn-mono" : ""}${stacksIntoNextTurn ? " -mb-1" : ""}${
+              className={`transcript-turn flex min-w-0 flex-col${inlineWork && !reactedOnly ? " transcript-turn-bot" : ""}${stacksIntoNextTurn ? " -mb-1" : ""}${
                 isLastTurn ? " transcript-turn-live" : ""
               }${
                 promptAnchor && anchorTurn && isLastTurn && userBlock
@@ -1574,10 +1574,10 @@ function AgentTranscriptComponent({
               {stampAt != null ? <DaySeparator at={stampAt} /> : null}
               {turn
                 .flatMap((block) =>
-                  block.monoPeerMessage ? [block.monoPeerMessage] : [],
+                  block.botPeerMessage ? [block.botPeerMessage] : [],
                 )
                 .map((peer) => (
-                  <MonoPeerMessageCard
+                  <BotPeerMessageCard
                     key={peer.id}
                     peer={peer}
                     cwd={cwd}
@@ -2376,7 +2376,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   /** True when the parent surface already provides the horizontal gutter. */
   embedded?: boolean;
   cwd?: string;
-  /** Show local images and videos a reply links to, as Mono chats do. */
+  /** Show local images and videos a reply links to, as Bot chats do. */
   localMedia?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onSaveNote?: (text: string) => void | Promise<void>;
@@ -2531,16 +2531,16 @@ const TranscriptBlock = memo(function TranscriptBlock({
 });
 
 /**
- * A Mono's emoji answer, on the corner of the message it answers. The top
+ * A Bot's emoji answer, on the corner of the message it answers. The top
  * left keeps it clear of the hover actions below.
  */
-function MonoReactionBadge({ emoji, live }: { emoji: string; live: boolean }) {
+function BotReactionBadge({ emoji, live }: { emoji: string; live: boolean }) {
   return (
     <span
       role="img"
       aria-label={`Reacted ${emoji}`}
-      data-mono-reaction={emoji}
-      className={`${live ? "mono-reaction-in " : ""}mono-reaction-badge absolute -top-2.5 -left-2.5 z-[1] grid h-[22px] place-items-center rounded-[8px] px-[7px] font-sans text-[11px] leading-none`}
+      data-bot-reaction={emoji}
+      className={`${live ? "bot-reaction-in " : ""}bot-reaction-badge absolute -top-2.5 -left-2.5 z-[1] grid h-[22px] place-items-center rounded-[8px] px-[7px] font-sans text-[11px] leading-none`}
     >
       {emoji}
     </span>
@@ -2584,7 +2584,7 @@ function UserMessageBlock({
   const [overflows, setOverflows] = useState(false);
   const [singleLine, setSingleLine] = useState(false);
   // Only a reaction that arrives while the chat is open pops in.
-  const [reactionAtMount] = useState(block.monoReaction);
+  const [reactionAtMount] = useState(block.botReaction);
   const textRef = useRef<HTMLElement>(null);
   const card = block.secondOpinion;
   const note = block.noteCard;
@@ -2604,7 +2604,7 @@ function UserMessageBlock({
     : bubbleTail && (block.sentAt != null || stackedOnPrevious)
       ? "pt-1 pb-5"
       : "pt-1.5 pb-5";
-  // A Mono's chat shows sent images above the bubble, like photos in a
+  // A Bot's chat shows sent images above the bubble, like photos in a
   // messaging app; only other files stay inside it.
   const photos =
     bubbleTail && chat && !block.draft
@@ -2714,7 +2714,7 @@ function UserMessageBlock({
         ) : null}
       </div>
     ) : null;
-  // In a Mono's chat a few emoji stand alone, like a reaction: no bubble,
+  // In a Bot's chat a few emoji stand alone, like a reaction: no bubble,
   // time or actions.
   if (
     bubbleTail &&
@@ -2737,10 +2737,10 @@ function UserMessageBlock({
           className="relative select-none font-sans text-6xl leading-none"
         >
           {displayText.trim()}
-          {block.monoReaction ? (
-            <MonoReactionBadge
-              emoji={block.monoReaction}
-              live={block.monoReaction !== reactionAtMount}
+          {block.botReaction ? (
+            <BotReactionBadge
+              emoji={block.botReaction}
+              live={block.botReaction !== reactionAtMount}
             />
           ) : null}
         </div>
@@ -2898,10 +2898,10 @@ function UserMessageBlock({
                   </span>
                 </div>
               ) : null}
-              {block.monoReaction ? (
-                <MonoReactionBadge
-                  emoji={block.monoReaction}
-                  live={block.monoReaction !== reactionAtMount}
+              {block.botReaction ? (
+                <BotReactionBadge
+                  emoji={block.botReaction}
+                  live={block.botReaction !== reactionAtMount}
                 />
               ) : null}
             </div>
@@ -3010,21 +3010,21 @@ function TurnRow({
 /** A turn item's identity, stable as the group it names grows. */
 /**
  * Where a turn's launched sessions go: each after the first reply that came
- * after its launch, so a Mono reporting back later in the same turn writes
+ * after its launch, so a Bot reporting back later in the same turn writes
  * below them, as it happened. A launch no reply has followed goes at the end.
  */
 function launchAnchors(
   items: readonly TurnItem[],
-  launches: readonly MonoSpawnedSession[],
+  launches: readonly BotSpawnedSession[],
 ): {
-  afterItem: Map<number, MonoSpawnedSession[]>;
-  atEnd: MonoSpawnedSession[];
+  afterItem: Map<number, BotSpawnedSession[]>;
+  atEnd: BotSpawnedSession[];
 } {
-  const afterItem = new Map<number, MonoSpawnedSession[]>();
-  const atEnd: MonoSpawnedSession[] = [];
+  const afterItem = new Map<number, BotSpawnedSession[]>();
+  const atEnd: BotSpawnedSession[] = [];
   if (launches.length === 0) return { afterItem, atEnd };
   const launched = items.map((item) =>
-    monoSpawnedSessions(
+    botSpawnedSessions(
       item.type === "block" ? [item.block] : item.blocks,
       launches,
     ).map((entry) => entry.sessionId),
@@ -3128,13 +3128,13 @@ function WorkFoldLine({
       {title}
     </span>
   );
-  // A settled Mono turn signs off in a pill, like the day separators.
+  // A settled Bot turn signs off in a pill, like the day separators.
   const content =
     agentMascot && !live ? (
-      <MonoSignaturePill>
+      <BotSignaturePill>
         {icon}
         {label}
-      </MonoSignaturePill>
+      </BotSignaturePill>
     ) : (
       <>
         {icon}
@@ -3170,7 +3170,7 @@ function WorkFoldLine({
   );
 }
 
-function MonoSignaturePill({ children }: { children: ReactNode }) {
+function BotSignaturePill({ children }: { children: ReactNode }) {
   return (
     <span className="flex min-w-0 items-center gap-1.5 rounded-full bg-content/[0.07] py-0.5 pr-3 pl-2">
       {children}
@@ -3391,7 +3391,7 @@ function markScrollEdges(el: HTMLElement) {
 }
 
 /** The live ticker shares the identity line instead of adding a work row. */
-function MonoTurnHeader({
+function BotTurnHeader({
   blocks,
   title,
   name,
@@ -3423,7 +3423,7 @@ function MonoTurnHeader({
     [blocks],
   );
   let status = useMemo(
-    () => monoWorkStatus(activity, active),
+    () => botWorkStatus(activity, active),
     [activity, active],
   );
   if (active && waitingForAnswers && !activity.some(needsApproval)) {
@@ -3451,11 +3451,11 @@ function MonoTurnHeader({
     <ActivityPhaseIcon kind={status.kind} />
   );
   const ticker = (
-    <MonoWorkTicker status={{ ...status, active: live }} showIcon={false} />
+    <BotWorkTicker status={{ ...status, active: live }} showIcon={false} />
   );
   return (
     <div
-      data-mono-work
+      data-bot-work
       data-transcript-search-item
       data-transcript-search-current={searchCurrent || undefined}
       className="flex min-w-0 items-center gap-1.5 px-4 py-1 font-sans text-sm text-content/50"
@@ -3463,18 +3463,18 @@ function MonoTurnHeader({
       {active ? (
         <>
           {agentMascot ? (
-            // The pill holds the Mono's signature from the first token on;
+            // The pill holds the Bot's signature from the first token on;
             // the ticker runs beside it.
             <>
               <span className="max-w-[45%] shrink-0">
-                <MonoSignaturePill>
+                <BotSignaturePill>
                   {mark}
                   {name ? (
                     <span className="min-w-0 truncate font-medium text-content/80">
                       {name}
                     </span>
                   ) : null}
-                </MonoSignaturePill>
+                </BotSignaturePill>
               </span>
               <span aria-hidden className="shrink-0 text-content/25">
                 ·
@@ -3509,10 +3509,10 @@ function MonoTurnHeader({
           )}
         </>
       ) : agentMascot ? (
-        <MonoSignaturePill>
+        <BotSignaturePill>
           {mark}
           <span className="min-w-0 truncate">{title}</span>
-        </MonoSignaturePill>
+        </BotSignaturePill>
       ) : (
         <>
           {mark}
@@ -3523,19 +3523,19 @@ function MonoTurnHeader({
   );
 }
 
-type MonoWorkApprovalsProps = Pick<
+type BotWorkApprovalsProps = Pick<
   ActivityPhasesProps,
   "blocks" | "cwd" | "onApproval" | "onOpenFile" | "onOpenDiff"
 >;
 
 /** Pending approvals stay actionable while the rest of the work is hidden. */
-const MonoWorkApprovals = memo(function MonoWorkApprovals({
+const BotWorkApprovals = memo(function BotWorkApprovals({
   blocks,
   cwd,
   onApproval,
   onOpenFile,
   onOpenDiff,
-}: MonoWorkApprovalsProps) {
+}: BotWorkApprovalsProps) {
   return (
     <div className="flex min-w-0 flex-col px-4">
       {blocks.filter(needsApproval).map((block) => (
@@ -3554,7 +3554,7 @@ const MonoWorkApprovals = memo(function MonoWorkApprovals({
 }, sameActivity);
 
 /** Full turn activity in transcript order, without the chat's work folding. */
-export function MonoActivityTrail({
+export function BotActivityTrail({
   blocks,
   live = false,
   cwd,
@@ -3593,26 +3593,26 @@ export function MonoActivityTrail({
           return (
             <li
               key={first.id}
-              data-mono-activity-block={first.id}
-              className="mono-activity-prose min-w-0 px-1 text-content/80"
+              data-bot-activity-block={first.id}
+              className="bot-activity-prose min-w-0 px-1 text-content/80"
             >
               <AgentMarkdown
                 text={first.text}
                 cwd={cwd}
                 onOpenFile={onOpenFile}
-                className="mono-run-report"
+                className="bot-run-report"
               />
             </li>
           );
         return (
           <li
             key={first.id}
-            className="mono-activity-steps flex min-w-0 flex-col px-1"
+            className="bot-activity-steps flex min-w-0 flex-col px-1"
           >
             {segment.blocks.map((block, step) => (
               <div
                 key={block.id}
-                data-mono-activity-block={block.id}
+                data-bot-activity-block={block.id}
                 className="relative min-w-0 pl-4"
               >
                 {/* The rail runs between the steps' dots, not past the ends. */}
@@ -5296,7 +5296,7 @@ function turnUserBlock(blocks: Block[], managed = false): Block | undefined {
 }
 
 /**
- * Whether a Mono turn that ended in only a reaction stacks into the next
+ * Whether a Bot turn that ended in only a reaction stacks into the next
  * one: the next turn opens with a message of the user's own, in the same
  * stretch of time.
  */
@@ -5308,19 +5308,19 @@ function stacksAfterReaction(
   const start = next?.[0];
   return (
     !!start &&
-    turn.some((block) => !!block.monoReaction) &&
+    turn.some((block) => !!block.botReaction) &&
     start.role === "user" &&
     !start.internal &&
-    !start.monoHabit &&
+    !start.botHabit &&
     !(
       daySeparators &&
       start.startedAt != null &&
-      opensNewStretch(start.startedAt, monoTurnLatestStart(turn))
+      opensNewStretch(start.startedAt, botTurnLatestStart(turn))
     )
   );
 }
 
-function monoTurnUserBlock(
+function botTurnUserBlock(
   blocks: Block[],
   deliveries?: ReadonlyMap<string, MessageDelivery>,
 ): Block | undefined {
@@ -5480,18 +5480,18 @@ function syncTranscriptViewport(el: HTMLElement | null) {
   el.style.setProperty("--transcript-viewport", next);
 }
 
-function MonoPeerMessageCard({
+function BotPeerMessageCard({
   peer,
   cwd,
   onOpenFile,
 }: {
-  peer: NonNullable<Block["monoPeerMessage"]>;
+  peer: NonNullable<Block["botPeerMessage"]>;
   cwd?: string;
   onOpenFile?: (path: string) => void;
 }) {
   return (
     <div
-      data-mono-peer-message={peer.id}
+      data-bot-peer-message={peer.id}
       className="mx-4 my-1.5 rounded-xl border border-stroke bg-surface/65 px-3.5 py-2.5 font-sans"
     >
       <div className="mb-1.5 flex items-center gap-2 text-xs text-content/65">

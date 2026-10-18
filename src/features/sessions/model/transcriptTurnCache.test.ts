@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "./session";
-import { groupMonoChatTurns, groupTurns } from "./transcriptActivity";
+import { groupBotChatTurns, groupTurns } from "./transcriptActivity";
 import { TranscriptTurnCache } from "./transcriptTurnCache";
 
 function conversation(): Block[] {
@@ -91,7 +91,7 @@ describe("transcript turn cache", () => {
     expect(cache.group(blocks.slice())).toBe(before);
   });
 
-  it("caches Mono follow-ups together and updates when inline work changes", () => {
+  it("caches Bot follow-ups together and updates when inline work changes", () => {
     const cache = new TranscriptTurnCache();
     const blocks: Block[] = [
       { id: "u", role: "user", text: "Inspect this" },
@@ -100,18 +100,18 @@ describe("transcript turn cache", () => {
       { id: "reply", role: "assistant", text: "Done" },
     ];
     expect(cache.group(blocks)).toHaveLength(2);
-    const monoTurns = cache.group(blocks, false, true);
-    expect(monoTurns).toHaveLength(1);
-    expect(monoTurns[0]).toEqual(blocks);
-    const items = cache.turnItems(monoTurns[0], true, { inlineWork: true });
-    expect(cache.group(blocks.slice(), false, true)).toBe(monoTurns);
-    expect(cache.turnItems(monoTurns[0], true, { inlineWork: true })).toBe(
+    const botTurns = cache.group(blocks, false, true);
+    expect(botTurns).toHaveLength(1);
+    expect(botTurns[0]).toEqual(blocks);
+    const items = cache.turnItems(botTurns[0], true, { inlineWork: true });
+    expect(cache.group(blocks.slice(), false, true)).toBe(botTurns);
+    expect(cache.turnItems(botTurns[0], true, { inlineWork: true })).toBe(
       items,
     );
     expect(cache.group(blocks)).toHaveLength(2);
   });
 
-  it("keeps cached Mono narration distinct from ordinary and settled work", () => {
+  it("keeps cached Bot narration distinct from ordinary and settled work", () => {
     const cache = new TranscriptTurnCache();
     const turn: Block[] = [
       { id: "u", role: "user", text: "Inspect this" },
@@ -163,7 +163,7 @@ describe("transcript turn cache", () => {
         role: "user",
         text: "Private completion prompt",
         internal: true,
-        appRequestId: "mono-completion-result",
+        appRequestId: "bot-completion-result",
         // A day later, so the reply opens a turn of its own.
         startedAt: 24 * 60 * 60 * 1000,
       },
@@ -180,7 +180,7 @@ describe("transcript turn cache", () => {
     expect(managed[0]).toEqual({ type: "block", block: blocks[2] });
     expect(cache.turnItems(turns[1], true, { inlineWork: true })).toBe(visible);
   });
-  it("keeps each merged Mono run's answer when a later run did more work", () => {
+  it("keeps each merged Bot run's answer when a later run did more work", () => {
     const cache = new TranscriptTurnCache();
     const shell = (id: string): Block => ({
       id,
@@ -196,7 +196,7 @@ describe("transcript turn cache", () => {
         role: "user",
         text: "Private completion prompt",
         internal: true,
-        appRequestId: "mono-completion-review",
+        appRequestId: "bot-completion-review",
         startedAt: 60_000,
       },
       shell("check"),
@@ -218,22 +218,22 @@ describe("transcript turn cache", () => {
   });
 });
 
-it("regroups when a changed Mono boundary joins the preceding turn", () => {
+it("regroups when a changed Bot boundary joins the preceding turn", () => {
   const cache = new TranscriptTurnCache();
   const blocks = conversation();
   cache.group(blocks, false, true);
   const changed = blocks.slice();
   changed[changed.length - 2] = { ...changed[changed.length - 2], sentAt: 10 };
   expect(cache.group(changed, false, true)).toEqual(
-    groupMonoChatTurns(changed),
+    groupBotChatTurns(changed),
   );
 });
 
 it.each([false, true])(
-  "matches fresh grouping across streaming, edits and rewinds (Mono=%s)",
-  (mono) => {
+  "matches fresh grouping across streaming, edits and rewinds (Bot=%s)",
+  (bot) => {
     const cache = new TranscriptTurnCache();
-    const group = mono ? groupMonoChatTurns : groupTurns;
+    const group = bot ? groupBotChatTurns : groupTurns;
     let blocks = conversation();
     for (let i = 0; i < 100; i++) {
       if (i % 13 === 0) blocks = blocks.slice(0, -3);
@@ -245,7 +245,7 @@ it.each([false, true])(
             role: "user",
             text: "completion",
             internal: true,
-            appRequestId: `mono-completion-${i}`,
+            appRequestId: `bot-completion-${i}`,
           },
           { id: `reply-${i}`, role: "assistant", text: "Completed" },
         ];
@@ -261,7 +261,7 @@ it.each([false, true])(
           index === at ? { ...block, text: block.text + " more" } : block,
         );
       }
-      expect(cache.group(blocks, false, mono)).toEqual(group(blocks));
+      expect(cache.group(blocks, false, bot)).toEqual(group(blocks));
     }
   },
 );

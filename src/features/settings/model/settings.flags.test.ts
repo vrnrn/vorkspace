@@ -60,11 +60,11 @@ describe.each([
     "monocode:live-agents-enabled-change",
   ],
   [
-    "monocode.monosEnabled",
-    settings.loadMonosEnabled,
-    settings.saveMonosEnabled,
+    "monocode.botsEnabled",
+    settings.loadBotsEnabled,
+    settings.saveBotsEnabled,
     true,
-    "monocode:monos-enabled-change",
+    "monocode:bots-enabled-change",
   ],
   [
     "monocode.closeToTray",

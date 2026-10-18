@@ -239,7 +239,7 @@ export class Vox {
       this.options.cwd,
       { provider: "codex", id: "default" },
       "codex",
-      "mono",
+      "bot",
     );
     await this.spawn;
     if (this.stopped) return;
@@ -454,7 +454,7 @@ export class Vox {
     else
       await rpc.respondError(id, {
         code: -32601,
-        message: "Use the vorkspace tool to control sessions and Monos.",
+        message: "Use the vorkspace tool to control sessions and Bots.",
       });
   }
 

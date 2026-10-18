@@ -31,7 +31,7 @@
 vorkspace is based on [MonoCode](https://github.com/hardbeat920/monocode), created by [Nick (hardbeat920)](https://github.com/hardbeat920). Thanks to Nick and the upstream contributors for the foundation.
 
 <p align="center">
-  <img src="public/vorkspace-workspace.png" alt="vorkspace desktop workspace showing multi-provider tabs, Monos, Channels, turn checkpoints, and git changes" width="960" />
+  <img src="public/vorkspace-workspace.png" alt="vorkspace desktop workspace showing multi-provider tabs, Bots, Channels, turn checkpoints, and git changes" width="960" />
 </p>
 
 ---
@@ -43,7 +43,7 @@ Install and sign in to at least one supported CLI. vorkspace probes for installe
 | Provider | CLI & Sign-In | Capabilities in vorkspace |
 | :--- | :--- | :--- |
 | <img src="src/assets/providers/claude.svg" width="18" height="18" align="absmiddle" /> **[Claude Code](https://claude.com/product/claude-code)** | `claude auth login` | Multi-account switching with native transcript/checkpoint transfer, AWS Bedrock detection, and optional GitHub Copilot 1M models (`GPT-6.1 Sol`, `GPT-6 Luna`). |
-| <img src="src/assets/providers/codex.svg" width="18" height="18" align="absmiddle" /> **[Codex](https://developers.openai.com/codex/cli)** | `codex login` | Multi-account switching with rollout/subagent transfer, isolated Mono stores, and real-time **Vox** voice control. |
+| <img src="src/assets/providers/codex.svg" width="18" height="18" align="absmiddle" /> **[Codex](https://developers.openai.com/codex/cli)** | `codex login` | Multi-account switching with rollout/subagent transfer, isolated Bot stores, and real-time **Vox** voice control. |
 | <img src="src/assets/providers/antigravity.svg" width="18" height="18" align="absmiddle" /> **[Antigravity](https://antigravity.google/docs/cli-install)** | `agy` *(macOS/Linux)* | Native stream-JSON session management, model catalog discovery, and worktree execution. |
 | <img src="src/assets/providers/pi.svg" width="18" height="18" align="absmiddle" /> **[Pi](https://pi.dev/)** | `npm i -g @earendil-works/pi-coding-agent` | Persistent JSON-RPC process adapter with live steering and tool streaming. |
 | <img src="src/assets/providers/omp.svg" width="18" height="18" align="absmiddle" /> **[omp](https://omp.sh)** | `curl -fsSL https://omp.sh/install \| sh` | High-speed ACP/stdio integration with shell-forwarded `COPILOT_GITHUB_TOKEN` support. |
@@ -60,13 +60,13 @@ See [Provider setup](docs/providers.md) ([ELI5](docs/eli5/providers.md)) for mod
 - **Turn Checkpoints & Worker-Backed Diffs**: Every agent turn snapshots modified files so you can roll back edits in one click. Review changes with off-thread Lezer syntax highlighting, hunk staging, and an interactive commit graph.
 - **Seamless Account Continuation**: When a Claude Code or Codex account hits a rate limit mid-session, switch accounts directly from the banner—vorkspace copies native transcripts, subagent trees, and checkpoints byte-for-byte before resuming.
 
-### Monos, Channels, Orchestrations & `/operator`
-- **Monos**: Persistent cross-project agents backed by their own `SOUL.md` identity and `MEMORY.md` long-term memory, with a dedicated floating companion window, scheduled **Habits**, and multi-agent **Channels**.
+### Bots, Channels, Orchestrations & `/operator`
+- **Bots**: Persistent cross-project agents backed by their own `SOUL.md` identity and `MEMORY.md` long-term memory, with a dedicated floating companion window, scheduled **Habits**, and multi-agent **Channels**.
 - **Lead/Worker Orchestrations**: Decompose complex changes into a lead session and parallel worker sessions across isolated worktrees with enforced file write scopes.
 - **`/operator` Mode**: Prefix any prompt with `/operator` to grant an agent scoped CLI access (`vorkspace app`) to open sessions, split panes, manage worktrees, and read or update workspace notes.
 
 ### Vox Voice Controller, Triage Inbox & Remote SSH
-- **Vox Voice Controller**: Talk hands-free over WebRTC (`gpt-live-1-codex`) to inspect active work, create or steer sessions, and message Monos without touching the keyboard.
+- **Vox Voice Controller**: Talk hands-free over WebRTC (`gpt-live-1-codex`) to inspect active work, create or steer sessions, and message Bots without touching the keyboard.
 - **Unified Inbox & CI Auto-Repair**: Triage GitHub PRs/issues, GitLab MRs/issues, and Jira Cloud tickets in one place, with automatic branch/commit ticket detection and one-click **CI Auto-Repair** when a PR check fails.
 - **Headless Remote SSH Daemon (`vorkspace-host`)**: Connect to remote macOS, Linux, or Windows devboxes over OpenSSH (`127.0.0.1:3774`). Remote agents keep running while your laptop is closed and resynchronize state when you reconnect.
 

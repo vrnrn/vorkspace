@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
 
-type MonoScrollWindow = Window & {
-  completeMonoReply: (text?: string) => void;
-  finishMonoSamples: () => {
+type BotScrollWindow = Window & {
+  completeBotReply: (text?: string) => void;
+  finishBotSamples: () => {
     at: number;
     height: number;
     offset: number;
@@ -10,10 +10,10 @@ type MonoScrollWindow = Window & {
   }[];
 };
 
-type MonoCompletionWindow = Window & {
-  queueMonoCompletion: () => void;
-  beginMonoCompletion: () => void;
-  finishMonoCompletion: () => void;
+type BotCompletionWindow = Window & {
+  queueBotCompletion: () => void;
+  beginBotCompletion: () => void;
+  finishBotCompletion: () => void;
   startCompletionSamples: () => void;
   finishCompletionSamples: () => {
     cardTop: number;
@@ -23,11 +23,11 @@ type MonoCompletionWindow = Window & {
 };
 
 for (const length of ["short", "scrolling"]) {
-  test(`a Mono completion attaches without reversing the ${length} chat's motion`, async ({
+  test(`a Bot completion attaches without reversing the ${length} chat's motion`, async ({
     page,
   }) => {
     await page.goto(
-      `/tests/browser/transcript.html?monoCompletion${length === "short" ? "&short" : ""}`,
+      `/tests/browser/transcript.html?botCompletion${length === "short" ? "&short" : ""}`,
     );
     const scroller = page.locator(".agent-transcript");
     const card = scroller.locator("[data-launched-session]");
@@ -59,21 +59,21 @@ for (const length of ["short", "scrolling"]) {
           return samples;
         },
       });
-      (window as MonoCompletionWindow).startCompletionSamples();
-      (window as MonoCompletionWindow).queueMonoCompletion();
+      (window as BotCompletionWindow).startCompletionSamples();
+      (window as BotCompletionWindow).queueBotCompletion();
     });
     // Delivery can await provider preflight after queuing. Capture that
-    // intermediate paint too, before the hidden prompt reaches the Mono.
+    // intermediate paint too, before the hidden prompt reaches the Bot.
     await page.waitForTimeout(120);
     await page.evaluate(() =>
-      (window as MonoCompletionWindow).beginMonoCompletion(),
+      (window as BotCompletionWindow).beginBotCompletion(),
     );
     await expect(card).toHaveAttribute("data-state", "done");
     // Let a temporary height correction complete; a final-position-only
     // assertion would miss the visible dip before the report is attached.
     await page.waitForTimeout(500);
     const reopened = await page.evaluate(() =>
-      (window as MonoCompletionWindow).finishCompletionSamples(),
+      (window as BotCompletionWindow).finishCompletionSamples(),
     );
     const tops = reopened.map((sample) => sample.cardTop);
     expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(1);
@@ -83,15 +83,15 @@ for (const length of ["short", "scrolling"]) {
     );
 
     await page.evaluate(() => {
-      (window as MonoCompletionWindow).startCompletionSamples();
-      (window as MonoCompletionWindow).finishMonoCompletion();
+      (window as BotCompletionWindow).startCompletionSamples();
+      (window as BotCompletionWindow).finishBotCompletion();
     });
     await expect(
-      scroller.locator('[data-chat-message="mono-report"]'),
+      scroller.locator('[data-chat-message="bot-report"]'),
     ).toBeVisible();
     await expect(content).toHaveCSS("transform", "none");
     const attached = await page.evaluate(() =>
-      (window as MonoCompletionWindow).finishCompletionSamples(),
+      (window as BotCompletionWindow).finishCompletionSamples(),
     );
     const reversals = attached
       .slice(1)
@@ -105,10 +105,10 @@ for (const length of ["short", "scrolling"]) {
   });
 }
 
-test("a completed Mono reply glides through its full height", async ({
+test("a completed Bot reply glides through its full height", async ({
   page,
 }) => {
-  await page.goto("/tests/browser/transcript.html?mono");
+  await page.goto("/tests/browser/transcript.html?bot");
   const scroller = page.locator(".agent-transcript");
   await expect(scroller.locator(".transcript-turn")).toHaveCount(7);
   await page.evaluate(() => document.fonts.ready);
@@ -142,22 +142,22 @@ test("a completed Mono reply glides through its full height", async ({
     };
     frame = requestAnimationFrame(sample);
     Object.assign(window, {
-      finishMonoSamples: () => {
+      finishBotSamples: () => {
         cancelAnimationFrame(frame);
         return samples;
       },
     });
-    (window as MonoScrollWindow).completeMonoReply();
+    (window as BotScrollWindow).completeBotReply();
   });
   await expect(
-    scroller.locator('[data-chat-message="mono-answer"]'),
+    scroller.locator('[data-chat-message="bot-answer"]'),
   ).toBeVisible();
   await expect(scroller.locator("[data-transcript-content]")).toHaveCSS(
     "transform",
     "none",
   );
   const samples = await page.evaluate(() =>
-    (window as MonoScrollWindow).finishMonoSamples(),
+    (window as BotScrollWindow).finishBotSamples(),
   );
   const growth = samples.at(-1)!.height - samples[0].height;
   const moving = samples.filter((sample) => sample.offset > 1);
@@ -179,18 +179,18 @@ test("a completed Mono reply glides through its full height", async ({
   ).toBeLessThanOrEqual(1);
 });
 
-test("scrolling up interrupts a completed Mono reply's glide", async ({
+test("scrolling up interrupts a completed Bot reply's glide", async ({
   page,
 }) => {
-  await page.goto("/tests/browser/transcript.html?mono");
+  await page.goto("/tests/browser/transcript.html?bot");
   const scroller = page.locator(".agent-transcript");
   const content = scroller.locator("[data-transcript-content]");
   await expect(scroller.locator(".transcript-turn")).toHaveCount(7);
   await page.evaluate(() => document.fonts.ready);
   await scroller.hover();
-  await page.evaluate(() => (window as MonoScrollWindow).completeMonoReply());
+  await page.evaluate(() => (window as BotScrollWindow).completeBotReply());
   await expect(
-    scroller.locator('[data-chat-message="mono-answer"]'),
+    scroller.locator('[data-chat-message="bot-answer"]'),
   ).toBeVisible();
   await page.mouse.wheel(0, -80);
   await expect(content).toHaveCSS("transform", "none");
@@ -215,10 +215,10 @@ test("scrolling up interrupts a completed Mono reply's glide", async ({
     .toBe(true);
   const top = await scroller.evaluate((el) => el.scrollTop);
   await page.evaluate(() =>
-    (window as MonoScrollWindow).completeMonoReply("More text. ".repeat(600)),
+    (window as BotScrollWindow).completeBotReply("More text. ".repeat(600)),
   );
   await expect(
-    scroller.locator('[data-chat-message="mono-answer"]'),
+    scroller.locator('[data-chat-message="bot-answer"]'),
   ).toContainText("More text.");
   expect(await scroller.evaluate((el) => el.scrollTop)).toBeCloseTo(top, 0);
 });

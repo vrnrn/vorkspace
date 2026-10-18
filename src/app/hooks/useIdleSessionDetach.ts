@@ -16,8 +16,8 @@ import {
   type WorkspaceTab,
 } from "../../features/workspace/model/layout";
 import { forgetHarnessSession } from "../../integrations/harness/core/registry";
-import { isMonoSession } from "../../features/monos/model/mono";
-import { isHabitRun } from "../../features/monos/model/monoHabits";
+import { isBotSession } from "../../features/bots/model/bot";
+import { isHabitRun } from "../../features/bots/model/botHabits";
 
 const SESSION_DETACH_DELAY_MS = 250;
 
@@ -68,7 +68,7 @@ export function useIdleSessionDetach({
       // A habit's hidden run is removed by its scheduler when it ends.
       if (
         session.inboxAsk ||
-        isMonoSession(session.id) ||
+        isBotSession(session.id) ||
         isHabitRun(session.id)
       )
         visibleIds.add(session.id);

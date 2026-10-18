@@ -45,8 +45,8 @@ import { sessionConversationPage, type SessionReadOptions } from "./sessionConve
 import {
   CARD_FIELDS,
   parseCard,
-  type MonoCard,
-} from "../../monos/model/monoCards";
+  type BotCard,
+} from "../../bots/model/botCards";
 import {
   HABITS_MAX,
   checkHabitsNow,
@@ -56,13 +56,13 @@ import {
   newHabit,
   nextHabitRunAt,
   type Habit,
-} from "../../monos/model/monoHabits";
+} from "../../bots/model/botHabits";
 import {
   memoryWithinBudget,
-  MonoFileConflict,
+  BotFileConflict,
   type AgentFilePath,
-  type MonoFiles,
-} from "../../monos/model/monoFiles";
+  type BotFiles,
+} from "../../bots/model/botFiles";
 import {
   addMemoryEntry,
   archiveMemoryEntries,
@@ -74,23 +74,23 @@ import {
   sinceDate,
   supersedeMemoryEntry,
   topicName,
-} from "../../monos/model/monoMemory";
-import { findMono, monoLook } from "../../monos/model/mono";
+} from "../../bots/model/botMemory";
+import { findBot, botLook } from "../../bots/model/bot";
 import {
   channelForMemberSession,
-  createMonoChannel,
-  findMonoChannel,
-  listMonoChannels,
-  listMonoPeerSummaries,
+  createBotChannel,
+  findBotChannel,
+  listBotChannels,
+  listBotPeerSummaries,
   MAX_CHANNEL_AUTONOMOUS_HOPS,
   MAX_PEER_AUTONOMOUS_HOPS,
   postChannelMessage,
-  resolveMonoPeer,
-  resolveUniqueMonoPeer,
-  type MonoChannel,
-  type MonoChannelMessage,
-  type MonoPeerSummary,
-} from "../../monos/model/monoChannels";
+  resolveBotPeer,
+  resolveUniqueBotPeer,
+  type BotChannel,
+  type BotChannelMessage,
+  type BotPeerSummary,
+} from "../../bots/model/botChannels";
 
 export type AppSessionListing = {
   id: string;
@@ -111,13 +111,13 @@ export type AgentAppHost = {
   /** Explicit workspace controller capability; never inferred from a session ID. */
   workspaceController?: {
     projects: readonly string[];
-    sendMono(monoId: string, message: string, requestId: string): Promise<unknown>;
+    sendBot(botId: string, message: string, requestId: string): Promise<unknown>;
   };
   start(
     launch: QuickLaunch,
     id: string,
     placement?: AppSessionPlacement,
-    notifyMonoId?: string,
+    notifyBotId?: string,
   ): Promise<void>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
   session(id: string): Promise<Session | null>;
@@ -126,7 +126,7 @@ export type AgentAppHost = {
     id: string,
     prompt: string,
     requestId: string,
-    notifyMonoId?: string,
+    notifyBotId?: string,
   ): Promise<{ alreadySubmitted: boolean }>;
   draft(
     id: string,
@@ -149,36 +149,36 @@ export type AgentAppHost = {
   artifact?(id: string): Promise<Artifact | null>;
   saveArtifact?(artifact: ArtifactUpsert): Promise<Artifact>;
   postArtifact?(sourceSessionId: string, card: ArtifactCard): void | Promise<void>;
-  /** Whether the session is a Mono's own conversation, which owns memory. */
-  isMono(sessionId: string): boolean;
+  /** Whether the session is a Bot's own conversation, which owns memory. */
+  isBot(sessionId: string): boolean;
   /**
-   * The Mono a session works for: its own conversation or one of its habit
+   * The Bot a session works for: its own conversation or one of its habit
    * runs. Its projects are the ones it may name with "project".
    */
-  monoOf?(sessionId: string): {
+  botOf?(sessionId: string): {
     id: string;
     projects: readonly string[];
     showStartedSessionsInSidebar?: boolean;
     /** Files the sessions it starts into a folder named after it. */
     folder?: { name: string; color: string };
   } | undefined;
-  /** A hidden run of one of a Mono's habits: it may remember, not schedule. */
+  /** A hidden run of one of a Bot's habits: it may remember, not schedule. */
   isHabitRun?(sessionId: string): boolean;
-  /** Puts a card in the Mono's chat, or holds it for a habit run's report. */
-  postCard?(sourceSessionId: string, card: MonoCard): void;
+  /** Puts a card in the Bot's chat, or holds it for a habit run's report. */
+  postCard?(sourceSessionId: string, card: BotCard): void;
   habits?: {
-    load(monoId: string): Promise<Habit[]>;
+    load(botId: string): Promise<Habit[]>;
     update<T>(
-      monoId: string,
+      botId: string,
       change: (habits: Habit[]) => { habits: Habit[]; result: T },
     ): Promise<T>;
   };
-  monos?: {
-    list?(excludeMonoId?: string): MonoPeerSummary[] | Promise<MonoPeerSummary[]>;
-    session?(monoId: string): Promise<Session | null>;
+  bots?: {
+    list?(excludeBotId?: string): BotPeerSummary[] | Promise<BotPeerSummary[]>;
+    session?(botId: string): Promise<Session | null>;
     send?(input: {
-      fromMonoId: string;
-      toMonoId: string;
+      fromBotId: string;
+      toBotId: string;
       text: string;
       requestId: string;
       expectReply: boolean;
@@ -188,20 +188,20 @@ export type AgentAppHost = {
   channels?: {
     currentHop?(sourceSessionId: string): number;
     onPosted?(
-      channel: MonoChannel,
-      message: MonoChannelMessage,
-      wakeMonoIds: string[],
+      channel: BotChannel,
+      message: BotChannelMessage,
+      wakeBotIds: string[],
       sourceSessionId: string,
     ): void | Promise<void>;
   };
-  agentFiles(monoId: string): Promise<MonoFiles>;
+  agentFiles(botId: string): Promise<BotFiles>;
   readAgentFile(
-    monoId: string,
+    botId: string,
     path: AgentFilePath,
   ): Promise<{ text: string | null; hash: string }>;
-  /** Throws `MonoFileConflict` when the file moved past `hash`. */
+  /** Throws `BotFileConflict` when the file moved past `hash`. */
   writeAgentFile(
-    monoId: string,
+    botId: string,
     path: AgentFilePath,
     text: string,
     hash: string,
@@ -261,9 +261,9 @@ const FIELDS = new Map<string, readonly string[]>([
   ["habits.update", ["id", "name", "instructions", "schedule", "enabled"]],
   ["habits.run", ["id"]],
   ["habits.remove", ["id"]],
-  ["monos.list", []],
-  ["monos.read", ["mono", "before", "limit", "maxChars"]],
-  ["monos.send", ["to", "message", "expectReply"]],
+  ["bots.list", []],
+  ["bots.read", ["bot", "before", "limit", "maxChars"]],
+  ["bots.send", ["to", "message", "expectReply"]],
   ["channels.list", []],
   ["channels.create", ["name", "members", "topic", "message"]],
   ["channels.read", ["channel", "limit", "before"]],
@@ -298,17 +298,17 @@ function completionRecipient(
   source: Session,
   input: Record<string, unknown>,
   host: AgentAppHost,
-  defaultForMono = false,
+  defaultForBot = false,
 ): string | undefined {
   const requested = input.notifyOnComplete;
   if (requested !== undefined && typeof requested !== "boolean")
     throw new Error("notifyOnComplete must be a boolean");
-  const isMono = host.isMono(source.id);
-  if (!(requested ?? (defaultForMono && isMono && !input.draft)))
+  const isBot = host.isBot(source.id);
+  if (!(requested ?? (defaultForBot && isBot && !input.draft)))
     return undefined;
-  if (!isMono)
+  if (!isBot)
     throw new Error(
-      "Completion notifications are only available in a Mono's chat",
+      "Completion notifications are only available in a Bot's chat",
     );
   if (input.draft === true)
     throw new Error("An unsent draft cannot send a completion notification");
@@ -342,7 +342,7 @@ function noteTags(value: unknown): string[] {
 }
 
 /**
- * The project an action works in. A session works in its own; a Mono works on
+ * The project an action works in. A session works in its own; a Bot works on
  * several, so it names one with "project" (its path or name), and may leave it
  * out when it has one project or is in one of its own.
  */
@@ -351,44 +351,44 @@ function requireProject(
   input: Record<string, unknown>,
   host: AgentAppHost,
 ): string {
-  const mono = host.workspaceController ?? host.monoOf?.(source.id);
+  const bot = host.workspaceController ?? host.botOf?.(source.id);
   const named = optionalString(input.project, "project", 4096);
-  if (!mono) {
-    if (named) throw new Error("project is only for a Mono");
+  if (!bot) {
+    if (named) throw new Error("project is only for a Bot");
     if (!looksLikeProject(source.cwd))
       throw new Error("Choose a project folder in this session first");
     return source.cwd;
   }
   const choices = () =>
-    mono.projects.length
-      ? mono.projects.map((path) => `${projectName(path)} (${path})`).join(", ")
+    bot.projects.length
+      ? bot.projects.map((path) => `${projectName(path)} (${path})`).join(", ")
       : "none yet; the user adds them from your details panel";
   if (named) {
-    const byPath = mono.projects.find(
+    const byPath = bot.projects.find(
       (path) => pathKey(path) === pathKey(named),
     );
-    const byName = mono.projects.filter(
+    const byName = bot.projects.filter(
       (path) => projectName(path) === named,
     );
     const match = byPath ?? (byName.length === 1 ? byName[0] : undefined);
     if (!match) throw new Error(`Not one of your projects. Yours: ${choices()}`);
     return match;
   }
-  const own = mono.projects.find(
+  const own = bot.projects.find(
     (path) => pathKey(path) === pathKey(source.cwd),
   );
   if (own) return own;
-  if (mono.projects.length === 1) return mono.projects[0];
+  if (bot.projects.length === 1) return bot.projects[0];
   throw new Error(`Pass "project" to choose one. Yours: ${choices()}`);
 }
 
-/** A Mono's chat lives outside its projects; project access follows its roster. */
+/** A Bot's chat lives outside its projects; project access follows its roster. */
 export function canAccessAgentAppProject(
   source: Session,
   cwd: string,
-  monoProjects?: readonly string[],
+  botProjects?: readonly string[],
 ): boolean {
-  return (monoProjects ?? [source.cwd]).some(
+  return (botProjects ?? [source.cwd]).some(
     (project) => pathKey(project) === pathKey(cwd),
   );
 }
@@ -421,10 +421,10 @@ export function notePreview(body: string): string {
 }
 
 /**
- * Puts a session a Mono started into the sidebar folder named after it,
+ * Puts a session a Bot started into the sidebar folder named after it,
  * making that folder in its color the first time.
  */
-function fileInMonoFolder(
+function fileInBotFolder(
   cwd: string,
   sessionId: string,
   folder: { name: string; color: string },
@@ -512,16 +512,16 @@ function startLaunch(
   const worktreeCwd = optionalString(input.worktreeCwd, "worktreeCwd");
   if (worktreeCwd && workspaceMode !== "current")
     throw new Error("worktreeCwd requires workspaceMode current");
-  const startingMono = host.monoOf?.(source.id);
+  const startingBot = host.botOf?.(source.id);
   const currentWorktree =
     worktreeCwd ||
     (pathKey(cwd) === pathKey(source.cwd) ? source.worktreeCwd : undefined);
   return {
     cwd,
     prompt,
-    // Only a Mono's own preference hides what it starts. A regular session
-    // with /operator has no Mono, and its launches belong in the sidebar.
-    ...(startingMono && startingMono.showStartedSessionsInSidebar !== true
+    // Only a Bot's own preference hides what it starts. A regular session
+    // with /operator has no Bot, and its launches belong in the sidebar.
+    ...(startingBot && startingBot.showStartedSessionsInSidebar !== true
       ? { sidebarHidden: true }
       : {}),
     ...(draft ? { draft: true } : {}),
@@ -534,8 +534,8 @@ function startLaunch(
       ...(requestedSettings as Record<string, string>),
     }),
     runtimeMode: runtimeMode as Session["runtimeMode"],
-    // A Mono delegates work without navigating the user out of their chat.
-    reveal: host.isMono(source.id) ? false : reveal,
+    // A Bot delegates work without navigating the user out of their chat.
+    reveal: host.isBot(source.id) ? false : reveal,
     workspaceMode,
     ...(workspaceMode === "current" && currentWorktree
       ? { worktreeCwd: currentWorktree }
@@ -556,13 +556,13 @@ async function handleSoul(
   input: Record<string, unknown>,
   host: AgentAppHost,
 ): Promise<unknown> {
-  const monoId = host.isMono(source.id)
-    ? host.monoOf?.(source.id)?.id
+  const botId = host.isBot(source.id)
+    ? host.botOf?.(source.id)?.id
     : undefined;
-  if (!monoId)
-    throw new Error("Only a Mono's own conversation can manage its soul");
+  if (!botId)
+    throw new Error("Only a Bot's own conversation can manage its soul");
   if (action === "soul.read") {
-    const files = await host.agentFiles(monoId);
+    const files = await host.agentFiles(botId);
     return { file: "SOUL.md", text: files.soul, hash: files.soulHash };
   }
   if (typeof input.text !== "string" || input.text.length > 240_000)
@@ -570,14 +570,14 @@ async function handleSoul(
   const expectedHash = requiredString(input.expectedHash, "expectedHash", 128);
   try {
     const hash = await host.writeAgentFile(
-      monoId,
+      botId,
       "SOUL.md",
       input.text,
       expectedHash,
     );
     return { file: "SOUL.md", updated: true, hash };
   } catch (error) {
-    if (error instanceof MonoFileConflict)
+    if (error instanceof BotFileConflict)
       throw new Error(
         "SOUL.md changed since you read it. Run soul.read and reapply the user's requested changes to the current text before calling soul.update again.",
       );
@@ -591,12 +591,12 @@ async function handleSoul(
  */
 async function editAgentFile<T>(
   host: AgentMemoryHost,
-  monoId: string,
+  botId: string,
   path: AgentFilePath,
   edit: (text: string) => { text: string; result: T },
 ): Promise<T> {
   for (let attempt = 0; ; attempt++) {
-    const current = await host.readAgentFile(monoId, path);
+    const current = await host.readAgentFile(botId, path);
     const fallback =
       current.text == null && path !== "MEMORY.md"
         ? `# ${path.slice("memory/".length, -".md".length)}\n\n`
@@ -604,10 +604,10 @@ async function editAgentFile<T>(
     const next = edit(current.text ?? fallback);
     try {
       if (next.text !== (current.text ?? ""))
-        await host.writeAgentFile(monoId, path, next.text, current.hash);
+        await host.writeAgentFile(botId, path, next.text, current.hash);
       return next.result;
     } catch (error) {
-      if (!(error instanceof MonoFileConflict) || attempt >= 2)
+      if (!(error instanceof BotFileConflict) || attempt >= 2)
         throw error;
     }
   }
@@ -620,21 +620,21 @@ async function editAgentFile<T>(
  */
 async function keepMemoryInBudget(
   host: AgentMemoryHost,
-  monoId: string,
+  botId: string,
   keep: string,
   date: string,
 ): Promise<string[]> {
-  const memory = await host.readAgentFile(monoId, "MEMORY.md");
+  const memory = await host.readAgentFile(botId, "MEMORY.md");
   const fitted = fitMemoryBudget(memory.text ?? "", keep, date);
   if (!fitted.moved.length) return [];
-  await editAgentFile(host, monoId, "memory/archive.md", (archive) => ({
+  await editAgentFile(host, botId, "memory/archive.md", (archive) => ({
     text: archiveMemoryEntries(archive, fitted.moved, date),
     result: undefined,
   }));
   try {
-    await host.writeAgentFile(monoId, "MEMORY.md", fitted.text, memory.hash);
+    await host.writeAgentFile(botId, "MEMORY.md", fitted.text, memory.hash);
   } catch (error) {
-    if (!(error instanceof MonoFileConflict)) throw error;
+    if (!(error instanceof BotFileConflict)) throw error;
     return [];
   }
   return fitted.moved;
@@ -646,9 +646,9 @@ async function handleMemory(
   input: Record<string, unknown>,
   host: AgentAppHost,
 ): Promise<unknown> {
-  const monoId = host.monoOf?.(source.id)?.id;
-  if (!monoId) throw new Error("Memory belongs to the Mono's conversation");
-  return handleAgentMemory(monoId, action, input, host);
+  const botId = host.botOf?.(source.id)?.id;
+  if (!botId) throw new Error("Memory belongs to the Bot's conversation");
+  return handleAgentMemory(botId, action, input, host);
 }
 
 export type AgentMemoryHost = Pick<
@@ -658,7 +658,7 @@ export type AgentMemoryHost = Pick<
 
 /** The caller supplies an authorized owner; tool input can never choose it. */
 export async function handleAgentMemory(
-  monoId: string,
+  botId: string,
   action: string,
   input: Record<string, unknown>,
   host: AgentMemoryHost,
@@ -670,7 +670,7 @@ export async function handleAgentMemory(
   const report = async (result: Record<string, unknown>, keep?: string) => {
     const moved =
       path === "MEMORY.md" && keep
-        ? await keepMemoryInBudget(host, monoId, keep, date)
+        ? await keepMemoryInBudget(host, botId, keep, date)
         : [];
     return {
       file: path,
@@ -693,7 +693,7 @@ export async function handleAgentMemory(
               requiredString(input.since, "since", 20),
               host.now?.() ?? new Date(),
             );
-      const files = await host.agentFiles(monoId);
+      const files = await host.agentFiles(botId);
       const paths: AgentFilePath[] = [
         "MEMORY.md",
         ...files.topics.map((topic) => `memory/${topic}.md` as const),
@@ -705,7 +705,7 @@ export async function handleAgentMemory(
           text:
             file === "MEMORY.md"
               ? files.memory
-              : ((await host.readAgentFile(monoId, file)).text ?? ""),
+              : ((await host.readAgentFile(botId, file)).text ?? ""),
         })),
       );
       const hits = searchMemory(texts, query, { since });
@@ -715,11 +715,11 @@ export async function handleAgentMemory(
     }
     case "memory.read": {
       if (path !== "MEMORY.md") {
-        const topic = await host.readAgentFile(monoId, path);
+        const topic = await host.readAgentFile(botId, path);
         if (topic.text == null) throw new Error("No such memory topic");
         return { file: path, text: topic.text };
       }
-      const files = await host.agentFiles(monoId);
+      const files = await host.agentFiles(botId);
       const budget = memoryWithinBudget(files.memory);
       return {
         file: path,
@@ -731,7 +731,7 @@ export async function handleAgentMemory(
     }
     case "memory.add": {
       const entry = memoryEntry(requiredString(input.fact, "fact"), date, until);
-      const added = await editAgentFile(host, monoId, path, (text) => {
+      const added = await editAgentFile(host, botId, path, (text) => {
         const next = addMemoryEntry(text, entry);
         return { text: next.text, result: next.added };
       });
@@ -742,7 +742,7 @@ export async function handleAgentMemory(
     case "memory.replace": {
       const find = requiredString(input.find, "find", 2000);
       const entry = memoryEntry(requiredString(input.fact, "fact"), date, until);
-      await editAgentFile(host, monoId, path, (text) => ({
+      await editAgentFile(host, botId, path, (text) => ({
         text: supersedeMemoryEntry(text, find, entry, date),
         result: undefined,
       }));
@@ -750,7 +750,7 @@ export async function handleAgentMemory(
     }
     case "memory.remove": {
       const find = requiredString(input.find, "find", 2000);
-      const removed = await editAgentFile(host, monoId, path, (text) => {
+      const removed = await editAgentFile(host, botId, path, (text) => {
         const next = removeMemoryEntry(text, find);
         return { text: next.text, result: next.removed };
       });
@@ -787,11 +787,11 @@ async function handleHabits(
 ): Promise<unknown> {
   const habits = host.habits;
   // A habit's own run cannot schedule more runs.
-  const monoId = host.isMono(source.id)
-    ? host.monoOf?.(source.id)?.id
+  const botId = host.isBot(source.id)
+    ? host.botOf?.(source.id)?.id
     : undefined;
-  if (!habits || !monoId)
-    throw new Error("Only a Mono's own conversation can manage its habits");
+  if (!habits || !botId)
+    throw new Error("Only a Bot's own conversation can manage its habits");
   const now = host.now?.() ?? new Date();
   const find = (list: Habit[]) => {
     const id = requiredString(input.id, "id", 128);
@@ -801,14 +801,14 @@ async function handleHabits(
   };
   switch (action) {
     case "habits.list":
-      return { habits: (await habits.load(monoId)).map(habitView) };
+      return { habits: (await habits.load(botId)).map(habitView) };
     case "habits.add": {
       const name = requiredString(input.name, "name", 80);
       const instructions = requiredString(input.instructions, "instructions", 4_000);
       const schedule = habitSchedule(input.schedule);
-      const habit = await habits.update(monoId, (list) => {
+      const habit = await habits.update(botId, (list) => {
         if (list.length >= HABITS_MAX)
-          throw new Error(`A Mono can have at most ${HABITS_MAX} habits`);
+          throw new Error(`A Bot can have at most ${HABITS_MAX} habits`);
         const created = newHabit(
           { name, instructions, schedule },
           now.getTime(),
@@ -837,7 +837,7 @@ async function handleHabits(
       };
       if (input.enabled !== undefined && typeof input.enabled !== "boolean")
         throw new Error("enabled must be true or false");
-      const habit = await habits.update(monoId, (list) => {
+      const habit = await habits.update(botId, (list) => {
         const current = find(list);
         const next: Habit = {
           ...current,
@@ -862,7 +862,7 @@ async function handleHabits(
         throw new Error(
           `That habit is already running (started ${new Date(running).toLocaleTimeString()}); its result will be posted here when it ends`,
         );
-      const habit = await habits.update(monoId, (list) => {
+      const habit = await habits.update(botId, (list) => {
         const next = { ...find(list), runRequested: true };
         return {
           habits: list.map((entry) => (entry.id === next.id ? next : entry)),
@@ -876,7 +876,7 @@ async function handleHabits(
       };
     }
     case "habits.remove": {
-      const removed = await habits.update(monoId, (list) => {
+      const removed = await habits.update(botId, (list) => {
         const habit = find(list);
         return {
           habits: list.filter((entry) => entry.id !== habit.id),
@@ -903,8 +903,8 @@ async function handleArtifacts(
   input: Record<string, unknown>,
   host: AgentAppHost,
 ): Promise<unknown> {
-  if (!(host.isMono(source.id) || host.isHabitRun?.(source.id)))
-    throw new Error("Only a Mono can create or read artifacts");
+  if (!(host.isBot(source.id) || host.isHabitRun?.(source.id)))
+    throw new Error("Only a Bot can create or read artifacts");
   if (!host.artifact) throw new Error("Artifacts are unavailable");
   if (action === "artifacts.list") {
     if (!host.artifacts) throw new Error("Artifacts are unavailable");
@@ -1009,7 +1009,7 @@ function sourcePeerHop(source: Session): number {
   for (let index = source.blocks.length - 1; index >= 0; index -= 1) {
     const block = source.blocks[index];
     if (block.role === "user" && !block.draft) {
-      return block.monoPeerMessage?.hop ?? 0;
+      return block.botPeerMessage?.hop ?? 0;
     }
   }
   return 0;
@@ -1023,36 +1023,36 @@ function sourceCollaborationHop(source: Session, host: AgentAppHost): number {
   return Math.max(sourcePeerHop(source), channelHop);
 }
 
-async function handleMonos(
+async function handleBots(
   source: Session,
   requestId: string,
   action: string,
   input: Record<string, unknown>,
   host: AgentAppHost,
 ): Promise<unknown> {
-  const callerMonoId = host.monoOf?.(source.id)?.id;
-  if (!callerMonoId && !host.workspaceController)
-    throw new Error("Only a Mono can list, read or message peer Monos");
+  const callerBotId = host.botOf?.(source.id)?.id;
+  if (!callerBotId && !host.workspaceController)
+    throw new Error("Only a Bot can list, read or message peer Bots");
   switch (action) {
-    case "monos.list": {
-      const peers = host.monos?.list
-        ? await host.monos.list(callerMonoId)
-        : listMonoPeerSummaries({ excludeMonoId: callerMonoId });
-      return { monos: peers };
+    case "bots.list": {
+      const peers = host.bots?.list
+        ? await host.bots.list(callerBotId)
+        : listBotPeerSummaries({ excludeBotId: callerBotId });
+      return { bots: peers };
     }
-    case "monos.read": {
-      const query = requiredString(input.mono, "mono", 256);
-      const targetMono = host.workspaceController ? resolveUniqueMonoPeer(query) : resolveMonoPeer(query, callerMonoId);
-      if (!targetMono) {
-        if (callerMonoId && resolveMonoPeer(query)?.id === callerMonoId)
-          throw new Error("Use your own conversation history rather than monos.read on yourself");
-        throw new Error("No Mono found matching that name or id; run monos.list");
+    case "bots.read": {
+      const query = requiredString(input.bot, "bot", 256);
+      const targetBot = host.workspaceController ? resolveUniqueBotPeer(query) : resolveBotPeer(query, callerBotId);
+      if (!targetBot) {
+        if (callerBotId && resolveBotPeer(query)?.id === callerBotId)
+          throw new Error("Use your own conversation history rather than bots.read on yourself");
+        throw new Error("No Bot found matching that name or id; run bots.list");
       }
-      const targetSession = host.monos?.session
-        ? await host.monos.session(targetMono.id)
-        : await host.session(targetMono.id);
+      const targetSession = host.bots?.session
+        ? await host.bots.session(targetBot.id)
+        : await host.session(targetBot.id);
       if (!targetSession)
-        throw new Error("That Mono's conversation is unavailable");
+        throw new Error("That Bot's conversation is unavailable");
       const options = {
         before: optionalString(input.before, "before", 256),
         limit: input.limit as number | undefined,
@@ -1062,32 +1062,32 @@ async function handleMonos(
         ? await host.readConversation(targetSession, options)
         : sessionConversationPage(targetSession, options);
       return {
-        mono: {
-          id: targetMono.id,
-          name: monoLook(targetMono).name,
+        bot: {
+          id: targetBot.id,
+          name: botLook(targetBot).name,
           harness: targetSession.harness,
           model: targetSession.model,
         },
         ...page,
       };
     }
-    case "monos.send": {
+    case "bots.send": {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
         throw new Error("Invalid request ID");
       const query = requiredString(input.to, "to", 256);
-      const targetMono = host.workspaceController ? resolveUniqueMonoPeer(query) : resolveMonoPeer(query, callerMonoId);
-      if (!targetMono) {
-        if (callerMonoId && resolveMonoPeer(query)?.id === callerMonoId)
+      const targetBot = host.workspaceController ? resolveUniqueBotPeer(query) : resolveBotPeer(query, callerBotId);
+      if (!targetBot) {
+        if (callerBotId && resolveBotPeer(query)?.id === callerBotId)
           throw new Error("Cannot send a peer message to yourself");
-        throw new Error("No Mono found matching that name or id; run monos.list");
+        throw new Error("No Bot found matching that name or id; run bots.list");
       }
       const message = requiredString(input.message, "message", 60_000);
       if (consumeOperatorCommand(message).matched)
         throw new Error("Peer messages cannot include /operator");
       if (host.workspaceController) {
-        if (input.expectReply !== undefined && input.expectReply !== false) throw new Error("Vox messages are one-way. Use monos.read when the user asks for the reply.");
-        const result = await host.workspaceController.sendMono(targetMono.id, message, `vox-${source.id}-${requestId}`);
-        return { to: { id: targetMono.id, name: monoLook(targetMono).name }, submitted: true, result, note: "Message accepted in the Mono's chat. This is acceptance, not completion." };
+        if (input.expectReply !== undefined && input.expectReply !== false) throw new Error("Vox messages are one-way. Use bots.read when the user asks for the reply.");
+        const result = await host.workspaceController.sendBot(targetBot.id, message, `vox-${source.id}-${requestId}`);
+        return { to: { id: targetBot.id, name: botLook(targetBot).name }, submitted: true, result, note: "Message accepted in the Bot's chat. This is acceptance, not completion." };
       }
       const expectReply = input.expectReply ?? true;
       if (typeof expectReply !== "boolean")
@@ -1098,22 +1098,22 @@ async function handleMonos(
           `Autonomous peer-to-peer hop limit (${MAX_PEER_AUTONOMOUS_HOPS}) reached; report back to the user before continuing.`,
         );
       }
-      if (!host.monos?.send)
-        throw new Error("Peer Mono messaging is unavailable");
+      if (!host.bots?.send)
+        throw new Error("Peer Bot messaging is unavailable");
       const effectiveExpectReply =
         expectReply && nextHop < MAX_PEER_AUTONOMOUS_HOPS;
-      const result = await host.monos.send({
-        fromMonoId: callerMonoId!,
-        toMonoId: targetMono.id,
+      const result = await host.bots.send({
+        fromBotId: callerBotId!,
+        toBotId: targetBot.id,
         text: message,
         requestId: `peer-${source.id}-${requestId}`,
         expectReply: effectiveExpectReply,
         hop: nextHop,
       });
-      const targetName = monoLook(targetMono).name;
+      const targetName = botLook(targetBot).name;
       return {
         to: {
-          id: targetMono.id,
+          id: targetBot.id,
           name: targetName,
         },
         queued: true,
@@ -1129,18 +1129,18 @@ async function handleMonos(
   throw new Error(`Unknown app action: ${action}`);
 }
 
-function formatChannelSummary(channel: MonoChannel, callerMonoId?: string) {
+function formatChannelSummary(channel: BotChannel, callerBotId?: string) {
   return {
     id: channel.id,
     name: channel.name,
     ...(channel.topic ? { topic: channel.topic } : {}),
-    joined: callerMonoId ? channel.memberIds.includes(callerMonoId) : true,
+    joined: callerBotId ? channel.memberIds.includes(callerBotId) : true,
     members: channel.memberIds.map((memberId) => {
-      const mono = findMono(memberId);
-      return mono
+      const bot = findBot(memberId);
+      return bot
         ? {
-            id: mono.id,
-            name: monoLook(mono).name,
+            id: bot.id,
+            name: botLook(bot).name,
           }
         : { id: memberId, name: memberId };
     }),
@@ -1152,18 +1152,18 @@ function formatChannelSummary(channel: MonoChannel, callerMonoId?: string) {
 function resolveMemberQueries(
   raw: unknown,
   fieldName: string,
-  callerMonoId?: string,
+  callerBotId?: string,
 ): string[] {
-  if (raw === undefined) return callerMonoId ? [callerMonoId] : [];
+  if (raw === undefined) return callerBotId ? [callerBotId] : [];
   if (!Array.isArray(raw))
-    throw new Error(`${fieldName} must be an array of Mono names or IDs`);
-  const ids: string[] = callerMonoId ? [callerMonoId] : [];
+    throw new Error(`${fieldName} must be an array of Bot names or IDs`);
+  const ids: string[] = callerBotId ? [callerBotId] : [];
   for (const item of raw) {
     const query = requiredString(item, fieldName, 256);
-    const mono = resolveMonoPeer(query);
-    if (!mono)
-      throw new Error(`No Mono found matching "${query}"; run monos.list`);
-    if (!ids.includes(mono.id)) ids.push(mono.id);
+    const bot = resolveBotPeer(query);
+    if (!bot)
+      throw new Error(`No Bot found matching "${query}"; run bots.list`);
+    if (!ids.includes(bot.id)) ids.push(bot.id);
   }
   return ids;
 }
@@ -1175,13 +1175,13 @@ async function handleChannels(
   input: Record<string, unknown>,
   host: AgentAppHost,
 ): Promise<unknown> {
-  const callerMonoId = host.monoOf?.(source.id)?.id;
-  if (!callerMonoId)
-    throw new Error("Only a Mono can list, read or post in Mono channels");
+  const callerBotId = host.botOf?.(source.id)?.id;
+  if (!callerBotId)
+    throw new Error("Only a Bot can list, read or post in Bot channels");
   switch (action) {
     case "channels.list": {
-      const channels = listMonoChannels().map((channel) =>
-        formatChannelSummary(channel, callerMonoId),
+      const channels = listBotChannels().map((channel) =>
+        formatChannelSummary(channel, callerBotId),
       );
       return { channels };
     }
@@ -1193,7 +1193,7 @@ async function handleChannels(
       const memberIds = resolveMemberQueries(
         input.members,
         "members",
-        callerMonoId,
+        callerBotId,
       );
       const openingMessage = optionalString(input.message, "message", 60_000);
       if (openingMessage && consumeOperatorCommand(openingMessage).matched)
@@ -1207,8 +1207,8 @@ async function handleChannels(
           );
         }
       }
-      const alreadyExisted = Boolean(findMonoChannel(name));
-      const channel = createMonoChannel({
+      const alreadyExisted = Boolean(findBotChannel(name));
+      const channel = createBotChannel({
         name,
         topic,
         memberIds,
@@ -1217,7 +1217,7 @@ async function handleChannels(
       if (openingMessage) {
         const postResult = postChannelMessage({
           channelId: channel.id,
-          from: { kind: "mono", monoId: callerMonoId },
+          from: { kind: "bot", botId: callerBotId },
           text: openingMessage,
           hop: openingHop,
           requestId: `chan-init-${source.id}-${requestId}`,
@@ -1226,22 +1226,22 @@ async function handleChannels(
         await host.channels?.onPosted?.(
           postResult.channel,
           postResult.message,
-          postResult.wakeMonoIds,
+          postResult.wakeBotIds,
           source.id,
         );
         posted = {
           messageId: postResult.message.id,
           hop: openingHop,
-          wokeMonos: postResult.wakeMonoIds.map((id) => {
-            const peer = findMono(id);
-            return peer ? { id: peer.id, name: monoLook(peer).name } : { id, name: id };
+          wokeBots: postResult.wakeBotIds.map((id) => {
+            const peer = findBot(id);
+            return peer ? { id: peer.id, name: botLook(peer).name } : { id, name: id };
           }),
         };
       }
       return {
         channel: formatChannelSummary(
-          findMonoChannel(channel.id) ?? channel,
-          callerMonoId,
+          findBotChannel(channel.id) ?? channel,
+          callerBotId,
         ),
         alreadyExisted,
         ...(posted ? { posted } : {}),
@@ -1249,7 +1249,7 @@ async function handleChannels(
     }
     case "channels.read": {
       const query = requiredString(input.channel, "channel", 256);
-      const channel = findMonoChannel(query);
+      const channel = findBotChannel(query);
       if (!channel)
         throw new Error(
           "No channel found matching that name or id; run channels.list",
@@ -1272,15 +1272,15 @@ async function handleChannels(
       const startIndex = Math.max(0, endIndex - (limit as number));
       const slice = channel.messages.slice(startIndex, endIndex);
       return {
-        channel: formatChannelSummary(channel, callerMonoId),
+        channel: formatChannelSummary(channel, callerBotId),
         messages: slice.map((m) => ({
           id: m.id,
           from:
             m.from.kind === "user"
               ? { kind: "user", name: "User" }
               : {
-                  kind: "mono",
-                  monoId: m.from.monoId,
+                  kind: "bot",
+                  botId: m.from.botId,
                   name: m.from.name,
                 },
           text: m.text,
@@ -1296,7 +1296,7 @@ async function handleChannels(
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
         throw new Error("Invalid request ID");
       const query = requiredString(input.channel, "channel", 256);
-      const channel = findMonoChannel(query);
+      const channel = findBotChannel(query);
       if (!channel)
         throw new Error(
           "No channel found matching that name or id; run channels.list",
@@ -1308,7 +1308,7 @@ async function handleChannels(
         input.to === undefined
           ? undefined
           : resolveMemberQueries(input.to, "to").filter(
-              (id) => id !== callerMonoId,
+              (id) => id !== callerBotId,
             );
       const nextHop = sourceCollaborationHop(source, host) + 1;
       if (nextHop > MAX_CHANNEL_AUTONOMOUS_HOPS) {
@@ -1318,7 +1318,7 @@ async function handleChannels(
       }
       const postResult = postChannelMessage({
         channelId: channel.id,
-        from: { kind: "mono", monoId: callerMonoId },
+        from: { kind: "bot", botId: callerBotId },
         text: message,
         explicitTargetIds,
         hop: nextHop,
@@ -1328,7 +1328,7 @@ async function handleChannels(
       await host.channels?.onPosted?.(
         postResult.channel,
         postResult.message,
-        postResult.wakeMonoIds,
+        postResult.wakeBotIds,
         source.id,
       );
       return {
@@ -1337,10 +1337,10 @@ async function handleChannels(
         messageId: postResult.message.id,
         alreadyPosted: postResult.alreadyPosted,
         hop: nextHop,
-        wokeMonos: postResult.wakeMonoIds.map((id) => {
-          const peer = findMono(id);
+        wokeBots: postResult.wakeBotIds.map((id) => {
+          const peer = findBot(id);
           return peer
-            ? { id: peer.id, name: monoLook(peer).name }
+            ? { id: peer.id, name: botLook(peer).name }
             : { id, name: id };
         }),
       };
@@ -1365,21 +1365,21 @@ export async function handleAgentApp(
     return handleMemory(source, action, input, host);
   if (action.startsWith("habits."))
     return handleHabits(source, action, input, host);
-  if (action.startsWith("monos."))
-    return handleMonos(source, requestId, action, input, host);
+  if (action.startsWith("bots."))
+    return handleBots(source, requestId, action, input, host);
   if (action.startsWith("channels."))
     return handleChannels(source, requestId, action, input, host);
   if (action === "chat.card") {
     if (
       !host.postCard ||
-      !(host.isMono(source.id) || host.isHabitRun?.(source.id))
+      !(host.isBot(source.id) || host.isHabitRun?.(source.id))
     )
-      throw new Error("Only a Mono can put cards in its chat");
+      throw new Error("Only a Bot can put cards in its chat");
     const card = parseCard(input);
     host.postCard(source.id, card);
     return {
       posted: card.type,
-      note: host.isMono(source.id)
+      note: host.isBot(source.id)
         ? "It shows in the chat where you are in your reply."
         : "It goes out with your report, after its text; if you stay quiet, it is dropped.",
     };
@@ -1408,7 +1408,7 @@ export async function handleAgentApp(
     }
     case "sessions.read": {
       const id = requiredString(input.sessionId, "sessionId", 256);
-      const target = id === source.id && host.isMono?.(id)
+      const target = id === source.id && host.isBot?.(id)
         ? source : await projectSession(source, id, input, host);
       const options = {
         before: optionalString(input.before, "before", 256),
@@ -1420,7 +1420,7 @@ export async function handleAgentApp(
     case "sessions.send": {
       const id = requiredString(input.sessionId, "sessionId", 256);
       const prompt = agentPrompt(input.prompt);
-      const notifyMonoId = completionRecipient(source, input, host);
+      const notifyBotId = completionRecipient(source, input, host);
       if (id === source.id)
         throw new Error(
           "Use the current conversation to continue this session",
@@ -1432,13 +1432,13 @@ export async function handleAgentApp(
         id,
         prompt,
         `app-${source.id}-${requestId}`,
-        ...(notifyMonoId ? [notifyMonoId] : []),
+        ...(notifyBotId ? [notifyBotId] : []),
       );
       return {
         sessionId: id,
         submitted: true,
         ...result,
-        ...(notifyMonoId ? { notifyOnComplete: true } : {}),
+        ...(notifyBotId ? { notifyOnComplete: true } : {}),
       };
     }
     case "sessions.draft": {
@@ -1467,7 +1467,7 @@ export async function handleAgentApp(
       const target = await projectSession(source, id, input, host);
       if (
         target.orchestrationLeadId ||
-        host.isMono(id) ||
+        host.isBot(id) ||
         host.isHabitRun?.(id)
       )
         throw new Error("Only regular project sessions can be managed here");
@@ -1488,7 +1488,7 @@ export async function handleAgentApp(
           "request ID must use letters, digits, underscores or hyphens",
         );
       const launch = startLaunch(source, input, host);
-      const notifyMonoId = completionRecipient(source, input, host, true);
+      const notifyBotId = completionRecipient(source, input, host, true);
       if (input.worktreeCwd !== undefined) {
         const chosen = (await host.worktrees(launch.cwd)).worktrees.find(
           (tree) =>
@@ -1520,13 +1520,13 @@ export async function handleAgentApp(
           launch,
           id,
           { direction: placement as SplitDir, besideSessionId },
-          ...(notifyMonoId ? [notifyMonoId] : []),
+          ...(notifyBotId ? [notifyBotId] : []),
         );
-      else if (notifyMonoId) await host.start(launch, id, undefined, notifyMonoId);
+      else if (notifyBotId) await host.start(launch, id, undefined, notifyBotId);
       else await host.start(launch, id);
-      const folder = host.monoOf?.(source.id)?.folder;
+      const folder = host.botOf?.(source.id)?.folder;
       if (folder && !launch.sidebarHidden)
-        fileInMonoFolder(launch.cwd, id, folder);
+        fileInBotFolder(launch.cwd, id, folder);
       return {
         id,
         cwd: launch.cwd,
@@ -1534,7 +1534,7 @@ export async function handleAgentApp(
         model: launch.model,
         submitted: !launch.draft,
         draft: !!launch.draft,
-        ...(notifyMonoId ? { notifyOnComplete: true } : {}),
+        ...(notifyBotId ? { notifyOnComplete: true } : {}),
       };
     }
     case "worktrees.list":

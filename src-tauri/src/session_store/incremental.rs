@@ -61,8 +61,8 @@ pub(crate) fn save(
     ids: &[String],
     expected: Option<i64>,
 ) -> Result<(SessionSummary, i64), String> {
-    if crate::mono_transcript::is_indexed(conn, &session.id).map_err(|e| e.to_string())? {
-        return Err("Mono sessions use their own transcript store".into());
+    if crate::bot_transcript::is_indexed(conn, &session.id).map_err(|e| e.to_string())? {
+        return Err("Bot sessions use their own transcript store".into());
     }
     let changed = session.blocks.as_array().ok_or("blocks must be an array")?;
     let unique: HashSet<&str> = ids.iter().map(String::as_str).collect();

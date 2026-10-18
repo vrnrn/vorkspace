@@ -15,8 +15,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: mocks.openUrl }));
 vi.mock("../../features/inbox/model/githubTasks", () => ({
-  githubMonocodeStarStatus: mocks.starStatus,
-  starMonocodeOnGithub: mocks.star,
+  githubBotcodeStarStatus: mocks.starStatus,
+  starBotcodeOnGithub: mocks.star,
 }));
 
 let container: HTMLDivElement;

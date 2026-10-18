@@ -60,7 +60,7 @@ function delivery() {
   };
 }
 
-describe("pending Mono follow-up delivery", () => {
+describe("pending Bot follow-up delivery", () => {
   it("waits for cold startup and never lets a later message overtake the head", async () => {
     const d = delivery();
     d.patch({ turnReady: false });

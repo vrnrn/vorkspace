@@ -6,9 +6,9 @@ import {
 import { planTurnKey } from "../../../features/sessions/model/plan";
 import { sanitizeSessionForPersist } from "../../../features/sessions/data/sessionStore";
 import {
-  acknowledgeMonoMessage,
-  enqueueMonoMessage,
-} from "../../../features/monos/model/monoMessaging";
+  acknowledgeBotMessage,
+  enqueueBotMessage,
+} from "../../../features/bots/model/botMessaging";
 import { previewFromTool } from "../providers/claude/claudeProtocol";
 import {
   appendUser,
@@ -722,7 +722,7 @@ describe("status blocks", () => {
     expect(session.blocks.map((block) => block.role)).toEqual(["user"]);
   });
 
-  it("keeps the same keyed status across pending and accepted Mono follow-ups", () => {
+  it("keeps the same keyed status across pending and accepted Bot follow-ups", () => {
     let session = appendUser(newSession("pi", "/tmp"), "go");
     session = applyHarnessEvent(session, {
       type: "status",
@@ -730,7 +730,7 @@ describe("status blocks", () => {
       text: "Working",
     });
     const id = session.blocks[1].id;
-    session = enqueueMonoMessage(session, {
+    session = enqueueBotMessage(session, {
       id: "follow-up",
       text: "Check the fallback too",
       attachments: [],
@@ -744,7 +744,7 @@ describe("status blocks", () => {
       session.blocks.filter((block) => block.statusKey === "caveman"),
     ).toEqual([expect.objectContaining({ id, text: "Still working" })]);
 
-    session = acknowledgeMonoMessage(session, session.queuedMessages![0], {
+    session = acknowledgeBotMessage(session, session.queuedMessages![0], {
       mode: "follow-up",
     });
     session = applyHarnessEvent(session, {
@@ -766,19 +766,19 @@ describe("status blocks", () => {
     );
   });
 
-  it("starts a new keyed status after a queued Mono message starts a new turn", () => {
+  it("starts a new keyed status after a queued Bot message starts a new turn", () => {
     let session = appendUser(newSession("pi", "/tmp"), "go");
     session = applyHarnessEvent(session, {
       type: "status",
       key: "caveman",
       text: "First turn",
     });
-    session = enqueueMonoMessage(stopStreaming(session), {
+    session = enqueueBotMessage(stopStreaming(session), {
       id: "next-turn",
       text: "again",
       attachments: [],
     });
-    session = acknowledgeMonoMessage(session, session.queuedMessages![0], {
+    session = acknowledgeBotMessage(session, session.queuedMessages![0], {
       mode: "new-turn",
     });
     session = applyHarnessEvent(session, {

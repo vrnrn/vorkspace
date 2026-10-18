@@ -89,10 +89,33 @@ if [ -n "$source_profile" ]; then
   case "$backup/" in "$destination/"*) fail 'Backup must be outside the recovery destination.' ;; esac
   case "$destination/" in "$backup/"*) fail 'Recovery destination must be outside the backup.' ;; esac
 fi
+legacy_copies=()
+for pair in 'monos:bots' 'codex-monos:codex-bots'; do
+  src_dir="${pair%%:*}"
+  dst_dir="${pair##*:}"
+  if [ -n "$source_profile" ]; then
+    if [ -d "$source_profile/$src_dir" ] && [ ! -L "$source_profile/$src_dir" ] && \
+       [ ! -e "$source_profile/$dst_dir" ] && [ ! -L "$source_profile/$dst_dir" ] && \
+       [ ! -e "$destination/$dst_dir" ] && [ ! -L "$destination/$dst_dir" ]; then
+      legacy_copies+=("$pair")
+    fi
+  else
+    profile="$home/Library/Application Support/com.monocode.desktop"
+    if [ -d "$profile/$src_dir" ] && [ ! -L "$profile/$src_dir" ] && \
+       [ ! -e "$profile/$dst_dir" ] && [ ! -L "$profile/$dst_dir" ]; then
+      legacy_copies+=("$pair")
+    fi
+  fi
+done
 printf 'vorkspace reuses the existing MonoCode profile (com.monocode.desktop).\n'
 printf 'App-owned locations found: %s\nBackup: %s\n' "${#paths[@]}" "$backup"
 for relative in "${paths[@]}"; do printf '  %s\n' "$relative"; done
 [ -z "$source_profile" ] || printf 'Recovery profile: %s -> %s\n' "$source_profile" "$destination"
+for pair in "${legacy_copies[@]}"; do
+  src_dir="${pair%%:*}"
+  dst_dir="${pair##*:}"
+  printf 'Legacy %s copy: %s -> %s\n' "$src_dir" "$src_dir" "$dst_dir"
+done
 if [ "$apply" -eq 0 ]; then printf 'Dry-run only. Use --apply after closing the apps.\n'; exit 0; fi
 # Check process names without printing command lines, tokens, or environment.
 closed() {
@@ -105,6 +128,7 @@ apps_closed() {
 }
 apps_closed
 [ -z "$source_profile" ] || [ -x /usr/bin/perl ] || fail 'Recovery requires macOS /usr/bin/perl.'
+[ "${#legacy_copies[@]}" -eq 0 ] || [ -x /usr/bin/perl ] || fail 'Migration requires macOS /usr/bin/perl.'
 [ "${#paths[@]}" -gt 0 ] || [ -n "$source_profile" ] || fail 'No app-owned data found; nothing to copy.'
 mkdir -p "$(dirname "$backup")"
 mkdir -m 700 "$backup"
@@ -114,15 +138,44 @@ for relative in "${paths[@]}"; do
   else ditto "$home/$relative" "$backup/$relative"; fi
   printf '%s\n' "$relative" >> "$backup/manifest.txt"
 done
+staging_legacy=''
+staging=''
+cleanup() {
+  [ -z "$staging_legacy" ] || rm -rf "$staging_legacy"
+  [ -z "$staging" ] || rm -rf "$staging"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+if [ -z "$source_profile" ]; then
+  profile="$home/Library/Application Support/com.monocode.desktop"
+  for pair in 'monos:bots' 'codex-monos:codex-bots'; do
+    src_dir="${pair%%:*}"
+    dst_dir="${pair##*:}"
+    if [ -d "$profile/$src_dir" ] && [ ! -L "$profile/$src_dir" ] && [ ! -e "$profile/$dst_dir" ] && [ ! -L "$profile/$dst_dir" ]; then
+      staging_legacy=$(mktemp -d "$profile/.vorkspace-$dst_dir.XXXXXXXX")
+      ditto "$profile/$src_dir" "$staging_legacy"
+      chmod 700 "$staging_legacy"
+      apps_closed
+      /usr/bin/perl -e 'rename $ARGV[0], $ARGV[1] or die "Bots destination changed; refusing to overwrite: $!\n"' -- "$staging_legacy" "$profile/$dst_dir"
+      staging_legacy=''
+    fi
+  done
+fi
 if [ -n "$source_profile" ]; then
   # Back up the complete recovery input before publishing the requested copy.
   ditto "$source_profile" "$backup/recovery-source"
   mkdir -p "$(dirname "$destination")"
   staging=$(mktemp -d "$(dirname "$destination")/.vorkspace-recovery.XXXXXXXX")
-  trap '[ -z "$staging" ] || rm -rf "$staging"' EXIT
-  trap 'exit 1' HUP INT TERM
   ditto "$backup/recovery-source" "$staging"
   chmod 700 "$staging"
+  for pair in 'monos:bots' 'codex-monos:codex-bots'; do
+    src_dir="${pair%%:*}"
+    dst_dir="${pair##*:}"
+    if [ -d "$staging/$src_dir" ] && [ ! -L "$staging/$src_dir" ] && [ ! -e "$staging/$dst_dir" ] && [ ! -L "$staging/$dst_dir" ]; then
+      ditto "$staging/$src_dir" "$staging/$dst_dir"
+      chmod 700 "$staging/$dst_dir"
+    fi
+  done
   apps_closed
   # POSIX directory rename refuses a now-populated directory or symlink target.
   /usr/bin/perl -e 'rename $ARGV[0], $ARGV[1] or die "Recovery destination changed; refusing to overwrite: $!\n"' -- "$staging" "$destination"

@@ -1,10 +1,10 @@
 import { handleAgentMemory } from "../../agent-app/model/agentApp";
 import {
-  loadMonoFiles,
+  loadBotFiles,
   memoryWithinBudget,
   readAgentFile,
   writeAgentFile,
-} from "../../monos/model/monoFiles";
+} from "../../bots/model/botFiles";
 import { VOX_MEMORY_ID } from "./conversation";
 import type { VoxRequest } from "./protocol";
 
@@ -21,7 +21,7 @@ export function handleVoxMemory(
   return handleAgentMemory(VOX_MEMORY_ID, request.action, request.input, {
     agentFiles: async (id) => {
       assertCurrent();
-      return loadMonoFiles(id);
+      return loadBotFiles(id);
     },
     readAgentFile: async (id, path) => {
       assertCurrent();

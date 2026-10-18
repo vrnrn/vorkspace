@@ -30,7 +30,7 @@ describe("Operator composer command", () => {
       text: "Explain /operator",
       matched: false,
     });
-    for (const alias of ["/mono", "/monocode"]) {
+    for (const alias of ["/bot", "/monocode"]) {
       expect(consumeOperatorCommand(`${alias} list notes`)).toEqual({
         text: "list notes",
         matched: true,
@@ -58,7 +58,7 @@ describe("Operator composer command", () => {
         { id: "other", role: "user", text: "Explain /operator" },
       ]),
     ).toBe(false);
-    for (const alias of ["/mono", "/monocode"]) {
+    for (const alias of ["/bot", "/monocode"]) {
       const legacy = {
         id: "legacy",
         role: "user" as const,

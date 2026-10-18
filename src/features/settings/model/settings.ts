@@ -26,7 +26,7 @@ export type SettingsSectionId =
   | "providers"
   | "mcp"
   | "skills"
-  | "monos"
+  | "bots"
   | "vox"
   | "inbox"
   | "worktrees"
@@ -125,12 +125,12 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     keywords: "voice microphone mic audio input speech silent",
   },
   {
-    id: "monos",
+    id: "bots",
     group: "agents",
-    label: "Monos",
+    label: "Bots",
     description:
       "The resident agent beside your tabs, and which projects have one.",
-    keywords: "mono resident agent mascot claim project title bar",
+    keywords: "bot bot resident agent mascot claim project title bar",
   },
   {
     id: "inbox",
@@ -224,23 +224,23 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "claude tools connections oauth authenticate login add remove",
   },
   {
-    id: "monos-enabled",
-    section: "monos",
-    label: "Show monos",
-    keywords: "mono agent rail hide",
+    id: "bots-enabled",
+    section: "bots",
+    label: "Show bots",
+    keywords: "bot bot agent rail hide",
   },
   {
-    id: "rail-monos-pinned",
-    section: "monos",
-    label: "Pin monos to the icon rail",
-    keywords: "mono rail compact collapsed icons top divider project picker",
+    id: "rail-bots-pinned",
+    section: "bots",
+    label: "Pin bots to the icon rail",
+    keywords: "bot bot rail compact collapsed icons top divider project picker",
   },
   {
-    id: "mono-list",
-    section: "monos",
-    label: "Your monos",
+    id: "bot-list",
+    section: "bots",
+    label: "Your bots",
     keywords:
-      "mono reset soul name projects sessions sidebar visibility hidden show",
+      "bot bot reset soul name projects sessions sidebar visibility hidden show",
   },
   {
     id: "project-worktrees",
@@ -512,14 +512,14 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "inbox",
     label: "GitLab",
     keywords:
-      "token self-managed merge request connect default mono send chat destination",
+      "token self-managed merge request connect default bot bot send chat destination",
   },
   {
     id: "jira",
     section: "inbox",
     label: "Jira",
     keywords:
-      "atlassian cloud site email api token issues projects connect jql query filter mode default mono send chat destination",
+      "atlassian cloud site email api token issues projects connect jql query filter mode default bot bot send chat destination",
   },
   {
     id: "show-archived",
@@ -840,53 +840,53 @@ export function subscribeNotesEnabled(onStoreChange: () => void) {
     window.removeEventListener(NOTES_ENABLED_CHANGE_EVENT, onStoreChange);
 }
 
-const MONOS_ENABLED_KEY = "monocode.monosEnabled";
+const BOTS_ENABLED_KEY = "monocode.botsEnabled";
 
-export const MONOS_ENABLED_DEFAULT = true;
+export const BOTS_ENABLED_DEFAULT = true;
 
-/** Fired on `window` when monos are shown or hidden. */
-export const MONOS_ENABLED_CHANGE_EVENT = "monocode:monos-enabled-change";
+/** Fired on `window` when bots are shown or hidden. */
+export const BOTS_ENABLED_CHANGE_EVENT = "monocode:bots-enabled-change";
 
-/** Whether monos show in the title bar at all, across every project. */
-export function loadMonosEnabled(): boolean {
-  return readFlag(MONOS_ENABLED_KEY) ?? MONOS_ENABLED_DEFAULT;
+/** Whether bots show in the title bar at all, across every project. */
+export function loadBotsEnabled(): boolean {
+  return readFlag(BOTS_ENABLED_KEY) ?? BOTS_ENABLED_DEFAULT;
 }
 
-export function saveMonosEnabled(value: boolean) {
-  writeFlag(MONOS_ENABLED_KEY, value);
+export function saveBotsEnabled(value: boolean) {
+  writeFlag(BOTS_ENABLED_KEY, value);
   if (typeof window === "undefined") return;
   window.dispatchEvent(
-    new CustomEvent<boolean>(MONOS_ENABLED_CHANGE_EVENT, { detail: value }),
+    new CustomEvent<boolean>(BOTS_ENABLED_CHANGE_EVENT, { detail: value }),
   );
 }
 
-export function subscribeMonosEnabled(onStoreChange: () => void) {
+export function subscribeBotsEnabled(onStoreChange: () => void) {
   if (typeof window === "undefined") return () => {};
-  window.addEventListener(MONOS_ENABLED_CHANGE_EVENT, onStoreChange);
+  window.addEventListener(BOTS_ENABLED_CHANGE_EVENT, onStoreChange);
   return () =>
-    window.removeEventListener(MONOS_ENABLED_CHANGE_EVENT, onStoreChange);
+    window.removeEventListener(BOTS_ENABLED_CHANGE_EVENT, onStoreChange);
 }
 
-const MONO_MENU_BAR_KEY = "monocode.monoMenuBarIcon";
+const BOT_MENU_BAR_KEY = "monocode.botMenuBarIcon";
 
 /** Fired on `window` when the menu bar icon is shown or hidden. */
-export const MONO_MENU_BAR_CHANGE_EVENT = "monocode:mono-menu-bar-change";
+export const BOT_MENU_BAR_CHANGE_EVENT = "monocode:bot-menu-bar-change";
 
-export function loadMonoMenuBarIcon(): boolean {
-  return readFlag(MONO_MENU_BAR_KEY) ?? true;
+export function loadBotMenuBarIcon(): boolean {
+  return readFlag(BOT_MENU_BAR_KEY) ?? true;
 }
 
-export function saveMonoMenuBarIcon(value: boolean) {
-  writeFlag(MONO_MENU_BAR_KEY, value);
+export function saveBotMenuBarIcon(value: boolean) {
+  writeFlag(BOT_MENU_BAR_KEY, value);
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent(MONO_MENU_BAR_CHANGE_EVENT));
+  window.dispatchEvent(new CustomEvent(BOT_MENU_BAR_CHANGE_EVENT));
 }
 
-export function subscribeMonoMenuBarIcon(onStoreChange: () => void) {
+export function subscribeBotMenuBarIcon(onStoreChange: () => void) {
   if (typeof window === "undefined") return () => {};
-  window.addEventListener(MONO_MENU_BAR_CHANGE_EVENT, onStoreChange);
+  window.addEventListener(BOT_MENU_BAR_CHANGE_EVENT, onStoreChange);
   return () =>
-    window.removeEventListener(MONO_MENU_BAR_CHANGE_EVENT, onStoreChange);
+    window.removeEventListener(BOT_MENU_BAR_CHANGE_EVENT, onStoreChange);
 }
 
 const QUICK_COMPOSER_ENABLED_KEY = "monocode.quickComposerEnabled";
@@ -1130,7 +1130,7 @@ export const KEYBINDINGS: KeybindingRow[] = [
     when: "Always",
   },
   { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },
-  { command: "App: Toggle Mono", keys: `${MOD}I`, when: "Project with a mono" },
+  { command: "App: Toggle Bot", keys: `${MOD}I`, when: "Project with a bot" },
   {
     command: "Composer: Toggle Workspace",
     keys: `${MOD}${SHIFT}G`,

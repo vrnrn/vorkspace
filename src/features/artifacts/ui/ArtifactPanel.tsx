@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Copy, PanelRightToggle, Trash2 } from "../../../shared/ui/icons";
 import { copyMessage } from "../../../platform/tauri/clipboard";
 import { IconButton } from "../../../app/shell/TitleBar";
-import { MonoSidebarHeader } from "../../monos/ui/MonoSidebar";
-import { PageHeader } from "../../monos/ui/monoPanelParts";
+import { BotSidebarHeader } from "../../bots/ui/BotSidebar";
+import { PageHeader } from "../../bots/ui/botPanelParts";
 import { artifactLabel, deleteArtifact } from "../artifacts";
 import { ArtifactContent, useArtifact } from "./ArtifactContent";
 
@@ -93,7 +93,7 @@ export function ArtifactReader({
           </IconButton>
         </PageHeader>
       ) : (
-        <MonoSidebarHeader title={label} onClose={onClose} actions={actions} />
+        <BotSidebarHeader title={label} onClose={onClose} actions={actions} />
       )}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-4 py-3">
         {!loaded ? (

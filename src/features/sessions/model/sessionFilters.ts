@@ -12,7 +12,7 @@ export type SessionStatusFilter = {
 
 export type SessionSidebarFilters = {
   showArchived: boolean;
-  /** Narrows a Mono's sessions to launches since deleted. */
+  /** Narrows a Bot's sessions to launches since deleted. */
   showUnavailable?: boolean;
   hiddenHarnesses: HarnessId[];
   time: SessionTimeFilter;

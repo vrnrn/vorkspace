@@ -16,7 +16,7 @@ type Props = {
   x: number;
   y: number;
   harnesses: HarnessId[];
-  /** Offers launches since deleted, which only a Mono's sessions keep. */
+  /** Offers launches since deleted, which only a Bot's sessions keep. */
   unavailableOption?: boolean;
   filters: SessionSidebarFilters;
   onChange: (filters: SessionSidebarFilters) => void;

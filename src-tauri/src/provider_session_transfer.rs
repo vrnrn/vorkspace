@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use tauri::AppHandle;
 
-use crate::codex_mono_store::{
+use crate::codex_bot_store::{
     apply_agent_edges, closed_agent_edges, copy_durable, find_thread, history_base, rollout_dest,
     rollout_matches, state_db, validate_thread_id,
 };

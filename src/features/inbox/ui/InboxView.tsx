@@ -3,7 +3,7 @@ import { summarizePrChecks } from "../model/githubPrChecks";
 import type { CiRepairRequest } from "../model/ciRepair";
 import { TicketContextActions } from "./TicketContextActions";
 import { supportsTicketContext } from "../model/ticketContext";
-import type { PickerMono } from "../../projects/ui/SearchableProjectPicker";
+import type { PickerBot } from "../../projects/ui/SearchableProjectPicker";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Check,
@@ -370,9 +370,9 @@ type Props = {
   onStart?: (
     item: InboxItem,
     body?: string,
-    monoId?: string,
+    botId?: string,
   ) => void | Promise<void>;
-  monos?: readonly PickerMono[];
+  bots?: readonly PickerBot[];
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
   sessions?: readonly SessionSummary[];
@@ -397,7 +397,7 @@ export function InboxView({
   onClose,
   onToggleSidebar,
   onStart,
-  monos,
+  bots,
   repairSessions,
   onRepairChecks,
   sessions = [],
@@ -1176,7 +1176,7 @@ export function InboxView({
               }
               onDiscuss={() => setDiscussionOpen(true)}
               onStart={onStart}
-              monos={monos}
+              bots={bots}
               repairSessions={repairSessions}
               onRepairChecks={onRepairChecks}
               onOpenSession={onOpenSession}
@@ -1416,7 +1416,7 @@ function InboxDetailBody({
   relatedSessions,
   onDiscuss,
   onStart,
-  monos,
+  bots,
   repairSessions,
   onRepairChecks,
   onOpenSession,
@@ -1431,9 +1431,9 @@ function InboxDetailBody({
   onStart?: (
     item: InboxItem,
     body?: string,
-    monoId?: string,
+    botId?: string,
   ) => void | Promise<void>;
-  monos?: readonly PickerMono[];
+  bots?: readonly PickerBot[];
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
@@ -1457,7 +1457,7 @@ function InboxDetailBody({
       relatedSessions={relatedSessions}
       onDiscuss={onDiscuss}
       onStart={onStart}
-      monos={monos}
+      bots={bots}
       repairSessions={repairSessions}
       onRepairChecks={onRepairChecks}
       onOpenSession={onOpenSession}
@@ -2011,7 +2011,7 @@ export function InboxDetail({
   visible = true,
   onDiscuss,
   onStart,
-  monos,
+  bots,
   repairSessions,
   onRepairChecks,
   onOpenSession,
@@ -2028,9 +2028,9 @@ export function InboxDetail({
   onStart?: (
     item: InboxItem,
     body?: string,
-    monoId?: string,
+    botId?: string,
   ) => void | Promise<void>;
-  monos?: readonly PickerMono[];
+  bots?: readonly PickerBot[];
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
@@ -2671,7 +2671,7 @@ export function InboxDetail({
                     item={item}
                     cwd={cwd}
                     projects={projects}
-                    monos={monos}
+                    bots={bots}
                     onStart={onStart}
                   />
                 ) : onStart && item.kind !== "pr" ? (

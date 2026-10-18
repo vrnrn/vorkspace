@@ -423,7 +423,7 @@ fn scan_attachment_collection(
         .collect::<HashSet<_>>();
     let mut referenced = HashSet::new();
     // One streaming pass, independent of candidate count. All durable text
-    // owners participate, including ordinary/queued/saved turns, Mono blocks,
+    // owners participate, including ordinary/queued/saved turns, Bot blocks,
     // receipts, snapshots, notes/artifacts and automation/orchestration state.
     // Scanning raw strings also retains references in malformed recovery rows.
     // New durable tables/columns are covered without a fragile ownership list.
@@ -1036,9 +1036,9 @@ mod tests {
         set_draft(&conn, &write("history", 0, with_file(&history))).unwrap();
         persist_history(&conn, "history", &history, false);
         set_draft(&conn, &write("history", 1, payload(""))).unwrap();
-        let mono = directory.file("mono", Duration::from_secs(7200));
-        persist_history(&conn, "mono", &mono, false);
-        crate::mono_transcript::migrate_transcript(&conn, "mono").unwrap();
+        let bot = directory.file("bot", Duration::from_secs(7200));
+        persist_history(&conn, "bot", &bot, false);
+        crate::bot_transcript::migrate_transcript(&conn, "bot").unwrap();
         let queued = directory.file("queued", Duration::from_secs(7200));
         persist_history(&conn, "queued", &queued, true);
         let receipt = directory.file("receipt", Duration::from_secs(7200));
@@ -1062,7 +1062,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cold_collect(&conn, &directory), 0);
-        for file in [history, mono, queued, receipt, snapshot, note, future] {
+        for file in [history, bot, queued, receipt, snapshot, note, future] {
             assert!(file.exists());
         }
     }

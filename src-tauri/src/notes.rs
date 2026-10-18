@@ -655,7 +655,7 @@ mod tests {
             title: "PR report".into(),
             body: "# Report\n\nDetailed review".into(),
             tags: Vec::new(),
-            source_session_id: Some("mono-1".into()),
+            source_session_id: Some("bot-1".into()),
             source_cwd: None,
             finalize_slug: false,
         };

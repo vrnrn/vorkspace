@@ -2,7 +2,7 @@
 
 Normally, an AI agent in a chat tab only works inside its own conversation and its own project folder. It doesn't know how to click buttons inside Vorkspace itself.
 
-When you start a message with **`/operator`**, you hand that agent a special walkie-talkie (`vorkspace app`) that lets it control Vorkspace for you during that conversation.
+When you start a message with **`/operator`** (or chat with a **Bot**), you hand that agent a special walkie-talkie (`vorkspace app`) that lets it control Vorkspace for you during that conversation.
 
 For the full reference, see [Agent access with /operator](../agent-access.md).
 

@@ -101,20 +101,20 @@ fn composer_draft_saved_turn_discard_preserves_unsent_typing_and_reusable_identi
 }
 
 #[test]
-fn search_keeps_older_mono_messages_available_after_conversion() {
+fn search_keeps_older_bot_messages_available_after_conversion() {
     let store = SessionStore::open_in_memory().unwrap();
     let conn = store.lock_conn().unwrap();
-    let mut mono = sample("mono", "/tmp/a", "Mono");
-    mono.blocks = json!([{ "id":"old", "role":"user", "text":"Archived needle" }, { "id":"answer", "role":"assistant", "text":"Done" }]);
-    upsert_session(&conn, &mono).unwrap();
-    crate::mono_transcript::migrate_transcript(&conn, "mono").unwrap();
+    let mut bot = sample("bot", "/tmp/a", "Bot");
+    bot.blocks = json!([{ "id":"old", "role":"user", "text":"Archived needle" }, { "id":"answer", "role":"assistant", "text":"Done" }]);
+    upsert_session(&conn, &bot).unwrap();
+    crate::bot_transcript::migrate_transcript(&conn, "bot").unwrap();
     let result = search_sessions(
         &conn,
         &SessionSearchOptions {
             query: "Archived needle".into(),
             cwd: None,
             include_archived: false,
-            search_owner: "mono-search".into(),
+            search_owner: "bot-search".into(),
         },
     )
     .unwrap();

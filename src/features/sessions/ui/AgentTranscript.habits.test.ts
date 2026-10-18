@@ -8,11 +8,11 @@ import {
   stopStreaming,
 } from "../../../integrations/harness/core/apply";
 import { copyMessage } from "../../../platform/tauri/clipboard";
-import { acknowledgeMonoMessage } from "../../monos/model/monoMessaging";
+import { acknowledgeBotMessage } from "../../bots/model/botMessaging";
 import {
-  enqueueMonoSessionCompletion,
-  monoSessionCompletionMessage,
-} from "../../monos/model/monoSessionCompletion";
+  enqueueBotSessionCompletion,
+  botSessionCompletionMessage,
+} from "../../bots/model/botSessionCompletion";
 import { sanitizeSessionForPersist } from "../data/sessionStore";
 import { newSession, type Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
@@ -30,7 +30,7 @@ const report: Block = {
   id: "report",
   role: "assistant",
   text: "CI failed on main.",
-  monoHabit: { id: "habit", name: "Morning check", at: postedAt },
+  botHabit: { id: "habit", name: "Morning check", at: postedAt },
 };
 
 beforeEach(() => {
@@ -104,7 +104,7 @@ it("gives a standalone habit report its mascot, name, posting time and response 
 });
 
 it.each(["current", "older"])(
-  "continues the Mono's reply with a delivered completion report in %s saved chats",
+  "continues the Bot's reply with a delivered completion report in %s saved chats",
   async (version) => {
     let session = appendUser(newSession("codex", "/tmp"), "Review the API");
     session = applyHarnessEvent(session, {
@@ -112,20 +112,20 @@ it.each(["current", "older"])(
       text: "I have started the review. I will let you know when it finishes.",
     });
     session = stopStreaming(session);
-    const notification = monoSessionCompletionMessage({
+    const notification = botSessionCompletionMessage({
       requestId: "review",
       sessionId: "worker",
       project: "/tmp",
       prompt: "Review the API",
       outcome: { status: "completed", text: "The API fix passed all tests." },
     });
-    session = enqueueMonoSessionCompletion(session, notification);
-    session = acknowledgeMonoMessage(session, notification, {
+    session = enqueueBotSessionCompletion(session, notification);
+    session = acknowledgeBotMessage(session, notification, {
       mode: "new-turn",
       cards: {
         internal: true,
         appRequestId: notification.id,
-        monoSessionCompletion: notification.monoSessionCompletion,
+        botSessionCompletion: notification.botSessionCompletion,
       },
     });
     session = applyHarnessEvent(session, {
@@ -138,7 +138,7 @@ it.each(["current", "older"])(
         ...session,
         blocks: session.blocks.map((block) =>
           block.id === notification.id
-            ? { ...block, monoSessionCompletion: undefined }
+            ? { ...block, botSessionCompletion: undefined }
             : block,
         ),
       };
@@ -149,7 +149,7 @@ it.each(["current", "older"])(
     expect(turns[0].textContent).toContain("I have started the review.");
     expect(turns[0].textContent).toContain("The API fix passed all tests.");
     expect(
-      turns[0].querySelectorAll("[data-mono-work]"),
+      turns[0].querySelectorAll("[data-bot-work]"),
     ).toHaveLength(1);
     expect(container.textContent).not.toContain(notification.text);
     expect(session.queuedMessages).toBeUndefined();
@@ -213,15 +213,15 @@ it.each(["current", "older"])(
       expect(previousTurn.textContent).toContain("Captain Awesome");
       expect(previousTurn.textContent).not.toContain("worked for");
     };
-    const notification = monoSessionCompletionMessage({
+    const notification = botSessionCompletionMessage({
       requestId: "review",
       sessionId: "worker",
       project: "/tmp",
       prompt: "Quick review",
       outcome: { status: "completed", text: "The checkout is clean." },
     });
-    session = acknowledgeMonoMessage(
-      enqueueMonoSessionCompletion(session, notification),
+    session = acknowledgeBotMessage(
+      enqueueBotSessionCompletion(session, notification),
       notification,
       {
         mode: "new-turn",
@@ -229,7 +229,7 @@ it.each(["current", "older"])(
           internal: true,
           appRequestId: notification.id,
           ...(version === "current"
-            ? { monoSessionCompletion: notification.monoSessionCompletion }
+            ? { botSessionCompletion: notification.botSessionCompletion }
             : {}),
         },
       },
@@ -244,7 +244,7 @@ it.each(["current", "older"])(
       completionTurn.querySelector('[role="status"]')?.textContent,
     ).toContain("Thinking…");
     expect(
-      completionTurn.querySelector("[data-mono-work]")?.textContent,
+      completionTurn.querySelector("[data-bot-work]")?.textContent,
     ).toContain("Captain Awesome");
     const events = [
       { type: "reasoning.delta", text: "Checking the session report" },
@@ -308,7 +308,7 @@ it("keeps a posted report actionable while the conversation is still running", a
   );
   const chat = container.querySelector('[data-transcript-turn="user"]')!;
   const habit = container.querySelector('[data-transcript-turn="report"]')!;
-  expect(chat.querySelector("[data-mono-work]")?.textContent).toContain(
+  expect(chat.querySelector("[data-bot-work]")?.textContent).toContain(
     "Captain Awesome",
   );
   expect(chat.querySelector('[role="status"]')?.textContent).toContain(
@@ -325,7 +325,7 @@ it("keeps a posted report actionable while the conversation is still running", a
 });
 
 it("renders the identity and actions for older standalone reports missing their habit tag", () => {
-  const { monoHabit: _habit, ...legacy } = report;
+  const { botHabit: _habit, ...legacy } = report;
   render([legacy]);
   expect(container.querySelector(".pixel-mascot")).not.toBeNull();
   expect(container.textContent).toContain("Captain Awesome");

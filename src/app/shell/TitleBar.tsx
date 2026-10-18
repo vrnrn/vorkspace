@@ -44,12 +44,12 @@ import { TerminalSpinner } from "../../features/sessions/ui/TerminalSpinner";
 import { TabLabel } from "../../shared/ui/TabLabel";
 import { WindowControls } from "./WindowControls";
 import { PixelMascot } from "../../features/projects/ui/PixelMascot";
-import { MonoRailMascot } from "../../features/monos/ui/MonoRailMascot";
+import { BotRailMascot } from "../../features/bots/ui/BotRailMascot";
 import {
-  MONO_STATUS_LABEL,
-  type MonoLook,
-  type MonoState,
-} from "../../features/monos/model/mono";
+  BOT_STATUS_LABEL,
+  type BotLook,
+  type BotState,
+} from "../../features/bots/model/bot";
 import { IS_MAC, IS_WIN, MOD, SHIFT } from "../../platform/tauri/platform";
 import { useTrafficLightsVisible } from "../../platform/tauri/useTrafficLightsVisible";
 import type { RecentProject } from "../../features/projects/model/recents";
@@ -78,8 +78,8 @@ const APP_VIEW_ICONS = {
 export type Tab = {
   id: string;
   appView?: AppView;
-  /** A Mono open as a tab; its name is the title. */
-  mono?: { mascot: string; color: string; status: MonoState["status"] };
+  /** A Bot open as a tab; its name is the title. */
+  bot?: { mascot: string; color: string; status: BotState["status"] };
   /** Project folder name, e.g. `agent-terminal`. */
   project: string;
   /** Focused conversation title; empty for a fresh session. */
@@ -116,20 +116,20 @@ type Props = {
   activeId: string;
   cwd: string;
   /**
-   * The Mono filling the main area. It takes the tabs' place, and nothing
+   * The Bot filling the main area. It takes the tabs' place, and nothing
    * project-scoped belongs beside it.
    */
-  mono?: { look: MonoLook; state: MonoState };
+  bot?: { look: BotLook; state: BotState };
   /**
    * Takes the tabs' place, as the inset layout's Settings does with its
    * breadcrumb and actions.
    */
   content?: ReactNode;
-  /** Shows or hides the Mono's overview panel beside its chat. */
-  onToggleMonoOverview?: () => void;
-  monoOverviewOpen?: boolean;
-  onOpenMonoSettings?: () => void;
-  /** The full-height Mono panel owns these while it is open. */
+  /** Shows or hides the Bot's overview panel beside its chat. */
+  onToggleBotOverview?: () => void;
+  botOverviewOpen?: boolean;
+  onOpenBotSettings?: () => void;
+  /** The full-height Bot panel owns these while it is open. */
   hideWindowControls?: boolean;
   voxControl?: ReactNode;
   projectRailOpen?: boolean;
@@ -189,7 +189,7 @@ export function tabCopy(tab: Tab): {
     const headline = APP_VIEW_LABELS[tab.appView];
     return { headline, meta: "", tooltip: headline };
   }
-  if (tab.mono) return { headline: tab.title, meta: "", tooltip: tab.title };
+  if (tab.bot) return { headline: tab.title, meta: "", tooltip: tab.title };
   const project = tab.project.trim() || "~";
   const conversation = tab.title.trim();
   const file = tab.files[0] ?? "";
@@ -417,11 +417,11 @@ function TitleTabItem({
       >
         {AppViewIcon ? (
           <AppViewIcon className="size-3.5 shrink-0" strokeWidth={1.75} />
-        ) : tab.mono ? (
-          <MonoRailMascot
-            name={tab.mono.mascot}
-            color={tab.mono.color}
-            status={tab.mono.status}
+        ) : tab.bot ? (
+          <BotRailMascot
+            name={tab.bot.mascot}
+            color={tab.bot.color}
+            status={tab.bot.status}
             className="size-3.5 shrink-0"
           />
         ) : tab.harnesses.length > 0 ? (
@@ -671,8 +671,8 @@ export function TabVisitNav({
   );
 }
 
-/** A Mono's overview toggle and settings, beside its conversation. */
-export function MonoViewActions({
+/** A Bot's overview toggle and settings, beside its conversation. */
+export function BotViewActions({
   name,
   overviewOpen,
   onToggleOverview,
@@ -745,11 +745,11 @@ function TitleBarComponent({
   tabs,
   activeId,
   cwd,
-  mono,
+  bot,
   content,
-  onToggleMonoOverview,
-  monoOverviewOpen = false,
-  onOpenMonoSettings,
+  onToggleBotOverview,
+  botOverviewOpen = false,
+  onOpenBotSettings,
   hideWindowControls = false,
   voxControl,
   projectRailOpen = true,
@@ -790,7 +790,7 @@ function TitleBarComponent({
   const paneDropArmed = useRef(false);
   const appTabIds = useRef(new Set<string>());
   appTabIds.current = new Set(
-    tabs.filter((tab) => tab.appView || tab.mono).map((tab) => tab.id),
+    tabs.filter((tab) => tab.appView || tab.bot).map((tab) => tab.id),
   );
   const externalTabDrop = useMemo<
     ReorderExternalDrop<string> | undefined
@@ -903,7 +903,7 @@ function TitleBarComponent({
     const activeName = activeTab
       ? activeTab.appView
         ? APP_VIEW_LABELS[activeTab.appView]
-        : activeTab.mono
+        : activeTab.bot
           ? activeTab.title
           : activeTab.files[0]
             ? basename(activeTab.files[0])
@@ -1046,19 +1046,19 @@ function TitleBarComponent({
     !inset && railClosed && Boolean(onSelectProject) && !showCurrentProject;
   const showTrailingActions =
     !inset &&
-    !mono &&
+    !bot &&
     projectless &&
     railClosed &&
     Boolean(onOpenInbox || onOpenNotes || onOpenSettings);
   const showRightPanelToggle = inset && Boolean(onToggleRightPanel);
-  // A Mono's own overview holds its changes; app views have none beside them.
-  const rightPanelOff = !!mono || rightPanelUnavailable;
+  // A Bot's own overview holds its changes; app views have none beside them.
+  const rightPanelOff = !!bot || rightPanelUnavailable;
   const changesDot = rightPanelDot && !rightPanelOff;
   const trailingControls =
     voxControl ||
     showTrailingActions ||
     showRightPanelToggle ||
-    (mono && (onToggleMonoOverview || onOpenMonoSettings)) ||
+    (bot && (onToggleBotOverview || onOpenBotSettings)) ||
     (!IS_MAC && !hideWindowControls) ? (
       <div className="flex h-full shrink-0 items-stretch">
         {voxControl ? (
@@ -1093,12 +1093,12 @@ function TitleBarComponent({
             </IconButton>
           </div>
         ) : null}
-        {mono && (onToggleMonoOverview || onOpenMonoSettings) ? (
-          <MonoViewActions
-            name={mono.look.name}
-            overviewOpen={monoOverviewOpen}
-            onToggleOverview={onToggleMonoOverview}
-            onOpenSettings={onOpenMonoSettings}
+        {bot && (onToggleBotOverview || onOpenBotSettings) ? (
+          <BotViewActions
+            name={bot.look.name}
+            overviewOpen={botOverviewOpen}
+            onToggleOverview={onToggleBotOverview}
+            onOpenSettings={onOpenBotSettings}
             className="px-3"
           />
         ) : null}
@@ -1133,7 +1133,7 @@ function TitleBarComponent({
       data-inset-title-bar={inset || undefined}
       className={`flex h-10 shrink-0 select-none items-stretch${
         inset ? "" : " border-b border-stroke"
-      }${compactRail && !mono && !inset ? " body-glass" : ""}`}
+      }${compactRail && !bot && !inset ? " body-glass" : ""}`}
       data-tauri-drag-region="deep"
     >
       {inset ? (
@@ -1173,9 +1173,9 @@ function TitleBarComponent({
       ) : compactRail ? (
         <div
           data-compact-title-nav
-          // A full Mono's title bar starts beside the 48px compact rail.
+          // A full Bot's title bar starts beside the 48px compact rail.
           className={`flex shrink-0 items-center ${
-            trafficLightsVisible ? (mono ? "pl-[22px]" : "pl-[70px]") : "pl-1.5"
+            trafficLightsVisible ? (bot ? "pl-[22px]" : "pl-[70px]") : "pl-1.5"
           }`}
         >
           <TabVisitNav
@@ -1237,8 +1237,8 @@ function TitleBarComponent({
       >
         {content ? (
           content
-        ) : mono && !inset ? (
-          <MonoTitle look={mono.look} state={mono.state} />
+        ) : bot && !inset ? (
+          <BotTitle look={bot.look} state={bot.state} />
         ) : (
           <div
             className="relative h-full min-w-0 flex-1 overflow-hidden"
@@ -1374,11 +1374,11 @@ function TitleBarComponent({
 
 export const TitleBar = memo(TitleBarComponent);
 
-/** In a Mono's view the title bar names it and shows its status. */
-function MonoTitle({ look, state }: { look: MonoLook; state: MonoState }) {
+/** In a Bot's view the title bar names it and shows its status. */
+function BotTitle({ look, state }: { look: BotLook; state: BotState }) {
   return (
     <div
-      data-mono-title
+      data-bot-title
       className="flex min-w-0 flex-1 items-center gap-2 px-4"
     >
       <PixelMascot
@@ -1392,12 +1392,12 @@ function MonoTitle({ look, state }: { look: MonoLook; state: MonoState }) {
         {look.name}
       </span>
       <span
-        data-mono-status={state.status}
+        data-bot-status={state.status}
         className={`shrink-0 text-[12px] ${
           state.status === "needs-you" ? "text-accent" : "text-content/45"
         }`}
       >
-        {MONO_STATUS_LABEL[state.status]}
+        {BOT_STATUS_LABEL[state.status]}
       </span>
     </div>
   );

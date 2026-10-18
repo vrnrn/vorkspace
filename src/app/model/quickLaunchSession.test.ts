@@ -173,8 +173,8 @@ it("leaves the selected project, recents, and active tab unchanged for backgroun
 
 it("starts a session without a workspace tab when asked, even if revealed", async () => {
   const { state, oldTab, request, commit, workspace } = setup(true);
-  await acceptQuickLaunch(request, "mono-launch", workspace, undefined, false);
-  expect(state.sessions.map((session) => session.id)).toContain("mono-launch");
+  await acceptQuickLaunch(request, "bot-launch", workspace, undefined, false);
+  expect(state.sessions.map((session) => session.id)).toContain("bot-launch");
   expect(commit).toHaveBeenCalledOnce();
   expect(workspace.appendTab).not.toHaveBeenCalled();
   expect(state.tabs).toEqual([oldTab]);

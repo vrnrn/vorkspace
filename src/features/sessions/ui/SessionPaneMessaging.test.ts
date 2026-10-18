@@ -36,10 +36,10 @@ vi.mock("../../orchestration/model/orchestration", async (original) => ({
     hydrate: async () => {},
   },
 }));
-vi.mock("../../monos/model/mono", async (original) => ({
-  ...(await original<typeof import("../../monos/model/mono")>()),
-  monoForSession: () => ({
-    id: "mono",
+vi.mock("../../bots/model/bot", async (original) => ({
+  ...(await original<typeof import("../../bots/model/bot")>()),
+  botForSession: () => ({
+    id: "bot",
     sessionId: "chat",
     name: "Captain",
     mascot: "cat",
@@ -194,7 +194,7 @@ it("keeps the same input, current draft and attachments when a question appears 
   ]);
 });
 
-it("routes transcript quotes to the Mono draft", () => {
+it("routes transcript quotes to the Bot draft", () => {
   render(props());
   const quote = [
     ...container.querySelectorAll<HTMLButtonElement>("button"),
@@ -203,7 +203,7 @@ it("routes transcript quotes to the Mono draft", () => {
   expect(field().value).toBe("> Selected response\n\n");
 });
 
-it("shows usage recovery above the Mono input and routes the reset option", () => {
+it("shows usage recovery above the Bot input and routes the reset option", () => {
   setComposerDraft("chat", "Keep my draft");
   const pane = props();
   pane.session.usageLimit = { resetsAt: Date.now() + 3600_000 };
@@ -251,7 +251,7 @@ it("shows pending messages in the conversation and routes retry from the bubble"
   expect(field()).not.toBeNull();
 });
 
-it("keeps a completion notification queued beside the Mono's composer", () => {
+it("keeps a completion notification queued beside the Bot's composer", () => {
   const pane = props();
   pane.session = {
     ...pane.session,
@@ -261,7 +261,7 @@ it("keeps a completion notification queued beside the Mono's composer", () => {
         id: "notification",
         text: "Hidden completion review prompt",
         attachments: [],
-        monoSessionCompletion: {
+        botSessionCompletion: {
           sessionId: "worker",
           title: "API fix",
           status: "completed",
@@ -283,7 +283,7 @@ it("keeps ready completion notifications out of the composer while they deliver"
     id: "notification",
     text: "Hidden completion review prompt",
     attachments: [],
-    monoSessionCompletion: {
+    botSessionCompletion: {
       sessionId: "worker",
       title: "API fix",
       status: "completed" as const,
@@ -320,7 +320,7 @@ it("keeps failed completion notifications visible and lets the user retry them",
         text: "Hidden completion review prompt",
         attachments: [],
         error: "Connection lost",
-        monoSessionCompletion: {
+        botSessionCompletion: {
           sessionId: "worker",
           title: "API fix",
           status: "completed",

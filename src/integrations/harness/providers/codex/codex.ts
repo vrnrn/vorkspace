@@ -13,7 +13,7 @@ import {
 import {
   killChild,
   resolveCodexBinary,
-  restoreMonoCodexAgentState,
+  restoreBotCodexAgentState,
   spawnChild,
   unwatchChild,
   watchChild,
@@ -48,7 +48,7 @@ import {
 } from "./codexQuestions";
 import { codexMcpConfirmation } from "./codexElicitation";
 import { snapshotRemainder } from "../../core/streamText";
-import { prepareCodexMonoContext } from "./codexStore";
+import { prepareCodexBotContext } from "./codexStore";
 import type {
   ApprovalDecision,
   CompactContextInput,
@@ -93,7 +93,7 @@ type Live = {
   /** Thread-level network policy used when this app-server opened the thread. */
   controlsAgents: boolean;
   ephemeral: boolean;
-  codexStore?: "mono";
+  codexStore?: "bot";
   runtimeMode: RuntimeMode;
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
@@ -142,7 +142,7 @@ type Resume = {
   cwd: string;
   providerAccountId?: string;
   ephemeral?: boolean;
-  codexStore?: "mono";
+  codexStore?: "bot";
 };
 
 const liveByThread = new Map<string, Live>();
@@ -473,14 +473,14 @@ export function bindCodexSession(
   });
 }
 
-export async function migrateMonoCodexSession(input: {
+export async function migrateBotCodexSession(input: {
   sessionId: string;
   threadId: string;
   cwd: string;
   providerAccountId?: string;
 }): Promise<void> {
   const { path } = await resolveCodexBinaryImpl();
-  await prepareCodexMonoContext({ ...input, path, migrationOnly: true });
+  await prepareCodexBotContext({ ...input, path, migrationOnly: true });
 }
 
 /** Ephemeral context exists only while its app-server is alive. */
@@ -554,8 +554,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 
   const { path } = await resolveCodexBinaryImpl();
   const store =
-    codexStore === "mono"
-      ? await prepareCodexMonoContext({
+    codexStore === "bot"
+      ? await prepareCodexBotContext({
           sessionId: input.sessionId,
           path,
           cwd: input.cwd,
@@ -675,7 +675,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     });
     await rpc.notify("initialized", undefined);
     if (store?.hasThread && canResume && resume) {
-      await restoreMonoCodexAgentState(
+      await restoreBotCodexAgentState(
         input.providerAccountId,
         resume.threadId,
       );
@@ -717,7 +717,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       } catch (error) {
         if (store?.hasThread)
           throw new Error(
-            "The saved Mono Codex context could not be resumed. Retry to keep its saved context.",
+            "The saved Bot Codex context could not be resumed. Retry to keep its saved context.",
           );
         if (!isRecoverableThreadResumeError(error)) throw error;
         threadId = undefined;

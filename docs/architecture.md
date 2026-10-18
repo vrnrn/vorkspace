@@ -14,14 +14,14 @@ Vorkspace operates across three execution boundaries:
 +-----------------------------------------------------------------------+
 | Desktop Webviews (React 19 + TypeScript)                              |
 |  - Main Workspace (index.html -> src/main.tsx -> src/app/App.tsx)     |
-|  - Floating Mono Companion (mono-chat.html)                           |
+|  - Floating Bot Companion (bot-chat.html)                            |
 |  - Quick Composer & Quick Git Popup (quick-composer.html)             |
 +-----------------------------------+-----------------------------------+
                                     | Tauri v2 IPC / Custom Protocols
 +-----------------------------------v-----------------------------------+
 | Native Rust Core (src-tauri/src/)                                     |
 |  - Process & PTY Supervisor (harness.rs, pty.rs, background_work.rs)  |
-|  - SQLite & Account Stores (session_store.rs, codex_mono_store.rs,    |
+|  - SQLite & Account Stores (session_store.rs, codex_bot_store.rs,    |
 |    provider_session_transfer.rs)                                      |
 |  - Git, Worktrees & Checkpoints (fs.rs, worktrees.rs, checkpoint.rs)  |
 |  - Local Loopback Control Server (control.rs, control_cli.rs)         |
@@ -43,7 +43,7 @@ Vorkspace operates across three execution boundaries:
 Before initializing the GUI, the native `vorkspace` binary inspects its arguments and environment to support four operating modes:
 1. **`SSH_ASKPASS` Helper (`ssh_askpass::maybe_run`)**: When invoked by OpenSSH during remote connection setup, connects to an ephemeral loopback socket using a one-time token to display passphrase/host-key prompts in Settings.
 2. **Orchestration Control CLI (`vorkspace control <action>`)**: JSON CLI injected into orchestration lead sessions (`control_cli.rs`) to spawn, inspect, and gate worker sessions.
-3. **Operator App CLI (`vorkspace app <action>`)**: JSON CLI injected into `/operator`-enabled sessions and Monos to manage sessions, split panes, create worktrees, and read/write notes.
+3. **Operator App CLI (`vorkspace app <action>`)**: JSON CLI injected into `/operator`-enabled sessions and Bots to manage sessions, split panes, create worktrees, and read/write notes.
 4. **Desktop GUI (`monocode_lib::run`)**: Boots the Tauri v2 application, native menus, system tray, custom URI schemes (`monoartifact://`, `vorkspace://`), and SQLite stores.
 
 ---
@@ -55,9 +55,9 @@ The frontend is organized into strict layers:
 - **`src/features/`**: Domain modules containing `model/`, `ui/`, `hooks/`, and `data/`:
   - `sessions`: Transcript rendering (`AgentTranscript`, `AgentMarkdown`), measured history virtualization (`useMeasuredHistory`), turn checkpoints, differential persistence, and inline usage-limit account switching (`UsageLimitAccountPicker`, `usageLimit.ts`).
   - `workspace`: Binary-tree split-pane layout (`layout.ts`), unified title-bar workspace/view tabs (`appViewTabs.ts`), kept-mounted view containers (`AppViewSurface.tsx` using `inert` to preserve drafts and selection across tab switches), and workspace snapshot serialization.
-  - `projects`: Recent project management (`recents.ts`) and project scoping (`projectScope.ts`, scoping Inbox, Notes, Automations, and individual Mono tabs to the active project while keeping project-less items globally visible).
+  - `projects`: Recent project management (`recents.ts`) and project scoping (`projectScope.ts`, scoping Inbox, Notes, Automations, and individual Bot tabs to the active project while keeping project-less items globally visible).
   - `settings`: Appearance controls (`appearance.ts`) and 11 dual-scheme dark/light **Workspace Themes** (`workspaceThemes.ts`—`default`, `harbor`, `moss`, `ember`, `orchid`, `tidepool`, `dune`, `rosewood`, `glacier`, `arcade`, `ink`) that drive `--wt-*` CSS variables, `--syntax-*` code tokens, and native macOS window glass tints (`src-tauri/src/macos.rs`).
-  - `monos`: Persistent cross-project agents backed by `SOUL.md` and `MEMORY.md`, scheduled **Habits** (`monoHabits.ts`), multi-agent **Channels** (`monoChannels.ts`), and usage-limit account recovery (`monoUsageLimit.ts`).
+  - `bots`: Persistent cross-project **Bots** backed by `SOUL.md` and `MEMORY.md`, scheduled **Habits** (`botHabits.ts`), multi-Bot **Channels** (`botChannels.ts`), and usage-limit account recovery (`botUsageLimit.ts`).
   - `orchestration`: Lead/worker multi-agent task decomposition across isolated worktrees with write-scope enforcement.
   - `automations`: Scheduled cron/calendar tasks and polling triggers (GitHub, GitLab, Jira).
   - `inbox`: Unified triage center for GitHub PRs/issues, GitLab MRs/issues, and Jira tickets, including one-click **CI Auto-Repair** (`ciRepair.ts`).
@@ -81,13 +81,13 @@ Streaming token deltas at 60+ Hz across multiple concurrent agents can easily ov
 
 All durable local state lives in the application data directory (`com.monocode.desktop` in production; `com.vrnrn.vorkspace.development` in `npm run tauri dev`):
 
-- **SQLite (`monocode.db`)**: Managed by `session_store.rs` and `codex_mono_store.rs` in WAL mode (`PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`) with a serialized write connection and a pool of read-only connections (`PRAGMA query_only = ON;`).
+- **SQLite (`monocode.db`)**: Managed by `session_store.rs` and `codex_bot_store.rs` in WAL mode (`PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`) with a serialized write connection and a pool of read-only connections (`PRAGMA query_only = ON;`).
 - **Incremental Block Storage (`session_store/incremental.rs`)**: Ordinary sessions persist individual message/tool blocks in `ordinary_blocks` rather than rewriting entire multi-megabyte JSON transcripts on every keystroke or turn. Frontend `WeakSet` tracking (`ordinarySaved`) ensures only dirty blocks are transmitted over IPC.
 - **Deferred Tool Output (`tool_detail.rs`)**: Tool outputs exceeding 512 bytes are stripped from in-memory session snapshots and replaced with `detailOmitted: true` markers. The full payload remains in SQLite and is loaded on demand when the user expands the tool row.
 - **Durable Submission Receipts (`local_submissions.rs`)**: Before dispatching a user prompt to a local CLI, a durable receipt is reserved on disk (`reserve` → `dispatch` → `settle`), preventing duplicate prompt execution or silent message loss across crashes.
-- **Cross-Account Native Session Transfer (`provider_session_transfer.rs`, `codex_mono_store.rs`)**: When a Claude Code or Codex conversation hits an account usage limit, `transferHarnessSessionAccount` (`src/integrations/harness/core/registry.ts`) stops the active process, copies all native provider state to the newly selected account via `copy_durable` (flushed temp file + atomic rename), and rebinds the session:
+- **Cross-Account Native Session Transfer (`provider_session_transfer.rs`, `codex_bot_store.rs`)**: When a Claude Code or Codex conversation hits an account usage limit, `transferHarnessSessionAccount` (`src/integrations/harness/core/registry.ts`) stops the active process, copies all native provider state to the newly selected account via `copy_durable` (flushed temp file + atomic rename), and rebinds the session:
   - **Claude Code**: Copies subagent transcripts (`projects/<cwd>/<id>/`) and edit checkpoints (`file-history/<id>/`) first, then publishes the root transcript (`projects/<cwd>/<id>.jsonl`) last so `--resume` never sees a partial copy.
-  - **Codex**: Traverses spawned descendant threads (`thread_spawn_edges`), `.zst` compressed/plain JSONL sibling tails, and required inherited `history_base` rollouts across `sessions/` and `archived_sessions/`, commits closed subagent edges (`apply_agent_edges`) to the destination SQLite index first, and copies the root rollout last. When a custom shared `CODEX_SQLITE_HOME` is active or native state is unavailable (such as on remote hosts or private Mono stores), Vorkspace falls back to a structured transcript handoff (`accountContinuePrompt`).
+  - **Codex**: Traverses spawned descendant threads (`thread_spawn_edges`), `.zst` compressed/plain JSONL sibling tails, and required inherited `history_base` rollouts across `sessions/` and `archived_sessions/`, commits closed subagent edges (`apply_agent_edges`) to the destination SQLite index first, and copies the root rollout last. When a custom shared `CODEX_SQLITE_HOME` is active or native state is unavailable (such as on remote hosts or private Bot stores), Vorkspace falls back to a structured transcript handoff (`accountContinuePrompt`).
 
 ---
 

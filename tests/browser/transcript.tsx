@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AgentTranscript } from "../../src/features/sessions/ui/AgentTranscript";
-import { MonoComposer } from "../../src/features/monos/ui/MonoComposer";
+import { BotComposer } from "../../src/features/bots/ui/BotComposer";
 import { MessageQueue } from "../../src/features/sessions/ui/MessageQueue";
-import { visibleMonoCompletionMessages } from "../../src/features/monos/model/monoMessaging";
+import { visibleBotCompletionMessages } from "../../src/features/bots/model/botMessaging";
 import {
   newSession,
   type Block,
@@ -70,15 +70,15 @@ function Fixture() {
   );
 }
 
-const monoAnswer =
+const botAnswer =
   "A reply arriving in chunks that should glide smoothly as the conversation grows. ".repeat(
     35,
   );
 
-function MonoFixture() {
+function BotFixture() {
   const history = blocks.slice(-12);
   const prompt: Block = {
-    id: "mono-prompt",
+    id: "bot-prompt",
     role: "user",
     text: "Explain this in detail",
   };
@@ -86,15 +86,15 @@ function MonoFixture() {
   const [conversation, setConversation] = useState<Block[]>([
     ...history,
     prompt,
-    { id: "mono-answer", role: "assistant", text: monoAnswer, streaming: true },
+    { id: "bot-answer", role: "assistant", text: botAnswer, streaming: true },
   ]);
   useEffect(() => {
     Object.assign(window, {
-      completeMonoReply: (text = monoAnswer) => {
+      completeBotReply: (text = botAnswer) => {
         setConversation([
           ...history,
           prompt,
-          { id: "mono-answer", role: "assistant", text, streaming: false },
+          { id: "bot-answer", role: "assistant", text, streaming: false },
         ]);
         setBusy(false);
       },
@@ -106,15 +106,15 @@ function MonoFixture() {
         <AgentTranscript
           blocks={conversation}
           busy={busy}
-          agentName="Mono"
+          agentName="Bot"
           agentMascot={{ mascot: "crab", color: "#aaf" }}
           bottomAligned
           inlineWork
         />
       </div>
-      <MonoComposer
-        sessionId="browser-mono"
-        name="Mono"
+      <BotComposer
+        sessionId="browser-bot"
+        name="Bot"
         enabled={false}
         onSubmit={() => false}
         controls={<span className="h-6.5">Model · Effort · Context</span>}
@@ -123,13 +123,13 @@ function MonoFixture() {
   );
 }
 
-function MonoCompletionFixture() {
+function BotCompletionFixture() {
   const history = new URLSearchParams(location.search).has("short")
     ? []
     : blocks.slice(-12);
   const start = Date.now();
   const launched = {
-    sessionId: "app-mono-review",
+    sessionId: "app-bot-review",
     cwd: "/repo",
     title: "Review the changes",
     harness: "codex" as const,
@@ -138,31 +138,31 @@ function MonoCompletionFixture() {
   const original: Block[] = [
     ...history,
     {
-      id: "mono-request",
+      id: "bot-request",
       role: "user",
       text: "Start a review session and report back",
       startedAt: start,
       durationMs: 1000,
-      monoSpawnedSessions: [launched],
+      botSpawnedSessions: [launched],
     },
     {
-      id: "mono-launch",
+      id: "bot-launch",
       role: "tool",
       text: "Start a session",
       tool: { kind: "execute", status: "completed" },
     },
     {
-      id: "mono-handoff",
+      id: "bot-handoff",
       role: "assistant",
       text: "I started the review session. I’ll report back when it finishes.",
     },
   ];
   const completion: Block = {
-    id: "mono-completion",
+    id: "bot-completion",
     role: "user",
     text: "Review complete",
     internal: true,
-    appRequestId: "mono-completion-batch-review",
+    appRequestId: "bot-completion-batch-review",
     startedAt: start + 5000,
   };
   const [conversation, setConversation] = useState(original);
@@ -172,13 +172,13 @@ function MonoCompletionFixture() {
   const [state, setState] = useState<"working" | "done">("working");
   useEffect(() => {
     Object.assign(window, {
-      queueMonoCompletion: () => {
+      queueBotCompletion: () => {
         setNotifications([
           {
             id: completion.id,
             text: completion.text,
             attachments: [],
-            monoSessionCompletion: {
+            botSessionCompletion: {
               sessionId: launched.sessionId,
               title: launched.title,
               status: "completed",
@@ -187,18 +187,18 @@ function MonoCompletionFixture() {
         ]);
         setState("done");
       },
-      beginMonoCompletion: () => {
+      beginBotCompletion: () => {
         setNotifications([]);
         setConversation([...original, completion]);
         setBusy(true);
         setState("done");
       },
-      finishMonoCompletion: () => {
+      finishBotCompletion: () => {
         setConversation([
           ...original,
           { ...completion, durationMs: 1000 },
           {
-            id: "mono-report",
+            id: "bot-report",
             role: "assistant",
             text: "The review is complete. Here are the results. ".repeat(40),
           },
@@ -213,7 +213,7 @@ function MonoCompletionFixture() {
         <AgentTranscript
           blocks={conversation}
           busy={busy}
-          agentName="Mono"
+          agentName="Bot"
           agentMascot={{ mascot: "crab", color: "#aaf" }}
           bottomAligned
           inlineWork
@@ -225,7 +225,7 @@ function MonoCompletionFixture() {
         />
       </div>
       <MessageQueue
-        messages={visibleMonoCompletionMessages({
+        messages={visibleBotCompletionMessages({
           ...session,
           blocks: conversation,
           busy,
@@ -235,9 +235,9 @@ function MonoCompletionFixture() {
         variant="messages"
         onResume={() => {}}
       />
-      <MonoComposer
-        sessionId="completion-mono"
-        name="Mono"
+      <BotComposer
+        sessionId="completion-bot"
+        name="Bot"
         enabled={false}
         onSubmit={() => false}
         controls={<span className="h-6.5">Model · Effort · Context</span>}
@@ -247,9 +247,9 @@ function MonoCompletionFixture() {
 }
 
 const params = new URLSearchParams(location.search);
-const mono = params.has("mono");
-const completion = params.has("monoCompletion");
-if (mono || completion) root.style.width = "540px";
+const bot = params.has("bot");
+const completion = params.has("botCompletion");
+if (bot || completion) root.style.width = "540px";
 createRoot(host).render(
-  completion ? <MonoCompletionFixture /> : mono ? <MonoFixture /> : <Fixture />,
+  completion ? <BotCompletionFixture /> : bot ? <BotFixture /> : <Fixture />,
 );

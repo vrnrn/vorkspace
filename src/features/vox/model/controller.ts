@@ -1,9 +1,9 @@
-import { isHabitRun } from "../../monos/model/monoHabits";
-import { findMono, isMonoSession } from "../../monos/model/mono";
+import { isHabitRun } from "../../bots/model/botHabits";
+import { findBot, isBotSession } from "../../bots/model/bot";
 import {
-  listMonoPeerSummaries,
-  resolveUniqueMonoPeer,
-} from "../../monos/model/monoChannels";
+  listBotPeerSummaries,
+  resolveUniqueBotPeer,
+} from "../../bots/model/botChannels";
 import {
   isRemoteProjectPath,
   looksLikeProject,
@@ -31,7 +31,7 @@ export type VoxAppContext = {
 type Host = {
   snapshot: () => { selected?: Session; projects: string[]; cwd: string };
   getSession: (id: string) => Promise<Session | null | undefined>;
-  openMono: (id: string) => Promise<void>;
+  openBot: (id: string) => Promise<void>;
   openSession: (id: string) => Promise<void>;
   dispatch: (request: VoxRequest, context: VoxAppContext) => Promise<unknown>;
 };
@@ -68,7 +68,7 @@ export function createVoxController(host: Host): VoxRequestHandler {
             }
           : null,
         projects,
-        monos: listMonoPeerSummaries().map(({ id, name, sessionId }) => ({
+        bots: listBotPeerSummaries().map(({ id, name, sessionId }) => ({
           id,
           name,
           sessionId,
@@ -79,8 +79,8 @@ export function createVoxController(host: Host): VoxRequestHandler {
     ) {
       const fields =
         action === "composer.write"
-          ? ["sessionId", "mono", "text", "mode", "expectedText"]
-          : ["sessionId", "mono"];
+          ? ["sessionId", "bot", "text", "mode", "expectedText"]
+          : ["sessionId", "bot"];
       if (Object.keys(input).some((key) => !fields.includes(key)))
         throw new Error("Unsupported composer field");
       if (
@@ -88,22 +88,23 @@ export function createVoxController(host: Host): VoxRequestHandler {
         (typeof input.sessionId !== "string" || !input.sessionId.trim())
       )
         throw new Error("Provide a session ID");
+      const botQuery = input.bot as string | undefined;
       if (
-        input.mono !== undefined &&
-        (typeof input.mono !== "string" || !input.mono.trim())
+        botQuery !== undefined &&
+        (typeof botQuery !== "string" || !botQuery.trim())
       )
-        throw new Error("Provide a Mono name");
-      if (input.sessionId && input.mono)
-        throw new Error("Choose a session or a Mono, not both");
-      if (action === "workspace.open" && !input.sessionId && !input.mono)
-        throw new Error("Choose a session or named Mono to open");
+        throw new Error("Provide a Bot name");
+      if (input.sessionId && botQuery)
+        throw new Error("Choose a session or a Bot, not both");
+      if (action === "workspace.open" && !input.sessionId && !botQuery)
+        throw new Error("Choose a session or named Bot to open");
       let targetId = (input.sessionId as string | undefined) ?? selected?.id;
-      if (typeof input.mono === "string") {
-        const mono = resolveUniqueMonoPeer(input.mono);
-        if (!mono) throw new Error("No Mono matches that name; use monos.list");
+      if (typeof botQuery === "string") {
+        const bot = resolveUniqueBotPeer(botQuery);
+        if (!bot) throw new Error("No Bot matches that name; use bots.list");
         assertVoxCurrent(request);
-        await host.openMono(mono.id);
-        targetId = findMono(mono.id)?.sessionId;
+        await host.openBot(bot.id);
+        targetId = findBot(bot.id)?.sessionId;
       } else {
         if (!targetId) throw new Error("Choose a chat first");
         const target = await host.getSession(targetId);
@@ -111,7 +112,7 @@ export function createVoxController(host: Host): VoxRequestHandler {
           !target ||
           target.orchestrationLeadId ||
           isHabitRun(target.id) ||
-          (!isMonoSession(target.id) &&
+          (!isBotSession(target.id) &&
             !projects.some((path) => sameProjectPath(path, target.cwd)))
         )
           throw new Error("That local chat is unavailable");

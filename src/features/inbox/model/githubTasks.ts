@@ -287,12 +287,12 @@ export function githubStatus(): Promise<GithubStatus> {
 }
 
 /** Whether the active GitHub CLI account has starred vorkspace. */
-export function githubMonocodeStarStatus(): Promise<GithubStarStatus> {
+export function githubBotcodeStarStatus(): Promise<GithubStarStatus> {
   return invoke<GithubStarStatus>("github_monocode_star_status");
 }
 
 /** Star vorkspace for the active GitHub CLI account. */
-export function starMonocodeOnGithub(): Promise<void> {
+export function starBotcodeOnGithub(): Promise<void> {
   return invoke<void>("github_star_monocode");
 }
 

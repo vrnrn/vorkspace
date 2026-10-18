@@ -61,7 +61,7 @@ export default defineConfig(({ mode }): UserConfig => {
           main: "index.html",
           bootSplash: "src/bootSplash.ts",
           quickComposer: "quick-composer.html",
-          monoChat: "mono-chat.html",
+          botChat: "bot-chat.html",
           ...(mode.startsWith("benchmark")
             ? { workspaceBenchmark: "tests/browser/workspace-performance.html" }
             : {}),

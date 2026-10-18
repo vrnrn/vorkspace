@@ -72,11 +72,11 @@ describe("restoring a session whose repair cannot be persisted", () => {
       harness: "codex" as const,
       model: "gpt-6",
     };
-    record.blocks[0].monoSpawnedSessions = [launch];
+    record.blocks[0].botSpawnedSessions = [launch];
     invoke.mockImplementation((cmd: string) =>
       Promise.resolve(cmd === "session_get" ? record : null),
     );
-    expect((await getSession("s1"))?.blocks[0].monoSpawnedSessions).toEqual([
+    expect((await getSession("s1"))?.blocks[0].botSpawnedSessions).toEqual([
       launch,
     ]);
   });

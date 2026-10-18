@@ -342,7 +342,7 @@ describe("persisting a subagent's trail", () => {
 });
 
 describe("sanitizeSessionForPersist", () => {
-  it("persists accepted Mono launches on user turns and fingerprints their addition", () => {
+  it("persists accepted Bot launches on user turns and fingerprints their addition", () => {
     const session = newSession("codex", "/repo");
     session.blocks = [{ id: "user", role: "user", text: "Review" }];
     const before = persistFingerprint(session);
@@ -354,17 +354,17 @@ describe("sanitizeSessionForPersist", () => {
       model: "gpt-6",
     };
     session.blocks = [
-      { ...session.blocks[0], monoSpawnedSessions: [launch] },
+      { ...session.blocks[0], botSpawnedSessions: [launch] },
       {
         id: "reply",
         role: "assistant",
         text: "Started",
-        monoSpawnedSessions: [launch],
+        botSpawnedSessions: [launch],
       },
     ];
     const saved = sanitizeSessionForPersist(session);
-    expect(saved.blocks[0].monoSpawnedSessions).toEqual([launch]);
-    expect(saved.blocks[1].monoSpawnedSessions).toBeUndefined();
+    expect(saved.blocks[0].botSpawnedSessions).toEqual([launch]);
+    expect(saved.blocks[1].botSpawnedSessions).toBeUndefined();
     expect(persistFingerprint(session)).not.toBe(before);
     expect(
       sanitizeSessionForPersist({

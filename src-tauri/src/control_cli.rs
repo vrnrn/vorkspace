@@ -114,9 +114,9 @@ const APP_ACTIONS: [&str; 39] = [
     "habits.update",
     "habits.run",
     "habits.remove",
-    "monos.list",
-    "monos.read",
-    "monos.send",
+    "bots.list",
+    "bots.read",
+    "bots.send",
     "channels.list",
     "channels.create",
     "channels.read",
@@ -127,9 +127,9 @@ const APP_USAGE: &str = r#"vorkspace app access — use in a thread enabled by /
 
 Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
 
-A Mono works on several projects: add "project":"<path or name>" to the
+A Bot works on several projects: add "project":"<path or name>" to the
 sessions.*, worktrees.* and folders.* actions to choose which one. It may be
-left out when the Mono has a single project.
+left out when the Bot has a single project.
 
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
@@ -143,7 +143,7 @@ Actions:
                   Submit a follow-up to an idle session in this project.
                   A busy session is rejected. Reuse --request-id on retries.
                   Optional notifyOnComplete:true asks for a completion report
-                  in the calling Mono's chat. It waits until that Mono is idle.
+                  in the calling Bot's chat. It waits until that Bot is idle.
   sessions.draft {"sessionId":"...","prompt":"..."}
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in vorkspace first.
@@ -162,16 +162,16 @@ Actions:
                   session in this project, including one just created. Set
                   draft:true to save the prompt unsent; no agent turn runs.
                   Otherwise the turn is submitted.
-                  Submitted sessions notify the calling Mono by default when
-                  this turn completes, fails or is cancelled. The Mono reviews
+                  Submitted sessions notify the calling Bot by default when
+                  this turn completes, fails or is cancelled. The Bot reviews
                   it and reports back once idle. Set notifyOnComplete:false
                   when the user asks not to receive a report. Drafts do not
                   notify; notifyOnComplete:true cannot be combined with draft:true.
-                  Sessions monitored during the same Mono turn form one group:
+                  Sessions monitored during the same Bot turn form one group:
                   their results arrive together after every session stops.
-                  The Mono reviews the whole group and gives one combined report.
+                  The Bot reviews the whole group and gives one combined report.
                   Rejected launches or follow-ups return a CLI error without
-                  a later completion report. When a Mono successfully stops,
+                  a later completion report. When a Bot successfully stops,
                   archives or deletes a monitored session, its pending report
                   for that session is dismissed; acknowledge the action in
                   the current reply. Other sessions' reports are kept.
@@ -199,7 +199,7 @@ Actions:
                   saved conversation. Open files, terminals and worktrees
                   are kept. Reuse --request-id on retries.
                   stop, archive and delete cannot target the calling session,
-                  Mono chats, habit runs or orchestration workers. Sessions
+                  Bot chats, habit runs or orchestration workers. Sessions
                   must belong to the chosen project.
   worktrees.list {}  Working copies in this project, with paths and branches.
   worktrees.create {"branch":"feature/name","base":"HEAD","existing":false}
@@ -217,7 +217,7 @@ Actions:
                   to derive it from the body. Use {"id":"...","body":"..."}
                   to edit an existing note; title and tags are also optional.
                   Omitted fields stay unchanged. Reuse --request-id on retries.
-  artifacts.list {"limit":30,"offset":0}  Mono or habit only. Saved artifact titles.
+  artifacts.list {"limit":30,"offset":0}  Bot or habit only. Saved artifact titles.
   artifacts.read {"id":"..."}  Full content of one artifact.
   artifacts.write {"kind":"document","title":"PR review",
                    "summary":"Merge queue and blockers",
@@ -228,13 +228,13 @@ Actions:
                   repeat the document body in chat. Returns metadata only.
                   To revise, pass {"id":"...","body":"<updated Markdown>"};
                   omitted title stays unchanged. Reuse --request-id on retries.
-  soul.read      {}  Mono's own conversation only. Current SOUL.md text and hash.
+  soul.read      {}  Bot's own conversation only. Current SOUL.md text and hash.
   soul.update    {"text":"<complete Markdown>","expectedHash":"<hash from soul.read>"}
                   Update your standing instructions only when the user asks.
                   Preserve the other instructions. If the file changed since
                   soul.read, read it again and reapply the requested changes.
-                  Habit runs and other sessions cannot change a Mono's soul.
-  memory.read    {"topic":"releases"}  Mono only. Without topic:
+                  Habit runs and other sessions cannot change a Bot's soul.
+  memory.read    {"topic":"releases"}  Bot only. Without topic:
                   MEMORY.md, how much of it loads, and the topic names.
   memory.search  {"query":"release tags","since":"7d"}
                   Entries across MEMORY.md, topic notes and the archive that
@@ -248,7 +248,7 @@ Actions:
                   Strike the one entry containing find through and add fact.
   memory.remove  {"find":"text of the entry","topic":"..."}
                   Delete the one entry containing find, for a wrong entry.
-  habits.list    {}  Mono only. Your habits: what each does, when it runs
+  habits.list    {}  Bot only. Your habits: what each does, when it runs
                   next, and how its last run went.
   habits.add     {"name":"Morning CI check","instructions":"...",
                   "schedule":{"kind":"weekdays","time":"09:00"}}
@@ -261,25 +261,25 @@ Actions:
                   "schedule":{...},"enabled":false}  Change or pause one.
   habits.run     {"id":"..."}  Run one within a minute, to try it out.
   habits.remove  {"id":"..."}
-  monos.list     {}  Mono only. Other Monos in vorkspace with their IDs, names,
+  bots.list      {}  Bot only. Other Bots in vorkspace with their IDs, names,
                   providers, models, busy status and projects.
-  monos.read     {"mono":"<name or id>","before":"<turnId>","limit":3,"maxChars":1200}
-                  Read up to 3 recent exchanges from another Mono's chat.
-  monos.send     {"to":"<name or id>","message":"...","expectReply":true}
-                  Send a direct message to another Mono. Returns immediately
-                  once queued; when expectReply is true (default), that Mono's
+  bots.read      {"bot":"<name or id>","before":"<turnId>","limit":3,"maxChars":1200}
+                  Read up to 3 recent exchanges from another Bot's chat.
+  bots.send      {"to":"<name or id>","message":"...","expectReply":true}
+                  Send a direct message to another Bot. Returns immediately
+                  once queued; when expectReply is true (default), that Bot's
                   reply arrives in your chat as a new turn once both of you are
                   idle. Set expectReply:false for a one-way handoff or update.
-  channels.list  {}  Mono only. Shared multi-Mono channels you belong to.
+  channels.list  {}  Bot only. Shared multi-Bot channels you belong to.
   channels.create {"name":"...","members":["<name or id>"],"topic":"...","message":"..."}
-                  Create a shared multi-Mono channel (you are included
+                  Create a shared multi-Bot channel (you are included
                   automatically) and optionally post an opening message.
   channels.read  {"channel":"<name or id>","limit":20,"before":"<messageId>"}
-                  Read recent messages from a shared multi-Mono channel.
+                  Read recent messages from a shared multi-Bot channel.
   channels.post  {"channel":"<name or id>","message":"...","to":["<name or id>"]}
-                  Post a message to a shared multi-Mono channel and wake any
-                  @mentioned Monos or explicit "to" recipients.
-  chat.card      Mono or habit only. Post a card to the Mono's chat:
+                  Post a message to a shared multi-Bot channel and wake any
+                  @mentioned Bots or explicit "to" recipients.
+  chat.card      Bot or habit only. Post a card to the Bot's chat:
                   {"type":"pr","repo":"owner/repo","number":123,"note":"..."}
                   {"type":"session","sessionId":"...","note":"..."}
                   {"type":"choices","options":["First choice","Second choice"]}

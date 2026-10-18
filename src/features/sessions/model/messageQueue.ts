@@ -48,13 +48,13 @@ export function canDispatchQueuedHead(session: Session): boolean {
   return true;
 }
 
-/** Monos deliver one waiting follow-up at a time after the provider is ready. */
+/** Bots deliver one waiting follow-up at a time after the provider is ready. */
 export function canSteerQueuedHead(session: Session): boolean {
   const head = queuedHead(session);
   return (
     !!head &&
-    !head.monoSessionCompletion &&
-    !head.monoPeerMessage &&
+    !head.botSessionCompletion &&
+    !head.botPeerMessage &&
     !!session.busy &&
     !!session.turnReady &&
     !session.worktreePreparing &&
@@ -84,7 +84,7 @@ export function queuedMessageForSubmit(
   );
   if (!message) return undefined;
   if (mode === "steer")
-    return message.monoSessionCompletion || message.monoPeerMessage
+    return message.botSessionCompletion || message.botPeerMessage
       ? undefined
       : message;
   if (queuedHead(session)?.id !== messageId) return undefined;

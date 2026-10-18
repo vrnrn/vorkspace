@@ -12,7 +12,7 @@ For the full technical breakdown, see [Architecture overview](../architecture.md
 
 1. **The Screen You See (The Frontend — `src/`)**
    - Built with React and TypeScript.
-   - It shows your chat tabs, code editor, Git changes, and floating helper windows (like the Quick Composer and floating Mono chat).
+   - It shows your chat tabs, code editor, Git changes, and floating helper windows (like the Quick Composer and floating Bot chat).
    - You can use either the classic full-window layout or an **Inset Glass Layout** with 11 color themes, smooth sliding project spaces, and project-scoped tabs for Inbox, Notes, and Automations.
    - When an AI helper types back really fast, Vorkspace only redraws the specific chat box that is talking—and colors big Git diffs on a background worker thread—so the rest of the screen stays buttery smooth.
 

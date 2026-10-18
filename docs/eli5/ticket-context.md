@@ -11,9 +11,9 @@ For the full protocol details, see [Ticket context](../ticket-context.md).
 ## 1. Two Easy Ways to Share a Ticket with an Agent
 
 1. **Send to Chat**:
-   - Click **Send to chat** on an issue or merge request and pick which **Project** or **Mono** should get it.
+   - Click **Send to chat** on an issue or merge request and pick which **Project** or **Bot** should get it.
    - Vorkspace attaches a neat ticket card to the chat box and waits for you to type any extra instructions before pressing Send.
-   - You can even pick a **Default Mono** in **Settings → Integrations** so your favorite personal agent is preselected automatically!
+   - You can even pick a **Default Bot** in **Settings → Integrations** so your favorite personal agent is preselected automatically!
 
 2. **Copy Context (`vorkspace://context/...`)**:
    - Click **Copy context** to copy a short link like `vorkspace://context/jira?url=...`.

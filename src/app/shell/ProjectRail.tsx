@@ -95,7 +95,7 @@ import {
 } from "../../features/connections/model/connections";
 import { remoteProjectFor } from "../../features/connections/model/remoteProjects";
 import { useProjectMenu } from "./useProjectMenu";
-import { MonoRailSection, type MonoRailProps } from "./MonoRailSection";
+import { BotRailSection, type BotRailProps } from "./BotRailSection";
 
 type Props = {
   visible?: boolean;
@@ -144,8 +144,8 @@ type Props = {
   updateNotice?: InstalledUpdate | null;
   onOpenWhatsNew?: (version: string) => void;
   onDismissUpdate?: () => void;
-  /** The Monos section above the projects; absent while Monos are off. */
-  monos?: MonoRailProps;
+  /** The Bots section above the projects; absent while Bots are off. */
+  bots?: BotRailProps;
 };
 
 export function ProjectRail({
@@ -185,7 +185,7 @@ export function ProjectRail({
   updateNotice = null,
   onOpenWhatsNew,
   onDismissUpdate,
-  monos,
+  bots,
 }: Props) {
   const trafficLightsVisible = useTrafficLightsVisible();
   const resize = useDragResize({
@@ -365,7 +365,7 @@ export function ProjectRail({
     inboxActive ||
     notesActive ||
     automationsActive ||
-    !!monos?.activeId;
+    !!bots?.activeId;
   const pinnedIds = sections.pinned.map((item) => item.path);
   const projectIds = groupedProjectSections.ungrouped.map((item) => item.path);
   const groupIds = groupedProjectSections.grouped.map(({ group }) => group.id);
@@ -459,7 +459,7 @@ export function ProjectRail({
             }}
             className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-none pb-2"
           >
-            {monos ? <MonoRailSection {...monos} /> : null}
+            {bots ? <BotRailSection {...bots} /> : null}
 
             {sections.pinned.length > 0 ? (
               <ProjectSection

@@ -63,28 +63,28 @@ import {
 } from "../model/transcriptJump";
 import { EmptySession } from "./EmptySession";
 import {
-  monoForSession,
-  monoLook,
-  monosSnapshot,
-  subscribeMonos,
-} from "../../monos/model/mono";
-import { MonoHeader } from "../../monos/ui/MonoHeader";
-import { MonoComposer } from "../../monos/ui/MonoComposer";
-import type { LaunchedSessionView } from "../../monos/model/monoSpawnedSessions";
+  botForSession,
+  botLook,
+  botsSnapshot,
+  subscribeBots,
+} from "../../bots/model/bot";
+import { BotHeader } from "../../bots/ui/BotHeader";
+import { BotComposer } from "../../bots/ui/BotComposer";
+import type { LaunchedSessionView } from "../../bots/model/botSpawnedSessions";
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { ContextMeter } from "./ContextMeter";
 import { UsageChips } from "../../../app/shell/UsageFooter";
 import type { RateLimitProvider } from "../../providers/model/rateLimits";
-import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
+import { BotUsageLimitNotice } from "../../bots/ui/BotUsageLimitNotice";
 import { QuestionForm } from "./QuestionForm";
 import {
-  monoMessageDeliveries,
-  monoPendingTranscriptBlocks,
-  visibleMonoCompletionMessages,
-} from "../../monos/model/monoMessaging";
+  botMessageDeliveries,
+  botPendingTranscriptBlocks,
+  visibleBotCompletionMessages,
+} from "../../bots/model/botMessaging";
 import { MessageQueue } from "./MessageQueue";
-import { useMonoTranscript } from "../../monos/hooks/useMonoTranscript";
-import { MONO_PAGE_TURNS } from "../data/sessionStore";
+import { useBotTranscript } from "../../bots/hooks/useBotTranscript";
+import { BOT_PAGE_TURNS } from "../data/sessionStore";
 import { useComposerDockMotion } from "./useComposerDockMotion";
 import { MOD } from "../../../platform/tauri/platform";
 import {
@@ -113,7 +113,7 @@ import {
   subscribeProjectChatBackground,
 } from "../../projects/model/projectChatBackground";
 import { useProjectBackgroundEffect } from "../../projects/ui/useProjectBackgroundEffect";
-import { monoChatBackground } from "../../monos/model/monoBackground";
+import { botChatBackground } from "../../bots/model/botBackground";
 import { GradientBlurBackground } from "../../settings/ui/GradientBlurBackground";
 import {
   loadChatBackgroundPath,
@@ -136,25 +136,25 @@ export type SessionPaneProps = {
   inSplit: boolean;
   composerFocused: boolean;
   composerFocusToken?: number;
-  onShowMonoActivity?: (
+  onShowBotActivity?: (
     sessionId: string,
     turnId: string,
     blocks: Block[],
   ) => void;
-  monoActivityTurnId?: string;
-  /** Open a session a Mono's turn launched, in the Mono's sidebar. */
-  onOpenMonoSession?: (
+  botActivityTurnId?: string;
+  /** Open a session a Bot's turn launched, in the Bot's sidebar. */
+  onOpenBotSession?: (
     sessionId: string,
     turnId: string,
     blocks: Block[],
     launchedId: string,
   ) => void;
-  /** Live status of the sessions this Mono launched, by id. */
-  monoLaunchedSessions?: ReadonlyMap<string, LaunchedSessionView>;
-  /** The launched session open in the Mono's sidebar. */
-  openMonoSessionId?: string;
-  /** Shows plan usage by a Mono's composer; off where a footer shows it. */
-  monoComposerUsage?: boolean;
+  /** Live status of the sessions this Bot launched, by id. */
+  botLaunchedSessions?: ReadonlyMap<string, LaunchedSessionView>;
+  /** The launched session open in the Bot's sidebar. */
+  openBotSessionId?: string;
+  /** Shows plan usage by a Bot's composer; off where a footer shows it. */
+  botComposerUsage?: boolean;
   recents: RecentProject[];
   hideProjectPicker?: boolean;
   onFocus: (sessionId: string) => void;
@@ -358,12 +358,12 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onOpenFile,
   onOpenDiff,
   onCommitChanges,
-  onShowMonoActivity,
-  monoActivityTurnId,
-  onOpenMonoSession,
-  monoLaunchedSessions,
-  openMonoSessionId,
-  monoComposerUsage = true,
+  onShowBotActivity,
+  botActivityTurnId,
+  onOpenBotSession,
+  botLaunchedSessions,
+  openBotSessionId,
+  botComposerUsage = true,
   onOpenPlan,
   onBuildPlan,
   onSecondOpinion,
@@ -394,14 +394,14 @@ const LocalSessionPane = memo(function LocalSessionPane({
     [session.blocks, session.busy],
   );
   const messageDeliveries = useMemo(
-    () => monoMessageDeliveries(session),
+    () => botMessageDeliveries(session),
     [session.queuedMessages, session.queueStatus],
   );
   const recallLastTurnRef = useRef<(() => void) | null>(null);
   const remote = remoteSession;
-  // A Mono's chat is a running conversation; what was said stays said.
+  // A Bot's chat is a running conversation; what was said stays said.
   const editLastTurnSupported =
-    !remote && !monoForSession(session.id) && canEditLastTurn(session);
+    !remote && !botForSession(session.id) && canEditLastTurn(session);
   const turnRecall = editLastTurnSupported ? lastTurnRecall(session) : null;
   const draftBlock = sessionDraftBlock(session);
   useSyncExternalStore(
@@ -420,12 +420,12 @@ const LocalSessionPane = memo(function LocalSessionPane({
     loadNewThreadBackgroundEffect,
   );
   // Renames, instructions and mascot picks re-render the agent's look.
-  useSyncExternalStore(subscribeMonos, monosSnapshot);
-  const mono = monoForSession(session.id);
-  const agent = mono ? monoLook(mono) : undefined;
-  // A Mono shows only its own background, never the project's or the app's.
-  const projectBackground = mono
-    ? monoChatBackground(mono.id)
+  useSyncExternalStore(subscribeBots, botsSnapshot);
+  const bot = botForSession(session.id);
+  const agent = bot ? botLook(bot) : undefined;
+  // A Bot shows only its own background, never the project's or the app's.
+  const projectBackground = bot
+    ? botChatBackground(bot.id)
     : loadProjectChatBackgroundSettings(projectKey(session.cwd));
   const projectBackgroundUrl = useProjectBackgroundEffect(
     projectBackground?.path ?? null,
@@ -528,9 +528,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const onJumpToBottomReady = useCallback((jump: () => void) => {
     jumpToBottomRef.current = jump;
   }, []);
-  const monoTranscript = useMonoTranscript(
+  const botTranscript = useBotTranscript(
     session,
-    !!monoForSession(session.id),
+    !!botForSession(session.id),
   );
   const revealBlockRef = useRef<((blockId: string) => boolean) | null>(null);
   const onRevealReady = useCallback((reveal: (blockId: string) => boolean) => {
@@ -555,13 +555,13 @@ const LocalSessionPane = memo(function LocalSessionPane({
     async (blockId: string | null, query?: string) => {
       if (navigateBlockRef.current?.(blockId, query)) return true;
       if (!blockId) return false;
-      if (!(await monoTranscript.reveal(blockId))) return false;
+      if (!(await botTranscript.reveal(blockId))) return false;
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => resolve()),
       );
       return navigateBlockRef.current?.(blockId, query) ?? false;
     },
-    [monoTranscript.reveal],
+    [botTranscript.reveal],
   );
   const jumpRequest = useSyncExternalStore(
     subscribeTranscriptJump,
@@ -641,7 +641,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
     remote ||
     !!session.inboxAsk ||
     !!session.worktreeRemoved ||
-    monoTranscript.viewingOlderPage ||
+    botTranscript.viewingOlderPage ||
     !!draftBlock;
   const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
   // The agent's input always sits at the bottom, like a chat.
@@ -915,7 +915,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
             {remoteSessionLoading ? null : isEmpty ? (
               agent ? (
                 <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
-                  <MonoHeader agent={agent} greeting />
+                  <BotHeader agent={agent} greeting />
                 </div>
               ) : session.inboxAsk ? (
                 <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
@@ -945,28 +945,28 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 >
                   <AgentTranscript
                     blocks={
-                      agent && !monoTranscript.viewingOlderPage
-                        ? monoPendingTranscriptBlocks(
+                      agent && !botTranscript.viewingOlderPage
+                        ? botPendingTranscriptBlocks(
                             session,
-                            monoTranscript.blocks,
+                            botTranscript.blocks,
                           )
-                        : monoTranscript.blocks
+                        : botTranscript.blocks
                     }
                     sessionId={remoteSession ? undefined : session.id}
-                    historicalBlockIds={monoTranscript.historicalBlockIds}
-                    initialTurns={agent ? MONO_PAGE_TURNS : undefined}
-                    pageSize={agent ? MONO_PAGE_TURNS : undefined}
-                    hasEarlier={monoTranscript.hasEarlier}
+                    historicalBlockIds={botTranscript.historicalBlockIds}
+                    initialTurns={agent ? BOT_PAGE_TURNS : undefined}
+                    pageSize={agent ? BOT_PAGE_TURNS : undefined}
+                    hasEarlier={botTranscript.hasEarlier}
                     loadEarlierOnScroll={!!agent}
                     onLoadEarlier={
-                      agent ? monoTranscript.loadEarlier : undefined
+                      agent ? botTranscript.loadEarlier : undefined
                     }
                     onReturnToLatest={
-                      monoTranscript.viewingOlderPage
-                        ? monoTranscript.latest
+                      botTranscript.viewingOlderPage
+                        ? botTranscript.latest
                         : undefined
                     }
-                    busy={!!session.busy && !monoTranscript.viewingOlderPage}
+                    busy={!!session.busy && !botTranscript.viewingOlderPage}
                     visible={visible}
                     cwd={workCwd}
                     agentName={agent?.name}
@@ -983,16 +983,16 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       agent ? () => onResumeQueue(session.id) : undefined
                     }
                     onShowWork={
-                      agent && onShowMonoActivity
+                      agent && onShowBotActivity
                         ? (turnId, blocks) =>
-                            onShowMonoActivity(session.id, turnId, blocks)
+                            onShowBotActivity(session.id, turnId, blocks)
                         : undefined
                     }
-                    activeWorkTurnId={monoActivityTurnId}
+                    activeWorkTurnId={botActivityTurnId}
                     onOpenSession={
-                      agent && onOpenMonoSession
+                      agent && onOpenBotSession
                         ? (turnId, blocks, launchedId) =>
-                            onOpenMonoSession(
+                            onOpenBotSession(
                               session.id,
                               turnId,
                               blocks,
@@ -1000,9 +1000,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
                             )
                         : undefined
                     }
-                    launchedSessions={monoLaunchedSessions}
-                    openSessionId={openMonoSessionId}
-                    // A Mono's turn keeps copy, save as note and the time.
+                    launchedSessions={botLaunchedSessions}
+                    openSessionId={openBotSessionId}
+                    // A Bot's turn keeps copy, save as note and the time.
                     daySeparators={!!agent}
                     hideTurnMetrics={!!agent}
                     harness={session.harness}
@@ -1068,7 +1068,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     onScrollerChange={setTranscriptScroller}
                     editingLastTurn={editingLastTurn}
                     onEditLastTurn={
-                      editLastTurnSupported && !monoTranscript.viewingOlderPage
+                      editLastTurnSupported && !botTranscript.viewingOlderPage
                         ? () => {
                             onFocus(session.id);
                             recallLastTurnRef.current?.();
@@ -1108,7 +1108,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     visible={visible}
                     focused={focused}
                     onNavigate={navigateBlock}
-                    onSearch={monoTranscript.search}
+                    onSearch={botTranscript.search}
                     side={
                       session.linkedWorkItemUpdateCard &&
                       session.linkedWorkItemUpdateCard.status !== "loading"
@@ -1117,7 +1117,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     }
                   />
                 ) : null}
-                {/* One mark per message would crowd a Mono's endless chat. */}
+                {/* One mark per message would crowd a Bot's endless chat. */}
                 {agent ? null : (
                   <PromptOutline
                     blocks={session.blocks}
@@ -1130,8 +1130,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 <TranscriptJumpToBottom
                   visibility={jumpVisibility}
                   onJump={() => {
-                    if (monoTranscript.viewingOlderPage) {
-                      monoTranscript.latest();
+                    if (botTranscript.viewingOlderPage) {
+                      botTranscript.latest();
                       requestAnimationFrame(() => jumpToBottomRef.current?.());
                     } else jumpToBottomRef.current?.();
                   }}
@@ -1149,7 +1149,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
               {agent ? (
                 <>
                   <MessageQueue
-                    messages={visibleMonoCompletionMessages(session)}
+                    messages={visibleBotCompletionMessages(session)}
                     status={session.queueStatus}
                     sendingId={session.sendingQueuedMessageId}
                     onDelete={(messageId) =>
@@ -1168,7 +1168,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     />
                   ) : null}
                   {session.usageLimit ? (
-                    <MonoUsageLimitNotice
+                    <BotUsageLimitNotice
                       session={session}
                       onModelChange={(harness, model) =>
                         onModelChange(session.id, harness, model)
@@ -1185,7 +1185,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       }
                     />
                   ) : null}
-                  <MonoComposer
+                  <BotComposer
                     key={session.id}
                     sessionId={session.id}
                     cwd={session.cwd}
@@ -1209,14 +1209,14 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       onSubmit(session.id, text, attachments)
                     }
                     // The plan's usage, as the session footer shows it,
-                    // which a Mono in full view covers. Its account moves
+                    // which a Bot in full view covers. Its account moves
                     // with the usage-limit notice, not here. A narrow chat
                     // drops it first, then shows the model controls as icons.
                     tools={
-                      monoComposerUsage ? (
+                      botComposerUsage ? (
                         <div className="flex shrink-0 items-center gap-0.5 text-[11px] text-content/55 @max-md:hidden">
                           <UsageChips
-                            providers={monoUsageProviders(session.harness)}
+                            providers={botUsageProviders(session.harness)}
                             session={{
                               id: session.id,
                               harness: session.harness,
@@ -1259,7 +1259,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                             onModelSettingsChange(session.id, settings)
                           }
                         />
-                        {/* A Mono is one long conversation; this is how full
+                        {/* A Bot is one long conversation; this is how full
                             its current thread is. It rotates threads itself,
                             so there is nothing to compact here. */}
                         <div className="grid size-6.5 place-items-center rounded-md transition-colors hover:bg-content/8">
@@ -1296,7 +1296,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   );
 });
 
-/** The providers whose plan usage a Mono on `harness` shows by its composer. */
-function monoUsageProviders(harness: HarnessId): RateLimitProvider[] {
+/** The providers whose plan usage a Bot on `harness` shows by its composer. */
+function botUsageProviders(harness: HarnessId): RateLimitProvider[] {
   return harness === "claude" || harness === "codex" ? [harness] : [];
 }
