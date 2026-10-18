@@ -31,31 +31,10 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
-      - name: Validate release version
+      - name: Prepare release version and build number
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          VERSION=$(node -p "require('./package.json').version")
-          TAG="mac-v$VERSION"
-          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "$TAG" ]]; then
-            echo "Tag must match the app version: $TAG" >&2
-            exit 1
-          fi
-          if [[ "$GITHUB_REF_TYPE" != tag && "$GITHUB_REF_NAME" != main ]]; then
-            echo "Dispatch releases from main." >&2
-            exit 1
-          fi
-          if gh release view "$TAG" --json isDraft,targetCommitish > "$RUNNER_TEMP/release.json" 2>/dev/null; then
-            node - "$RUNNER_TEMP/release.json" <<'NODE'
-          const release = require(process.argv[2]);
-          if (!release.isDraft) throw new Error("Published releases cannot be overwritten");
-          if (release.targetCommitish !== process.env.GITHUB_SHA) {
-            throw new Error("An existing draft must belong to the same commit");
-          }
-          NODE
-          fi
-          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+        run: node scripts/prepare-macos-release.mjs
 
       - run: npm ci
       - run: node --test scripts/*.test.mjs
@@ -80,7 +59,7 @@ jobs:
         with:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "vorkspace __VERSION__"
-          releaseBody: "Personal Apple Silicon Mac build from vrnrn/vorkspace. Uses ad hoc Apple signing and signed in-app updates. See CHANGELOG.md for changes."
+          releaseBody: ${{ env.RELEASE_NOTES }}
           releaseDraft: true
           prerelease: false
           args: --target aarch64-apple-darwin --bundles app,dmg
@@ -102,6 +81,8 @@ jobs:
           APP="target/aarch64-apple-darwin/release/bundle/macos/vorkspace.app"
           codesign --verify --deep --strict "$APP"
           test "$(lipo -archs "$APP/Contents/MacOS/vorkspace")" = arm64
+          test "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" = "$RELEASE_VERSION"
+          test "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" = "$RELEASE_BUILD_NUMBER"
           test ! -e "$APP/Contents/Resources/Assets.car"
           if plutil -extract CFBundleIconName raw "$APP/Contents/Info.plist" >/dev/null 2>&1; then
             echo "App must use the original ICNS without a catalog override." >&2
@@ -111,4 +92,4 @@ jobs:
           gh release download "$RELEASE_TAG" --pattern latest.json --dir "$RUNNER_TEMP/feed"
           gh release view "$RELEASE_TAG" --json name,assets > "$RUNNER_TEMP/assets.json"
           node scripts/verify-macos-release.mjs "$RELEASE_TAG" "$RUNNER_TEMP/feed/latest.json" "$RUNNER_TEMP/assets.json"
-          gh release edit "$RELEASE_TAG" --draft=false --latest
+          gh release edit "$RELEASE_TAG" --draft=false --latest --notes-file "$RUNNER_TEMP/macos-release-notes.md"
