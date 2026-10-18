@@ -171,52 +171,60 @@ describe("headless session ownership", () => {
     turns[0].finish();
   });
 
-  it("does not dispatch provider.send when cancelled while reading image attachments", async () => {
-    const { engine, store, provider, id } = setup("claude");
-    const firstId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
-    const secondId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
-    const image = Buffer.from("image-bytes");
-    for (const fileId of [firstId, secondId]) {
-      writeAttachmentChunk(store, {
-        id: fileId,
-        offset: 0,
-        size: image.length,
-        data: image.toString("base64"),
+  it.each(["cancel", "close"] as const)(
+    "does not dispatch provider.send when %s arrives while reading image attachments",
+    async (action) => {
+      const { engine, store, provider, id } = setup("claude");
+      const firstId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+      const secondId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+      const image = Buffer.from("image-bytes");
+      for (const fileId of [firstId, secondId]) {
+        writeAttachmentChunk(store, {
+          id: fileId,
+          offset: 0,
+          size: image.length,
+          data: image.toString("base64"),
+        });
+      }
+      engine.command({
+        type: "send",
+        commandId: `image-${action}-turn`,
+        sessionId: id,
+        text: "Inspect these",
+        attachments: [
+          {
+            id: firstId,
+            name: "one.png",
+            mimeType: "image/png",
+            kind: "image",
+            size: image.length,
+          },
+          {
+            id: secondId,
+            name: "two.png",
+            mimeType: "image/png",
+            kind: "image",
+            size: image.length,
+          },
+        ],
       });
-    }
-    engine.command({
-      type: "send",
-      commandId: "image-cancel-turn",
-      sessionId: id,
-      text: "Inspect these",
-      attachments: [
-        {
-          id: firstId,
-          name: "one.png",
-          mimeType: "image/png",
-          kind: "image",
-          size: image.length,
-        },
-        {
-          id: secondId,
-          name: "two.png",
-          mimeType: "image/png",
-          kind: "image",
-          size: image.length,
-        },
-      ],
-    });
-    // Yield one microtask so run() enters the attachment read loop before cancel arrives.
-    await Promise.resolve();
-    engine.command({
-      type: "cancel",
-      commandId: "cancel-during-read",
-      sessionId: id,
-      runId: store.session(id).runId!,
-    });
-    await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
-    expect(provider.send).not.toHaveBeenCalled();
-  });
+      // Yield one microtask so run() enters the attachment read loop before cancel/close arrives.
+      await Promise.resolve();
+      if (action === "cancel") {
+        engine.command({
+          type: "cancel",
+          commandId: "cancel-during-read",
+          sessionId: id,
+          runId: store.session(id).runId!,
+        });
+        await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+      } else {
+        await engine.close();
+        expect(store.session(id).status).toBe("interrupted");
+      }
+      expect(provider.send).not.toHaveBeenCalled();
+    },
+  );
 
   it("removes a remote draft without starting the provider", () => {
     const { engine, store, provider, id } = setup();
