@@ -6,21 +6,21 @@ This release channel uses ad hoc signing and is not notarized. macOS may require
 
 ## Bringing your MonoCode data
 
-vorkspace uses the same `com.monocode.desktop` profile as MonoCode. On the same Mac, your sessions, settings, Bots, notes, attachments, and configured accounts are already available. Open one app at a time.
+vorkspace uses the same `com.monocode.desktop` profile as MonoCode. On the same Mac, your sessions, settings, notes, attachments, and configured accounts are already available. Open one app at a time.
 
-For a complete backup before switching, download [the migration helper](../scripts/migrate-monocode-to-vorkspace.sh) and preview its plan:
+To back up your profile and convert existing Bots before switching, download [the migration helper](../scripts/migrate-monocode-to-vorkspace.sh) and preview its plan:
 
 ```bash
 bash migrate-monocode-to-vorkspace.sh
 ```
 
-Quit both apps and any local host, then create the private backup:
+Quit both apps and any local host, then create the private backup and run the one-time Bot conversion:
 
 ```bash
 bash migrate-monocode-to-vorkspace.sh --apply
 ```
 
-The helper preserves the originals, backs up the app profile, WebKit storage, preferences, and compatibility data, and migrates your profile's `bots/` and `codex-bots/` directories when they do not yet exist. Run it with `--help` for recovery into an empty profile. Keychain credentials stay on the same Mac; external provider installations and project checkouts remain in place.
+The helper preserves the originals, backs up the app profile, WebKit storage, preferences, and compatibility data, and migrates your existing Bot roster, channels, settings, chat transcripts, and `bots/` and `codex-bots/` directories when they do not yet exist. Run it with `--help` for recovery into an empty profile. Keychain credentials stay on the same Mac; external provider installations and project checkouts remain in place.
 
 ## Unsent messages and attachments
 

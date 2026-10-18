@@ -17,9 +17,9 @@ For the full platform guide and Linux commands, see [Installation](../install.md
 ## 2. Switching from MonoCode
 
 Vorkspace grew out of MonoCode and uses the same saved-data folder (`com.monocode.desktop`) on your Mac:
-- All your existing chats, Bots, notes, and settings show up automatically!
+- All your existing chats, notes, and settings show up automatically!
 - Just don't run both MonoCode and Vorkspace at the exact same time.
-- Run the migration and backup script (`bash scripts/migrate-monocode-to-vorkspace.sh --apply`) to save a safety copy of your data and set up your `bots/` and `codex-bots/` folders.
+- Run the migration and backup script (`bash scripts/migrate-monocode-to-vorkspace.sh --apply`) to save a safety copy of your data and convert your existing Bot roster, channels, chat transcripts, and `bots/` and `codex-bots/` folders.
 
 ---
 

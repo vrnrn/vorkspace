@@ -825,3 +825,465 @@ macTest(
   },
 );
 
+function execSqlite(dbPath, sql) {
+  const result = spawnSync("/usr/bin/sqlite3", [dbPath], {
+    input: sql,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    throw new Error(`sqlite3 error (${dbPath}): ${result.stderr}`);
+  }
+  return result.stdout;
+}
+
+function getLocalstorageJson(dbPath, key) {
+  const result = spawnSync(
+    "/usr/bin/sqlite3",
+    ["-tabs", dbPath, `SELECT hex(value) FROM ItemTable WHERE key = '${key}';`],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) throw new Error(result.stderr);
+  const hex = result.stdout.trim();
+  if (!hex) return null;
+  return JSON.parse(Buffer.from(hex, "hex").toString("utf16le"));
+}
+
+function putLocalstorageJson(dbPath, key, val) {
+  const hex = Buffer.from(JSON.stringify(val), "utf16le").toString("hex");
+  execSqlite(
+    dbPath,
+    `INSERT INTO ItemTable (key, value) VALUES ('${key}', X'${hex}');`,
+  );
+}
+
+function getSqliteHexJson(dbPath, query) {
+  const result = spawnSync("/usr/bin/sqlite3", ["-tabs", dbPath, query], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0) throw new Error(result.stderr);
+  const hex = result.stdout.trim();
+  if (!hex) return null;
+  return JSON.parse(Buffer.from(hex, "hex").toString("utf8"));
+}
+
+macTest(
+  "migrates WebKit localStorage mono keys to bot keys with UTF-16LE encoding and channel transformations",
+  (t) => {
+    const f = fixture(t);
+    const wkRelative =
+      "Library/WebKit/com.monocode.desktop/WebsiteData/Default/LocalStorage/localstorage.sqlite3";
+    const wkDb = join(f.home, wkRelative);
+    mkdirSync(join(wkDb, ".."), { recursive: true });
+
+    execSqlite(
+      wkDb,
+      "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB NOT NULL ON CONFLICT FAIL);",
+    );
+
+    putLocalstorageJson(wkDb, "monocode:mono-roster", { m1: { name: "Agent 1" } });
+    putLocalstorageJson(wkDb, "monocode:mono-handed", { left: "m1" });
+    putLocalstorageJson(wkDb, "monocode:mono-channels", [
+      { id: "c1", name: "General", monoIds: ["m1"] },
+    ]);
+    putLocalstorageJson(wkDb, "monocode:mono-channel-messages:c1", [
+      {
+        id: "msg1",
+        from: { kind: "mono", monoId: "m1" },
+        author: { kind: "mono", monoId: "m1" },
+        reactions: [{ monoId: "m1" }],
+      },
+    ]);
+    putLocalstorageJson(wkDb, "monocode.railMonosPinned", ["m1"]);
+    putLocalstorageJson(wkDb, "monocode.monosEnabled", true);
+    putLocalstorageJson(wkDb, "monocode.monoMenuBarIcon", "icon.png");
+    putLocalstorageJson(wkDb, "monocode:open-mono", "m1");
+    // Existing bot key should never be overwritten
+    putLocalstorageJson(wkDb, "monocode:bot-handed", { left: "pre-existing-bot" });
+
+    // Dry-run
+    const dry = f.run();
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(
+      dry.stdout,
+      /Legacy localStorage migration: monocode:mono-\* -> monocode:bot-\*/,
+    );
+    assert.equal(getLocalstorageJson(wkDb, "monocode:bot-roster"), null);
+    assert.equal(existsSync(f.backup), false);
+
+    // Apply
+    const apply = f.run(["--apply"]);
+    assert.equal(apply.status, 0, apply.stderr);
+    assert.match(
+      apply.stdout,
+      /Legacy localStorage migration: monocode:mono-\* -> monocode:bot-\*/,
+    );
+
+    // Verify originals kept intact
+    assert.deepEqual(getLocalstorageJson(wkDb, "monocode:mono-channels"), [
+      { id: "c1", name: "General", monoIds: ["m1"] },
+    ]);
+    assert.deepEqual(
+      getLocalstorageJson(wkDb, "monocode:mono-channel-messages:c1"),
+      [
+        {
+          id: "msg1",
+          from: { kind: "mono", monoId: "m1" },
+          author: { kind: "mono", monoId: "m1" },
+          reactions: [{ monoId: "m1" }],
+        },
+      ],
+    );
+
+    // Verify migrated keys with transformed values
+    assert.deepEqual(getLocalstorageJson(wkDb, "monocode:bot-channels"), [
+      { id: "c1", name: "General", botIds: ["m1"] },
+    ]);
+    assert.deepEqual(
+      getLocalstorageJson(wkDb, "monocode:bot-channel-messages:c1"),
+      [
+        {
+          id: "msg1",
+          from: { kind: "bot", botId: "m1" },
+          author: { kind: "bot", botId: "m1" },
+          reactions: [{ botId: "m1" }],
+        },
+      ],
+    );
+    assert.deepEqual(getLocalstorageJson(wkDb, "monocode:bot-roster"), {
+      m1: { name: "Agent 1" },
+    });
+    // Never overwrite existing bot key
+    assert.deepEqual(getLocalstorageJson(wkDb, "monocode:bot-handed"), {
+      left: "pre-existing-bot",
+    });
+    assert.deepEqual(getLocalstorageJson(wkDb, "monocode.railBotsPinned"), ["m1"]);
+    assert.equal(getLocalstorageJson(wkDb, "monocode.botsEnabled"), true);
+    assert.equal(getLocalstorageJson(wkDb, "monocode.botMenuBarIcon"), "icon.png");
+    assert.equal(getLocalstorageJson(wkDb, "monocode:open-bot"), "m1");
+
+    // Verify backup contains the original unmigrated state
+    assert.equal(
+      getLocalstorageJson(join(f.backup, wkRelative), "monocode:bot-roster"),
+      null,
+    );
+    assert.deepEqual(
+      getLocalstorageJson(join(f.backup, wkRelative), "monocode:mono-roster"),
+      { m1: { name: "Agent 1" } },
+    );
+
+    // Idempotent: Subsequent dry-run does NOT report localStorage migration
+    const dry2 = f.run(["--backup-dir", `${f.backup}-2`]);
+    assert.equal(dry2.status, 0, dry2.stderr);
+    assert.doesNotMatch(dry2.stdout, /Legacy localStorage migration/);
+  },
+);
+
+macTest(
+  "migrates monocode.db mono transcripts, turns, blocks and JSON fields to bot equivalents",
+  (t) => {
+    const f = fixture(t);
+    const dbPath = join(f.home, profile, "monocode.db");
+    mkdirSync(join(dbPath, ".."), { recursive: true });
+
+    execSqlite(
+      dbPath,
+      `
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, blocks_json TEXT, queued_messages_json TEXT);
+      CREATE TABLE mono_transcripts (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE);
+      CREATE TABLE mono_turns (session_id TEXT NOT NULL REFERENCES mono_transcripts(session_id) ON DELETE CASCADE, seq INTEGER NOT NULL, PRIMARY KEY (session_id, seq));
+      CREATE TABLE mono_blocks (session_id TEXT NOT NULL REFERENCES mono_transcripts(session_id) ON DELETE CASCADE, seq INTEGER NOT NULL, block_id TEXT NOT NULL, block_json TEXT NOT NULL, search_text TEXT NOT NULL, is_user INTEGER NOT NULL, is_draft INTEGER NOT NULL, PRIMARY KEY (session_id, seq), UNIQUE (session_id, block_id));
+      CREATE TABLE workspace_snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
+
+      CREATE TABLE bot_transcripts (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE);
+      CREATE TABLE bot_turns (session_id TEXT NOT NULL REFERENCES bot_transcripts(session_id) ON DELETE CASCADE, seq INTEGER NOT NULL, PRIMARY KEY (session_id, seq));
+      CREATE TABLE bot_blocks (session_id TEXT NOT NULL REFERENCES bot_transcripts(session_id) ON DELETE CASCADE, seq INTEGER NOT NULL, block_id TEXT NOT NULL, block_json TEXT NOT NULL, search_text TEXT NOT NULL, is_user INTEGER NOT NULL, is_draft INTEGER NOT NULL, PRIMARY KEY (session_id, seq), UNIQUE (session_id, block_id));
+      CREATE INDEX bot_blocks_user ON bot_blocks(session_id, is_user, is_draft);
+      `,
+    );
+
+    const blockPayload = {
+      id: "b1",
+      role: "user",
+      monoHabit: { id: "h1", name: "Morning report", at: 1000 },
+      monoCard: { id: "card1", title: "Overview" },
+      monoReaction: "👍",
+      monoSessionCompletion: {
+        sessionId: "sub-1",
+        title: "Task 1",
+        status: "completed",
+      },
+      monoPeerMessage: { fromMonoId: "p1", toMonoId: "p2", text: "hello" },
+      monoSpawnedSessions: [{ id: "spawn-1" }],
+      btwThreads: [
+        {
+          id: "t1",
+          messages: [
+            {
+              id: "m1",
+              blocks: [
+                {
+                  id: "b_nested",
+                  monoSpawnedSessions: [{ id: "spawn-nested" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const queuedPayload = [
+      {
+        id: "q1",
+        monoPeerMessage: { fromMonoId: "p1", toMonoId: "p2", text: "queued peer" },
+      },
+    ];
+
+    const snapPayload = {
+      tabs: ["mono:helper-1", "project:/app", "mono:helper-2"],
+    };
+
+    execSqlite(
+      dbPath,
+      `
+      INSERT INTO sessions VALUES (
+        's_legacy',
+        '${JSON.stringify([blockPayload]).replace(/'/g, "''")}',
+        '${JSON.stringify(queuedPayload).replace(/'/g, "''")}'
+      );
+      INSERT INTO mono_transcripts VALUES ('s_legacy');
+      INSERT INTO mono_turns VALUES ('s_legacy', 1);
+      INSERT INTO mono_blocks VALUES (
+        's_legacy',
+        1,
+        'b1',
+        '${JSON.stringify(blockPayload).replace(/'/g, "''")}',
+        'morning report search',
+        1,
+        0
+      );
+      INSERT INTO workspace_snapshot VALUES (
+        1,
+        '${JSON.stringify(snapPayload).replace(/'/g, "''")}',
+        5000
+      );
+
+      INSERT INTO sessions VALUES ('s_pre_existing', '[]', '[]');
+      INSERT INTO mono_transcripts VALUES ('s_pre_existing');
+      INSERT INTO mono_turns VALUES ('s_pre_existing', 1);
+      INSERT INTO mono_blocks VALUES ('s_pre_existing', 1, 'b_exist', '{"id":"b_exist","text":"old mono"}', 'old search', 1, 0);
+
+      INSERT INTO bot_transcripts VALUES ('s_pre_existing');
+      INSERT INTO bot_turns VALUES ('s_pre_existing', 1);
+      INSERT INTO bot_blocks VALUES ('s_pre_existing', 1, 'b_exist', '{"id":"b_exist","text":"preserved bot"}', 'preserved search', 1, 0);
+      `,
+    );
+
+    // Dry-run
+    const dry = f.run();
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(dry.stdout, /Legacy SQLite migration: mono_\* -> bot_\*/);
+    assert.equal(
+      execSqlite(
+        dbPath,
+        "SELECT COUNT(*) FROM bot_transcripts WHERE session_id = 's_legacy';",
+      ).trim(),
+      "0",
+    );
+    assert.equal(existsSync(f.backup), false);
+
+    // Apply
+    const apply = f.run(["--apply"]);
+    assert.equal(apply.status, 0, apply.stderr);
+    assert.match(apply.stdout, /Legacy SQLite migration: mono_\* -> bot_\*/);
+
+    // Verify s_legacy in bot_transcripts, bot_turns, and bot_blocks
+    assert.equal(
+      execSqlite(
+        dbPath,
+        "SELECT COUNT(*) FROM bot_transcripts WHERE session_id = 's_legacy';",
+      ).trim(),
+      "1",
+    );
+    assert.equal(
+      execSqlite(
+        dbPath,
+        "SELECT COUNT(*) FROM bot_turns WHERE session_id = 's_legacy' AND seq = 1;",
+      ).trim(),
+      "1",
+    );
+
+    const migratedBlock = getSqliteHexJson(
+      dbPath,
+      "SELECT hex(block_json) FROM bot_blocks WHERE session_id = 's_legacy' AND block_id = 'b1';",
+    );
+    assert.deepEqual(migratedBlock.botHabit, {
+      id: "h1",
+      name: "Morning report",
+      at: 1000,
+    });
+    assert.deepEqual(migratedBlock.botCard, { id: "card1", title: "Overview" });
+    assert.equal(migratedBlock.botReaction, "👍");
+    assert.deepEqual(migratedBlock.botSessionCompletion, {
+      sessionId: "sub-1",
+      title: "Task 1",
+      status: "completed",
+    });
+    assert.deepEqual(migratedBlock.botPeerMessage, {
+      fromBotId: "p1",
+      toBotId: "p2",
+      text: "hello",
+    });
+    assert.deepEqual(migratedBlock.botSpawnedSessions, [{ id: "spawn-1" }]);
+    assert.deepEqual(
+      migratedBlock.btwThreads[0].messages[0].blocks[0].botSpawnedSessions,
+      [{ id: "spawn-nested" }],
+    );
+    assert.equal(migratedBlock.monoHabit, undefined);
+    assert.equal(migratedBlock.monoCard, undefined);
+    assert.equal(migratedBlock.monoReaction, undefined);
+    assert.equal(migratedBlock.monoSessionCompletion, undefined);
+    assert.equal(migratedBlock.monoPeerMessage, undefined);
+    assert.equal(migratedBlock.monoSpawnedSessions, undefined);
+
+    // Verify pre-existing bot transcript session was NOT overwritten
+    const preExistingBlock = getSqliteHexJson(
+      dbPath,
+      "SELECT hex(block_json) FROM bot_blocks WHERE session_id = 's_pre_existing' AND block_id = 'b_exist';",
+    );
+    assert.equal(preExistingBlock.text, "preserved bot");
+
+    // Verify original mono tables remain intact
+    assert.equal(
+      execSqlite(dbPath, "SELECT COUNT(*) FROM mono_transcripts;").trim(),
+      "2",
+    );
+    const originalMonoBlock = getSqliteHexJson(
+      dbPath,
+      "SELECT hex(block_json) FROM mono_blocks WHERE session_id = 's_legacy' AND block_id = 'b1';",
+    );
+    assert.equal(originalMonoBlock.monoHabit.id, "h1");
+
+    // Verify sessions.blocks_json and queued_messages_json transformed
+    const sessionBlocks = getSqliteHexJson(
+      dbPath,
+      "SELECT hex(blocks_json) FROM sessions WHERE id = 's_legacy';",
+    );
+    assert.equal(sessionBlocks[0].botHabit.id, "h1");
+    assert.equal(sessionBlocks[0].monoHabit, undefined);
+
+    const sessionQueued = getSqliteHexJson(
+      dbPath,
+      "SELECT hex(queued_messages_json) FROM sessions WHERE id = 's_legacy';",
+    );
+    assert.equal(sessionQueued[0].botPeerMessage.fromBotId, "p1");
+    assert.equal(sessionQueued[0].botPeerMessage.fromMonoId, undefined);
+
+    // Verify workspace_snapshot.snapshot_json transformed tab IDs
+    const snapResult = getSqliteHexJson(
+      dbPath,
+      "SELECT hex(snapshot_json) FROM workspace_snapshot WHERE id = 1;",
+    );
+    assert.deepEqual(snapResult.tabs, [
+      "bot:helper-1",
+      "project:/app",
+      "bot:helper-2",
+    ]);
+
+    // Idempotent: Subsequent dry-run does NOT report SQLite migration
+    const dry2 = f.run(["--backup-dir", `${f.backup}-2`]);
+    assert.equal(dry2.status, 0, dry2.stderr);
+    assert.doesNotMatch(dry2.stdout, /Legacy SQLite migration/);
+  },
+);
+
+macTest(
+  "recovery mode migrates monocode.db inside staging leaving source untouched",
+  (t) => {
+    const f = fixture(t);
+    const source = join(f.root, "legacy source profile");
+    mkdirSync(source);
+    const sourceDb = join(source, "monocode.db");
+    const destination = join(f.home, profile);
+
+    execSqlite(
+      sourceDb,
+      `
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, blocks_json TEXT);
+      CREATE TABLE mono_transcripts (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE);
+      CREATE TABLE mono_turns (session_id TEXT NOT NULL REFERENCES mono_transcripts(session_id) ON DELETE CASCADE, seq INTEGER NOT NULL, PRIMARY KEY (session_id, seq));
+      CREATE TABLE mono_blocks (session_id TEXT NOT NULL REFERENCES mono_transcripts(session_id) ON DELETE CASCADE, seq INTEGER NOT NULL, block_id TEXT NOT NULL, block_json TEXT NOT NULL, search_text TEXT NOT NULL, is_user INTEGER NOT NULL, is_draft INTEGER NOT NULL, PRIMARY KEY (session_id, seq), UNIQUE (session_id, block_id));
+
+      INSERT INTO sessions VALUES ('s_rec', '[{"id":"b1","monoHabit":{"id":"h_rec","name":"Recovery","at":123}}]');
+      INSERT INTO mono_transcripts VALUES ('s_rec');
+      INSERT INTO mono_turns VALUES ('s_rec', 1);
+      INSERT INTO mono_blocks VALUES ('s_rec', 1, 'b1', '{"id":"b1","monoHabit":{"id":"h_rec","name":"Recovery","at":123}}', 'rec search', 1, 0);
+      `,
+    );
+
+    const args = ["--source", source, "--destination", destination];
+
+    // Dry-run
+    const dry = f.run(args);
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(dry.stdout, /Legacy SQLite migration: mono_\* -> bot_\*/);
+    assert.equal(existsSync(destination), false);
+
+    // Apply
+    const apply = f.run([...args, "--apply"]);
+    assert.equal(apply.status, 0, apply.stderr);
+    assert.match(apply.stdout, /Legacy SQLite migration: mono_\* -> bot_\*/);
+
+    // Source DB was NEVER modified
+    const sourceHasBotTranscripts = execSqlite(
+      sourceDb,
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='bot_transcripts';",
+    ).trim();
+    assert.equal(sourceHasBotTranscripts, "");
+    const sourceBlocksJson = getSqliteHexJson(
+      sourceDb,
+      "SELECT hex(blocks_json) FROM sessions WHERE id = 's_rec';",
+    );
+    assert.equal(sourceBlocksJson[0].monoHabit.id, "h_rec");
+    assert.equal(sourceBlocksJson[0].botHabit, undefined);
+
+    // Destination DB was migrated inside staging before publication
+    const destDb = join(destination, "monocode.db");
+    assert.equal(
+      execSqlite(
+        destDb,
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='bot_transcripts';",
+      ).trim(),
+      "1",
+    );
+    assert.equal(
+      execSqlite(
+        destDb,
+        "SELECT session_id FROM bot_transcripts WHERE session_id = 's_rec';",
+      ).trim(),
+      "s_rec",
+    );
+    const destBlocksJson = getSqliteHexJson(
+      destDb,
+      "SELECT hex(blocks_json) FROM sessions WHERE id = 's_rec';",
+    );
+    assert.equal(destBlocksJson[0].botHabit.id, "h_rec");
+    assert.equal(destBlocksJson[0].monoHabit, undefined);
+
+    const destBlock = getSqliteHexJson(
+      destDb,
+      "SELECT hex(block_json) FROM bot_blocks WHERE session_id = 's_rec' AND block_id = 'b1';",
+    );
+    assert.equal(destBlock.botHabit.id, "h_rec");
+
+    // Backup contains untouched original
+    const backupDb = join(f.backup, "recovery-source", "monocode.db");
+    const backupHasBotTranscripts = execSqlite(
+      backupDb,
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='bot_transcripts';",
+    ).trim();
+    assert.equal(backupHasBotTranscripts, "");
+  },
+);
+
+
