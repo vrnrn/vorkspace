@@ -9,16 +9,16 @@ import {
   firstFoldableIndex,
   foldableWork,
   foldedBlocks,
-  groupMonoChatTurns,
-  groupMonoTurnItems,
-  groupMonoTurns,
+  groupBotChatTurns,
+  groupBotTurnItems,
+  groupBotTurns,
   groupTurnItems,
   groupTurns,
   hasRunningSubagent,
   joinedTurnStart,
   initialThinkingIndex,
   lastActivityIndex,
-  monoTurnRuns,
+  botTurnRuns,
   nestedScrollAbsorbsWheel,
   proseSummary,
   resolveToolCallDisplay,
@@ -112,7 +112,7 @@ function irc(id: string, text = "new message in #general"): Block {
   };
 }
 
-describe("groupMonoChatTurns", () => {
+describe("groupBotChatTurns", () => {
   const minute = 60 * 1000;
   const at = new Date(2026, 9, 7, 11, 0).getTime();
   const completion = (id: string, startedAt: number): Block => ({
@@ -120,13 +120,22 @@ describe("groupMonoChatTurns", () => {
     role: "user",
     text: "{}",
     internal: true,
-    appRequestId: `mono-completion-${id}`,
+    appRequestId: `bot-completion-${id}`,
     sentAt: startedAt,
     startedAt,
     durationMs: 25_000,
   });
 
-  it("continues the message above with a reply the Mono sends on its own", () => {
+  it("keeps saved completion receipts from before the Bot rename in the same turn", () => {
+    const prompt = { ...completion("old", at + minute), appRequestId: "mono-completion-old" };
+    const blocks: Block[] = [
+      {id:"user",role:"user",text:"Please check",startedAt:at},
+      note("reply", "Checking"), prompt, note("report", "Done"),
+    ];
+    expect(groupBotChatTurns(blocks).map(turn => turn.map(block => block.id))).toEqual([["user", "reply", "old", "report"]]);
+  });
+
+  it("continues the message above with a reply the Bot sends on its own", () => {
     const blocks: Block[] = [
       { id: "thanks", role: "user", text: "thanks :)", startedAt: at },
       note("welcome", "You're welcome!"),
@@ -135,12 +144,12 @@ describe("groupMonoChatTurns", () => {
       completion("tests", at + 5 * minute),
       note("tests-done", "Tests passed."),
     ];
-    const turns = groupMonoChatTurns(blocks);
+    const turns = groupBotChatTurns(blocks);
     expect(turns.map((turn) => turn.map((block) => block.id))).toEqual([
       ["thanks", "welcome", "review", "cancelled", "tests", "tests-done"],
     ]);
     expect(
-      monoTurnRuns(turns[0]).map((run) => run.map((block) => block.id)),
+      botTurnRuns(turns[0]).map((run) => run.map((block) => block.id)),
     ).toEqual([
       ["thanks", "welcome"],
       ["review", "cancelled"],
@@ -155,7 +164,7 @@ describe("groupMonoChatTurns", () => {
       completion("review", at + 90 * minute),
       note("cancelled", "The review was cancelled."),
     ];
-    expect(groupMonoChatTurns(blocks)).toHaveLength(2);
+    expect(groupBotChatTurns(blocks)).toHaveLength(2);
   });
 
   it("measures the next gap from the latest run even with out-of-order completions", () => {
@@ -167,7 +176,7 @@ describe("groupMonoChatTurns", () => {
       completion("separate", at + 170 * minute),
     ];
     expect(
-      groupMonoChatTurns(blocks).map((turn) => turn.map((block) => block.id)),
+      groupBotChatTurns(blocks).map((turn) => turn.map((block) => block.id)),
     ).toEqual([["first", "later", "earlier", "next"], ["separate"]]);
   });
 
@@ -187,7 +196,7 @@ describe("groupMonoChatTurns", () => {
         text: "Done",
       });
     }
-    const turns = groupMonoChatTurns(blocks);
+    const turns = groupBotChatTurns(blocks);
     expect(turns).toHaveLength(1);
     expect(turns[0]).toEqual(blocks);
     // A deterministic work bound, independent of machine speed. The old
@@ -205,12 +214,12 @@ describe("groupMonoChatTurns", () => {
         id: "habit",
         role: "assistant",
         text: "Morning report",
-        monoHabit: { id: "h", name: "Morning", at: at + 2 * minute },
+        botHabit: { id: "h", name: "Morning", at: at + 2 * minute },
       },
       completion("review", at + 3 * minute),
       note("cancelled", "The review was cancelled."),
     ];
-    expect(groupMonoChatTurns(blocks).map((turn) => turn[0].id)).toEqual([
+    expect(groupBotChatTurns(blocks).map((turn) => turn[0].id)).toEqual([
       "first",
       "second",
       "habit",
@@ -219,7 +228,7 @@ describe("groupMonoChatTurns", () => {
   });
 });
 
-describe("groupMonoTurnItems", () => {
+describe("groupBotTurnItems", () => {
   it("keeps a queued message promoted to a new turn separate and hides its process", () => {
     const blocks: Block[] = [
       { id: "first", role: "user", text: "First request", startedAt: 1 },
@@ -234,9 +243,9 @@ describe("groupMonoTurnItems", () => {
       note("intro", "Checking the next request."),
       shell("next-work", "in_progress"),
     ];
-    const turns = groupMonoTurns(blocks);
+    const turns = groupBotTurns(blocks);
     expect(turns).toHaveLength(2);
-    expect(groupMonoTurnItems(turns[1], { live: true })).toMatchObject([
+    expect(groupBotTurnItems(turns[1], { live: true })).toMatchObject([
       { type: "block", block: { id: "queued" } },
       {
         type: "activity",
@@ -258,7 +267,7 @@ describe("groupMonoTurnItems", () => {
       shell("cancel", "in_progress"),
     ];
     for (const live of [true, false]) {
-      const items = groupMonoTurnItems(blocks, { live });
+      const items = groupBotTurnItems(blocks, { live });
       expect(
         items.flatMap((item) =>
           item.type === "block" && item.block.role === "assistant"
@@ -278,20 +287,20 @@ describe("groupMonoTurnItems", () => {
       shell("first"),
       note("reply", "The result."),
     ];
-    expect(groupMonoTurnItems(blocks, { live: true })).toMatchObject([
+    expect(groupBotTurnItems(blocks, { live: true })).toMatchObject([
       {
         type: "activity",
         blocks: [{ id: "intro" }, { id: "first" }, { id: "reply" }],
       },
     ]);
-    expect(groupMonoTurnItems(blocks).at(-1)).toMatchObject({
+    expect(groupBotTurnItems(blocks).at(-1)).toMatchObject({
       type: "block",
       block: { id: "reply" },
     });
   });
 
   it("keeps the opening in the chronological work group and reveals only the trailing reply", () => {
-    const items = groupMonoTurnItems([
+    const items = groupBotTurnItems([
       { id: "user", role: "user", text: "Inspect" },
       note("intro", "I will inspect the files."),
       shell("first"),
@@ -318,7 +327,7 @@ describe("groupMonoTurnItems", () => {
 
   it("groups a tool-first turn without promoting its first progress note to an opening", () => {
     expect(
-      groupMonoTurnItems([
+      groupBotTurnItems([
         shell("first"),
         note("progress", "Trying another approach."),
         shell("second"),
@@ -339,12 +348,12 @@ describe("groupMonoTurnItems", () => {
       shell("first"),
       note("progress", "Checking more."),
     ];
-    expect(groupMonoTurnItems(blocks).at(-1)).toMatchObject({
+    expect(groupBotTurnItems(blocks).at(-1)).toMatchObject({
       type: "block",
       block: { id: "progress" },
     });
     expect(
-      groupMonoTurnItems([...blocks, shell("second", "in_progress")]).at(-1),
+      groupBotTurnItems([...blocks, shell("second", "in_progress")]).at(-1),
     ).toMatchObject({
       type: "activity",
       blocks: [
@@ -365,7 +374,7 @@ describe("groupMonoTurnItems", () => {
     };
     const card: Block = { id: "plan", role: "plan", text: "The plan" };
     const incoming = irc("incoming");
-    const items = groupMonoTurnItems([
+    const items = groupBotTurnItems([
       shell("first"),
       notice,
       card,
@@ -389,7 +398,7 @@ describe("groupMonoTurnItems", () => {
       tool: { kind: "shell", status: "completed", background: true },
     };
     expect(
-      groupMonoTurnItems([
+      groupBotTurnItems([
         shell("first"),
         note("yielded", "The task is still running."),
         background,
@@ -404,18 +413,18 @@ describe("groupMonoTurnItems", () => {
   });
 
   it("keeps direct replies and empty turns intact", () => {
-    expect(groupMonoTurnItems([])).toEqual([]);
-    expect(groupMonoTurnItems([note("answer", "Hello.")])).toMatchObject([
+    expect(groupBotTurnItems([])).toEqual([]);
+    expect(groupBotTurnItems([note("answer", "Hello.")])).toMatchObject([
       { type: "block", block: { id: "answer" } },
     ]);
     expect(
-      groupMonoTurnItems([note("answer", "Hello.")], { live: true }),
+      groupBotTurnItems([note("answer", "Hello.")], { live: true }),
     ).toMatchObject([{ type: "activity", blocks: [{ id: "answer" }] }]);
   });
 
   it("keeps a final answer visible when a status ping arrives after it", () => {
     expect(
-      groupMonoTurnItems([
+      groupBotTurnItems([
         note("intro", "Checking."),
         shell("first"),
         note("answer", "Everything passed."),
@@ -434,7 +443,7 @@ describe("groupMonoTurnItems", () => {
       tool: { kind: "shell", status: "completed", background: true },
     };
     expect(
-      groupMonoTurnItems(
+      groupBotTurnItems(
         [
           shell("first"),
           note("yielded", "The task is still running."),
@@ -694,13 +703,13 @@ describe("turnCopyText", () => {
 
 describe("groupTurns", () => {
   it("keeps habit reports and relayed approvals outside conversation turns", () => {
-    const monoHabit = { id: "habit", name: "Morning check", at: 1_000 };
+    const botHabit = { id: "habit", name: "Morning check", at: 1_000 };
     const turns = groupTurns([
       { id: "user", role: "user", text: "Review" },
       { id: "answer", role: "assistant", text: "Reviewed." },
-      { id: "report", role: "assistant", text: "CI failed.", monoHabit },
-      { id: "approval", role: "approval", text: "Allow command", monoHabit },
-      { id: "next-report", role: "assistant", text: "CI passed.", monoHabit },
+      { id: "report", role: "assistant", text: "CI failed.", botHabit },
+      { id: "approval", role: "approval", text: "Allow command", botHabit },
+      { id: "next-report", role: "assistant", text: "CI passed.", botHabit },
       { id: "next-user", role: "user", text: "Thanks" },
     ]);
     expect(turns.map((turn) => turn.map((block) => block.id))).toEqual([

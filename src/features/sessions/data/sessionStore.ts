@@ -3,8 +3,8 @@ import {
   restoreLocalSubmissions,
 } from "../../../integrations/harness/core/localSubmissions";
 import { invoke } from "@tauri-apps/api/core";
-import { isMonoSession } from "../../monos/model/mono";
-import { sanitizeMonoSpawnedSessions } from "../../monos/model/monoSpawnedSessions";
+import { isBotSession } from "../../bots/model/bot";
+import { sanitizeBotSpawnedSessions } from "../../bots/model/botSpawnedSessions";
 import {
   isWeakToolTitle,
   titleFromToolInput,
@@ -86,7 +86,7 @@ export type SessionSummary = {
 
 type SessionRecord = {
   sidebarHidden?: boolean;
-  monoTranscript?: Session["monoTranscript"];
+  botTranscript?: Session["botTranscript"];
   orchestrationLeadId?: string;
   id: string;
   cwd: string;
@@ -143,8 +143,8 @@ export function shouldPersistSession(session: Session): boolean {
     !isRemoteProjectPath(session.cwd) &&
     session.cwd !== "~" &&
     (session.blocks.some((block) => block.role === "user") ||
-      (isMonoSession(session.id) &&
-        (session.blocks.length > 0 || !!session.monoTranscript)))
+      (isBotSession(session.id) &&
+        (session.blocks.length > 0 || !!session.botTranscript)))
   );
 }
 
@@ -196,11 +196,11 @@ function persistableMeta(
   };
 }
 
-function sanitizeMonoSessionCompletion(
+function sanitizeBotSessionCompletion(
   value: unknown,
-): Block["monoSessionCompletion"] {
+): Block["botSessionCompletion"] {
   if (!value || typeof value !== "object") return undefined;
-  const completion = value as NonNullable<Block["monoSessionCompletion"]>;
+  const completion = value as NonNullable<Block["botSessionCompletion"]>;
   if (
     typeof completion.sessionId !== "string" ||
     !isPersistableId(completion.sessionId) ||
@@ -220,19 +220,19 @@ function sanitizeMonoSessionCompletion(
   };
 }
 
-function sanitizeMonoPeerMessage(value: unknown): Block["monoPeerMessage"] {
+function sanitizeBotPeerMessage(value: unknown): Block["botPeerMessage"] {
   if (!value || typeof value !== "object") return undefined;
-  const peer = value as NonNullable<Block["monoPeerMessage"]>;
+  const peer = value as NonNullable<Block["botPeerMessage"]>;
   if (
     typeof peer.id !== "string" ||
     !isPersistableId(peer.id) ||
-    typeof peer.fromMonoId !== "string" ||
-    !isPersistableId(peer.fromMonoId) ||
+    typeof peer.fromBotId !== "string" ||
+    !isPersistableId(peer.fromBotId) ||
     typeof peer.fromName !== "string" ||
     typeof peer.fromMascot !== "string" ||
     typeof peer.fromColor !== "string" ||
-    typeof peer.toMonoId !== "string" ||
-    !isPersistableId(peer.toMonoId) ||
+    typeof peer.toBotId !== "string" ||
+    !isPersistableId(peer.toBotId) ||
     typeof peer.toName !== "string" ||
     typeof peer.text !== "string" ||
     typeof peer.expectReply !== "boolean" ||
@@ -246,11 +246,11 @@ function sanitizeMonoPeerMessage(value: unknown): Block["monoPeerMessage"] {
     return undefined;
   return {
     id: peer.id,
-    fromMonoId: peer.fromMonoId,
+    fromBotId: peer.fromBotId,
     fromName: peer.fromName,
     fromMascot: peer.fromMascot,
     fromColor: peer.fromColor,
-    toMonoId: peer.toMonoId,
+    toBotId: peer.toBotId,
     toName: peer.toName,
     text: peer.text,
     expectReply: peer.expectReply,
@@ -301,10 +301,10 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
         })
       : [];
     const noteMeta = sanitizeNoteCard(message.noteCard);
-    const completion = sanitizeMonoSessionCompletion(
-      message.monoSessionCompletion,
+    const completion = sanitizeBotSessionCompletion(
+      message.botSessionCompletion,
     );
-    const peerMessage = sanitizeMonoPeerMessage(message.monoPeerMessage);
+    const peerMessage = sanitizeBotPeerMessage(message.botPeerMessage);
     const noteCard =
       noteMeta && typeof message.noteCard?.body === "string"
         ? { ...noteMeta, body: message.noteCard.body }
@@ -335,8 +335,8 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
         attachments,
         ...(noteCard ? { noteCard } : {}),
         ...(handoffCard ? { handoffCard } : {}),
-        ...(completion ? { monoSessionCompletion: completion } : {}),
-        ...(peerMessage ? { monoPeerMessage: peerMessage } : {}),
+        ...(completion ? { botSessionCompletion: completion } : {}),
+        ...(peerMessage ? { botPeerMessage: peerMessage } : {}),
         ...(["default", "plan", "build", "orchestrate"].includes(
           message.intent ?? "",
         )
@@ -457,11 +457,11 @@ export async function upsertSession(
   if (!shouldPersistSession(session) || deletedSessionIds.has(session.id)) {
     return null;
   }
-  const mono = !!session.monoTranscript || isMonoSession(session.id);
-  const snapshot = mono
-    ? session.blocks.filter((block) => monoPersistedBlock(block) !== null)
+  const bot = !!session.botTranscript || isBotSession(session.id);
+  const snapshot = bot
+    ? session.blocks.filter((block) => botPersistedBlock(block) !== null)
     : session.blocks;
-  // Mono writes sanitize only the changed suffix inside the serialized queue.
+  // Bot writes sanitize only the changed suffix inside the serialized queue.
   const payload = persistableMeta(session);
   if (session.orchestrationLeadId) {
     sessionWriteLeadById.set(session.id, session.orchestrationLeadId);
@@ -470,8 +470,8 @@ export async function upsertSession(
   }
   const summary = await enqueueSessionWrite(session.id, async () => {
     if (deletedSessionIds.has(session.id)) return null;
-    if (mono) {
-      const previous = monoSavedBlocks.get(session.id);
+    if (bot) {
+      const previous = botSavedBlocks.get(session.id);
       let same = 0;
       if (previous) {
         while (
@@ -483,11 +483,11 @@ export async function upsertSession(
       }
       const changed =
         !previous || same !== previous.length || same !== snapshot.length;
-      const summary = await invoke<SessionSummary>("mono_session_upsert", {
+      const summary = await invoke<SessionSummary>("bot_session_upsert", {
         session: {
           ...payload,
           blocks: changed
-            ? snapshot.slice(same).map((block) => monoPersistedBlock(block)!)
+            ? snapshot.slice(same).map((block) => botPersistedBlock(block)!)
             : [],
         },
         afterBlockId: same > 0 ? snapshot[same - 1].id : null,
@@ -495,12 +495,12 @@ export async function upsertSession(
           same === 0
             ? previous !== undefined
               ? (previous[0]?.id ?? null)
-              : (session.monoTranscript?.firstBlockId ?? null)
+              : (session.botTranscript?.firstBlockId ?? null)
             : null,
         blocksChanged: changed,
         appendOnly: previous?.length === 0,
       });
-      monoSavedBlocks.set(session.id, snapshot);
+      botSavedBlocks.set(session.id, snapshot);
       return summary;
     }
     const baseline = ordinarySaved.get(session.id);
@@ -665,31 +665,31 @@ export function cancelSessionSearch(searchOwner: string): Promise<void> {
   return invoke<void>("cancel_session_search", { searchOwner });
 }
 
-const monoSavedBlocks = new Map<string, Block[]>();
-const monoBlockPayloads = new WeakMap<Block, Block | null>();
-function monoPersistedBlock(block: Block): Block | null {
-  if (monoBlockPayloads.has(block)) return monoBlockPayloads.get(block)!;
+const botSavedBlocks = new Map<string, Block[]>();
+const botBlockPayloads = new WeakMap<Block, Block | null>();
+function botPersistedBlock(block: Block): Block | null {
+  if (botBlockPayloads.has(block)) return botBlockPayloads.get(block)!;
   const payload = sanitizeBlock(block);
-  monoBlockPayloads.set(block, payload);
+  botBlockPayloads.set(block, payload);
   return payload;
 }
 
-export const MONO_PAGE_TURNS = 10;
-export type MonoTranscriptPage = {
+export const BOT_PAGE_TURNS = 10;
+export type BotTranscriptPage = {
   blocks: Block[];
   before: number | null;
   hasNewer: boolean;
 };
 
-export async function getMonoTranscriptPage(
+export async function getBotTranscriptPage(
   sessionId: string,
   options: {
     before?: number;
     beforeBlockId?: string;
     aroundBlockId?: string;
   } = {},
-): Promise<MonoTranscriptPage> {
-  const page = await invoke<MonoTranscriptPage>("mono_session_page", {
+): Promise<BotTranscriptPage> {
+  const page = await invoke<BotTranscriptPage>("bot_session_page", {
     sessionId,
     before: options.before ?? null,
     beforeBlockId: options.beforeBlockId ?? null,
@@ -703,11 +703,11 @@ export async function getMonoTranscriptPage(
   };
 }
 
-export function findMonoTranscript(
+export function findBotTranscript(
   sessionId: string,
   query: string,
 ): Promise<string[]> {
-  return invoke("mono_session_find", { sessionId, query });
+  return invoke("bot_session_find", { sessionId, query });
 }
 
 export async function getSession(sessionId: string): Promise<Session | null> {
@@ -718,7 +718,7 @@ export async function getSession(sessionId: string): Promise<Session | null> {
 /** Read the saved conversation without waiting for optional provider-log repairs. */
 export async function readSession(sessionId: string): Promise<Session | null> {
   const record = await invoke<SessionRecord | null>(
-    isMonoSession(sessionId) ? "mono_session_get" : "session_get",
+    isBotSession(sessionId) ? "bot_session_get" : "session_get",
     {
       sessionId,
     },
@@ -753,7 +753,7 @@ export async function readSession(sessionId: string): Promise<Session | null> {
       };
     }
   }
-  if (session.monoTranscript) monoSavedBlocks.set(sessionId, persistedBlocks);
+  if (session.botTranscript) botSavedBlocks.set(sessionId, persistedBlocks);
   else if (record.persistenceRevision !== undefined)
     ordinarySaved.set(sessionId, {
       revision: record.persistenceRevision,
@@ -978,7 +978,7 @@ export async function deleteSession(
       invoke<void>("session_delete", { sessionId, imagePaths }),
     );
     discardComposerDraft(sessionId);
-    monoSavedBlocks.delete(sessionId);
+    botSavedBlocks.delete(sessionId);
     ordinarySaved.delete(sessionId);
     const tombstone = setTimeout(
       () => deletedSessionIds.delete(sessionId),
@@ -1002,7 +1002,7 @@ export async function discardDraftSessionRecord(
       preserveComposer: true,
     }),
   );
-  monoSavedBlocks.delete(sessionId);
+  botSavedBlocks.delete(sessionId);
   ordinarySaved.delete(sessionId);
 }
 
@@ -1121,17 +1121,17 @@ function sanitizeBlock(
   if (block.durationMs != null) next.durationMs = block.durationMs;
   if (
     (block.role === "assistant" || block.role === "approval") &&
-    typeof block.monoHabit?.id === "string" &&
-    block.monoHabit.id.trim() &&
-    typeof block.monoHabit.name === "string" &&
-    block.monoHabit.name.trim() &&
-    typeof block.monoHabit.at === "number" &&
-    Number.isFinite(block.monoHabit.at)
+    typeof block.botHabit?.id === "string" &&
+    block.botHabit.id.trim() &&
+    typeof block.botHabit.name === "string" &&
+    block.botHabit.name.trim() &&
+    typeof block.botHabit.at === "number" &&
+    Number.isFinite(block.botHabit.at)
   ) {
-    next.monoHabit = {
-      id: block.monoHabit.id,
-      name: block.monoHabit.name,
-      at: block.monoHabit.at,
+    next.botHabit = {
+      id: block.botHabit.id,
+      name: block.botHabit.name,
+      at: block.botHabit.at,
     };
   }
   if (block.role === "user" && typeof block.sentAt === "number")
@@ -1168,15 +1168,15 @@ function sanitizeBlock(
   // Without this the transcript would show the app's orchestration turns as
   // the user's own after a reload.
   if (block.role === "user" && block.internal) next.internal = true;
-  const completion = sanitizeMonoSessionCompletion(block.monoSessionCompletion);
+  const completion = sanitizeBotSessionCompletion(block.botSessionCompletion);
   if (block.role === "user" && block.internal && completion)
-    next.monoSessionCompletion = completion;
-  const peerMessage = sanitizeMonoPeerMessage(block.monoPeerMessage);
+    next.botSessionCompletion = completion;
+  const peerMessage = sanitizeBotPeerMessage(block.botPeerMessage);
   if (block.role === "user" && block.internal && peerMessage)
-    next.monoPeerMessage = peerMessage;
-  const spawned = sanitizeMonoSpawnedSessions(block.monoSpawnedSessions);
+    next.botPeerMessage = peerMessage;
+  const spawned = sanitizeBotSpawnedSessions(block.botSpawnedSessions);
   if (block.role === "user" && spawned.length)
-    next.monoSpawnedSessions = spawned;
+    next.botSpawnedSessions = spawned;
   const turnMetrics = sanitizeTurnMetrics(block.turnMetrics);
   if (block.role === "user" && turnMetrics) next.turnMetrics = turnMetrics;
   if (block.tool) next.tool = block.tool;
@@ -1686,7 +1686,7 @@ function recordToSession(
     ...(queuedMessages.length
       ? { queuedMessages, queueStatus: "paused" as const }
       : {}),
-    ...(record.monoTranscript ? { monoTranscript: record.monoTranscript } : {}),
+    ...(record.botTranscript ? { botTranscript: record.botTranscript } : {}),
     busy: false,
     orchestrationLeadId:
       record.orchestrationLeadId ??

@@ -1,6 +1,6 @@
 # Vox
 
-Vox is an opt-in voice controller for Vorkspace sessions and Monos. It uses the
+Vox is an opt-in voice controller for Vorkspace sessions and Bots. It uses the
 default Codex CLI ChatGPT sign-in and requires live voice access, a compatible
 Codex installation, and microphone permission. Audio uses remote ChatGPT voice;
 this is not offline speech recognition.
@@ -12,7 +12,7 @@ the face in the top-right title bar to start a call, and click again to end it.
 Vox waits for spoken input without greeting you. The face animates while a call
 is active and shows static `vox` when stopped; Reduced Motion uses static faces.
 
-Calls stay connected while navigating between chats, projects, Monos, and
+Calls stay connected while navigating between chats, projects, Bots, and
 Settings. Hiding or closing the workspace, quitting, or disabling Vox ends the
 call. Enabling Vox alone does not start a call or capture audio.
 
@@ -33,7 +33,7 @@ styling. Settings retains the standard app casing and layout.
 
 ## Controlling chats
 
-Vox can find, read, open, and message sessions and Monos, start or stop sessions
+Vox can find, read, open, and message sessions and Bots, start or stop sessions
 in known local projects, and read or fill their composers. For example:
 
 - “Tell Helper to review the latest change.”
@@ -59,7 +59,7 @@ a fresh conversation on the next call. It keeps saved memories and does not
 erase the previous native history from disk.
 
 Vox can save facts and preferences through its memory tools. **Settings → Vox →
-Memory** lists them with the same add, edit, and delete controls as Mono memories.
+Memory** lists them with the same add, edit, and delete controls as Bot memories.
 Saved memories load when the next call starts and survive conversation reset.
 
 ## Implementation
@@ -69,7 +69,7 @@ Saved memories load when the next call starts and survive conversation reset.
 | [VoxProvider](../src/features/vox/ui/VoxProvider.tsx)                                                             | Workspace call lifecycle and preferences, independent of mounted title-bar controls. |
 | [vox.ts](../src/features/vox/model/vox.ts)                                                                        | Exact microphone capture, WebRTC, Codex helper, request receipts, and shutdown.      |
 | [controller.ts](../src/features/vox/model/controller.ts)                                                          | Current target resolution and delegation through existing app and composer handlers. |
-| [conversation.ts](../src/features/vox/model/conversation.ts) and [memory.ts](../src/features/vox/model/memory.ts) | Saved native thread identity and Vox-owned Mono memory storage.                      |
+| [conversation.ts](../src/features/vox/model/conversation.ts) and [memory.ts](../src/features/vox/model/memory.ts) | Saved native thread identity and Vox-owned Bot memory storage.                       |
 | [display.ts](../src/features/vox/model/display.ts) and [VoxButton](../src/features/vox/ui/VoxButton.tsx)          | Latest completed native reply, coarse activity, title-bar face, and reply bubble.    |
 
 WebRTC carries audio directly; the Codex app-server owns authentication and voice
@@ -90,7 +90,7 @@ The boundaries that protect continuity and keep work bounded are:
   Existing chat handlers and mounted composers own sends, drafts, and persistence.
 - Conversation history stays in Codex. Startup projects at most four recent
   turns and 3,000 UTF-16 characters from that conversation into voice context.
-  Saved facts reuse Mono storage under the reserved `vox` owner.
+  Saved facts reuse Bot storage under the reserved `vox` owner.
 - The display retains one completed assistant reply, capped at 4,000 UTF-16
   characters with explicit truncation. Native transcript deltas are suppressed
   before IPC. Audio samples and per-word transcript updates do not enter React.

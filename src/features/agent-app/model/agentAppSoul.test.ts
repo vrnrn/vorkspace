@@ -2,44 +2,44 @@
 import { expect, it, vi } from "vitest";
 import { newSession } from "../../sessions/model/session";
 import {
-  MonoFileConflict,
+  BotFileConflict,
   type AgentFilePath,
-} from "../../monos/model/monoFiles";
+} from "../../bots/model/botFiles";
 import { handleAgentApp, type AgentAppHost } from "./agentApp";
 
-function fixture(kind: "mono" | "habit" | "session" = "mono") {
+function fixture(kind: "bot" | "habit" | "session" = "bot") {
   const source = newSession("codex", "/Users/me", "codex:test");
   source.id = "chat";
   let soul = "# Soul\n\n- Be brief.\n- Check the code before answering.\n";
   let version = 0;
   const hash = () => `soul@${version}`;
   const agentFiles = vi.fn(async () => ({
-    id: "mono-1",
-    dir: "/data/monos/mono-1",
+    id: "bot-1",
+    dir: "/data/bots/bot-1",
     soul,
     soulHash: hash(),
     memory: "",
     memoryHash: "memory@0",
-    memoryPath: "/data/monos/mono-1/MEMORY.md",
+    memoryPath: "/data/bots/bot-1/MEMORY.md",
     topics: [],
   }));
   const write = vi.fn(
     async (
-      _monoId: string,
+      _botId: string,
       _path: AgentFilePath,
       text: string,
       expected: string,
     ) => {
-      if (expected !== hash()) throw new MonoFileConflict();
+      if (expected !== hash()) throw new BotFileConflict();
       soul = text;
       version++;
       return hash();
     },
   );
   const host = {
-    isMono: (id: string) => kind === "mono" && id === source.id,
-    monoOf: () =>
-      kind === "session" ? undefined : { id: "mono-1", projects: [] },
+    isBot: (id: string) => kind === "bot" && id === source.id,
+    botOf: () =>
+      kind === "session" ? undefined : { id: "bot-1", projects: [] },
     agentFiles,
     writeAgentFile: write,
   } as unknown as AgentAppHost;
@@ -65,7 +65,7 @@ it("reads and updates its own soul without needing an assigned project", async (
     text: soul(),
     hash: "soul@0",
   });
-  expect(agentFiles).toHaveBeenCalledWith("mono-1");
+  expect(agentFiles).toHaveBeenCalledWith("bot-1");
   const text = current.text.replace("Be brief.", "Use British English.");
   expect(
     await run("soul.update", { text, expectedHash: current.hash }),
@@ -74,7 +74,7 @@ it("reads and updates its own soul without needing an assigned project", async (
     updated: true,
     hash: "soul@1",
   });
-  expect(write).toHaveBeenCalledWith("mono-1", "SOUL.md", text, current.hash);
+  expect(write).toHaveBeenCalledWith("bot-1", "SOUL.md", text, current.hash);
   expect(soul()).toBe(text);
   expect(await run("soul.read")).toMatchObject({ text, hash: "soul@1" });
 });
@@ -107,14 +107,14 @@ it.each(["habit", "session"] as const)(
   async (kind) => {
     const { run, write, agentFiles } = fixture(kind);
     await expect(run("soul.read")).rejects.toThrow(
-      "Only a Mono's own conversation",
+      "Only a Bot's own conversation",
     );
     await expect(
       run("soul.update", {
         text: "# Soul\n",
         expectedHash: "soul@0",
       }),
-    ).rejects.toThrow("Only a Mono's own conversation");
+    ).rejects.toThrow("Only a Bot's own conversation");
     expect(agentFiles).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
   },
@@ -128,7 +128,7 @@ it.each([
   [{ text: null, expectedHash: "soul@0" }, "text"],
   [{ text: "x".repeat(240_001), expectedHash: "soul@0" }, "text"],
   [
-    { text: "# Soul", expectedHash: "soul@0", monoId: "other" },
+    { text: "# Soul", expectedHash: "soul@0", botId: "other" },
     "Unknown soul.update fields",
   ],
   [

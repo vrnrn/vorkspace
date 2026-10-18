@@ -278,8 +278,8 @@ pub fn session_upsert_delta(
     if session.cwd.starts_with("remote://") {
         return Err("Remote sessions belong to their host".into());
     }
-    if session.id.starts_with("mono/") {
-        return Err("Mono sessions use their own transcript store".into());
+    if session.id.starts_with("bot/") {
+        return Err("Bot sessions use their own transcript store".into());
     }
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
     incremental::save(&conn, &session, &block_ids, expected_revision)
@@ -568,7 +568,7 @@ pub fn session_delete(
         .unwrap_or_default();
     image_paths.extend(persisted_paths);
     image_paths.extend(
-        crate::mono_transcript::generated_image_paths(&conn, &session_id)
+        crate::bot_transcript::generated_image_paths(&conn, &session_id)
             .map_err(|e| e.to_string())?,
     );
     delete_session_record(&conn, &session_id, preserve_composer.unwrap_or(false))
@@ -1062,9 +1062,10 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     crate::automations::ensure_tables(conn)?;
     incremental::ensure_tables(conn)?;
     ensure_orchestration_history(conn)?;
-    crate::mono_transcript::ensure_tables(conn)?;
+    crate::bot_transcript::ensure_tables(conn)?;
     crate::composer_drafts::ensure_table(conn)?;
     crate::local_submissions::ensure_table(conn)?;
+    crate::bot_storage_migration::migrate_database(conn)?;
     Ok(())
 }
 
@@ -1473,8 +1474,8 @@ fn search_sessions_sql(include_archived: bool, cwd_scoped: bool) -> String {
                              AND CASE WHEN octet_length(block_json) <= ?2
                                       THEN LOWER(block_json) LIKE LOWER(?1) ESCAPE '\\'
                                       ELSE 0 END)
-                 OR EXISTS(SELECT 1 FROM mono_blocks
-                           WHERE mono_blocks.session_id = sessions.id
+                 OR EXISTS(SELECT 1 FROM bot_blocks
+                           WHERE bot_blocks.session_id = sessions.id
                              AND search_text LIKE LOWER(?1) ESCAPE '\\'))",
     );
     if !include_archived {
@@ -1599,8 +1600,8 @@ fn search_sessions_with_connection(
                 String::from_utf8_lossy(value.as_bytes().map_err(|e| e.to_string())?).into_owned()
             }
         };
-        let blocks = if crate::mono_transcript::is_indexed(conn, &id).map_err(|e| e.to_string())? {
-            crate::mono_transcript::matching_blocks(
+        let blocks = if crate::bot_transcript::is_indexed(conn, &id).map_err(|e| e.to_string())? {
+            crate::bot_transcript::matching_blocks(
                 conn,
                 &id,
                 &needle,

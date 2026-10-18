@@ -19,7 +19,7 @@ static LAUNCH_REVEALED: AtomicBool = AtomicBool::new(false);
 /// paths that bring workspace windows back.
 pub const QUICK_COMPOSER_LABEL: &str = "quick-composer";
 pub const QUICK_COMPOSER_GIT_LABEL: &str = "quick-composer-git";
-pub const MONO_CHAT_PREFIX: &str = "mono-chat-";
+pub const BOT_CHAT_PREFIX: &str = "bot-chat-";
 static ALLOW_EXIT: AtomicBool = AtomicBool::new(false);
 
 const QUIT_POLL: &str = "quit_poll";
@@ -170,7 +170,7 @@ pub fn set_window_glass_enabled(
         if enabled {
             // The floating panel's native layer owns its rounded fill. A
             // nonzero under-page background would add a square surface below it.
-            let alpha = if window.label().starts_with(MONO_CHAT_PREFIX) {
+            let alpha = if window.label().starts_with(BOT_CHAT_PREFIX) {
                 0
             } else {
                 3
@@ -228,8 +228,8 @@ pub fn destroy_window(window: WebviewWindow) -> Result<(), String> {
 pub fn is_workspace_window(label: &str) -> bool {
     label != QUICK_COMPOSER_LABEL
         && label != QUICK_COMPOSER_GIT_LABEL
-        && label != "mono-chat"
-        && !label.starts_with(MONO_CHAT_PREFIX)
+        && label != "bot-chat"
+        && !label.starts_with(BOT_CHAT_PREFIX)
 }
 
 /// Every workspace window, sorted by label.
@@ -658,11 +658,11 @@ mod tests {
     }
 
     #[test]
-    fn floating_mono_windows_are_excluded_from_workspace_lifecycle() {
+    fn floating_bot_windows_are_excluded_from_workspace_lifecycle() {
         assert!(is_workspace_window("main"));
         assert!(is_workspace_window("session-123"));
-        assert!(!is_workspace_window("mono-chat-first"));
-        assert!(!is_workspace_window("mono-chat-second"));
+        assert!(!is_workspace_window("bot-chat-first"));
+        assert!(!is_workspace_window("bot-chat-second"));
         assert!(!is_workspace_window(QUICK_COMPOSER_LABEL));
         assert!(!is_workspace_window(QUICK_COMPOSER_GIT_LABEL));
     }

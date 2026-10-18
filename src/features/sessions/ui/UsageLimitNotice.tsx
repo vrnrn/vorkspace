@@ -19,7 +19,7 @@ export function UsageLimitNotice({
   onResume?: () => void;
   onResumeAtReset?: (enabled: boolean) => void;
   onDismiss?: () => void;
-  variant?: "composer" | "mono";
+  variant?: "composer" | "bot";
   providerName?: string;
   modelPicker?: ReactNode;
 }) {
@@ -35,7 +35,7 @@ export function UsageLimitNotice({
   return (
     <div
       className={
-        variant === "mono"
+        variant === "bot"
           ? "mx-1.5 mb-2 rounded-lg border border-amber-400/20 bg-amber-400/6 px-3 py-2.5 text-[12px] text-content/60"
           : "px-2 text-content/55"
       }
@@ -44,7 +44,7 @@ export function UsageLimitNotice({
     >
       <div
         className={
-          variant === "mono"
+          variant === "bot"
             ? "flex items-center gap-2"
             : "relative z-0 flex h-8 items-center gap-2 rounded-t-[10px] border border-b-0 border-amber-400/25 bg-amber-400/10 px-2 text-[12px]"
         }
@@ -55,7 +55,7 @@ export function UsageLimitNotice({
             ? `${providerName} usage limit reached`
             : "Usage limit reached"}
         </span>
-        {variant === "mono" ? null : (
+        {variant === "bot" ? null : (
           <span className="min-w-0 flex-1 truncate">
             {limit.resetsAt == null
               ? ""
@@ -64,8 +64,8 @@ export function UsageLimitNotice({
                 : "Limit has reset"}
           </span>
         )}
-        {variant === "mono" ? null : modelPicker}
-        {variant === "mono" ? null : (
+        {variant === "bot" ? null : modelPicker}
+        {variant === "bot" ? null : (
           <ResumeControls
             limit={limit}
             waiting={waiting}
@@ -85,7 +85,7 @@ export function UsageLimitNotice({
           </button>
         ) : null}
       </div>
-      {variant === "mono" ? (
+      {variant === "bot" ? (
         <div className="pl-5.5">
           <p className="mt-1 leading-relaxed">
             Your conversation is saved. Choose another model or account to keep

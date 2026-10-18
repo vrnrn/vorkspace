@@ -42,7 +42,7 @@ Object.assign(window, {
     transformCallback: () => 1,
     unregisterCallback: () => {},
     invoke: async (command: string, args?: Record<string, unknown>) => {
-      if (command.startsWith("mono_")) return voxMemoryFixture(command, args);
+      if (command.startsWith("bot_")) return voxMemoryFixture(command, args);
       if (command === "plugin:dialog|message")
         return (window as unknown as { voxConfirm?: boolean }).voxConfirm ===
           false

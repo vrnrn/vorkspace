@@ -4,9 +4,14 @@ mod account_identity;
 mod artifacts;
 mod automations;
 mod background_work;
+mod bot;
+#[cfg(target_os = "macos")]
+mod bot_chat;
+mod bot_storage_migration;
+mod bot_transcript;
 mod chat_background;
 mod checkpoint;
-mod codex_mono_store;
+mod codex_bot_store;
 mod composer_drafts;
 mod control;
 pub mod control_cli;
@@ -26,10 +31,6 @@ mod macos;
 mod macos_background;
 mod mcp;
 mod menu;
-mod mono;
-#[cfg(target_os = "macos")]
-mod mono_chat;
-mod mono_transcript;
 mod notes;
 mod notifications;
 mod pasteboard;
@@ -297,6 +298,8 @@ pub fn run() {
         .manage(window_transfer::WindowTransferState::new())
         .manage(ticket_links::PendingTicketLinks::default())
         .setup(move |app| {
+            harness::reap_orphaned_harness_processes();
+            bot_storage_migration::migrate_directories(&app.path().app_data_dir()?)?;
             #[cfg(target_os = "macos")]
             if let Some(config) = &launch_window {
                 tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
@@ -315,7 +318,6 @@ pub fn run() {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 app.deep_link().register_all()?;
             }
-            harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
             control::init(app.handle())?;
             reminders::init(app.handle());
@@ -326,7 +328,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 quick_composer::init(app.handle())?;
-                mono_chat::init(app.handle())?;
+                bot_chat::init(app.handle())?;
                 macos::install_dock_menu(app.handle());
                 if let Some(window) = app.get_webview_window("main") {
                     macos::install(&window);
@@ -520,9 +522,9 @@ pub fn run() {
             harness::harness_resolve_pi,
             harness::harness_resolve_antigravity,
             harness::harness_spawn,
-            codex_mono_store::codex_mono_store_prepare,
-            codex_mono_store::codex_mono_store_copy,
-            codex_mono_store::codex_mono_store_restore_agent_state,
+            codex_bot_store::codex_bot_store_prepare,
+            codex_bot_store::codex_bot_store_copy,
+            codex_bot_store::codex_bot_store_restore_agent_state,
             provider_session_transfer::provider_session_transfer,
             harness::harness_write,
             harness::harness_kill,
@@ -550,10 +552,10 @@ pub fn run() {
             session_store::cancel_session_search,
             session_store::session_get,
             session_store::session_tool_detail,
-            mono_transcript::mono_session_get,
-            mono_transcript::mono_session_page,
-            mono_transcript::mono_session_upsert,
-            mono_transcript::mono_session_find,
+            bot_transcript::bot_session_get,
+            bot_transcript::bot_session_page,
+            bot_transcript::bot_session_upsert,
+            bot_transcript::bot_session_find,
             session_store::session_delete,
             session_store::session_set_archived,
             session_store::session_set_pinned,
@@ -573,9 +575,9 @@ pub fn run() {
             notes::notes_delete,
             notes::notes_save_image,
             notes::notes_image_path,
-            mono::mono_load,
-            mono::mono_read,
-            mono::mono_save,
+            bot::bot_load,
+            bot::bot_read,
+            bot::bot_save,
             checkpoint::session_checkpoint_ensure,
             checkpoint::session_checkpoint_begin_turn,
             checkpoint::session_checkpoint_finish_turn,
@@ -631,27 +633,27 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             quick_composer::git_popup::quick_composer_dismiss,
             #[cfg(target_os = "macos")]
-            mono_chat::mono_chat_sync,
+            bot_chat::bot_chat_sync,
             #[cfg(target_os = "macos")]
-            mono_chat::mono_chat_publish,
+            bot_chat::bot_chat_publish,
             #[cfg(target_os = "macos")]
-            mono_chat::mono_chat_state,
+            bot_chat::bot_chat_state,
             #[cfg(target_os = "macos")]
-            mono_chat::mono_chat_ready,
+            bot_chat::bot_chat_ready,
             #[cfg(target_os = "macos")]
-            mono_chat::mono_chat_action,
+            bot_chat::bot_chat_action,
             #[cfg(target_os = "macos")]
-            mono_chat::mono_chat_take,
+            bot_chat::bot_chat_take,
             #[cfg(target_os = "macos")]
-            mono_chat::mono_chat_accept,
+            bot_chat::bot_chat_accept,
             #[cfg(target_os = "macos")]
-            mono_chat::mono_chat_reply,
+            bot_chat::bot_chat_reply,
             #[cfg(target_os = "macos")]
-            mono_chat::mono_chat_keep_alive,
+            bot_chat::bot_chat_keep_alive,
             #[cfg(target_os = "macos")]
-            mono_chat::mono_chat_switch,
+            bot_chat::bot_chat_switch,
             #[cfg(target_os = "macos")]
-            mono_chat::mono_menu_bar_set_visible,
+            bot_chat::bot_menu_bar_set_visible,
             window_transfer::stage_window_transfer,
             window_transfer::take_window_transfer,
             ticket_links::take_ticket_context_links,
@@ -701,7 +703,7 @@ pub fn run() {
                 .any(|window| window.label() != label);
             control::window_closed(handle, &label);
             #[cfg(target_os = "macos")]
-            mono_chat::window_closed(handle, &label);
+            bot_chat::window_closed(handle, &label);
             if !other_window {
                 reap_harness_children(handle);
             }

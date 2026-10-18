@@ -12,9 +12,9 @@ import {
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
 import { copyText } from "../../platform/tauri/clipboard";
 import {
-  createMono,
-  saveMonoSessionId,
-} from "../../features/monos/model/mono";
+  createBot,
+  saveBotSessionId,
+} from "../../features/bots/model/bot";
 
 // Keep native services out of these menu/input interaction tests.
 vi.mock("../../features/source-control/hooks/useProjectDiffStats", () => ({
@@ -296,7 +296,7 @@ describe("inset session previews", () => {
 });
 
 it("leaves the resident agent and its description out of the session list", () => {
-  saveMonoSessionId(createMono(["/workspace/project"]).id, "resident");
+  saveBotSessionId(createBot(["/workspace/project"]).id, "resident");
   props.sessions = [
     ...props.sessions,
     {
@@ -308,15 +308,15 @@ it("leaves the resident agent and its description out of the session list", () =
   act(() => render());
   expect(card()).not.toBeNull();
   expect(container.querySelector('[data-session-card="resident"]')).toBeNull();
-  expect(container.querySelector("[data-mono]")).toBeNull();
+  expect(container.querySelector("[data-bot]")).toBeNull();
   expect(container.textContent).not.toContain("Resident agent description");
 });
 
-it("omits hidden Mono launches from history, open sessions and folders", () => {
+it("omits hidden Bot launches from history, open sessions and folders", () => {
   const hidden = {
     ...props.sessions[0],
     id: "hidden-launch",
-    title: "Mono background work",
+    title: "Bot background work",
     sidebarHidden: true,
   };
   props.sessions = [...props.sessions, hidden];
@@ -409,23 +409,23 @@ describe("worktree explorer visibility", () => {
   });
 });
 
-describe.each([false, true])("Mono rail selection (compact: %s)", (compact) => {
+describe.each([false, true])("Bot rail selection (compact: %s)", (compact) => {
   it.each([
     ["Inbox", "inboxActive", "onOpenInbox"],
     ["Notes", "notesActive", "onOpenNotes"],
     ["Automations", "automationsActive", "onOpenAutomations"],
     ["Search", "searchActive", "onSearch"],
-  ] as const)("selects only %s while it covers a Mono", async (label, active, open) => {
-    const mono = createMono();
+  ] as const)("selects only %s while it covers a Bot", async (label, active, open) => {
+    const bot = createBot();
     props = {
       ...props,
       projectRailOpen: !compact,
       compactProjectRail: compact,
       onSelectProject: vi.fn(),
       onOpenProject: vi.fn(),
-      monoViewActive: true,
-      monos: {
-        activeId: mono.id,
+      botViewActive: true,
+      bots: {
+        activeId: bot.id,
         states: new Map(),
         onOpen: vi.fn(),
         onCreate: vi.fn(),
@@ -437,25 +437,25 @@ describe.each([false, true])("Mono rail selection (compact: %s)", (compact) => {
       },
     };
     await act(async () => render());
-    const monoSelected = () => compact
+    const botSelected = () => compact
       ? container.querySelector('[aria-label^="Switch project"]')!
-          .getAttribute("aria-label")!.includes("current mono")
-      : !!container.querySelector('[data-mono-rail] [aria-current="true"]');
-    expect(monoSelected()).toBe(true);
+          .getAttribute("aria-label")!.includes("current bot")
+      : !!container.querySelector('[data-bot-rail] [aria-current="true"]');
+    expect(botSelected()).toBe(true);
 
     await act(async () =>
       container.querySelector<HTMLButtonElement>(`button[aria-label^="${label}"]`)!.click(),
     );
     expect(container.querySelector(`button[aria-label^="${label}"]`)!.classList)
       .toContain("bg-selection");
-    expect(monoSelected()).toBe(false);
-    expect(container.querySelector('[data-mono-rail] [data-selected="true"]')).toBeNull();
-    expect(props.monos?.activeId).toBe(mono.id);
+    expect(botSelected()).toBe(false);
+    expect(container.querySelector('[data-bot-rail] [data-selected="true"]')).toBeNull();
+    expect(props.bots?.activeId).toBe(bot.id);
 
     // Back reveals the same conversation and restores its rail selection.
     props = { ...props, [active]: false };
     await act(async () => render());
-    expect(monoSelected()).toBe(true);
+    expect(botSelected()).toBe(true);
   });
 });
 

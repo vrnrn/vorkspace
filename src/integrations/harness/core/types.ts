@@ -168,8 +168,8 @@ export type HarnessSessionInput = {
   runtimeMode: RuntimeMode;
   /** Keep provider context in memory; vorkspace owns the saved transcript. */
   ephemeral?: boolean;
-  /** Persist Codex context in vorkspace's private Mono store. */
-  codexStore?: "mono";
+  /** Persist Codex context in vorkspace's private Bot store. */
+  codexStore?: "bot";
   intent?: TurnIntent;
   /**
    * This session drives vorkspace's control CLI, which reaches the app over

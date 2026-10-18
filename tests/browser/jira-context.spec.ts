@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 for (const provider of ["jira", "github", "gitlab", "gitlab-mr"]) {
-  test(`${provider}: copy and attach live context to a Mono`, async ({
+  test(`${provider}: copy and attach live context to a Bot`, async ({
     page,
   }) => {
     const errors: string[] = [];
@@ -26,16 +26,16 @@ for (const provider of ["jira", "github", "gitlab", "gitlab-mr"]) {
     await expect(
       page.getByRole("group", { name: "Projects", exact: true }),
     ).toBeVisible();
-    await page.getByRole("option", { name: "Demo Mono" }).click();
+    await page.getByRole("option", { name: "Demo Bot" }).click();
     await page
       .getByRole("button", { name: "Send to chat", exact: true })
       .click();
     await expect(
-      page.getByRole("heading", { name: "Demo Mono" }),
+      page.getByRole("heading", { name: "Demo Bot" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Update dummy ticket" }).click();
     await page
-      .getByRole("textbox", { name: "Message Demo Mono" })
+      .getByRole("textbox", { name: "Message Demo Bot" })
       .fill("Please investigate");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByLabel("Resolved ticket context")).toContainText(
@@ -60,11 +60,11 @@ for (const provider of ["jira", "github", "gitlab", "gitlab-mr"]) {
 }
 
 for (const provider of ["jira", "gitlab"]) {
-  test(`${provider}: Send to chat defaults to the saved Mono`, async ({ page }) => {
+  test(`${provider}: Send to chat defaults to the saved Bot`, async ({ page }) => {
     await page.addInitScript(() => {
-      localStorage.setItem("monocode.inboxMonos.v1", JSON.stringify({
-        jira: "mono-demo",
-        gitlab: "mono-demo",
+      localStorage.setItem("monocode.inboxBots.v1", JSON.stringify({
+        jira: "bot-demo",
+        gitlab: "bot-demo",
       }));
     });
     await page.goto(
@@ -72,12 +72,12 @@ for (const provider of ["jira", "gitlab"]) {
     );
     await expect(
       page.getByRole("button", { name: "Choose chat destination" }),
-    ).toContainText("Demo Mono");
+    ).toContainText("Demo Bot");
     await page
       .getByRole("button", { name: "Send to chat", exact: true })
       .click();
     await expect(
-      page.getByRole("heading", { name: "Demo Mono" }),
+      page.getByRole("heading", { name: "Demo Bot" }),
     ).toBeVisible();
     await expect(page.getByLabel("Resolved ticket context")).toContainText(
       "Ticket attached. Add a message",
@@ -100,12 +100,12 @@ test("supports keyboard destination selection in a narrow window", async ({ page
   await page.setViewportSize({ width: 560, height: 760 });
   await page.goto("/tests/browser/jira-context.html");
   await page.getByRole("button", { name: "Choose chat destination" }).click();
-  const search = page.getByRole("textbox", { name: "Find project or Mono" });
+  const search = page.getByRole("textbox", { name: "Find project or Bot" });
   await expect(search).toBeFocused();
   if (testInfo.project.name === "chromium") await page.screenshot({ path: testInfo.outputPath("ticket-context.png") });
   await search.press("ArrowDown");
   await expect(page.getByRole("option", { name: "Demo project" })).toBeFocused();
   await page.getByRole("option", { name: "Demo project" }).press("ArrowDown");
-  await page.getByRole("option", { name: "Demo Mono" }).press("Enter");
-  await expect(page.getByRole("button", { name: "Choose chat destination" })).toContainText("Demo Mono");
+  await page.getByRole("option", { name: "Demo Bot" }).press("Enter");
+  await expect(page.getByRole("button", { name: "Choose chat destination" })).toContainText("Demo Bot");
 });

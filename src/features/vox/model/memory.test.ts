@@ -19,21 +19,21 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async (command, args) => {
       const value = args as {
-        mono: string;
+        bot: string;
         path: string;
         text: string;
         expectedHash: string;
       };
-      expect(value.mono).toBe("vox");
+      expect(value.bot).toBe("vox");
       const hash = (path: string) => `version:${files.get(path) ?? ""}`;
-      if (command === "mono_read")
+      if (command === "bot_read")
         return { text: files.get(value.path) ?? null, hash: hash(value.path) };
-      if (command === "mono_save") {
+      if (command === "bot_save") {
         if (value.expectedHash !== hash(value.path)) throw "conflict";
         files.set(value.path, value.text);
         return hash(value.path);
       }
-      if (command === "mono_load")
+      if (command === "bot_load")
         return {
           id: "vox",
           dir: "/fixture/vox",
@@ -48,7 +48,7 @@ beforeEach(() => {
     });
 });
 afterEach(() => vi.restoreAllMocks());
-it("uses the Mono memory owner for durable add, correction, recall and deletion", async () => {
+it("uses the Bot memory owner for durable add, correction, recall and deletion", async () => {
   await run("memory.add", { fact: "Uses npm" });
   expect(await voxMemoryContext()).toContain("Uses npm");
   await run("memory.replace", { find: "Uses npm", fact: "Uses pnpm" });
@@ -60,9 +60,9 @@ it("uses the Mono memory owner for durable add, correction, recall and deletion"
   await run("memory.remove", { find: "Uses pnpm" });
   expect(files.get("MEMORY.md")).not.toContain("Uses pnpm");
 });
-it("cannot redirect memory to another Mono and revalidates cancellation before writing", async () => {
+it("cannot redirect memory to another Bot and revalidates cancellation before writing", async () => {
   await expect(
-    run("memory.add", { mono: "other", fact: "wrong owner" }),
+    run("memory.add", { bot: "other", fact: "wrong owner" }),
   ).rejects.toThrow();
   let checks = 0;
   await expect(
@@ -72,7 +72,7 @@ it("cannot redirect memory to another Mono and revalidates cancellation before w
   ).rejects.toThrow("stopped");
   expect(files.get("MEMORY.md")).toBe("");
 });
-it("loads memory using the same bounded budget as Monos", async () => {
+it("loads memory using the same bounded budget as Bots", async () => {
   files.set(
     "MEMORY.md",
     Array.from({ length: 500 }, (_, n) => `${n} ${"x".repeat(300)}`).join("\n"),

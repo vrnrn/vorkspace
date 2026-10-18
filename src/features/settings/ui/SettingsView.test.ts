@@ -11,7 +11,7 @@ import {
 } from "../../vox/model/microphone";
 import { rememberNotificationProjects } from "../../notifications/model/notificationProjects";
 import { loadInboxConnectors } from "../../inbox/model/inboxConnectors";
-import { loadInboxMonos } from "../../inbox/model/inboxMonos";
+import { loadInboxBots } from "../../inbox/model/inboxBots";
 import { loadJiraInboxFilter } from "../../inbox/model/jira";
 import {
   SETTINGS_INDEX,
@@ -32,11 +32,11 @@ import {
 import { HARNESSES, HARNESS_TITLE } from "../../sessions/model/session";
 import { saveMaskEmails, saveShowRemainingUsage } from "../model/displayPrefs";
 import {
-  createMono,
-  findMono,
-  monoLook,
-  updateMono,
-} from "../../monos/model/mono";
+  createBot,
+  findBot,
+  botLook,
+  updateBot,
+} from "../../bots/model/bot";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => undefined),
@@ -116,7 +116,7 @@ beforeEach(() => {
   vi.mocked(invoke)
     .mockReset()
     .mockImplementation(async (command) =>
-      command === "mono_load"
+      command === "bot_load"
         ? {
             id: "vox",
             dir: "/fixture/vox",
@@ -196,17 +196,17 @@ describe("settings pages", () => {
     expect(loadVoxMicrophone().id).toBe("missing");
   });
 
-  it("saves separate default Monos for Jira and GitLab and can clear them", async () => {
-    const reviews = createMono();
-    const tickets = createMono();
-    updateMono(reviews.id, (mono) => ({ ...mono, name: "Review Mono" }));
-    updateMono(tickets.id, (mono) => ({ ...mono, name: "Ticket Mono" }));
+  it("saves separate default Bots for Jira and GitLab and can clear them", async () => {
+    const reviews = createBot();
+    const tickets = createBot();
+    updateBot(reviews.id, (bot) => ({ ...bot, name: "Review Bot" }));
+    updateBot(tickets.id, (bot) => ({ ...bot, name: "Ticket Bot" }));
     await render("inbox");
-    const chooseMono = async (source: string, label: string) => {
+    const chooseBot = async (source: string, label: string) => {
       await act(async () =>
         container
           .querySelector<HTMLButtonElement>(
-            `button[aria-label^="${source} default Mono:"]`,
+            `button[aria-label^="${source} default Bot:"]`,
           )!
           .click(),
       );
@@ -216,33 +216,33 @@ describe("settings pages", () => {
           .click(),
       );
     };
-    await chooseMono("GitLab", "Review Mono");
-    await chooseMono("Jira", "Ticket Mono");
-    expect(loadInboxMonos()).toEqual({ gitlab: reviews.id, jira: tickets.id });
+    await chooseBot("GitLab", "Review Bot");
+    await chooseBot("Jira", "Ticket Bot");
+    expect(loadInboxBots()).toEqual({ gitlab: reviews.id, jira: tickets.id });
     await render("general");
     await render("inbox");
     expect(
-      container.querySelector('[aria-label^="GitLab default Mono:"]')
+      container.querySelector('[aria-label^="GitLab default Bot:"]')
         ?.textContent,
-    ).toBe("Review Mono");
+    ).toBe("Review Bot");
     await act(async () =>
-      updateMono(reviews.id, (mono) => ({ ...mono, name: "Renamed Mono" })),
+      updateBot(reviews.id, (bot) => ({ ...bot, name: "Renamed Bot" })),
     );
     expect(
-      container.querySelector('[aria-label^="GitLab default Mono:"]')
+      container.querySelector('[aria-label^="GitLab default Bot:"]')
         ?.textContent,
-    ).toBe("Renamed Mono");
-    await chooseMono("GitLab", "No default Mono");
-    expect(loadInboxMonos()).toEqual({ jira: tickets.id });
+    ).toBe("Renamed Bot");
+    await chooseBot("GitLab", "No default Bot");
+    expect(loadInboxBots()).toEqual({ jira: tickets.id });
   });
 
-  it("explains how to choose a default when there are no Monos", async () => {
+  it("explains how to choose a default when there are no Bots", async () => {
     await render("inbox");
     expect(
-      container.querySelector('[aria-label^="GitLab default Mono:"]')
+      container.querySelector('[aria-label^="GitLab default Bot:"]')
         ?.textContent,
-    ).toBe("No default Mono");
-    expect(container.textContent).toContain("Create a Mono in Monos settings");
+    ).toBe("No default Bot");
+    expect(container.textContent).toContain("Create a Bot in Bots settings");
   });
 
   it("hides Jira notification rows immediately when the dropdown selects JQL", async () => {
@@ -354,31 +354,31 @@ describe("settings pages", () => {
     ).toContain("https://gitlab.example.com");
   });
 
-  it("saves each Mono's session visibility and restores it when settings reopen", async () => {
-    const mono = createMono();
-    const other = createMono();
+  it("saves each Bot's session visibility and restores it when settings reopen", async () => {
+    const bot = createBot();
+    const other = createBot();
     const toggle = (id: string) =>
       container.querySelector<HTMLButtonElement>(
-        `[role="switch"][aria-label="Show sessions started by ${monoLook(findMono(id)!).name} in sidebar"]`,
+        `[role="switch"][aria-label="Show sessions started by ${botLook(findBot(id)!).name} in sidebar"]`,
       )!;
-    await render("monos");
-    // Off until turned on: a Mono's sessions stay in its overview.
-    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
+    await render("bots");
+    // Off until turned on: a Bot's sessions stay in its overview.
+    expect(toggle(bot.id).getAttribute("aria-checked")).toBe("false");
     expect(toggle(other.id).getAttribute("aria-checked")).toBe("false");
-    await act(async () => toggle(mono.id).click());
-    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
-    expect(findMono(mono.id)?.showStartedSessionsInSidebar).toBe(true);
+    await act(async () => toggle(bot.id).click());
+    expect(toggle(bot.id).getAttribute("aria-checked")).toBe("true");
+    expect(findBot(bot.id)?.showStartedSessionsInSidebar).toBe(true);
     expect(toggle(other.id).getAttribute("aria-checked")).toBe("false");
     await render("general");
-    await render("monos");
-    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
+    await render("bots");
+    expect(toggle(bot.id).getAttribute("aria-checked")).toBe("true");
     await act(async () =>
-      updateMono(mono.id, (entry) => ({
+      updateBot(bot.id, (entry) => ({
         ...entry,
         showStartedSessionsInSidebar: false,
       })),
     );
-    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
+    expect(toggle(bot.id).getAttribute("aria-checked")).toBe("false");
   });
 
   it("blurs account emails by default and hides them when settings reopen", async () => {

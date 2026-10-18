@@ -1,8 +1,8 @@
 import {
   acquireHarnessBridge,
-  copyMonoCodexThreads,
+  copyBotCodexThreads,
   killChild,
-  prepareMonoCodexStore,
+  prepareBotCodexStore,
   spawnChild,
   unwatchChild,
   watchChild,
@@ -42,7 +42,7 @@ const inFlight = new Map<
 
 /** Read account configuration in its original home, then retain exact native
  * rollouts privately. No inference or transcript summarization is involved. */
-export function prepareCodexMonoContext(input: {
+export function prepareCodexBotContext(input: {
   sessionId: string;
   path: string;
   cwd: string;
@@ -58,7 +58,7 @@ export function prepareCodexMonoContext(input: {
       pending.migrationOnly === input.migrationOnly
     )
       return pending.task;
-    return pending.task.then(() => prepareCodexMonoContext(input));
+    return pending.task.then(() => prepareCodexBotContext(input));
   }
   const task = prepare(input).finally(() => {
     if (inFlight.get(key)?.task === task) inFlight.delete(key);
@@ -72,9 +72,9 @@ export function prepareCodexMonoContext(input: {
 }
 
 async function prepare(
-  input: Parameters<typeof prepareCodexMonoContext>[0],
+  input: Parameters<typeof prepareCodexBotContext>[0],
 ): Promise<PreparedContext> {
-  const store = await prepareMonoCodexStore(
+  const store = await prepareBotCodexStore(
     input.providerAccountId,
     input.threadId,
   );
@@ -144,7 +144,7 @@ async function prepare(
         throw error;
       }
       if (!root.path)
-        throw new Error("Codex did not return the saved Mono context");
+        throw new Error("Codex did not return the saved Bot context");
       const descendants = new Map<string, Thread>();
       for (const archived of [false, true]) {
         let cursor: string | undefined;
@@ -186,10 +186,10 @@ async function prepare(
           includeTurns: false,
         });
         if (!retained.thread.path)
-          throw new Error("Codex did not retain a Mono thread file");
+          throw new Error("Codex did not retain a Bot thread file");
         paths.push(retained.thread.path);
       }
-      await copyMonoCodexThreads(
+      await copyBotCodexThreads(
         input.providerAccountId,
         root.id,
         paths,

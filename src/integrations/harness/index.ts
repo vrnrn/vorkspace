@@ -25,7 +25,7 @@ export {
   forgetCodexSession,
   bindCodexSession,
   hasLiveCodexSession,
-  migrateMonoCodexSession,
+  migrateBotCodexSession,
 } from "./providers/codex/codex";
 
 export {

@@ -345,15 +345,15 @@ function groupTranscriptTurns(
     // message. Dropping it here folds the reply into the turn above, so a
     // supervised run reads as one conversation.
     if (block.internal && !managed) {
-      if (isMonoCompletionPrompt(block) || isMonoPeerPrompt(block)) {
+      if (isBotCompletionPrompt(block) || isBotPeerPrompt(block)) {
         if (current.length > 0) turns.push(current);
-        // Mono replies need a stable turn before their first output arrives.
+        // Bot replies need a stable turn before their first output arrives.
         // Keep the hidden prompt as its identity and timing, not visible text.
         current = retainCompletionPrompts ? [block] : [];
       }
       continue;
     }
-    if (block.role === "handoff" || block.monoHabit) {
+    if (block.role === "handoff" || block.botHabit) {
       if (current.length > 0) turns.push(current);
       turns.push([block]);
       current = [];
@@ -386,20 +386,20 @@ export function joinedTurnStart(
   return undefined;
 }
 
-/** The hidden turn the app writes when a session a Mono launched finishes. */
-export function isMonoCompletionPrompt(block: Block): boolean {
+/** The hidden turn the app writes when a session a Bot launched finishes. */
+export function isBotCompletionPrompt(block: Block): boolean {
   // Older completion deliveries lost their marker but kept the receipt ID.
   return (
     !!block.internal &&
-    (!!block.monoSessionCompletion ||
+    (!!block.botSessionCompletion ||
       (block.role === "user" &&
-        !!block.appRequestId?.startsWith("mono-completion-")))
+        /^(?:bot|mono)-completion-/.test(block.appRequestId ?? "")))
   );
 }
 
-/** The turn the app writes when another Mono sends this Mono a direct message. */
-export function isMonoPeerPrompt(block: Block): boolean {
-  return !!block.internal && !!block.monoPeerMessage;
+/** The turn the app writes when another Bot sends this Bot a direct message. */
+export function isBotPeerPrompt(block: Block): boolean {
+  return !!block.internal && !!block.botPeerMessage;
 }
 
 /** A message this long after the one before gets its own day and time. */
@@ -414,9 +414,9 @@ export function opensNewStretch(at: number, previousAt?: number): boolean {
   );
 }
 
-/** When the latest run in a Mono turn started, for measuring the gap after it. */
-export function monoTurnLatestStart(turn: Block[]): number | undefined {
-  let latest = turn[0].monoHabit?.at ?? turn[0].startedAt;
+/** When the latest run in a Bot turn started, for measuring the gap after it. */
+export function botTurnLatestStart(turn: Block[]): number | undefined {
+  let latest = turn[0].botHabit?.at ?? turn[0].startedAt;
   for (const block of turn) {
     if (
       block.role === "user" &&
@@ -429,25 +429,25 @@ export function monoTurnLatestStart(turn: Block[]): number | undefined {
 }
 
 /**
- * The Mono chat's turns. A reply the Mono sends on its own, after a session it
+ * The Bot chat's turns. A reply the Bot sends on its own, after a session it
  * launched finishes, continues the message above it: one header, one answer,
  * one set of actions. Only a new stretch, which gets its own day and time,
  * starts a fresh message.
  */
-export function groupMonoChatTurns(
+export function groupBotChatTurns(
   blocks: Block[],
   managed = false,
 ): Block[][] {
   const groups: Block[][] = [];
   let latestStart: number | undefined;
-  for (const turn of groupMonoTurns(blocks, managed)) {
+  for (const turn of groupBotTurns(blocks, managed)) {
     const previous = groups[groups.length - 1];
     const at = turn[0].startedAt;
     if (
       previous &&
-      !previous[0].monoHabit &&
+      !previous[0].botHabit &&
       previous[0].role !== "handoff" &&
-      isMonoCompletionPrompt(turn[0]) &&
+      isBotCompletionPrompt(turn[0]) &&
       (at == null || !opensNewStretch(at, latestStart))
     ) {
       previous.push(...turn);
@@ -463,19 +463,19 @@ export function groupMonoChatTurns(
       }
     } else {
       groups.push(turn);
-      latestStart = monoTurnLatestStart(turn);
+      latestStart = botTurnLatestStart(turn);
     }
   }
   return groups;
 }
 
-/** The runs a merged Mono turn holds, each opened by its own prompt. */
-export function monoTurnRuns(turn: Block[]): Block[][] {
+/** The runs a merged Bot turn holds, each opened by its own prompt. */
+export function botTurnRuns(turn: Block[]): Block[][] {
   const runs: Block[][] = [];
   turn.forEach((block, index) => {
     if (
       index === 0 ||
-      (isMonoCompletionPrompt(block) && block.startedAt != null)
+      (isBotCompletionPrompt(block) && block.startedAt != null)
     )
       runs.push([block]);
     else runs[runs.length - 1].push(block);
@@ -484,7 +484,7 @@ export function monoTurnRuns(turn: Block[]): Block[][] {
 }
 
 /** Follow-ups belong to one conversation burst even when work lands between them. */
-export function groupMonoTurns(blocks: Block[], managed = false): Block[][] {
+export function groupBotTurns(blocks: Block[], managed = false): Block[][] {
   const groups: Block[][] = [];
   for (const turn of groupTranscriptTurns(blocks, managed, true)) {
     const previous = groups[groups.length - 1];
@@ -557,14 +557,14 @@ export function groupTurnItems(
 }
 
 /**
- * A Mono keeps its process, including the opening message, in the activity
+ * A Bot keeps its process, including the opening message, in the activity
  * trail. Live prose stays there until the user joins the running turn; replies
  * after a delivered follow-up stay visible even when more work arrives.
  * Settling reveals the trailing reply for uninterrupted turns.
  * Cards, notices and interjections keep their
  * own rows, and work resumed after a yielded reply does not absorb that reply.
  */
-export function groupMonoTurnItems(
+export function groupBotTurnItems(
   blocks: Block[],
   options?: { live?: boolean; undeliveredMessageIds?: ReadonlySet<string> },
 ): TurnItem[] {

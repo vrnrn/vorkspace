@@ -1,6 +1,6 @@
 # Vox Voice Controller (ELI5)
 
-**Vox** is a little voice assistant built into the top-right corner of Vorkspace's title bar. Instead of typing to every chat tab by hand, you can talk out loud to Vox and ask it to check on your chats, start new tasks, or read replies back to you.
+**Vox** is a little voice assistant built into the top-right corner of Vorkspace's title bar. Instead of typing to every chat tab or Bot by hand, you can talk out loud to Vox and ask it to check on your sessions and Bots, start new tasks, or read replies back to you.
 
 For the full implementation guide, see [Vox](../vox.md).
 

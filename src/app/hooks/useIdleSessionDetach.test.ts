@@ -27,7 +27,7 @@ import {
   type WorkspaceTab,
 } from "../../features/workspace/model/layout";
 import { useIdleSessionDetach } from "./useIdleSessionDetach";
-import { createMono, saveMonoSessionId } from "../../features/monos/model/mono";
+import { createBot, saveBotSessionId } from "../../features/bots/model/bot";
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -221,7 +221,7 @@ it("keeps the resident conversation mounted independently of ordinary tabs", asy
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => values.set(key, value),
   });
-  saveMonoSessionId(createMono([agent.cwd]).id, agent.id);
+  saveBotSessionId(createBot([agent.cwd]).id, agent.id);
   const workspace = mountWorkspace({
     sessions: [agent, chat("other")],
     tabs: [newTab("other")],

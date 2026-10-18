@@ -197,7 +197,7 @@ it("does no idle work and negotiates direct audio with a durable private default
     "/repo",
     { provider: "codex", id: "default" },
     "codex",
-    "mono",
+    "bot",
   ]);
   expect(
     host.requests.find((r) => r.method === "initialize")?.params,
@@ -456,7 +456,7 @@ it("returns actionable failures without replaying a rejected call or ending voic
     ),
   );
   expect(execute).toHaveBeenCalledOnce();
-  tool("r3", "call-3", "monos.list", {});
+  tool("r3", "call-3", "bots.list", {});
   await vi.waitFor(() =>
     expect(host.requests.find((r) => r.id === "r3")?.result?.success).toBe(
       true,
@@ -546,9 +546,9 @@ it("denied microphone access has a recovery path and never spawns", async () => 
   expect(error).not.toHaveBeenCalled();
 });
 
-it("provides Mono names to voice once at startup and aborts metadata requests with the call", async () => {
+it("provides Bot names to voice once at startup and aborts metadata requests with the call", async () => {
   const getContext = vi.fn(async () => ({
-    monos: [{ id: "helper", name: "Build Helper" }],
+    bots: [{ id: "helper", name: "Build Helper" }],
   }));
   const call = create({ getContext });
   expect(getContext).not.toHaveBeenCalled();

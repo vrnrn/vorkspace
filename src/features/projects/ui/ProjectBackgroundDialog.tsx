@@ -38,7 +38,7 @@ type Props = {
   name: string;
   /**
    * Only the image can change: it shows as a dimmed Haze on every chat, and
-   * nothing falls back to the global background. A Mono's chat is like this.
+   * nothing falls back to the global background. A Bot's chat is like this.
    */
   locked?: boolean;
   onClose: () => void;

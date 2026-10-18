@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { TicketContextActions } from "./TicketContextActions";
 import { copyText } from "../../../platform/tauri/clipboard";
 import type { InboxItem } from "../model/githubTasks";
-import { loadInboxMonos, setInboxMono } from "../model/inboxMonos";
+import { loadInboxBots, setInboxBot } from "../model/inboxBots";
 
 vi.mock("../../../platform/tauri/clipboard", () => ({
   copyText: vi.fn(async () => {}),
@@ -42,8 +42,8 @@ const projects = [
     mascotColor: "blue",
   },
 ];
-const monos = [
-  { id: "mono-demo", name: "Demo Mono", mascot: "crab", color: "blue" },
+const bots = [
+  { id: "bot-demo", name: "Demo Bot", mascot: "crab", color: "blue" },
 ];
 const onStart = vi.fn();
 beforeEach(() => {
@@ -72,7 +72,7 @@ function render(
         item: ticket,
         cwd: "/tmp/demo",
         projects,
-        monos,
+        bots,
         onStart,
         ...extra,
       }),
@@ -96,32 +96,32 @@ async function choose(text: string) {
 }
 
 it.each(["jira", "gitlab"] as const)(
-  "preselects the saved %s Mono and sends to it",
+  "preselects the saved %s Bot and sends to it",
   async (provider) => {
-    setInboxMono(provider, "mono-demo");
+    setInboxBot(provider, "bot-demo");
     const item = { ...ticket, provider };
     render({ item });
     expect(
       container.querySelector('[aria-label="Choose chat destination"]')
         ?.textContent,
-    ).toContain("Demo Mono");
+    ).toContain("Demo Bot");
     await act(async () => button("Send to chat").click());
-    expect(onStart).toHaveBeenCalledWith(item, undefined, "mono-demo");
+    expect(onStart).toHaveBeenCalledWith(item, undefined, "bot-demo");
   },
 );
 
 it("keeps separate defaults and leaves GitHub's destination alone", async () => {
-  setInboxMono("jira", "mono-demo");
-  setInboxMono("gitlab", "mono-review");
-  const reviewMono = { ...monos[0], id: "mono-review", name: "Review Mono" };
+  setInboxBot("jira", "bot-demo");
+  setInboxBot("gitlab", "bot-review");
+  const reviewBot = { ...bots[0], id: "bot-review", name: "Review Bot" };
   render({
     item: { ...ticket, provider: "gitlab" },
-    monos: [...monos, reviewMono],
+    bots: [...bots, reviewBot],
   });
   expect(
     container.querySelector('[aria-label="Choose chat destination"]')
       ?.textContent,
-  ).toContain("Review Mono");
+  ).toContain("Review Bot");
   render({ item: { ...ticket, provider: "github" } });
   expect(
     container.querySelector('[aria-label="Choose chat destination"]')
@@ -130,7 +130,7 @@ it("keeps separate defaults and leaves GitHub's destination alone", async () => 
 });
 
 it("allows a project override without replacing the saved default", async () => {
-  setInboxMono("jira", "mono-demo");
+  setInboxBot("jira", "bot-demo");
   render();
   await choose("Demo project");
   render();
@@ -140,11 +140,11 @@ it("allows a project override without replacing the saved default", async () => 
     undefined,
     undefined,
   );
-  expect(loadInboxMonos()).toEqual({ jira: "mono-demo" });
+  expect(loadInboxBots()).toEqual({ jira: "bot-demo" });
 });
 
-it("falls back when the saved Mono has been removed", async () => {
-  setInboxMono("jira", "mono-deleted");
+it("falls back when the saved Bot has been removed", async () => {
+  setInboxBot("jira", "bot-deleted");
   render();
   expect(
     container.querySelector('[aria-label="Choose chat destination"]')
@@ -153,15 +153,15 @@ it("falls back when the saved Mono has been removed", async () => {
   expect(button("Send to chat").disabled).toBe(false);
 });
 
-it("follows defaults and Mono availability updates until manually overridden", async () => {
-  render({ monos: [] });
-  act(() => setInboxMono("jira", "mono-demo"));
+it("follows defaults and Bot availability updates until manually overridden", async () => {
+  render({ bots: [] });
+  act(() => setInboxBot("jira", "bot-demo"));
   render();
   expect(
     container.querySelector('[aria-label="Choose chat destination"]')
       ?.textContent,
-  ).toContain("Demo Mono");
-  act(() => setInboxMono("jira", null));
+  ).toContain("Demo Bot");
+  act(() => setInboxBot("jira", null));
   expect(
     container.querySelector('[aria-label="Choose chat destination"]')
       ?.textContent,
@@ -170,7 +170,7 @@ it("follows defaults and Mono availability updates until manually overridden", a
 
 it("resets a manual destination when switching to a different item", async () => {
   render();
-  await choose("Demo Mono");
+  await choose("Demo Bot");
   render({
     item: { ...ticket, url: "https://demo.atlassian.net/browse/DEMO-43" },
   });
@@ -188,20 +188,20 @@ it("offers both kinds of destination and sends to the selected project", async (
     undefined,
   );
 });
-it("sends to the selected Mono without assigning its project path", async () => {
+it("sends to the selected Bot without assigning its project path", async () => {
   render();
-  await choose("Demo Mono");
+  await choose("Demo Bot");
   await act(async () => button("Send to chat").click());
-  expect(onStart).toHaveBeenCalledWith(ticket, undefined, "mono-demo");
+  expect(onStart).toHaveBeenCalledWith(ticket, undefined, "bot-demo");
 });
-it("works with a Mono even when there are no projects", async () => {
+it("works with a Bot even when there are no projects", async () => {
   render({ projects: [] });
   expect(button("Send to chat").disabled).toBe(false);
   await act(async () => button("Send to chat").click());
-  expect(onStart).toHaveBeenCalledWith(ticket, undefined, "mono-demo");
+  expect(onStart).toHaveBeenCalledWith(ticket, undefined, "bot-demo");
 });
 it("keeps copy available when there are no destinations", async () => {
-  render({ projects: [], monos: [] });
+  render({ projects: [], bots: [] });
   expect(button("Send to chat").disabled).toBe(true);
   await act(async () => button("Copy context").click());
   expect(copyText).toHaveBeenCalledWith(
@@ -219,12 +219,12 @@ it("shows clipboard errors without claiming the link was copied", async () => {
   expect(button("Copy context")).toBeDefined();
 });
 it("allows retry after an opening failure", async () => {
-  onStart.mockRejectedValueOnce(new Error("Could not open Mono"));
+  onStart.mockRejectedValueOnce(new Error("Could not open Bot"));
   render();
-  await choose("Demo Mono");
+  await choose("Demo Bot");
   await act(async () => button("Send to chat").click());
   expect(container.querySelector('[role="alert"]')!.textContent).toBe(
-    "Could not open Mono",
+    "Could not open Bot",
   );
   expect(button("Send to chat").disabled).toBe(false);
 });

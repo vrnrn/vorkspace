@@ -43,7 +43,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("Mono transcript pages", () => {
+describe("Bot transcript pages", () => {
   const messages = (start: number, count: number): Block[] =>
     Array.from({ length: count }, (_, i) => ({
       id: `user-${start + i}`,
@@ -51,7 +51,7 @@ describe("Mono transcript pages", () => {
       text: `Message ${start + i}`,
     }));
 
-  it("renders ten Mono turns while ordinary sessions progressively retain twenty", async () => {
+  it("renders ten Bot turns while ordinary sessions progressively retain twenty", async () => {
     vi.useFakeTimers();
     const blocks = messages(0, 30);
     act(() =>
@@ -67,7 +67,7 @@ describe("Mono transcript pages", () => {
     act(() =>
       root.render(
         createElement(AgentTranscript, {
-          key: "mono",
+          key: "bot",
           blocks,
           initialTurns: 10,
           pageSize: 10,
@@ -515,7 +515,7 @@ describe("transcript scrolling", () => {
     expect(geometry.top).toBe(700);
   });
 
-  it("keeps an opening Mono pinned through scroll events queued before layout settles", () => {
+  it("keeps an opening Bot pinned through scroll events queued before layout settles", () => {
     const showJump = vi.fn();
     act(() =>
       root.render(
@@ -565,7 +565,7 @@ describe("transcript scrolling", () => {
   });
 
   it.each([false, true])(
-    "keeps manual Mono scrolling near the bottom unpinned (busy: %s)",
+    "keeps manual Bot scrolling near the bottom unpinned (busy: %s)",
     (busy) => {
       const blocks: Block[] = [
         { id: "user", role: "user", text: "Explain auth" },

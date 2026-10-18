@@ -34,20 +34,20 @@ export function readHarnessTextFile(path: string): Promise<string> {
   });
 }
 
-export function prepareMonoCodexStore(
+export function prepareBotCodexStore(
   providerAccountId?: string,
   threadId?: string,
 ): Promise<{ home: string; hasThread: boolean }> {
-  return invoke("codex_mono_store_prepare", { providerAccountId, threadId });
+  return invoke("codex_bot_store_prepare", { providerAccountId, threadId });
 }
 
-export function copyMonoCodexThreads(
+export function copyBotCodexThreads(
   providerAccountId: string | undefined,
   threadId: string,
   paths: string[],
   sqliteHome?: string,
 ): Promise<void> {
-  return invoke("codex_mono_store_copy", {
+  return invoke("codex_bot_store_copy", {
     providerAccountId,
     threadId,
     paths,
@@ -71,11 +71,11 @@ export function transferProviderSession(
   });
 }
 
-export function restoreMonoCodexAgentState(
+export function restoreBotCodexAgentState(
   providerAccountId: string | undefined,
   threadId: string,
 ): Promise<void> {
-  return invoke("codex_mono_store_restore_agent_state", {
+  return invoke("codex_bot_store_restore_agent_state", {
     providerAccountId,
     threadId,
   });
@@ -380,7 +380,7 @@ export async function spawnChild(
   cwd: string,
   account?: { provider: "claude" | "codex"; id: string },
   binaryProvider?: ConfigurableBinaryProvider,
-  codexStore?: "mono",
+  codexStore?: "bot",
 ): Promise<void> {
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);

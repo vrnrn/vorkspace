@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createMono, updateMono } from "../../monos/model/mono";
+import { createBot, updateBot } from "../../bots/model/bot";
 import { registerComposerEditor } from "../../sessions/model/composerControl";
 import { newSession } from "../../sessions/model/session";
 import { createVoxController } from "./controller";
@@ -26,7 +26,7 @@ function fixture() {
   const host = {
     snapshot: vi.fn(() => snapshot),
     getSession: vi.fn(async (_id: string) => session),
-    openMono: vi.fn(async (_id: string) => {}),
+    openBot: vi.fn(async (_id: string) => {}),
     openSession: vi.fn(async (_id: string) => {}),
     dispatch: vi.fn(async (_request: VoxRequest, _context: unknown) => ({
       accepted: true,
@@ -76,22 +76,22 @@ it("discovers current metadata without reading history, opening chats, or dispat
   expect(f.host.dispatch).not.toHaveBeenCalled();
 });
 
-it("opens a named Mono and fills its actual composer without dispatching a send", async () => {
+it("opens a named Bot and fills its actual composer without dispatching a send", async () => {
   const f = fixture();
-  const mono = createMono();
-  updateMono(mono.id, (entry) => ({
+  const bot = createBot();
+  updateBot(bot.id, (entry) => ({
     ...entry,
     name: "Build Helper",
-    sessionId: "mono-draft-test",
+    sessionId: "bot-draft-test",
   }));
-  const field = editor("mono-draft-test", "Keep my draft");
+  const field = editor("bot-draft-test", "Keep my draft");
   const result = await f.request("composer.write", {
-    mono: "@build-helper",
+    bot: "@build-helper",
     text: "Review this change",
   });
-  expect(f.host.openMono).toHaveBeenCalledExactlyOnceWith(mono.id);
+  expect(f.host.openBot).toHaveBeenCalledExactlyOnceWith(bot.id);
   expect(result).toMatchObject({
-    sessionId: "mono-draft-test",
+    sessionId: "bot-draft-test",
     updated: true,
     sent: false,
   });
@@ -159,19 +159,19 @@ it("rejects unavailable, remote, worker, ambiguous, and malformed targets before
   await expect(
     f.request("workspace.open", { sessionId: f.session.id }),
   ).rejects.toThrow("unavailable");
-  const a = createMono();
-  const b = createMono();
-  updateMono(a.id, (entry) => ({ ...entry, name: "Helper" }));
-  updateMono(b.id, (entry) => ({ ...entry, name: "Helper" }));
-  await expect(f.request("composer.read", { mono: "Helper" })).rejects.toThrow(
-    "Several Monos match",
+  const a = createBot();
+  const b = createBot();
+  updateBot(a.id, (entry) => ({ ...entry, name: "Helper" }));
+  updateBot(b.id, (entry) => ({ ...entry, name: "Helper" }));
+  await expect(f.request("composer.read", { bot: "Helper" })).rejects.toThrow(
+    /Several (?:Bots|Bots) match/,
   );
-  await expect(f.request("composer.read", { mono: "Missing" })).rejects.toThrow(
-    "No Mono matches",
+  await expect(f.request("composer.read", { bot: "Missing" })).rejects.toThrow(
+    "No Bot matches",
   );
   await expect(
     f.request("composer.write", {
-      mono: "Helper",
+      bot: "Helper",
       sessionId: "other",
       text: "No",
     }),
@@ -182,16 +182,16 @@ it("rejects unavailable, remote, worker, ambiguous, and malformed targets before
   await expect(f.request("sessions.delete")).rejects.toThrow(
     "Unsupported Vox action",
   );
-  expect(f.host.openMono).not.toHaveBeenCalled();
+  expect(f.host.openBot).not.toHaveBeenCalled();
   expect(f.host.openSession).not.toHaveBeenCalled();
   expect(f.host.dispatch).not.toHaveBeenCalled();
 });
 
 it("delegates app operations with an explicit ephemeral controller scope", async () => {
   const f = fixture();
-  await f.request("monos.send", { to: "Helper", message: "Review this" });
+  await f.request("bots.send", { to: "Helper", message: "Review this" });
   expect(f.host.dispatch).toHaveBeenCalledWith(
-    expect.objectContaining({ action: "monos.send" }),
+    expect.objectContaining({ action: "bots.send" }),
     expect.objectContaining({
       projects: ["/local/project", "/local/other"],
       source: expect.objectContaining({
@@ -202,5 +202,5 @@ it("delegates app operations with an explicit ephemeral controller scope", async
       }),
     }),
   );
-  expect(f.host.openMono).not.toHaveBeenCalled();
+  expect(f.host.openBot).not.toHaveBeenCalled();
 });

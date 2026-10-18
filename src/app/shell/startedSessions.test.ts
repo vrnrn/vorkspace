@@ -36,7 +36,7 @@ describe("groupStartedSessions", () => {
 
   it("leaves a launch whose caller is not listed where it is", () => {
     const { byParent, childIds } = groupStartedSessions(
-      rows("app-mono-session-1-task", "plain"),
+      rows("app-bot-session-1-task", "plain"),
     );
     expect(byParent.size).toBe(0);
     expect(childIds.size).toBe(0);
@@ -47,7 +47,7 @@ describe("groupStartedSessions", () => {
     expect(startedSessionCaller("app-ab3c-98dc-3a64-6702", ids)).toBe(
       "ab3c-98dc",
     );
-    expect(startedSessionCaller("app-mono-1-task", ids)).toBeUndefined();
+    expect(startedSessionCaller("app-bot-1-task", ids)).toBeUndefined();
     expect(startedSessionCaller("plain", ids)).toBeUndefined();
   });
 });

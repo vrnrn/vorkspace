@@ -212,24 +212,24 @@ import { SourceControl } from "../../features/source-control/ui/SourceControl";
 import { GitHistoryGraph } from "../../features/source-control/ui/GitHistoryGraph";
 import { GithubStarPrompt } from "./GithubStarPrompt";
 import {
-  isMonoSession,
-  listMonos,
-  MONO_STATUS_LABEL,
-  monoLook,
-  monosSnapshot,
-  subscribeMonos,
-  type MonoStatus,
-} from "../../features/monos/model/mono";
-import { MonoRailMascot } from "../../features/monos/ui/MonoRailMascot";
-import { useRailMonosPinned } from "../../features/settings/model/displayPrefs";
-import type { PickerMonos } from "../../features/projects/ui/SearchableProjectPicker";
-import { isHabitRun } from "../../features/monos/model/monoHabits";
+  isBotSession,
+  listBots,
+  BOT_STATUS_LABEL,
+  botLook,
+  botsSnapshot,
+  subscribeBots,
+  type BotStatus,
+} from "../../features/bots/model/bot";
+import { BotRailMascot } from "../../features/bots/ui/BotRailMascot";
+import { useRailBotsPinned } from "../../features/settings/model/displayPrefs";
+import type { PickerBots } from "../../features/projects/ui/SearchableProjectPicker";
+import { isHabitRun } from "../../features/bots/model/botHabits";
 import {
-  MonoRailSection,
+  BotRailSection,
   unreadBadge,
   unreadLabel,
-  type MonoRailProps,
-} from "./MonoRailSection";
+  type BotRailProps,
+} from "./BotRailSection";
 import {
   refreshRemoteProjectSessions,
   remoteRequest,
@@ -409,10 +409,10 @@ type Props = {
   updateNotice?: InstalledUpdate | null;
   onOpenWhatsNew?: (version: string) => void;
   onDismissUpdate?: () => void;
-  /** The Monos on the rail; absent while Monos are off. */
-  monos?: MonoRailProps;
-  /** A Mono fills the main area, which has no project sidebar. */
-  monoViewActive?: boolean;
+  /** The Bots on the rail; absent while Bots are off. */
+  bots?: BotRailProps;
+  /** A Bot fills the main area, which has no project sidebar. */
+  botViewActive?: boolean;
 };
 
 function SidebarComponent({
@@ -506,8 +506,8 @@ function SidebarComponent({
   updateNotice = null,
   onOpenWhatsNew,
   onDismissUpdate,
-  monos,
-  monoViewActive = false,
+  bots,
+  botViewActive = false,
 }: Props) {
   const trafficLightsVisible = useTrafficLightsVisible();
   const remoteProject = isRemoteProjectPath(cwd);
@@ -772,21 +772,21 @@ function SidebarComponent({
     : pending && sessions.length === 0;
   const worktreeFocus = useWorktreeFocus(cwd);
   const focusedWorktree = remoteProject ? undefined : worktreeFocus;
-  useSyncExternalStore(subscribeMonos, monosSnapshot);
+  useSyncExternalStore(subscribeBots, botsSnapshot);
   const listableSessions = mergeFolderSessionSummaries(
     projectSessions,
     remoteProject ? [] : openSessions,
     sessionFolders,
   ).filter(
     (session) =>
-      !isMonoSession(session.id) &&
+      !isBotSession(session.id) &&
       !("ephemeral" in session && session.ephemeral) &&
       !isHabitRun(session.id) &&
       !session.orchestrationLeadId &&
       inWorktreeFocus(session, focusedWorktree),
   );
   // Sessions saved hidden still show when a listed session started them:
-  // /operator launches were once hidden like a Mono's by mistake. A Mono's
+  // /operator launches were once hidden like a Bot's by mistake. A Bot's
   // chat is never listed, so its hidden launches stay hidden.
   const shownSessionIds = new Set(
     listableSessions
@@ -982,21 +982,21 @@ function SidebarComponent({
     notesActive ||
     automationsActive ||
     settingsOpen;
-  // A remembered Mono sits underneath these views; select it only while visible.
-  const railMonos = monos
-    ? { ...monos, activeId: otherViewActive ? undefined : monos.activeId }
+  // A remembered Bot sits underneath these views; select it only while visible.
+  const railBots = bots
+    ? { ...bots, activeId: otherViewActive ? undefined : bots.activeId }
     : undefined;
   // Likewise the session they cover stays current but isn't shown selected.
   const highlightedSessionId =
-    otherViewActive || monoViewActive ? undefined : activeListedSessionId;
+    otherViewActive || botViewActive ? undefined : activeListedSessionId;
   // A blank session has no project to browse, so the shell stands alone until
   // one is picked — whether or not the rail is open.
   // The inset sidebar holds the links to search, inbox, notes and
-  // automations, and lists the project's Monos, so it stays beside them;
+  // automations, and lists the project's Bots, so it stays beside them;
   // only settings take its place.
   const sidebarAvailable = inset
     ? !settingsOpen && inProject
-    : !otherViewActive && !monoViewActive && inProject;
+    : !otherViewActive && !botViewActive && inProject;
   const sidebarVisible = open && sidebarAvailable;
   // With the sidebar collapsed beside the compact rail, its tab shortcuts
   // open the sidebar temporarily until the user clicks away.
@@ -2619,9 +2619,9 @@ function SidebarComponent({
           }
         >
           {navList}
-          {/* The project's Monos, above its folders. */}
-          {inset && railMonos && inProject ? (
-            <MonoRailSection {...railMonos} project={cwd} />
+          {/* The project's Bots, above its folders. */}
+          {inset && railBots && inProject ? (
+            <BotRailSection {...railBots} project={cwd} />
           ) : null}
           {!cwd || cwd === "~" ? (
             <p className="px-3 py-2 text-[12px] text-content/50">
@@ -3165,8 +3165,8 @@ function SidebarComponent({
           onTogglePanel={onToggleProjectRail}
           onLeaveActive={onGoBack}
           titleBarAbove={titleBarAbove}
-          monos={railMonos}
-          monoViewActive={monoViewActive}
+          bots={railBots}
+          botViewActive={botViewActive}
         />
       ) : null}
       {railMounted.current && onSelectProject && onOpenProject ? (
@@ -3208,7 +3208,7 @@ function SidebarComponent({
           updateNotice={updateNotice}
           onOpenWhatsNew={onOpenWhatsNew}
           onDismissUpdate={onDismissUpdate}
-          monos={railMonos}
+          bots={railBots}
         />
       ) : null}
     </>
@@ -3480,8 +3480,8 @@ function CompactProjectRail({
   onTogglePanel,
   onLeaveActive,
   titleBarAbove,
-  monos,
-  monoViewActive = false,
+  bots,
+  botViewActive = false,
 }: {
   cwd: string;
   recents: RecentProject[];
@@ -3513,32 +3513,32 @@ function CompactProjectRail({
   onTogglePanel?: () => void;
   onLeaveActive?: () => void;
   titleBarAbove: boolean;
-  /** Monos have no row here, so the project button lists them too. */
-  monos?: MonoRailProps;
-  /** A Mono fills the main area: no workspace tab is the current one. */
-  monoViewActive?: boolean;
+  /** Bots have no row here, so the project button lists them too. */
+  bots?: BotRailProps;
+  /** A Bot fills the main area: no workspace tab is the current one. */
+  botViewActive?: boolean;
 }) {
-  const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
-  const monosPinned = useRailMonosPinned();
-  const monoItems = useMemo(() => {
-    if (!monos) return [];
-    return listMonos().map((mono) => ({
-      id: mono.id,
-      ...monoLook(mono),
-      status: monos.states.get(mono.id)?.status ?? "idle",
+  const botsSnap = useSyncExternalStore(subscribeBots, botsSnapshot);
+  const botsPinned = useRailBotsPinned();
+  const botItems = useMemo(() => {
+    if (!bots) return [];
+    return listBots().map((bot) => ({
+      id: bot.id,
+      ...botLook(bot),
+      status: bots.states.get(bot.id)?.status ?? "idle",
     }));
     // The roster is read through its snapshot.
-  }, [monos, monosSnap]);
-  const pickerMonos = useMemo((): PickerMonos | undefined => {
-    if (!monos) return undefined;
+  }, [bots, botsSnap]);
+  const pickerBots = useMemo((): PickerBots | undefined => {
+    if (!bots) return undefined;
     return {
-      // Pinned Monos have their own buttons; the picker keeps "New mono".
-      items: monosPinned ? [] : monoItems,
-      activeId: monos.activeId,
-      onOpen: monos.onOpen,
-      onCreate: monos.onCreate,
+      // Pinned Bots have their own buttons; the picker keeps "New bot".
+      items: botsPinned ? [] : botItems,
+      activeId: bots.activeId,
+      onOpen: bots.onOpen,
+      onCreate: bots.onCreate,
     };
-  }, [monos, monoItems, monosPinned]);
+  }, [bots, botItems, botsPinned]);
   const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -3550,7 +3550,7 @@ function CompactProjectRail({
     !inboxActive &&
     !notesActive &&
     !automationsActive &&
-    !monoViewActive;
+    !botViewActive;
   const openWorkspaceTab = (nextTab: SidebarTab) => {
     if (!workspaceActive) onLeaveActive?.();
     onTabChange(nextTab);
@@ -3587,34 +3587,34 @@ function CompactProjectRail({
           icon={PanelLeft}
           onClick={onTogglePanel}
         />
-        {monos && monosPinned && monoItems.length ? (
+        {bots && botsPinned && botItems.length ? (
           <>
             <div
               role="group"
-              aria-label="Monos"
-              data-compact-rail-monos
+              aria-label="Bots"
+              data-compact-rail-bots
               className="flex flex-col items-center gap-1.5"
             >
-              {monoItems.map((mono) => (
-                <CompactRailMono
-                  key={mono.id}
-                  name={mono.name}
-                  mascot={mono.mascot}
-                  color={mono.color}
-                  status={mono.status}
-                  active={mono.id === monos.activeId}
+              {botItems.map((bot) => (
+                <CompactRailBot
+                  key={bot.id}
+                  name={bot.name}
+                  mascot={bot.mascot}
+                  color={bot.color}
+                  status={bot.status}
+                  active={bot.id === bots.activeId}
                   unseen={
-                    mono.id === monos.activeId
+                    bot.id === bots.activeId
                       ? 0
-                      : (monos.unseenCounts?.get(mono.id) ?? 0)
+                      : (bots.unseenCounts?.get(bot.id) ?? 0)
                   }
-                  onClick={() => monos.onOpen(mono.id)}
+                  onClick={() => bots.onOpen(bot.id)}
                 />
               ))}
             </div>
             <span
               aria-hidden
-              data-compact-rail-monos-divider
+              data-compact-rail-bots-divider
               className="h-px w-6 shrink-0 bg-stroke"
             />
           </>
@@ -3630,7 +3630,7 @@ function CompactProjectRail({
             onOpenProject={onOpenProject}
             onRemoveProject={onRemoveProject}
             onOpenNotificationSettings={onOpenNotificationSettings}
-            monos={pickerMonos}
+            bots={pickerBots}
           />
         ) : null}
         <div
@@ -3728,7 +3728,7 @@ function CompactProjectRail({
   );
 }
 
-function CompactRailMono({
+function CompactRailBot({
   name,
   mascot,
   color,
@@ -3740,25 +3740,25 @@ function CompactRailMono({
   name: string;
   mascot: string;
   color: string;
-  status: MonoStatus;
+  status: BotStatus;
   active: boolean;
   /** Replies the user has not read. */
   unseen: number;
   onClick: () => void;
 }) {
-  const label = `${name}, ${MONO_STATUS_LABEL[status]}`;
+  const label = `${name}, ${BOT_STATUS_LABEL[status]}`;
   return (
     <button
       type="button"
       data-rail-tip={name}
       data-rail-tip-detail={
         unseen
-          ? `${MONO_STATUS_LABEL[status]} · ${unreadLabel(unseen)}`
-          : MONO_STATUS_LABEL[status]
+          ? `${BOT_STATUS_LABEL[status]} · ${unreadLabel(unseen)}`
+          : BOT_STATUS_LABEL[status]
       }
       aria-label={unseen ? `${label}, ${unreadLabel(unseen)}` : label}
       aria-current={active ? "true" : undefined}
-      data-compact-rail-mono
+      data-compact-rail-bot
       onClick={onClick}
       className={`relative grid size-8 shrink-0 place-items-center rounded-md active:scale-[0.97] ${
         active
@@ -3766,11 +3766,11 @@ function CompactRailMono({
           : "opacity-65 hover:bg-content/10 hover:opacity-100"
       }`}
     >
-      <MonoRailMascot name={mascot} color={color} status={status} />
+      <BotRailMascot name={mascot} color={color} status={status} />
       {unseen ? (
         <span
           aria-hidden
-          data-mono-unread={unseen}
+          data-bot-unread={unseen}
           className="absolute -right-0.5 -top-0.5 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-background-base px-0.5 text-[9px] font-medium tabular-nums leading-none text-content/80 ring-1 ring-content/15"
         >
           {unreadBadge(unseen)}
@@ -4149,7 +4149,7 @@ const NO_STARTED_SESSIONS: {
  * Sessions started through the app CLI are named `app-<caller>-<request>`, so
  * each finds its caller among the listed sessions. One a started session
  * started in turn joins the same top-level session. Sessions whose caller is
- * not listed, such as a Mono's, stay where they are.
+ * not listed, such as a Bot's, stay where they are.
  */
 export function groupStartedSessions<T extends { id: string }>(
   sessions: readonly T[],

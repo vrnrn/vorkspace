@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
-import { MemoryPage, useMonoFiles } from "../../monos/ui/MonoFilePages";
+import { MemoryPage, useBotFiles } from "../../bots/ui/BotFilePages";
 import {
   resetSavedVoxConversation,
   VOX_MEMORY_ID,
@@ -75,10 +75,10 @@ import {
   useInboxConnectors,
 } from "../../inbox/model/inboxConnectors";
 import {
-  setInboxMono,
-  useInboxMonos,
-  type InboxMonoSource,
-} from "../../inbox/model/inboxMonos";
+  setInboxBot,
+  useInboxBots,
+  type InboxBotSource,
+} from "../../inbox/model/inboxBots";
 import {
   INBOX_SOURCE_LABELS,
   type InboxSource,
@@ -298,11 +298,11 @@ import {
   usePacedReveal,
   saveMaskEmails,
   saveNewLayoutPromptDismissed,
-  saveRailMonosPinned,
+  saveRailBotsPinned,
   saveShowRemainingUsage,
   useComposerAutocorrect,
   useMaskEmails,
-  useRailMonosPinned,
+  useRailBotsPinned,
   useShowRemainingUsage,
 } from "../model/displayPrefs";
 import {
@@ -347,17 +347,17 @@ import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import {
-  defaultMonoName,
-  listMonos,
-  monoLook,
-  monoProjectsPhrase,
-  monosSnapshot,
-  subscribeMonos,
-  updateMono,
-  type Mono,
-} from "../../monos/model/mono";
-import { resetMonoDefaults } from "../../monos/model/monoFiles";
-import { ConfirmReset } from "../../monos/ui/ConfirmReset";
+  defaultBotName,
+  listBots,
+  botLook,
+  botProjectsPhrase,
+  botsSnapshot,
+  subscribeBots,
+  updateBot,
+  type Bot,
+} from "../../bots/model/bot";
+import { resetBotDefaults } from "../../bots/model/botFiles";
+import { ConfirmReset } from "../../bots/ui/ConfirmReset";
 import {
   filterKeybindings,
   currentKeybindings,
@@ -372,11 +372,11 @@ import {
   loadLiveAgentsEnabled,
   loadModelControls,
   loadNotesEnabled,
-  loadMonosEnabled,
-  loadMonoMenuBarIcon,
+  loadBotsEnabled,
+  loadBotMenuBarIcon,
   loadKeybindingOverrides,
-  saveMonoMenuBarIcon,
-  subscribeMonoMenuBarIcon,
+  saveBotMenuBarIcon,
+  subscribeBotMenuBarIcon,
   loadQuickComposerEnabled,
   loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
@@ -393,8 +393,8 @@ import {
   saveLiveAgentsEnabled,
   saveModelControls,
   saveNotesEnabled,
-  saveMonosEnabled,
-  subscribeMonosEnabled,
+  saveBotsEnabled,
+  subscribeBotsEnabled,
   saveKeybindingOverride,
   validateKeybindingShortcut,
   saveQuickComposerEnabled,
@@ -671,7 +671,7 @@ export function SettingsView({
               ) : null}
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
-              {section === "monos" ? <MonosPage /> : null}
+              {section === "bots" ? <BotsPage /> : null}
               {section === "vox" ? <VoxPage /> : null}
               {section === "mcp" ? (
                 <McpSettings cwd={cwd} recents={recents} />
@@ -861,7 +861,7 @@ function VoxPage() {
   const [availabilityError, setAvailabilityError] = useState<string | null>(
     null,
   );
-  const files = useMonoFiles(VOX_MEMORY_ID, "idle");
+  const files = useBotFiles(VOX_MEMORY_ID, "idle");
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
   const [selected, setSelected] = useState(loadVoxMicrophone);
@@ -1063,9 +1063,9 @@ function VoxPage() {
       <Group
         id="vox-memory"
         title="Memory"
-        description="What Vox remembers across conversations. Add, edit or delete memories just like a Mono."
+        description="What Vox remembers across conversations. Add, edit or delete memories just like a Bot."
       >
-        <MemoryPage monoId={VOX_MEMORY_ID} files={files} embedded />
+        <MemoryPage botId={VOX_MEMORY_ID} files={files} embedded />
       </Group>
     </>
   );
@@ -1420,7 +1420,7 @@ function ChatPage() {
         <Row
           id="composer-autocorrect"
           label="Autocorrect"
-          description="Spell check and autocorrect prompts in session and mono composers. Turn this off to keep the text exactly as typed."
+          description="Spell check and autocorrect prompts in session and bot composers. Turn this off to keep the text exactly as typed."
         >
           <Toggle
             label="Autocorrect"
@@ -1515,7 +1515,7 @@ function InboxPage({
         enabled={connectors.gitlab}
         description="Merge requests from GitLab.com or a self-managed instance."
       >
-        <InboxMonoRow source="gitlab" />
+        <InboxBotRow source="gitlab" />
         <GitlabSettings />
       </InboxConnectorGroup>
 
@@ -1524,40 +1524,40 @@ function InboxPage({
         enabled={connectors.jira}
         description="Jira Cloud issues filtered by project or a JQL query."
       >
-        <InboxMonoRow source="jira" />
+        <InboxBotRow source="jira" />
         <JiraSettings onFilterModeChange={setJiraFilterMode} />
       </InboxConnectorGroup>
     </>
   );
 }
 
-/** The Mono preselected when sending an integration item to chat. */
-function InboxMonoRow({ source }: { source: InboxMonoSource }) {
-  const defaults = useInboxMonos();
-  const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
-  const monos = useMemo(() => listMonos(), [snapshot]);
-  const selected = monos.find((mono) => mono.id === defaults[source]);
+/** The Bot preselected when sending an integration item to chat. */
+function InboxBotRow({ source }: { source: InboxBotSource }) {
+  const defaults = useInboxBots();
+  const snapshot = useSyncExternalStore(subscribeBots, botsSnapshot);
+  const bots = useMemo(() => listBots(), [snapshot]);
+  const selected = bots.find((bot) => bot.id === defaults[source]);
   const name = INBOX_SOURCE_LABELS[source];
   return (
     <Row
-      label="Default Mono"
+      label="Default Bot"
       description={
-        monos.length
+        bots.length
           ? `Preselected when you send ${name} items to chat. You can choose another destination before sending.`
-          : "Create a Mono in Monos settings to choose a default destination."
+          : "Create a Bot in Bots settings to choose a default destination."
       }
     >
       <Select
-        label={`${name} default Mono`}
+        label={`${name} default Bot`}
         value={selected?.id ?? ""}
         options={[
-          { value: "", label: "No default Mono" },
-          ...monos.map((mono) => ({
-            value: mono.id,
-            label: monoLook(mono).name,
+          { value: "", label: "No default Bot" },
+          ...bots.map((bot) => ({
+            value: bot.id,
+            label: botLook(bot).name,
           })),
         ]}
-        onChange={(value) => setInboxMono(source, value || null)}
+        onChange={(value) => setInboxBot(source, value || null)}
       />
     </Row>
   );
@@ -4202,68 +4202,68 @@ function formatDate(value: number): string {
   }
 }
 
-/** Monos on or off, and each Mono the user has. */
-function MonosPage() {
+/** Bots on or off, and each Bot the user has. */
+function BotsPage() {
   const enabled = useSyncExternalStore(
-    subscribeMonosEnabled,
-    loadMonosEnabled,
+    subscribeBotsEnabled,
+    loadBotsEnabled,
     () => true,
   );
   const menuBarIcon = useSyncExternalStore(
-    subscribeMonoMenuBarIcon,
-    loadMonoMenuBarIcon,
+    subscribeBotMenuBarIcon,
+    loadBotMenuBarIcon,
     () => true,
   );
-  const railPinned = useRailMonosPinned();
-  const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
-  const monos = useMemo(() => listMonos(), [snapshot]);
+  const railPinned = useRailBotsPinned();
+  const snapshot = useSyncExternalStore(subscribeBots, botsSnapshot);
+  const bots = useMemo(() => listBots(), [snapshot]);
 
   return (
     <>
-      <Group title="Monos">
+      <Group title="Bots">
         <Row
-          id="monos-enabled"
-          label="Show monos"
+          id="bots-enabled"
+          label="Show bots"
           description="Agents of your own on the project rail. Each works on the projects you give it, remembers what matters and picks up habits it runs on its own. Turn this off to hide them."
         >
-          <Toggle label="Show monos" on={enabled} onChange={saveMonosEnabled} />
+          <Toggle label="Show bots" on={enabled} onChange={saveBotsEnabled} />
         </Row>
         <Row
-          id="rail-monos-pinned"
-          label="Pin monos to the icon rail"
-          description="When the project rail is collapsed to icons, show each Mono at the top of the rail, above a divider, instead of inside the project picker."
+          id="rail-bots-pinned"
+          label="Pin bots to the icon rail"
+          description="When the project rail is collapsed to icons, show each Bot at the top of the rail, above a divider, instead of inside the project picker."
         >
           <Toggle
-            label="Pin monos to the icon rail"
+            label="Pin bots to the icon rail"
             on={railPinned}
-            onChange={saveRailMonosPinned}
+            onChange={saveRailBotsPinned}
             disabled={!enabled}
           />
         </Row>
         {IS_MAC && (
           <Row
-            id="mono-menu-bar-icon"
+            id="bot-menu-bar-icon"
             label="Menu bar icon"
-            description="Chat with a Mono or open the quick composer from the macOS menu bar. Turn this off to hide the icon."
+            description="Chat with a Bot or open the quick composer from the macOS menu bar. Turn this off to hide the icon."
           >
             <Toggle
               label="Menu bar icon"
               on={menuBarIcon}
-              onChange={saveMonoMenuBarIcon}
+              onChange={saveBotMenuBarIcon}
             />
           </Row>
         )}
       </Group>
       <Group
-        id="mono-list"
-        title="Your monos"
-        description="Choose whether new sessions started by each Mono appear in the sidebar. Hidden sessions remain saved and can be opened from the Mono's chat. Add a Mono with the plus on the rail and choose its projects from its details."
+        id="bot-list"
+        title="Your bots"
+        description="Choose whether new sessions started by each Bot appear in the sidebar. Hidden sessions remain saved and can be opened from the Bot's chat. Add a Bot with the plus on the rail and choose its projects from its details."
       >
-        {monos.length ? (
-          monos.map((mono) => <MonoRow key={mono.id} mono={mono} />)
+        {bots.length ? (
+          bots.map((bot) => <BotRow key={bot.id} bot={bot} />)
         ) : (
           <p className="px-4 py-3.5 text-[12px] text-content/45">
-            No monos yet.
+            No bots yet.
           </p>
         )}
       </Group>
@@ -4271,8 +4271,8 @@ function MonosPage() {
   );
 }
 
-function MonoRow({ mono }: { mono: Mono }) {
-  const look = monoLook(mono);
+function BotRow({ bot }: { bot: Bot }) {
+  const look = botLook(bot);
   return (
     <Row
       label={
@@ -4288,30 +4288,30 @@ function MonoRow({ mono }: { mono: Mono }) {
       }
       description={
         look.projects.length
-          ? `Works on ${monoProjectsPhrase(look.projects)}`
+          ? `Works on ${botProjectsPhrase(look.projects)}`
           : "No projects yet"
       }
     >
       <span className="text-[12px] leading-5 text-content/50">
-        Show Mono spawned session on the sidebar
+        Show Bot spawned session on the sidebar
       </span>
       <Toggle
         label={`Show sessions started by ${look.name} in sidebar`}
-        on={mono.showStartedSessionsInSidebar === true}
+        on={bot.showStartedSessionsInSidebar === true}
         onChange={(on) =>
-          updateMono(mono.id, (entry) => ({
+          updateBot(bot.id, (entry) => ({
             ...entry,
             showStartedSessionsInSidebar: on,
           }))
         }
       />
       <ConfirmReset
-        label="Reset Mono"
+        label="Reset Bot"
         title={`Reset ${look.name} to its defaults?`}
-        body={`Its soul goes back to the default and its name to ${defaultMonoName(look.mascot)}. Changes to its soul can't be recovered.`}
+        body={`Its soul goes back to the default and its name to ${defaultBotName(look.mascot)}. Changes to its soul can't be recovered.`}
         kept="Its conversation, projects, memory and habits will be kept."
-        failure="Could not reset the Mono."
-        onConfirm={() => resetMonoDefaults(mono.id)}
+        failure="Could not reset the Bot."
+        onConfirm={() => resetBotDefaults(bot.id)}
       >
         {(open, ref) => (
           <button

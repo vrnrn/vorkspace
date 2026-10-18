@@ -100,14 +100,14 @@ export function MessageQueue({
           const sending = sendingId === message.id;
           const editing = editingId === message.id;
           const systemNotice =
-            !!message.monoSessionCompletion || !!message.monoPeerMessage;
+            !!message.botSessionCompletion || !!message.botPeerMessage;
           const label =
-            (message.monoSessionCompletion
-              ? message.monoSessionCompletion.sessionCount
-                ? `${message.monoSessionCompletion.sessionCount} sessions finished`
-                : `Session ${message.monoSessionCompletion.status}: ${message.monoSessionCompletion.title}`
-              : message.monoPeerMessage
-                ? `Message from ${message.monoPeerMessage.fromName}: ${message.monoPeerMessage.text}`
+            (message.botSessionCompletion
+              ? message.botSessionCompletion.sessionCount
+                ? `${message.botSessionCompletion.sessionCount} sessions finished`
+                : `Session ${message.botSessionCompletion.status}: ${message.botSessionCompletion.title}`
+              : message.botPeerMessage
+                ? `Message from ${message.botPeerMessage.fromName}: ${message.botPeerMessage.text}`
                 : message.text.trim()) ||
             message.noteCard?.title ||
             message.handoffCard?.brief ||

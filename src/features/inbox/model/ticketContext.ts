@@ -34,7 +34,7 @@ export type TicketReference = {
   number: number;
 };
 export type TicketChatTarget =
-  { kind: "project"; path: string } | { kind: "mono"; id: string };
+  { kind: "project"; path: string } | { kind: "bot"; id: string };
 
 export function supportsTicketContext(
   item: Pick<InboxItem, "provider" | "kind">,

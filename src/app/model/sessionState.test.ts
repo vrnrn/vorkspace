@@ -13,10 +13,10 @@ import {
   stopStreaming,
 } from "../../integrations/harness/core/apply";
 import {
-  createMonoPeerQueuedMessage,
-  enqueueMonoPeerMessage,
-} from "../../features/monos/model/monoChannels";
-import { monoState } from "../../features/monos/model/mono";
+  createBotPeerQueuedMessage,
+  enqueueBotPeerMessage,
+} from "../../features/bots/model/botChannels";
+import { botState } from "../../features/bots/model/bot";
 import { canDispatchQueuedHead } from "../../features/sessions/model/messageQueue";
 import { HarnessEventQueue } from "./harnessFlush";
 import { updateSessionState } from "./sessionState";
@@ -189,17 +189,17 @@ it.each([false, true])(
   "settles a DM recipient before delivering its reply in the same React batch (strict=%s)",
   (strict) => {
     const state = mountSessions(strict);
-    const reply = createMonoPeerQueuedMessage({
-      fromMonoId: "recipient",
-      toMonoId: "sender",
+    const reply = createBotPeerQueuedMessage({
+      fromBotId: "recipient",
+      toBotId: "sender",
       text: "Here is the answer",
       requestId: "peer-reply-request",
       expectReply: false,
       hop: 2,
     });
-    const followUp = createMonoPeerQueuedMessage({
-      fromMonoId: "sender",
-      toMonoId: "recipient",
+    const followUp = createBotPeerQueuedMessage({
+      fromBotId: "sender",
+      toBotId: "recipient",
       text: "One more question",
       requestId: "next-request",
     });
@@ -214,7 +214,7 @@ it.each([false, true])(
       // The onSettled callback runs before React renders. Its snapshot must
       // already contain the finished reply and idle recipient.
       const recipient = state().current()[1];
-      expect(monoState(recipient).status).toBe("idle");
+      expect(botState(recipient).status).toBe("idle");
       expect(recipient.blocks[0]).toMatchObject({
         text: "Still working",
         streaming: false,
@@ -225,14 +225,14 @@ it.each([false, true])(
       state().update((sessions) =>
         sessions.map((session) =>
           session.id === "blank"
-            ? enqueueMonoPeerMessage(session, reply).session
+            ? enqueueBotPeerMessage(session, reply).session
             : session,
         ),
       );
       state().update((sessions) =>
         sessions.map((session) =>
           session.id === "background"
-            ? enqueueMonoPeerMessage(session, followUp).session
+            ? enqueueBotPeerMessage(session, followUp).session
             : session,
         ),
       );
@@ -242,7 +242,7 @@ it.each([false, true])(
     expect(sender.title).toBe("Sender conversation");
     expect(sender.queuedMessages).toEqual([reply]);
     expect(canDispatchQueuedHead(sender)).toBe(true);
-    expect(monoState(recipient).status).toBe("idle");
+    expect(botState(recipient).status).toBe("idle");
     expect(recipient.blocks[0].streaming).toBe(false);
     expect(recipient.queuedMessages).toEqual([followUp]);
     expect(canDispatchQueuedHead(recipient)).toBe(true);

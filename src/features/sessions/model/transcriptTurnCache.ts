@@ -1,10 +1,10 @@
 import type { Block } from "./session";
 import {
-  groupMonoChatTurns,
-  groupMonoTurnItems,
+  groupBotChatTurns,
+  groupBotTurnItems,
   groupTurnItems,
   groupTurns,
-  monoTurnRuns,
+  botTurnRuns,
   type TurnItem,
 } from "./transcriptActivity";
 
@@ -42,7 +42,7 @@ export class TranscriptTurnCache {
       ]),
     );
     const grouped = inlineWork
-      ? groupMonoChatTurns(source, managed)
+      ? groupBotChatTurns(source, managed)
       : groupTurns(source, managed);
     const next = prefix.concat(
       grouped.map((turn) => {
@@ -94,11 +94,11 @@ export class TranscriptTurnCache {
       blocks.filter(
         (block) => !block.orchestration && (managed || !block.internal),
       );
-    // Each run in a merged Mono turn folds on its own: an earlier answer is
+    // Each run in a merged Bot turn folds on its own: an earlier answer is
     // not narration for the work that the next run went on to do.
     const items = inlineWork
-      ? monoTurnRuns(turn).flatMap((run, index, runs) =>
-          groupMonoTurnItems(visible(run), {
+      ? botTurnRuns(turn).flatMap((run, index, runs) =>
+          groupBotTurnItems(visible(run), {
             live: !settled && index === runs.length - 1,
             undeliveredMessageIds,
           }),

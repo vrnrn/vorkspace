@@ -2,13 +2,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vitest";
-import { monoSessionCompletionMessage } from "../../monos/model/monoSessionCompletion";
+import { botSessionCompletionMessage } from "../../bots/model/botSessionCompletion";
 import { MessageQueue } from "./MessageQueue";
 
 it("labels a pending completion and offers removal without editing or steering it", () => {
-  const message = monoSessionCompletionMessage({
+  const message = botSessionCompletionMessage({
     sessionId: "worker",
-    requestId: "app-mono-monitor",
+    requestId: "app-bot-monitor",
     project: "/code/project",
     prompt: "Review",
     session: undefined,
@@ -40,14 +40,14 @@ it("labels a pending completion and offers removal without editing or steering i
 });
 
 it("labels a combined report without exposing the app prompt", () => {
-  const message = monoSessionCompletionMessage({
+  const message = botSessionCompletionMessage({
     sessionId: "worker",
     requestId: "request",
     project: "/code/project",
     prompt: "Review",
     outcome: { status: "completed", text: "Done" },
   });
-  message.monoSessionCompletion!.sessionCount = 3;
+  message.botSessionCompletion!.sessionCount = 3;
   const markup = renderToStaticMarkup(
     createElement(MessageQueue, { messages: [message] }),
   );

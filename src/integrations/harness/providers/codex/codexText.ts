@@ -2,7 +2,7 @@ import { modelsFor } from "../../../../features/sessions/model/models";
 import {
   killChild,
   resolveCodexBinary,
-  restoreMonoCodexAgentState,
+  restoreBotCodexAgentState,
   spawnChild,
   unwatchChild,
   watchChild,
@@ -17,7 +17,7 @@ import {
 } from "./codexProtocol";
 import type { HarnessEvent } from "../../core/types";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
-import { prepareCodexMonoContext } from "./codexStore";
+import { prepareCodexBotContext } from "./codexStore";
 import type { TextPromptInput } from "../../core/registry";
 
 import { mergeStream, streamTextDelta } from "../../core/streamText";
@@ -35,7 +35,7 @@ type LiveText = {
   providerAccountId?: string;
   threadId: string;
   ephemeral: boolean;
-  codexStore?: "mono";
+  codexStore?: "bot";
   storeConfig?: Record<string, unknown>;
   model: string;
   effort: string;
@@ -199,7 +199,7 @@ async function ensureLive(input: {
   model?: string;
   modelSettings?: Record<string, string>;
   ephemeral?: boolean;
-  codexStore?: "mono";
+  codexStore?: "bot";
   threadId?: string;
   onThreadId?: (threadId: string) => void;
 }): Promise<LiveText> {
@@ -278,13 +278,13 @@ async function startLive(
   serviceTier?: string,
   requestedThreadId?: string,
   ephemeral = true,
-  codexStore?: "mono",
+  codexStore?: "bot",
 ): Promise<LiveText> {
   await dropLive();
   const { path } = await resolveCodexBinary();
   const store =
-    codexStore === "mono"
-      ? await prepareCodexMonoContext({
+    codexStore === "bot"
+      ? await prepareCodexBotContext({
           sessionId: TEXT_CHILD_ID,
           path,
           cwd,
@@ -381,15 +381,15 @@ async function openThread(
   cwd: string,
   requestedThreadId: string | undefined,
   ephemeral: boolean,
-  preparedStore?: Awaited<ReturnType<typeof prepareCodexMonoContext>>,
+  preparedStore?: Awaited<ReturnType<typeof prepareCodexBotContext>>,
 ): Promise<void> {
   let opened: { thread?: { id?: string } } | undefined;
   let hasSavedContext = false;
-  if (session.codexStore === "mono") {
+  if (session.codexStore === "bot") {
     const { path } = await resolveCodexBinary();
     const store =
       preparedStore ??
-      (await prepareCodexMonoContext({
+      (await prepareCodexBotContext({
         sessionId: TEXT_CHILD_ID,
         path,
         cwd,
@@ -399,7 +399,7 @@ async function openThread(
     session.storeConfig = store.config;
     hasSavedContext = store.hasThread;
     if (requestedThreadId && hasSavedContext)
-      await restoreMonoCodexAgentState(
+      await restoreBotCodexAgentState(
         session.providerAccountId,
         requestedThreadId,
       );

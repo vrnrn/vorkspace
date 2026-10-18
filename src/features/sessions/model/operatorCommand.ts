@@ -17,12 +17,14 @@ export function consumeOperatorCommand(text: string): {
   matched: boolean;
 } {
   // Keep the old spellings as unlisted aliases for existing drafts and threads.
-  const match = text.match(/^\s*\/(?:operator|vorkspace|mono|monocode)(?=\s|$)\s*/i);
+  const match = text.match(
+    /^\s*\/(?:operator|vorkspace|bot|mono|monocode)(?=\s|$)\s*/i,
+  );
   if (!match) return { text, matched: false };
   return { text: text.slice(match[0].length), matched: true };
 }
 
-const LEGACY_COMMAND = /^\s*\/(?:vorkspace|mono|monocode)(?=\s|$)\s*/i;
+const LEGACY_COMMAND = /^\s*\/(?:vorkspace|bot|mono|monocode)(?=\s|$)\s*/i;
 
 /** A submitted /operator turn keeps CLI access available in later turns. */
 export function isOperatorUserTurn(block: Block): boolean {

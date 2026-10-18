@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { newSession } from "../../sessions/model/session";
-import { createMono, updateMono } from "../../monos/model/mono";
+import { createBot, updateBot } from "../../bots/model/bot";
 import {
   resetHarnessModelOverlays,
   setHarnessModels,
@@ -124,7 +124,7 @@ function fixture() {
     notes: vi.fn(async () => [note]),
     note: vi.fn(async (id) => (id === note.id ? note : null)),
     saveNote: vi.fn(async (input) => ({ ...note, ...input })),
-    isMono: () => false,
+    isBot: () => false,
   };
   return { source, host };
 }
@@ -133,7 +133,7 @@ describe("agent app commands", () => {
   it("gives the explicit workspace controller cross-project context and normal session delivery", async () => {
     const { source, host } = fixture();
     const target = { ...newSession("codex", "/tmp/second"), id: "target", blocks: [{ id: "u", role: "user" as const, text: "Existing question" }, { id: "a", role: "assistant" as const, text: "Existing answer" }] };
-    host.workspaceController = { projects: [source.cwd, target.cwd], sendMono: vi.fn() };
+    host.workspaceController = { projects: [source.cwd, target.cwd], sendBot: vi.fn() };
     host.sessions = vi.fn(async () => [{ id: target.id, title: "Target", harness: target.harness, model: target.model, busy: false, hasDraft: false, archived: false }]);
     host.session = vi.fn(async () => target);
     const history = await handleAgentApp(source, "read-1", "sessions.read", { project: "second", sessionId: target.id }, host);
@@ -144,53 +144,53 @@ describe("agent app commands", () => {
     expect(host.send).toHaveBeenCalledOnce();
   });
 
-  it("lets Vox read and message a Mono as the user without creating a peer reply chain", async () => {
+  it("lets Vox read and message a Bot as the user without creating a peer reply chain", async () => {
     const { source, host } = fixture();
-    const mono = createMono([source.cwd]);
-    updateMono(mono.id, (current) => ({ ...current, name: "Helper" }));
-    const sendMono = vi.fn(async () => ({ alreadySubmitted: false }));
-    host.workspaceController = { projects: [source.cwd], sendMono };
-    host.monos = { session: vi.fn(async () => ({ ...newSession("codex", "~"), blocks: [{ id: "question", role: "user", text: "Earlier request" }, { id: "reply", role: "assistant", text: "Mono's recent answer" }] })), send: vi.fn() };
-    expect(JSON.stringify(await handleAgentApp(source, "list-1", "monos.list", {}, host))).toContain("Helper");
-    expect(JSON.stringify(await handleAgentApp(source, "read-1", "monos.read", { mono: "Helper" }, host))).toContain("Mono's recent answer");
-    const sent = await handleAgentApp(source, "send-1", "monos.send", { to: "Helper", message: "Please investigate", expectReply: false }, host);
-    expect(sent).toMatchObject({ submitted: true, to: { id: mono.id } });
-    expect(sendMono).toHaveBeenCalledExactlyOnceWith(mono.id, "Please investigate", "vox-lead-send-1");
-    expect(host.monos.send).not.toHaveBeenCalled();
-    await expect(handleAgentApp(source, "send-2", "monos.send", { to: "Helper", message: "More", expectReply: true }, host)).rejects.toThrow("one-way");
-    expect(sendMono).toHaveBeenCalledOnce();
+    const bot = createBot([source.cwd]);
+    updateBot(bot.id, (current) => ({ ...current, name: "Helper" }));
+    const sendBot = vi.fn(async () => ({ alreadySubmitted: false }));
+    host.workspaceController = { projects: [source.cwd], sendBot };
+    host.bots = { session: vi.fn(async () => ({ ...newSession("codex", "~"), blocks: [{ id: "question", role: "user", text: "Earlier request" }, { id: "reply", role: "assistant", text: "Bot's recent answer" }] })), send: vi.fn() };
+    expect(JSON.stringify(await handleAgentApp(source, "list-1", "bots.list", {}, host))).toContain("Helper");
+    expect(JSON.stringify(await handleAgentApp(source, "read-1", "bots.read", { bot: "Helper" }, host))).toContain("Bot's recent answer");
+    const sent = await handleAgentApp(source, "send-1", "bots.send", { to: "Helper", message: "Please investigate", expectReply: false }, host);
+    expect(sent).toMatchObject({ submitted: true, to: { id: bot.id } });
+    expect(sendBot).toHaveBeenCalledExactlyOnceWith(bot.id, "Please investigate", "vox-lead-send-1");
+    expect(host.bots.send).not.toHaveBeenCalled();
+    await expect(handleAgentApp(source, "send-2", "bots.send", { to: "Helper", message: "More", expectReply: true }, host)).rejects.toThrow("one-way");
+    expect(sendBot).toHaveBeenCalledOnce();
   });
 
   it("does not infer workspace privileges from a Vox-looking session ID", async () => {
     const { source, host } = fixture();
     source.id = "vorkspace-vox-untrusted";
-    await expect(handleAgentApp(source, "r", "monos.list", {}, host)).rejects.toThrow("Only a Mono");
-    await expect(handleAgentApp(source, "r", "sessions.list", { project: "/tmp/second" }, host)).rejects.toThrow("project is only for a Mono");
+    await expect(handleAgentApp(source, "r", "bots.list", {}, host)).rejects.toThrow("Only a Bot");
+    await expect(handleAgentApp(source, "r", "sessions.list", { project: "/tmp/second" }, host)).rejects.toThrow("project is only for a Bot");
   });
 
-  it("routes spoken Mono names, refuses ambiguous names, and reports missing targets honestly", async () => {
+  it("routes spoken Bot names, refuses ambiguous names, and reports missing targets honestly", async () => {
     const { source, host } = fixture();
-    const helper = createMono([source.cwd]);
-    updateMono(helper.id, (mono) => ({ ...mono, name: "Build Helper" }));
-    const sendMono = vi.fn(async () => ({ alreadySubmitted: false }));
-    host.workspaceController = { projects: [source.cwd], sendMono };
-    await handleAgentApp(source, "name-1", "monos.send", { to: "@build-helper", message: "What are you working on?" }, host);
-    expect(sendMono).toHaveBeenCalledWith(helper.id, "What are you working on?", expect.any(String));
-    const duplicate = createMono([source.cwd]);
-    updateMono(duplicate.id, (mono) => ({ ...mono, name: "Build Helper" }));
-    await expect(handleAgentApp(source, "name-2", "monos.send", { to: "build helper", message: "Do not guess" }, host)).rejects.toThrow("Several Monos match");
-    await expect(handleAgentApp(source, "name-3", "monos.send", { to: "Missing Bot", message: "No" }, host)).rejects.toThrow("No Mono found");
-    expect(sendMono).toHaveBeenCalledOnce();
-    await handleAgentApp(source, "id-1", "monos.send", { to: duplicate.id, message: "Explicit target" }, host);
-    expect(sendMono).toHaveBeenLastCalledWith(duplicate.id, "Explicit target", expect.any(String));
+    const helper = createBot([source.cwd]);
+    updateBot(helper.id, (bot) => ({ ...bot, name: "Build Helper" }));
+    const sendBot = vi.fn(async () => ({ alreadySubmitted: false }));
+    host.workspaceController = { projects: [source.cwd], sendBot };
+    await handleAgentApp(source, "name-1", "bots.send", { to: "@build-helper", message: "What are you working on?" }, host);
+    expect(sendBot).toHaveBeenCalledWith(helper.id, "What are you working on?", expect.any(String));
+    const duplicate = createBot([source.cwd]);
+    updateBot(duplicate.id, (bot) => ({ ...bot, name: "Build Helper" }));
+    await expect(handleAgentApp(source, "name-2", "bots.send", { to: "build helper", message: "Do not guess" }, host)).rejects.toThrow(/Several (?:Bots|Bots) match/);
+    await expect(handleAgentApp(source, "name-3", "bots.send", { to: "Missing Bot", message: "No" }, host)).rejects.toThrow("No Bot found");
+    expect(sendBot).toHaveBeenCalledOnce();
+    await handleAgentApp(source, "id-1", "bots.send", { to: duplicate.id, message: "Explicit target" }, host);
+    expect(sendBot).toHaveBeenLastCalledWith(duplicate.id, "Explicit target", expect.any(String));
   });
   it.each([undefined, true, false])(
-    "uses the Mono's sidebar preference for both submitted and draft sessions: %s",
+    "uses the Bot's sidebar preference for both submitted and draft sessions: %s",
     async (showStartedSessionsInSidebar) => {
       const { source, host } = fixture();
-      host.isMono = () => true;
-      host.monoOf = () => ({
-        id: "mono",
+      host.isBot = () => true;
+      host.botOf = () => ({
+        id: "bot",
         projects: [source.cwd],
         showStartedSessionsInSidebar,
       });
@@ -224,11 +224,11 @@ describe("agent app commands", () => {
     expect(launch.sidebarHidden).toBeUndefined();
   });
 
-  it("uses the owning Mono's preference when a habit starts a session", async () => {
+  it("uses the owning Bot's preference when a habit starts a session", async () => {
     const { source, host } = fixture();
     host.isHabitRun = () => true;
-    host.monoOf = () => ({
-      id: "mono",
+    host.botOf = () => ({
+      id: "bot",
       projects: [source.cwd],
       showStartedSessionsInSidebar: false,
     });
@@ -248,11 +248,11 @@ describe("agent app commands", () => {
     );
   });
 
-  it("files a Mono's sessions into a folder named after it", async () => {
+  it("files a Bot's sessions into a folder named after it", async () => {
     const { source, host } = fixture();
-    host.isMono = () => true;
-    host.monoOf = () => ({
-      id: "mono",
+    host.isBot = () => true;
+    host.botOf = () => ({
+      id: "bot",
       projects: [source.cwd],
       showStartedSessionsInSidebar: true,
       folder: { name: "Captain Jack", color: "#5b8def" },
@@ -277,11 +277,11 @@ describe("agent app commands", () => {
     ]);
   });
 
-  it("leaves a hidden Mono session out of its folder", async () => {
+  it("leaves a hidden Bot session out of its folder", async () => {
     const { source, host } = fixture();
-    host.isMono = () => true;
-    host.monoOf = () => ({
-      id: "mono",
+    host.isBot = () => true;
+    host.botOf = () => ({
+      id: "bot",
       projects: [source.cwd],
       showStartedSessionsInSidebar: false,
       folder: { name: "Captain Jack", color: "#5b8def" },
@@ -332,12 +332,12 @@ describe("agent app commands", () => {
       }
     });
 
-    it("lets a Mono manage sessions in a selected assigned project", async () => {
+    it("lets a Bot manage sessions in a selected assigned project", async () => {
       const { source, host } = fixture();
       source.cwd = "/home/user";
-      host.isMono = (id) => id === source.id;
-      host.monoOf = () => ({
-        id: "mono",
+      host.isBot = (id) => id === source.id;
+      host.botOf = () => ({
+        id: "bot",
         projects: ["/code/app", "/code/site"],
       });
       vi.mocked(host.session).mockResolvedValue({
@@ -412,13 +412,13 @@ describe("agent app commands", () => {
       expect(host.remove).not.toHaveBeenCalled();
     });
 
-    it("does not manage Mono chats, habit runs or orchestration workers", async () => {
+    it("does not manage Bot chats, habit runs or orchestration workers", async () => {
       const { source, host } = fixture();
-      host.isMono = () => true;
+      host.isBot = () => true;
       await expect(
-        handleAgentApp(source, "mono", action, { sessionId: "other" }, host),
+        handleAgentApp(source, "bot", action, { sessionId: "other" }, host),
       ).rejects.toThrow("Only regular project sessions");
-      host.isMono = () => false;
+      host.isBot = () => false;
       host.isHabitRun = () => true;
       await expect(
         handleAgentApp(source, "habit", action, { sessionId: "other" }, host),
@@ -467,7 +467,7 @@ describe("agent app commands", () => {
     });
   });
 
-  it("allows session inspection in a Mono's projects when its chat lives at home", () => {
+  it("allows session inspection in a Bot's projects when its chat lives at home", () => {
     const { source } = fixture();
     source.cwd = "/home/user";
     const projects = ["/code/app", "/code/site"];
@@ -483,10 +483,10 @@ describe("agent app commands", () => {
   });
 
   it.each([undefined, true])(
-    "reports completion of Mono launches with notifyOnComplete=%s",
+    "reports completion of Bot launches with notifyOnComplete=%s",
     async (notifyOnComplete) => {
       const { source, host } = fixture();
-      host.isMono = (id) => id === source.id;
+      host.isBot = (id) => id === source.id;
       expect(
         await handleAgentApp(
           source,
@@ -524,9 +524,9 @@ describe("agent app commands", () => {
     },
   );
 
-  it("does not monitor a Mono's unsent draft by default", async () => {
+  it("does not monitor a Bot's unsent draft by default", async () => {
     const { source, host } = fixture();
-    host.isMono = (id) => id === source.id;
+    host.isBot = (id) => id === source.id;
     const result = await handleAgentApp(
       source,
       "draft",
@@ -543,7 +543,7 @@ describe("agent app commands", () => {
   });
 
   it.each([false, true])(
-    "leaves non-Mono launches unmonitored when habitRun=%s",
+    "leaves non-Bot launches unmonitored when habitRun=%s",
     async (habitRun) => {
       const { source, host } = fixture();
       host.isHabitRun = () => habitRun;
@@ -562,9 +562,9 @@ describe("agent app commands", () => {
     },
   );
 
-  it("reports completion of a sent follow-up to its calling Mono", async () => {
+  it("reports completion of a sent follow-up to its calling Bot", async () => {
     const { source, host } = fixture();
-    host.isMono = (id) => id === source.id;
+    host.isBot = (id) => id === source.id;
     expect(
       await handleAgentApp(
         source,
@@ -593,10 +593,10 @@ describe("agent app commands", () => {
     { reveal: true, draft: true },
     { reveal: true, placement: "right", besideSessionId: "other" },
   ])(
-    "keeps Mono-launched sessions in the background for %j",
+    "keeps Bot-launched sessions in the background for %j",
     async (options) => {
       const { source, host } = fixture();
-      host.isMono = (id) => id === source.id;
+      host.isBot = (id) => id === source.id;
       await handleAgentApp(
         source,
         "background",
@@ -613,7 +613,7 @@ describe("agent app commands", () => {
 
   it("reports completion by default through split placement", async () => {
     const { source, host } = fixture();
-    host.isMono = (id) => id === source.id;
+    host.isBot = (id) => id === source.id;
     await handleAgentApp(
       source,
       "monitored-split",
@@ -655,12 +655,12 @@ describe("agent app commands", () => {
       await expect(
         handleAgentApp(
           source,
-          "not-mono",
+          "not-bot",
           action,
           { ...input, notifyOnComplete: true },
           host,
         ),
-      ).rejects.toThrow("only available in a Mono");
+      ).rejects.toThrow("only available in a Bot");
       expect(host.start).not.toHaveBeenCalled();
       expect(host.send).not.toHaveBeenCalled();
       await handleAgentApp(
@@ -675,7 +675,7 @@ describe("agent app commands", () => {
 
   it("rejects completion reports for an unsent draft", async () => {
     const { source, host } = fixture();
-    host.isMono = () => true;
+    host.isBot = () => true;
     await expect(
       handleAgentApp(
         source,
@@ -692,12 +692,12 @@ describe("agent app commands", () => {
     expect(host.start).not.toHaveBeenCalled();
   });
 
-  it("lets a Mono page its own chat without requiring a project", async () => {
+  it("lets a Bot page its own chat without requiring a project", async () => {
     const { source, host } = fixture();
-    host.isMono = (id) => id === source.id;
+    host.isBot = (id) => id === source.id;
     host.readConversation = vi.fn(async () => ({
       sessionId: source.id,
-      title: "Mono",
+      title: "Bot",
       busy: false,
       hasDraft: false,
       turns: [],
@@ -821,7 +821,7 @@ describe("agent app commands", () => {
     ]) {
       for (const prompt of [
         "/operator list notes",
-        "/mono list notes",
+        "/bot list notes",
         "  /MONOCODE list notes",
       ]) {
         await expect(
@@ -966,9 +966,9 @@ describe("agent app commands", () => {
     async (project, expectedWorktree) => {
       const { source, host } = fixture();
       source.worktreeCwd = "/tmp/project-worktrees/source";
-      host.isMono = () => true;
-      host.monoOf = () => ({
-        id: "mono",
+      host.isBot = () => true;
+      host.botOf = () => ({
+        id: "bot",
         projects: [source.cwd, "/tmp/other"],
       });
       await handleAgentApp(
@@ -988,11 +988,11 @@ describe("agent app commands", () => {
     },
   );
 
-  it("validates an explicit worktree in the Mono's selected project", async () => {
+  it("validates an explicit worktree in the Bot's selected project", async () => {
     const { source, host } = fixture();
     source.worktreeCwd = "/tmp/project-worktrees/source";
-    host.isMono = () => true;
-    host.monoOf = () => ({ id: "mono", projects: [source.cwd, "/tmp/other"] });
+    host.isBot = () => true;
+    host.botOf = () => ({ id: "bot", projects: [source.cwd, "/tmp/other"] });
     const chosen = "/tmp/other-worktrees/feature";
     vi.mocked(host.worktrees).mockResolvedValue({
       worktrees: [{ ...featureWorktree, path: chosen }],
@@ -1336,7 +1336,7 @@ describe("agent app commands", () => {
 
   it("saves artifacts separately, returns metadata, and attaches one reference on retries", async () => {
     const { source, host } = fixture();
-    host.isMono = () => true;
+    host.isBot = () => true;
     let created: Artifact | null = null;
     host.artifact = vi.fn(async (id) => (id === created?.id ? created : null));
     host.saveArtifact = vi.fn(async (input) => {
@@ -1397,7 +1397,7 @@ describe("agent app commands", () => {
 
   it("revises a document without changing omitted fields and refuses note IDs", async () => {
     const { source, host } = fixture();
-    host.isMono = () => true;
+    host.isBot = () => true;
     host.artifact = vi.fn(async (id) =>
       id === "artifact-1" ? { ...artifact, id } : null,
     );
@@ -1451,7 +1451,7 @@ describe("agent app commands", () => {
     expect(host.saveArtifact).toHaveBeenCalledTimes(1);
   });
 
-  it("restricts artifact actions to Monos and lists only document metadata", async () => {
+  it("restricts artifact actions to Bots and lists only document metadata", async () => {
     const { source, host } = fixture();
     await expect(
       handleAgentApp(
@@ -1461,8 +1461,8 @@ describe("agent app commands", () => {
         { body: "Report" },
         host,
       ),
-    ).rejects.toThrow("Only a Mono");
-    host.isMono = () => true;
+    ).rejects.toThrow("Only a Bot");
+    host.isBot = () => true;
     host.artifact = vi.fn(async () => artifact);
     host.artifacts = vi.fn(async () => [{ ...artifact, id: "artifact-1" }]);
     const result = await handleAgentApp(
@@ -1507,7 +1507,7 @@ describe("agent app commands", () => {
 
   it("saves an html visual with its kind and posts it to the reply", async () => {
     const { source, host } = fixture();
-    host.isMono = () => true;
+    host.isBot = () => true;
     host.artifact = vi.fn(async () => null);
     host.saveArtifact = vi.fn(async (artifact) => ({
       ...artifact,
@@ -1535,7 +1535,7 @@ describe("agent app commands", () => {
 
   it("rejects unsupported artifact kinds before saving or posting a card", async () => {
     const { source, host } = fixture();
-    host.isMono = () => true;
+    host.isBot = () => true;
     host.artifact = vi.fn(async () => null);
     host.artifacts = vi.fn(async () => []);
     host.saveArtifact = vi.fn();

@@ -223,7 +223,7 @@ test("Vox survives chat navigation and titlebar replacement", async ({
   expect(await page.evaluate(() => (window as any).voxMetrics.stopped)).toBe(1);
 });
 
-test("voice passes messages to explicit session and Mono targets while keeping the draft", async ({
+test("voice passes messages to explicit session and Bot targets while keeping the draft", async ({
   page,
 }) => {
   await page.goto("/tests/browser/vox.html");
@@ -245,7 +245,7 @@ test("voice passes messages to explicit session and Mono targets while keeping t
   );
   await page.getByRole("button", { name: "Switch chat", exact: true }).click();
   await page.evaluate(() =>
-    (window as any).voxAction("mono-call", "monos.send", {
+    (window as any).voxAction("bot-call", "bots.send", {
       to: "Helper",
       message: "Review the change",
       expectReply: false,
@@ -267,7 +267,7 @@ test("voice passes messages to explicit session and Mono targets while keeping t
         },
       },
       {
-        action: "monos.send",
+        action: "bots.send",
         input: {
           to: "Helper",
           message: "Review the change",
@@ -280,7 +280,7 @@ test("voice passes messages to explicit session and Mono targets while keeping t
   await endVox(page);
 });
 
-test("voice fills session and controlled Mono composers without sending or erasing typing", async ({
+test("voice fills session and controlled Bot composers without sending or erasing typing", async ({
   page,
 }) => {
   await page.goto("/tests/browser/vox.html");
@@ -311,26 +311,26 @@ test("voice fills session and controlled Mono composers without sending or erasi
   );
   await page.keyboard.press("Escape");
   await page
-    .getByRole("button", { name: "Mono composer", exact: true })
+    .getByRole("button", { name: "Bot composer", exact: true })
     .click();
-  const mono = page.getByRole("textbox", { name: "Message Helper" });
-  await mono.fill("Keep my Mono draft");
+  const bot = page.getByRole("textbox", { name: "Message Helper" });
+  await bot.fill("Keep my Bot draft");
   await page.evaluate(() =>
-    (window as any).voxAction("fill-mono", "composer.write", {
+    (window as any).voxAction("fill-bot", "composer.write", {
       text: "Please investigate",
     }),
   );
-  await expect(mono).toHaveValue("Keep my Mono draft\n\nPlease investigate");
+  await expect(bot).toHaveValue("Keep my Bot draft\n\nPlease investigate");
   await page
     .getByRole("button", { name: "Move controls", exact: true })
     .click();
-  await expect(mono).toHaveValue("Keep my Mono draft\n\nPlease investigate");
-  await mono.fill("Manual edit wins");
+  await expect(bot).toHaveValue("Keep my Bot draft\n\nPlease investigate");
+  await bot.fill("Manual edit wins");
   await page.evaluate(() =>
     (window as any).voxAction("stale-replace", "composer.write", {
       text: "Do not overwrite",
       mode: "replace",
-      expectedText: "Keep my Mono draft",
+      expectedText: "Keep my Bot draft",
     }),
   );
   await expect
@@ -338,7 +338,7 @@ test("voice fills session and controlled Mono composers without sending or erasi
       page.evaluate(() => (window as any).voxMetrics.responses.length),
     )
     .toBe(3);
-  await expect(mono).toHaveValue("Manual edit wins");
+  await expect(bot).toHaveValue("Manual edit wins");
   expect(await page.evaluate(() => (window as any).voxMetrics.submitted)).toBe(
     0,
   );

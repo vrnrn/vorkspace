@@ -198,7 +198,7 @@ it("limits context and reports omitted comments", async () => {
   expect(resolved).not.toContain('"body":"Comment 0"');
   expect(resolved).toContain('"body":"Comment 49"');
 });
-it("creates the same portable context card for project and Mono composers", () => {
+it("creates the same portable context card for project and Bot composers", () => {
   const item = {
     provider: "jira",
     kind: "jira",

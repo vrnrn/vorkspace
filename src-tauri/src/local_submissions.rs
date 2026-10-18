@@ -376,7 +376,7 @@ mod tests {
     fn saved_owner(conn: &Connection) {
         conn.execute_batch("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY);")
             .unwrap();
-        conn.execute("INSERT INTO sessions(id) VALUES (?1)", ["mono/chat.中国"])
+        conn.execute("INSERT INTO sessions(id) VALUES (?1)", ["bot/chat.中国"])
             .unwrap();
     }
 
@@ -390,7 +390,7 @@ mod tests {
         SubmissionInput {
             attempt_id: id.into(),
             user_turn_id: id.into(),
-            session_id: "mono/chat.中国".into(),
+            session_id: "bot/chat.中国".into(),
             payload_json: r#"{"cwd":"/repo","text":"hello","attachments":[{"data":"exact"}]}"#
                 .into(),
             user_turn: Some(json!({"id":id,"role":"user","text":"hello"})),
@@ -511,7 +511,7 @@ mod tests {
     fn deletion_keeps_identity_tombstones_and_defeats_delayed_new_reservations() {
         let conn = db();
         reserve(&conn, input("old")).unwrap();
-        delete_session(&conn, "mono/chat.中国").unwrap();
+        delete_session(&conn, "bot/chat.中国").unwrap();
         assert!(!dispatch(&conn, "old").unwrap().claimed);
         assert!(reserve(&conn, input("delayed")).is_err());
         let mut moved = input("old");

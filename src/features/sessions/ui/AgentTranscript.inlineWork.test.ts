@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { copyMessage } from "../../../platform/tauri/clipboard";
 import type { Block } from "../model/session";
-import { AgentTranscript, MonoActivityTrail } from "./AgentTranscript";
+import { AgentTranscript, BotActivityTrail } from "./AgentTranscript";
 import { PACED_REVEAL_KEY, WORD_FADE_MS } from "./wordFade";
 
 vi.mock("../../../platform/tauri/clipboard", () => ({
@@ -89,7 +89,7 @@ function render(
 }
 
 function status() {
-  return container.querySelector('[data-mono-work] [role="status"] .sr-only')
+  return container.querySelector('[data-bot-work] [role="status"] .sr-only')
     ?.textContent;
 }
 
@@ -143,14 +143,14 @@ it("shows launched sessions as cards with live status, only in their turn", () =
   const onOpenSession = vi.fn();
   const launches = [
     {
-      sessionId: "app-mono-review",
+      sessionId: "app-bot-review",
       cwd: "/repo/web",
       title: "PR review",
       harness: "codex" as const,
       model: "gpt-6",
     },
     {
-      sessionId: "app-mono-fix",
+      sessionId: "app-bot-fix",
       cwd: "/repo/api",
       title: "Fix the build",
       harness: "claude" as const,
@@ -165,13 +165,13 @@ it("shows launched sessions as cards with live status, only in their turn", () =
       role: "user",
       text: "Review",
       durationMs: 1000,
-      monoSpawnedSessions: launches,
+      botSpawnedSessions: launches,
     },
     { id: "answer", role: "assistant", text: "Started your reviewer." },
   ];
   const launchedSessions = new Map([
-    ["app-mono-review", { state: "working" as const, title: "Review #42" }],
-    ["app-mono-fix", { state: "done" as const, title: "Fix the build" }],
+    ["app-bot-review", { state: "working" as const, title: "Review #42" }],
+    ["app-bot-fix", { state: "done" as const, title: "Fix the build" }],
   ]);
   render(blocks, {
     onOpenSession,
@@ -201,23 +201,23 @@ it("shows launched sessions as cards with live status, only in their turn", () =
   expect(onOpenSession).toHaveBeenCalledWith(
     "user",
     blocks.slice(2),
-    "app-mono-fix",
+    "app-bot-fix",
   );
   render(blocks, {
     onOpenSession,
     launchedSessions,
-    openSessionId: "app-mono-fix",
+    openSessionId: "app-bot-fix",
   });
   expect(
     container
-      .querySelector('[data-launched-session="app-mono-fix"]')
+      .querySelector('[data-launched-session="app-bot-fix"]')
       ?.getAttribute("aria-pressed"),
   ).toBe("true");
 });
 
-it("keeps launched sessions under the reply that started them when the Mono reports back", () => {
+it("keeps launched sessions under the reply that started them when the Bot reports back", () => {
   const launch = {
-    sessionId: "app-mono-article",
+    sessionId: "app-bot-article",
     cwd: "/repo",
     title: "Write an article",
     harness: "codex" as const,
@@ -230,24 +230,24 @@ it("keeps launched sessions under the reply that started them when the Mono repo
       text: "Write two articles",
       startedAt: 1000,
       durationMs: 1000,
-      monoSpawnedSessions: [launch],
+      botSpawnedSessions: [launch],
     },
     tool("start"),
     { id: "started", role: "assistant", text: "Both are running." },
-    // The app's hidden prompt when the session finishes; the Mono's report
+    // The app's hidden prompt when the session finishes; the Bot's report
     // back joins the same message.
     {
       id: "completion",
       role: "user",
       text: "Session finished",
       internal: true,
-      appRequestId: "mono-completion-app-mono-article",
+      appRequestId: "bot-completion-app-bot-article",
       startedAt: 5000,
     },
     tool("read"),
     { id: "report", role: "assistant", text: "Both finished." },
   ];
-  render(blocks, { onOpenSession: vi.fn(), agentName: "MonoSkull" });
+  render(blocks, { onOpenSession: vi.fn(), agentName: "BotSkull" });
   expect(container.querySelectorAll("[data-transcript-turn]")).toHaveLength(1);
   const started = container.querySelector('[data-chat-message="started"]')!;
   const cards = container.querySelector("[data-launched-sessions]")!;
@@ -263,9 +263,9 @@ it("keeps launched sessions under the reply that started them when the Mono repo
   ).toBeTruthy();
 });
 
-it("keeps launched session cards in place while the Mono's report back arrives", () => {
+it("keeps launched session cards in place while the Bot's report back arrives", () => {
   const launch = {
-    sessionId: "app-mono-article",
+    sessionId: "app-bot-article",
     cwd: "/repo",
     title: "Write an article",
     harness: "codex" as const,
@@ -276,7 +276,7 @@ it("keeps launched session cards in place while the Mono's report back arrives",
     role: "user",
     text: "Write two articles",
     startedAt: 1000,
-    monoSpawnedSessions: [launch],
+    botSpawnedSessions: [launch],
   };
   const started: Block = {
     id: "started",
@@ -288,10 +288,10 @@ it("keeps launched session cards in place while the Mono's report back arrives",
     role: "user",
     text: "Session finished",
     internal: true,
-    appRequestId: "mono-completion-app-mono-article",
+    appRequestId: "bot-completion-app-bot-article",
     startedAt: 5000,
   };
-  const props = { onOpenSession: vi.fn(), agentName: "MonoCrab" };
+  const props = { onOpenSession: vi.fn(), agentName: "BotCrab" };
   const cards = () => container.querySelector("[data-launched-sessions]");
 
   // While the reply streams, the cards wait under it.
@@ -305,7 +305,7 @@ it("keeps launched session cards in place while the Mono's report back arrives",
   expect(shown).not.toBeNull();
 
   // The session finishing reopens the same message: the cards stay put
-  // through the hidden prompt, the Mono's work and its report.
+  // through the hidden prompt, the Bot's work and its report.
   const reopened = [{ ...user, durationMs: 2000 }, tool("start"), started];
   render([...reopened, completion], { ...props, busy: true });
   expect(cards()).toBe(shown);
@@ -331,16 +331,16 @@ it("keeps launched session cards in place while the Mono's report back arrives",
   ).toBeTruthy();
 });
 
-it("shows reused sessions in the requesting Mono after its handoff reply, before its completion report", () => {
+it("shows reused sessions in the requesting Bot after its handoff reply, before its completion report", () => {
   const launches = [
     {
-      id: "app-other-mono-one",
+      id: "app-other-bot-one",
       title: "Meaning in everyday life",
       harness: "codex",
       model: "gpt-6",
     },
     {
-      id: "app-other-mono-two",
+      id: "app-other-bot-two",
       title: "Growth through change",
       harness: "codex",
       model: "gpt-6",
@@ -388,14 +388,14 @@ it("shows reused sessions in the requesting Mono after its handoff reply, before
       role: "user",
       text: "Both finished",
       internal: true,
-      appRequestId: "mono-completion-batch-articles",
+      appRequestId: "bot-completion-batch-articles",
       startedAt: 5000,
       durationMs: 1000,
     },
     { id: "report", role: "assistant", text: "Both articles are finished." },
   ];
   const onOpenSession = vi.fn();
-  render(blocks, { onOpenSession, agentName: "MonoShroom" });
+  render(blocks, { onOpenSession, agentName: "BotShroom" });
   expect(container.querySelectorAll("[data-transcript-turn]")).toHaveLength(2);
   const cards = container.querySelector("[data-launched-sessions]")!;
   expect(cards).not.toBeNull();
@@ -433,7 +433,7 @@ it("waits for the final reply's reveal, then shows its artifact before the actio
     text: "Review",
     startedAt: 1000,
     artifactCards: [{ id: "review", kind: "document", title: "PR review" }],
-    monoSpawnedSessions: [
+    botSpawnedSessions: [
       {
         sessionId: "app-review",
         cwd: "/repo",
@@ -446,7 +446,7 @@ it("waits for the final reply's reveal, then shows its artifact before the actio
   const actions = {
     onOpenSession: vi.fn(),
     onShowWork: vi.fn(),
-    agentName: "MonoInvader",
+    agentName: "BotInvader",
   };
   render([user, tool("call", "in_progress")], { ...actions, busy: true });
   expect(container.querySelector("[data-turn-actions]")).toBeNull();
@@ -454,7 +454,7 @@ it("waits for the final reply's reveal, then shows its artifact before the actio
   // Session cards wait for the reply, so it never lands above them.
   expect(container.querySelector("[data-launched-sessions]")).toBeNull();
   expect(
-    container.querySelector('[data-mono-work] [aria-label="Show activity"]'),
+    container.querySelector('[data-bot-work] [aria-label="Show activity"]'),
   ).not.toBeNull();
 
   const reply: Block = {
@@ -539,14 +539,14 @@ it("shows only the final reply, with no separate work summary or opening narrati
     { id: "answer", role: "assistant", text: "Everything passed." },
   ]);
   expect(status()).toBeUndefined();
-  const work = container.querySelector("[data-mono-work]")!;
+  const work = container.querySelector("[data-bot-work]")!;
   expect(work.querySelector("button")).toBeNull();
   act(() => work.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   expect(container.textContent).not.toContain("Trying another approach.");
   expect(container.textContent).not.toContain("Inspect first");
   expect(container.textContent).not.toContain("I will inspect the files.");
   expect(container.textContent).toContain("Everything passed.");
-  expect(container.querySelectorAll("[data-mono-work]")).toHaveLength(1);
+  expect(container.querySelectorAll("[data-bot-work]")).toHaveLength(1);
 });
 
 it("opens the full turn activity from the footer beside copy and notes", () => {
@@ -576,7 +576,7 @@ it("opens the full turn activity from the footer beside copy and notes", () => {
       button.getAttribute("aria-label"),
     ),
   ).toEqual(["Copy response", "Save as note", "Show activity"]);
-  expect(turn.querySelector("[data-mono-work] button")).toBeNull();
+  expect(turn.querySelector("[data-bot-work] button")).toBeNull();
   act(() =>
     turn
       .querySelector<HTMLButtonElement>('[aria-label="Show activity"]')!
@@ -606,7 +606,7 @@ it("keeps streamed progress inside the status row and reveals the final reply wh
     { id: "intro", role: "assistant", text: "I will inspect the files." },
   ];
   render([...opening, tool("first", "in_progress")], { busy: true });
-  const group = container.querySelector("[data-mono-work]");
+  const group = container.querySelector("[data-bot-work]");
   expect(status()).toBe("Running command…");
   const narrated: Block[] = [
     ...opening,
@@ -635,7 +635,7 @@ it("keeps streamed progress inside the status row and reveals the final reply wh
   render(worked, { busy: true });
   settleTicker();
   expect(status()).toBe("Considering…");
-  expect(container.querySelector("[data-mono-work]")).toBe(group);
+  expect(container.querySelector("[data-bot-work]")).toBe(group);
   expect(container.querySelector('[data-chat-message="answer"]')).toBeNull();
   render(worked.map((block) => ({ ...block, streaming: false })));
   settleTicker();
@@ -690,7 +690,7 @@ it("opens live activity from the header ticker before any tool, while a direct a
     onShowWork: vi.fn(),
   };
   render([user], props);
-  const header = container.querySelector("[data-mono-work]")!;
+  const header = container.querySelector("[data-bot-work]")!;
   expect(header.querySelector(".pixel-mascot")).not.toBeNull();
   expect(header.textContent).toContain("Captain");
   expect(status()).toBe("Thinking…");
@@ -716,7 +716,7 @@ it("opens live activity from the header ticker before any tool, while a direct a
   };
   render([user, answer], props);
   settleTicker();
-  expect(container.querySelector("[data-mono-work]")).toBe(header);
+  expect(container.querySelector("[data-bot-work]")).toBe(header);
   expect(container.textContent).not.toContain(answer.text);
   expect(container.querySelector('[aria-label="Copy response"]')).toBeNull();
   act(() => activity.click());
@@ -765,11 +765,11 @@ it("copies and saves only the final answer while the activity trail retains ever
   expect(container.textContent).not.toContain("Weighing the options.");
   expect(container.textContent).not.toContain("Checking more files.");
 
-  act(() => root.render(createElement(MonoActivityTrail, { blocks })));
+  act(() => root.render(createElement(BotActivityTrail, { blocks })));
   expect(
     [
-      ...container.querySelectorAll<HTMLElement>("[data-mono-activity-block]"),
-    ].map((row) => row.dataset.monoActivityBlock),
+      ...container.querySelectorAll<HTMLElement>("[data-bot-activity-block]"),
+    ].map((row) => row.dataset.botActivityBlock),
   ).toEqual([
     "intro",
     "reasoning",
@@ -849,12 +849,12 @@ it("marks the compact group for search without expanding its commands or narrati
     '[data-transcript-search-current="true"]',
   );
   expect(current).toHaveLength(1);
-  expect(current[0].hasAttribute("data-mono-work")).toBe(true);
+  expect(current[0].hasAttribute("data-bot-work")).toBe(true);
   expect(container.textContent).not.toContain("Trying another approach.");
-  expect(container.querySelector("[data-mono-work] button")).toBeNull();
+  expect(container.querySelector("[data-bot-work] button")).toBeNull();
 });
 
-it("keeps interrupted Mono messages together above one working indicator", () => {
+it("keeps interrupted Bot messages together above one working indicator", () => {
   const blocks: Block[] = [
     {
       id: "first-message",
@@ -884,12 +884,12 @@ it("keeps interrupted Mono messages together above one working indicator", () =>
     ),
   ).toEqual(["first-message", "second-message", "third-message"]);
   expect(turn.querySelectorAll('[data-message-stack="true"]')).toHaveLength(2);
-  expect(turn.querySelectorAll("[data-mono-work]")).toHaveLength(1);
+  expect(turn.querySelectorAll("[data-bot-work]")).toHaveLength(1);
   const rows = [...turn.querySelectorAll("[data-transcript-search-item]")];
   expect(
     rows.slice(0, 3).every((row) => row.querySelector("[data-prompt-anchor]")),
   ).toBe(true);
-  expect(rows[3].hasAttribute("data-mono-work")).toBe(true);
+  expect(rows[3].hasAttribute("data-bot-work")).toBe(true);
   render([...blocks, { id: "answer", role: "assistant", text: "Done" }], {
     ...props,
     busy: false,
@@ -907,7 +907,7 @@ it("keeps interrupted Mono messages together above one working indicator", () =>
   expect(container.querySelectorAll(".transcript-turn")).toHaveLength(2);
 });
 
-it("stacks the next message onto one the Mono only reacted to", () => {
+it("stacks the next message onto one the Bot only reacted to", () => {
   const props = {
     agentName: "Captain",
     agentMascot: { mascot: "cat" as const, color: "#6ba" },
@@ -924,7 +924,7 @@ it("stacks the next message onto one the Mono only reacted to", () => {
   expect([...stacked].map((row) => row.dataset.promptAnchor)).toEqual([
     "thanks",
   ]);
-  expect(container.querySelector('[data-mono-reaction="😊"]')).not.toBeNull();
+  expect(container.querySelector('[data-bot-reaction="😊"]')).not.toBeNull();
   // It opens a turn, but sits as close as a message sent mid-turn.
   expect(
     container
@@ -936,7 +936,7 @@ it("stacks the next message onto one the Mono only reacted to", () => {
 });
 
 it("shows answers to mid-turn follow-ups immediately and retains them during later work", () => {
-  const props = { busy: true, agentName: "MonoInvader" };
+  const props = { busy: true, agentName: "BotInvader" };
   const blocks: Block[] = [
     { id: "user", role: "user", text: "Review the PR", startedAt: 1000 },
     { id: "intro", role: "assistant", text: "I will inspect the files." },
@@ -971,7 +971,7 @@ it("shows answers to mid-turn follow-ups immediately and retains them during lat
   expect(container.textContent).toContain("I am checking browser security.");
   expect(container.textContent).toContain("Stopping the review now.");
   expect(container.textContent).not.toContain("Inspect second");
-  expect(container.querySelectorAll("[data-mono-work]")).toHaveLength(1);
+  expect(container.querySelectorAll("[data-bot-work]")).toHaveLength(1);
   render(continued, { ...props, busy: false });
   expect(container.textContent).toContain("I am checking browser security.");
   expect(container.textContent).toContain("Stopping the review now.");
@@ -1052,7 +1052,7 @@ it.each(["Follow up", "👍"])(
 it("does not repeat a thought's first paragraph above it once opened", () => {
   act(() =>
     root.render(
-      createElement(MonoActivityTrail, {
+      createElement(BotActivityTrail, {
         blocks: [
           tool("before"),
           {

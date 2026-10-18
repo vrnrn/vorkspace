@@ -1,8 +1,8 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useSyncExternalStore } from "react";
 import {
-  githubMonocodeStarStatus,
-  starMonocodeOnGithub,
+  githubBotcodeStarStatus,
+  starBotcodeOnGithub,
 } from "../../features/inbox/model/githubTasks";
 import { Loader, Star, X } from "../../shared/ui/icons";
 
@@ -58,7 +58,7 @@ function checkStarStatus(force = false): Promise<void> {
   if (!force && promptSnapshot !== "loading") return Promise.resolve();
 
   const initial = promptSnapshot === "loading";
-  checkRequest = githubMonocodeStarStatus()
+  checkRequest = githubBotcodeStarStatus()
     .then((status) => {
       if (status === "starred") setPromptSnapshot("hidden");
       else if (status === "notStarred") setPromptSnapshot("visible");
@@ -76,7 +76,7 @@ function checkStarStatus(force = false): Promise<void> {
 function starFromPrompt(): Promise<void> {
   if (starRequest) return starRequest;
   setPromptSnapshot("starring");
-  starRequest = starMonocodeOnGithub()
+  starRequest = starBotcodeOnGithub()
     .then(() => setPromptSnapshot("hidden"))
     .catch(async () => {
       setPromptSnapshot("visible");

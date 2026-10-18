@@ -31,8 +31,8 @@ export type BlockRole =
   | "system"
   | "handoff";
 
-/** A session created by a Mono during this conversation turn. */
-export type MonoSpawnedSession = {
+/** A session created by a Bot during this conversation turn. */
+export type BotSpawnedSession = {
   sessionId: string;
   cwd: string;
   title: string;
@@ -240,22 +240,22 @@ export type Attachment = {
   previewUrl?: string;
 };
 
-export type MonoSessionCompletion = {
+export type BotSessionCompletion = {
   sessionId: string;
   title: string;
   status: "completed" | "failed" | "cancelled";
-  /** A single report covering several sessions launched in one Mono turn. */
+  /** A single report covering several sessions launched in one Bot turn. */
   sessionCount?: number;
 };
 
-export type MonoPeerMessageMeta = {
+export type BotPeerMessageMeta = {
   id: string;
   requestId?: string;
-  fromMonoId: string;
+  fromBotId: string;
   fromName: string;
   fromMascot: string;
   fromColor: string;
-  toMonoId: string;
+  toBotId: string;
   toName: string;
   text: string;
   expectReply: boolean;
@@ -266,17 +266,17 @@ export type MonoPeerMessageMeta = {
 
 export type QueuedMessage = {
   id: string;
-  /** User bubble already shown optimistically in a Mono's conversation. */
+  /** User bubble already shown optimistically in a Bot's conversation. */
   blockId?: string;
   text: string;
   attachments: Attachment[];
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
   intent?: TurnIntent;
-  /** An app notification that must wait for an idle Mono, never steer its work. */
-  monoSessionCompletion?: MonoSessionCompletion;
-  /** Direct message from another Mono; waits for an idle turn, never steers. */
-  monoPeerMessage?: MonoPeerMessageMeta;
+  /** An app notification that must wait for an idle Bot, never steer its work. */
+  botSessionCompletion?: BotSessionCompletion;
+  /** Direct message from another Bot; waits for an idle turn, never steers. */
+  botPeerMessage?: BotPeerMessageMeta;
   /** Delivery failed; the message remains available to retry or edit. */
   error?: string;
 };
@@ -369,12 +369,12 @@ export type Block = {
    * conversation rather than the user narrating their own agents.
    */
   internal?: boolean;
-  /** Hidden app prompt that starts a separate completion report in a Mono chat. */
-  monoSessionCompletion?: MonoSessionCompletion;
-  /** Direct message from another Mono that started this turn. */
-  monoPeerMessage?: MonoPeerMessageMeta;
+  /** Hidden app prompt that starts a separate completion report in a Bot chat. */
+  botSessionCompletion?: BotSessionCompletion;
+  /** Direct message from another Bot that started this turn. */
+  botPeerMessage?: BotPeerMessageMeta;
   /** Accepted session launches, kept on the originating user turn. */
-  monoSpawnedSessions?: MonoSpawnedSession[];
+  botSpawnedSessions?: BotSpawnedSession[];
   handoff?: HandoffMeta;
   secondOpinion?: SecondOpinionMeta;
   /** Independent read-only side conversations anchored to this user turn. */
@@ -392,15 +392,15 @@ export type Block = {
    */
   notice?: "error" | "interrupt";
   statusKey?: string;
-  /** Posted to a Mono's chat by one of its habits, outside any turn. */
-  monoHabit?: { id: string; name: string; at: number };
-  /** A card a Mono put in its chat; see `features/monos/model/monoCards`. */
-  monoCard?: import("../../monos/model/monoCards").MonoCard;
+  /** Posted to a Bot's chat by one of its habits, outside any turn. */
+  botHabit?: { id: string; name: string; at: number };
+  /** A card a Bot put in its chat; see `features/bots/model/botCards`. */
+  botCard?: import("../../bots/model/botCards").BotCard;
   /**
-   * The emoji a Mono answered this user message with. Drawn from its reply
-   * when the chat renders; see `features/monos/model/monoReaction`.
+   * The emoji a Bot answered this user message with. Drawn from its reply
+   * when the chat renders; see `features/bots/model/botReaction`.
    */
-  monoReaction?: string;
+  botReaction?: string;
 };
 
 export type RuntimeMode =
@@ -462,8 +462,8 @@ export type Session = {
   /** Project / working directory for this session. */
   cwd: string;
   blocks: Block[];
-  /** Mono-only database window. Older blocks are fetched separately by the viewer. */
-  monoTranscript?: { before: number | null; firstBlockId: string | null };
+  /** Bot-only database window. Older blocks are fetched separately by the viewer. */
+  botTranscript?: { before: number | null; firstBlockId: string | null };
   /** True while a harness turn is in flight. */
   busy?: boolean;
   /** The provider has accepted this turn and can take live follow-ups. */
@@ -485,7 +485,7 @@ export type Session = {
   usageLimit?: UsageLimit;
   /**
    * Lives only in memory: never saved, never listed with the project's chats.
-   * A Mono's habit runs are, and disappear when the run ends.
+   * A Bot's habit runs are, and disappear when the run ends.
    */
   ephemeral?: boolean;
   /** Provider-side conversation id. */

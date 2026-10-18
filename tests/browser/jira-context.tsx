@@ -63,7 +63,7 @@ Object.assign(window, {
         ].includes(command)
       )
         return {
-          body: `Dummy description revision ${revision}: allow a ticket to be attached to project chats and Monos.`,
+          body: `Dummy description revision ${revision}: allow a ticket to be attached to project chats and Bots.`,
           author: "Alex",
           title: item.title,
           state: item.state,
@@ -108,8 +108,8 @@ Object.assign(window, {
 });
 
 const { InboxDetail } = await import("../../src/features/inbox/ui/InboxView");
-const { MonoComposer } =
-  await import("../../src/features/monos/ui/MonoComposer");
+const { BotComposer } =
+  await import("../../src/features/bots/ui/BotComposer");
 const { applyTicketContextToTurn, ticketComposerCard } =
   await import("../../src/features/inbox/model/ticketContext");
 function Fixture() {
@@ -131,7 +131,7 @@ function Fixture() {
             Back to ticket
           </button>
           <h1 className="text-[16px] font-semibold">
-            {destination === "mono-demo" ? "Demo Mono" : "Demo project chat"}
+            {destination === "bot-demo" ? "Demo Bot" : "Demo project chat"}
           </h1>
         </div>
         <p className="text-[12px] text-content/60">
@@ -153,9 +153,9 @@ function Fixture() {
           {resolved ||
             "Ticket attached. Add a message, then send to inspect the context."}
         </pre>
-        <MonoComposer
+        <BotComposer
           sessionId="dummy-context-chat"
-          name="Demo Mono"
+          name="Demo Bot"
           inboxCard={card}
           onInboxCardDismiss={() => setCard(undefined)}
           onSubmit={async (text) => {
@@ -180,19 +180,19 @@ function Fixture() {
           mascotColor: "hsl(210 70% 60%)",
         },
       ]}
-      monos={[
+      bots={[
         {
-          id: "mono-demo",
-          name: "Demo Mono",
+          id: "bot-demo",
+          name: "Demo Bot",
           mascot: "crab",
           color: "hsl(210 70% 60%)",
         },
       ]}
       revision={0}
       relatedSessions={[]}
-      onStart={(ticket, _body, monoId) => {
+      onStart={(ticket, _body, botId) => {
         setCard(ticketComposerCard(ticket));
-        setDestination(monoId || ticket.projectPath);
+        setDestination(botId || ticket.projectPath);
       }}
     />
   );

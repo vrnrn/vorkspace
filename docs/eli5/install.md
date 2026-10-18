@@ -17,9 +17,9 @@ For the full platform guide and Linux commands, see [Installation](../install.md
 ## 2. Switching from MonoCode
 
 Vorkspace grew out of MonoCode and uses the same saved-data folder (`com.monocode.desktop`) on your Mac:
-- All your existing chats, Monos, notes, and settings show up automatically!
+- All your existing chats, Bots, channels, notes, backgrounds, shortcuts, and settings show up automatically. Older Bot data names are converted when the app starts, on Mac, Linux, and Windows.
 - Just don't run both MonoCode and Vorkspace at the exact same time.
-- If you want a safety copy of your data before switching, you can run the backup script (`bash scripts/migrate-monocode-to-vorkspace.sh --apply`).
+- On a Mac, you can also run the migration and backup script (`bash scripts/migrate-monocode-to-vorkspace.sh --apply`) after closing both apps to save a safety copy or recover older data offline. It can bring back missing Bot folders even if Vox has already created a new folder, while keeping existing Bot and account folders intact.
 
 ---
 

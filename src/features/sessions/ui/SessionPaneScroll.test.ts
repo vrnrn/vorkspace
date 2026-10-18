@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionPane, type SessionPaneProps } from "./SessionPane";
 import { TranscriptPool, TranscriptPoolOutlet } from "./TranscriptPool";
-import { getMonoTranscriptPage } from "../data/sessionStore";
+import { getBotTranscriptPage } from "../data/sessionStore";
 
 const probes = vi.hoisted(() => ({
   composer: vi.fn(() => null),
@@ -13,15 +13,15 @@ const probes = vi.hoisted(() => ({
 }));
 
 vi.mock("./Composer", () => ({ Composer: () => null }));
-vi.mock("../../monos/ui/MonoComposer", () => ({
-  MonoComposer: probes.composer,
+vi.mock("../../bots/ui/BotComposer", () => ({
+  BotComposer: probes.composer,
 }));
 vi.mock("./SessionReview", () => ({
   SessionReview: probes.review,
 }));
 vi.mock("../data/sessionStore", async (original) => ({
   ...(await original<typeof import("../data/sessionStore")>()),
-  getMonoTranscriptPage: vi.fn(),
+  getBotTranscriptPage: vi.fn(),
 }));
 vi.mock("../../orchestration/model/orchestration", async (importOriginal) => ({
   ...(await importOriginal<
@@ -33,10 +33,10 @@ vi.mock("../../orchestration/model/orchestration", async (importOriginal) => ({
     hydrate: async () => {},
   },
 }));
-vi.mock("../../monos/model/mono", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../monos/model/mono")>()),
-  monoForSession: () => ({
-    id: "mono",
+vi.mock("../../bots/model/bot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../bots/model/bot")>()),
+  botForSession: () => ({
+    id: "bot",
     sessionId: "chat",
     name: "Captain Awesome",
     mascot: "cat",
@@ -52,7 +52,7 @@ let observers: Array<{ targets: Element[]; resize: () => void }>;
 beforeEach(() => {
   probes.composer.mockClear();
   probes.review.mockClear();
-  vi.mocked(getMonoTranscriptPage).mockReset();
+  vi.mocked(getBotTranscriptPage).mockReset();
   observers = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
@@ -149,7 +149,7 @@ function props(transcriptPool?: TranscriptPool): SessionPaneProps {
   };
 }
 
-it("routes a Mono footer activity click to its session and selected turn", () => {
+it("routes a Bot footer activity click to its session and selected turn", () => {
   const pane = props();
   pane.session.blocks = [
     { id: "user", role: "user", text: "Inspect", durationMs: 23000 },
@@ -161,9 +161,9 @@ it("routes a Mono footer activity click to its session and selected turn", () =>
     },
     { id: "reply", role: "assistant", text: "Done" },
   ];
-  const onShowMonoActivity = vi.fn();
+  const onShowBotActivity = vi.fn();
   act(() =>
-    root.render(createElement(SessionPane, { ...pane, onShowMonoActivity })),
+    root.render(createElement(SessionPane, { ...pane, onShowBotActivity })),
   );
   act(() =>
     container
@@ -172,7 +172,7 @@ it("routes a Mono footer activity click to its session and selected turn", () =>
       )!
       .click(),
   );
-  expect(onShowMonoActivity).toHaveBeenCalledWith(
+  expect(onShowBotActivity).toHaveBeenCalledWith(
     "chat",
     "user",
     pane.session.blocks,
@@ -181,8 +181,8 @@ it("routes a Mono footer activity click to its session and selected turn", () =>
     root.render(
       createElement(SessionPane, {
         ...pane,
-        onShowMonoActivity,
-        monoActivityTurnId: "user",
+        onShowBotActivity,
+        botActivityTurnId: "user",
       }),
     ),
   );
@@ -193,11 +193,11 @@ it("routes a Mono footer activity click to its session and selected turn", () =>
   ).toBe("true");
 });
 
-it("routes a launched session's card to the Mono, its turn and the session", () => {
+it("routes a launched session's card to the Bot, its turn and the session", () => {
   const pane = props();
   pane.session.blocks[0] = {
     ...pane.session.blocks[0],
-    monoSpawnedSessions: [
+    botSpawnedSessions: [
       {
         sessionId: "app-review",
         cwd: "/repo",
@@ -207,16 +207,16 @@ it("routes a launched session's card to the Mono, its turn and the session", () 
       },
     ],
   };
-  const onOpenMonoSession = vi.fn();
-  const monoLaunchedSessions = new Map([
+  const onOpenBotSession = vi.fn();
+  const botLaunchedSessions = new Map([
     ["app-review", { state: "working" as const, title: "Review" }],
   ]);
   act(() =>
     root.render(
       createElement(SessionPane, {
         ...pane,
-        onOpenMonoSession,
-        monoLaunchedSessions,
+        onOpenBotSession,
+        botLaunchedSessions,
       }),
     ),
   );
@@ -225,7 +225,7 @@ it("routes a launched session's card to the Mono, its turn and the session", () 
   )!;
   expect(card.dataset.state).toBe("working");
   act(() => card.click());
-  expect(onOpenMonoSession).toHaveBeenCalledWith(
+  expect(onOpenBotSession).toHaveBeenCalledWith(
     "chat",
     "user",
     pane.session.blocks,
@@ -235,9 +235,9 @@ it("routes a launched session's card to the Mono, its turn and the session", () 
     root.render(
       createElement(SessionPane, {
         ...pane,
-        onOpenMonoSession,
-        monoLaunchedSessions,
-        openMonoSessionId: "app-review",
+        onOpenBotSession,
+        botLaunchedSessions,
+        openBotSessionId: "app-review",
       }),
     ),
   );
@@ -248,10 +248,10 @@ it("routes a launched session's card to the Mono, its turn and the session", () 
   ).toBe("true");
 });
 
-it("renders older replies immediately when scrolling up loads a Mono page", async () => {
+it("renders older replies immediately when scrolling up loads a Bot page", async () => {
   const pane = props();
-  pane.session.monoTranscript = { before: 20, firstBlockId: "user" };
-  vi.mocked(getMonoTranscriptPage).mockResolvedValueOnce({
+  pane.session.botTranscript = { before: 20, firstBlockId: "user" };
+  vi.mocked(getBotTranscriptPage).mockResolvedValueOnce({
     blocks: [
       { id: "older-user", role: "user", text: "Earlier question" },
       { id: "older-reply", role: "assistant", text: "Earlier answer in full." },
@@ -265,8 +265,8 @@ it("renders older replies immediately when scrolling up loads a Mono page", asyn
   await act(async () => {
     scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
   });
-  expect(getMonoTranscriptPage).toHaveBeenCalledOnce();
-  expect(getMonoTranscriptPage).toHaveBeenCalledWith("chat", { before: 20 });
+  expect(getBotTranscriptPage).toHaveBeenCalledOnce();
+  expect(getBotTranscriptPage).toHaveBeenCalledWith("chat", { before: 20 });
   const olderReply = container.querySelector(
     '[data-chat-message="older-reply"]',
   )!;

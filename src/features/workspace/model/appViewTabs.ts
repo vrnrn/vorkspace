@@ -19,18 +19,18 @@ export function appViewForTab(id: string): AppView | undefined {
     : undefined;
 }
 
-/** A Mono open as a title tab in the inset layout. */
-export function monoTabId(monoId: string): string {
-  return `mono:${monoId}`;
+/** A Bot open as a title tab in the inset layout. */
+export function botTabId(botId: string): string {
+  return `bot:${botId}`;
 }
 
-export function monoForTab(id: string): string | undefined {
-  return id.startsWith("mono:") ? id.slice("mono:".length) : undefined;
+export function botForTab(id: string): string | undefined {
+  return id.startsWith("bot:") ? id.slice("bot:".length) : undefined;
 }
 
 /** Whether a title tab is a view of its own rather than a workspace tab. */
 export function isViewTab(id: string): boolean {
-  return !!appViewForTab(id) || !!monoForTab(id);
+  return !!appViewForTab(id) || !!botForTab(id);
 }
 
 /** Keep the shared order and append newly opened tabs regardless of type. */

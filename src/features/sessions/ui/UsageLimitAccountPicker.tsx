@@ -22,12 +22,12 @@ export function UsageLimitAccountPicker({
   harness,
   accountId,
   onSelect,
-  variant = "mono",
+  variant = "bot",
 }: {
   harness: HarnessId;
   accountId?: string;
   onSelect: (accountId: string) => void;
-  variant?: "composer" | "mono";
+  variant?: "composer" | "bot";
 }) {
   const snapshot = useSyncExternalStore(
     subscribeProviderAccounts,
@@ -83,7 +83,7 @@ export function UsageLimitAccountPicker({
         aria-label="Choose another account"
         aria-haspopup="menu"
         aria-expanded={open}
-        data-mono-account-picker
+        data-bot-account-picker
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => {
           if (open) dismiss(true);
@@ -93,13 +93,13 @@ export function UsageLimitAccountPicker({
           }
         }}
         className={
-          variant === "mono"
+          variant === "bot"
             ? "flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-selection px-1.5 text-[11px] text-content hover:bg-selection-hover"
             : "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
         }
       >
         <span>
-          {variant === "mono" ? "Choose another account" : "Switch account"}
+          {variant === "bot" ? "Choose another account" : "Switch account"}
         </span>
         <ChevronDown
           className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
@@ -114,7 +114,7 @@ export function UsageLimitAccountPicker({
           maxHeight={260}
           autoFocus
           onDismiss={(reason) => dismiss(reason === "escape")}
-          ignore="[data-mono-account-picker]"
+          ignore="[data-bot-account-picker]"
           role="menu"
           aria-label="Choose another account"
           aria-activedescendant={`${menuId}-${active}`}

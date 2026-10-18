@@ -103,10 +103,10 @@ fn delete_artifact(conn: &Connection, id: &str) -> rusqlite::Result<()> {
         "DELETE FROM notes WHERE id = ?1 AND content_kind = 'artifact'",
         [id],
     )?;
-    // Update paginated Mono history and older full-session transcripts in the
+    // Update paginated Bot history and older full-session transcripts in the
     // same transaction. Reply text and all unrelated metadata stay intact.
     tx.execute(
-        "UPDATE mono_blocks SET block_json = json_set(block_json, '$.artifactCards',
+        "UPDATE bot_blocks SET block_json = json_set(block_json, '$.artifactCards',
            (SELECT json_group_array(json(card.value))
             FROM json_each(block_json, '$.artifactCards') AS card
             WHERE json_extract(card.value, '$.id') != ?1))
@@ -379,7 +379,7 @@ mod tests {
             title: "PR report".into(),
             body: "# Report".into(),
             tags: Vec::new(),
-            source_session_id: Some("mono-1".into()),
+            source_session_id: Some("bot-1".into()),
             source_cwd: Some("/repo".into()),
             finalize_slug: false,
         };
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(list_artifacts(&conn).unwrap()[0].id, note.id);
         let json = serde_json::to_value(artifact).unwrap();
         assert_eq!(json["kind"], "document");
-        assert_eq!(json["sourceSessionId"], "mono-1");
+        assert_eq!(json["sourceSessionId"], "bot-1");
         assert!(json.get("tags").is_none());
         assert!(json.get("slug").is_none());
         assert!(get_artifact(&conn, "missing").unwrap().is_none());
@@ -461,12 +461,12 @@ mod tests {
             None,
         )
         .unwrap();
-        let mono = SessionUpsert {
-            id: "mono".into(),
+        let bot = SessionUpsert {
+            id: "bot".into(),
             ..session.clone()
         };
-        upsert_session(&conn, &mono).unwrap();
-        crate::mono_transcript::migrate_transcript(&conn, "mono").unwrap();
+        upsert_session(&conn, &bot).unwrap();
+        crate::bot_transcript::migrate_transcript(&conn, "bot").unwrap();
         delete_artifact(&conn, "remove").unwrap();
         delete_artifact(&conn, "remove").unwrap();
         delete_artifact(&conn, "personal").unwrap();
@@ -497,7 +497,13 @@ mod tests {
             json!([{ "id": "keep", "kind": "document", "title": "Other" }])
         );
         assert_eq!(blocks[1], session.blocks[1]);
-        let raw: String = conn.query_row("SELECT block_json FROM mono_blocks WHERE session_id = 'mono' AND block_id = 'turn'", [], |row| row.get(0)).unwrap();
+        let raw: String = conn
+            .query_row(
+                "SELECT block_json FROM bot_blocks WHERE session_id = 'bot' AND block_id = 'turn'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(serde_json::from_str::<Value>(&raw).unwrap(), blocks[0]);
         // An older client save still contains both references, but the deleted
         // card is filtered before it reaches storage again.
@@ -506,7 +512,7 @@ mod tests {
             get_session(&conn, "normal").unwrap().unwrap().blocks,
             blocks
         );
-        let stale = retain_existing_cards(&conn, &mono.blocks).unwrap();
+        let stale = retain_existing_cards(&conn, &bot.blocks).unwrap();
         assert_eq!(stale.as_ref(), &blocks);
     }
 }
