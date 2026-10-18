@@ -23,6 +23,7 @@ import {
 import { stageChunkText } from "../../files/editor/editorGit";
 import { LINE_DIFF_CONFIG } from "../model/lineDiff";
 import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
+import { pruneMap } from "../model/stableDiff";
 
 type Props = {
   cwd: string;
@@ -86,10 +87,7 @@ export function WorkingTreeDiff({
           setError(null);
           const entries = workingTreeDiffEntries(index.files, focusKind);
           const retained = new Set(entries.map((entry) => entry.id));
-          setDiffs(
-            (existing) =>
-              new Map([...existing].filter(([id]) => retained.has(id))),
-          );
+          setDiffs((existing) => pruneMap(existing, retained));
           const loadOrder = prioritizeWorkingTreeDiffEntries(
             entries,
             focusPath,
@@ -106,22 +104,34 @@ export function WorkingTreeDiff({
                   entry.file.relative,
                   entry.kind,
                 );
-                const unified =
-                  !diff.binary && !diff.tooLarge
-                    ? await prepareUnifiedDiff(
-                        diff.original,
-                        diff.current,
-                        signal,
-                        entry.file.path === focusPath ? 0 : 1,
-                      )
-                    : null;
-                loaded = {
-                  binary: diff.binary,
-                  tooLarge: diff.tooLarge,
-                  original: diff.original,
-                  current: diff.current,
-                  unified,
-                };
+                const previous = diffsRef.current.get(entry.id);
+                if (
+                  previous &&
+                  previous.original === diff.original &&
+                  previous.current === diff.current &&
+                  previous.binary === diff.binary &&
+                  previous.tooLarge === diff.tooLarge &&
+                  !previous.error
+                ) {
+                  loaded = previous;
+                } else {
+                  const unified =
+                    !diff.binary && !diff.tooLarge
+                      ? await prepareUnifiedDiff(
+                          diff.original,
+                          diff.current,
+                          signal,
+                          entry.file.path === focusPath ? 0 : 1,
+                        )
+                      : null;
+                  loaded = {
+                    binary: diff.binary,
+                    tooLarge: diff.tooLarge,
+                    original: diff.original,
+                    current: diff.current,
+                    unified,
+                  };
+                }
               } catch (caught: unknown) {
                 loaded = {
                   binary: false,
@@ -135,6 +145,7 @@ export function WorkingTreeDiff({
               }
               if (disposed || current !== generation) return;
               setDiffs((existing) => {
+                if (existing.get(entry.id) === loaded) return existing;
                 const next = new Map(existing);
                 next.set(entry.id, loaded);
                 return next;
@@ -323,6 +334,7 @@ export function WorkingTreeDiff({
   return (
     <UnifiedDiffView
       files={models}
+      visible={visible}
       fileCount={focusKind ? entries.length : files.length}
       focusId={focusId}
       busyId={busyId}

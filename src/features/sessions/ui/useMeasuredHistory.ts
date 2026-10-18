@@ -1,5 +1,9 @@
 import { useLayoutEffect, useRef } from "react";
 import type { Block } from "../model/session";
+import {
+  layoutTransitionActive,
+  onLayoutTransitionEnd,
+} from "../../../shared/lib/layoutTransition";
 
 export const historyHosts = new WeakMap<HTMLElement, HTMLElement>();
 const detachedNodes = new WeakMap<HTMLElement, number>();
@@ -49,8 +53,9 @@ export function useMeasuredHistory(
           child.hasAttribute("data-transcript-turn"),
       );
     const width = scroller.clientWidth;
-    const changedWidth = width !== measuredWidth.current;
-    measuredWidth.current = width;
+    const changedWidth =
+      !layoutTransitionActive() && width !== measuredWidth.current;
+    if (changedWidth) measuredWidth.current = width;
     const versions = new Map(turns.map((turn) => [turn[0].id, turn]));
     for (const row of rows()) {
       const id = row.dataset.transcriptTurn!;
@@ -66,6 +71,10 @@ export function useMeasuredHistory(
     let frame = 0;
     const update = () => {
       frame = 0;
+      // A pane sliding or being dragged changes the width every frame;
+      // remeasuring the whole history each time is what makes it stutter.
+      // The stale turns are offscreen, so they settle once it ends.
+      if (layoutTransitionActive()) return;
       if (!scroller.isConnected || scroller.clientWidth === 0) return;
       const currentWidth = scroller.clientWidth;
       const items = rows();
@@ -152,9 +161,11 @@ export function useMeasuredHistory(
       schedule();
     };
     document.fonts?.addEventListener("loadingdone", invalidate);
+    const stopTransitionEnd = onLayoutTransitionEnd(schedule);
     schedule();
     return () => {
       if (frame) cancelAnimationFrame(frame);
+      stopTransitionEnd();
       resize.disconnect();
       mutations.disconnect();
       scroller.removeEventListener("scroll", schedule);

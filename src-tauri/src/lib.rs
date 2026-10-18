@@ -35,6 +35,7 @@ mod notifications;
 mod pasteboard;
 mod pi_usage;
 mod project_logo;
+mod provider_session_transfer;
 mod pty;
 #[cfg(target_os = "macos")]
 mod quick_composer;
@@ -522,6 +523,7 @@ pub fn run() {
             codex_mono_store::codex_mono_store_prepare,
             codex_mono_store::codex_mono_store_copy,
             codex_mono_store::codex_mono_store_restore_agent_state,
+            provider_session_transfer::provider_session_transfer,
             harness::harness_write,
             harness::harness_kill,
             harness::harness_kill_all,

@@ -24,10 +24,7 @@ import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
  * Mounted blocks hold their tokens in component state, so eviction only means
  * a remounted block briefly shows plain text while it is highlighted again.
  */
-const DEFAULT_THEMES: [ThemeInput, ThemeInput] = [
-  "github-light",
-  "github-dark",
-];
+const DEFAULT_THEMES: [ThemeInput, ThemeInput] = ["light-plus", "dark-plus"];
 const MAX_ENTRIES = 100;
 const MAX_CACHED_CHARS = 500_000;
 

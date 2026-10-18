@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
+import { beginLayoutTransition } from "../../../shared/lib/layoutTransition";
 import { useReplyReflowAnchor } from "./useReplyReflowAnchor";
 
 it("keeps the reader's character through scrolling, reflow, and cached tab return", () => {
@@ -100,6 +101,27 @@ it("keeps the reader's character through scrolling, reflow, and cached tab retur
     act(() => {
       while (frames.length) frames.shift()!(now);
     });
+    act(() => resize([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(100);
+
+    // A closing pane briefly applies the final layout before its slide starts.
+    // The resulting native clamp must not replace the bookmarked character.
+    const endTransition = beginLayoutTransition();
+    try {
+      scroller.scrollTop = 50;
+      scroller.dispatchEvent(new Event("scroll"));
+      act(() => {
+        while (frames.length) frames.shift()!(now);
+      });
+      width = 200;
+      glyphTop = 248;
+      act(() => resize([], {} as ResizeObserver));
+      expect(scroller.scrollTop).toBe(200);
+    } finally {
+      endTransition();
+    }
+    width = 100;
+    glyphTop = 148;
     act(() => resize([], {} as ResizeObserver));
     expect(scroller.scrollTop).toBe(100);
 

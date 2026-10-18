@@ -29,7 +29,7 @@ const normalize = (language: string) =>
   aliases.get(language.trim().toLowerCase()) ?? language.trim().toLowerCase();
 const MAX_CHARS = 500_000;
 const MAX_RESULTS = 100;
-const THEMES: [ThemeInput, ThemeInput] = ["github-light", "github-dark"];
+const THEMES: [ThemeInput, ThemeInput] = ["light-plus", "dark-plus"];
 const results = new Map<string, HighlightResult>();
 const jobs = new Map<string, Job>();
 let chars = 0;

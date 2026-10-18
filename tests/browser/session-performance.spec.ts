@@ -184,13 +184,17 @@ test("paces a completed provider burst and follows it beyond the viewport", asyn
     const fixture = window as Fixture;
     fixture.deliverReply(fixture.sessionBurst, true);
     const lengths: number[] = [];
-    const deadline = performance.now() + 350;
-    while (performance.now() < deadline) {
+    const distinct = new Set<number>();
+    // A busy runner can spend most of a short window rendering the first
+    // chunk. Observe the required progression instead of assuming a frame rate.
+    const deadline = performance.now() + 5_000;
+    while (distinct.size < 4 && performance.now() < deadline) {
       await new Promise(requestAnimationFrame);
-      lengths.push(
+      const length =
         document.querySelector('[data-chat-message="live-reply"]')?.textContent
-          ?.length ?? 0,
-      );
+          ?.length ?? 0;
+      lengths.push(length);
+      distinct.add(length);
     }
     return { lengths, total: fixture.sessionBurst.length };
   });

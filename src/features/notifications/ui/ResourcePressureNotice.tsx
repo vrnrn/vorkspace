@@ -1,8 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { CircleAlert } from "../../../shared/ui/icons";
+import {
+  Check,
+  ChevronDown,
+  CircleAlert,
+  Loader,
+} from "../../../shared/ui/icons";
+import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { Modal } from "../../../shared/ui/Modal";
+import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import {
   sessionDisplayTitle,
   type Session,
@@ -26,11 +33,13 @@ type OwnedProcess = {
 };
 type Props = {
   sessions: RefObject<Session[]>;
-  onStopAgent: (id: string) => void;
-  onStopSession: (id: string) => void;
+  onStopAgent: (id: string) => void | Promise<unknown>;
+  onStopSession: (id: string) => void | Promise<unknown>;
   onPressureChange?: (active: boolean) => void;
-  /** The footer's slot. Without one, the notice shows as a toast. */
+  /** The footer's slot. Without one, monitoring continues without a notice. */
   chipHost?: HTMLElement | null;
+  /** Pill-shaped chip, for the inset layout's footer. */
+  insetChip?: boolean;
 };
 
 /** Local subscriptions keep resource sampling out of the workspace render loop. */
@@ -40,20 +49,23 @@ export function ResourcePressureNotice({
   onStopSession,
   onPressureChange,
   chipHost,
+  insetChip = false,
 }: Props) {
   const [pressure, setPressure] = useState<PressureState>(emptyPressure);
-  const [sample, setSample] = useState<ResourceSample>();
   const [open, setOpen] = useState(false);
   const [processes, setProcesses] = useState<OwnedProcess[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [stopError, setStopError] = useState("");
   const [stopping, setStopping] = useState<string>();
-  const currentOpen = useRef(open);
-  currentOpen.current = open;
+  const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   useEffect(() => {
     onPressureChange?.(pressure.active);
   }, [pressure.active, onPressureChange]);
+
+  useEffect(() => {
+    if (!chipHost) setOpen(false);
+  }, [chipHost]);
 
   useEffect(() => {
     let alive = true;
@@ -88,7 +100,6 @@ export function ResourcePressureNotice({
                   ? previous
                   : state,
               );
-              if (currentOpen.current) setSample(sample);
             })
             .catch(() => {})
             .finally(() => {
@@ -107,7 +118,7 @@ export function ResourcePressureNotice({
   }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !chipHost) return;
     let alive = true;
     let timer = 0;
     setLoading(true);
@@ -124,7 +135,16 @@ export function ResourcePressureNotice({
               if (row) ordered.push(row);
               remaining.delete(old.identity);
             }
-            return [...ordered, ...remaining.values()];
+            const sessionOrder = new Map(
+              [...new Set(previous.map((row) => row.sessionId))].map(
+                (id, index) => [id, index],
+              ),
+            );
+            return [...ordered, ...remaining.values()].sort(
+              (a, b) =>
+                (sessionOrder.get(a.sessionId) ?? sessionOrder.size) -
+                (sessionOrder.get(b.sessionId) ?? sessionOrder.size),
+            );
           });
           setError("");
         }
@@ -142,7 +162,7 @@ export function ResourcePressureNotice({
       alive = false;
       clearTimeout(timer);
     };
-  }, [open, stopping]);
+  }, [open, stopping, chipHost]);
 
   if (!pressure.active && !open) return null;
   const sessionFor = (id: string) =>
@@ -151,181 +171,264 @@ export function ResourcePressureNotice({
     const session = sessionFor(id);
     return session
       ? sessionDisplayTitle(session.title, session.harness)
-      : "Background agent";
+      : "Background work";
   };
-  const stopTool = async (process: OwnedProcess) => {
+  const stopWork = async (
+    identity: string,
+    stop: () => void | Promise<unknown>,
+  ) => {
     setStopError("");
-    setStopping(process.identity);
+    setStopping(identity);
     try {
-      await invoke("resource_stop_tool", {
-        pid: process.pid,
-        identity: process.identity,
-      });
+      await stop();
     } catch (error) {
       setStopError(String(error));
     } finally {
       setStopping(undefined);
     }
   };
+  const groups = new Map<string, OwnedProcess[]>();
+  for (const process of processes) {
+    const group = groups.get(process.sessionId);
+    if (group) group.push(process);
+    else groups.set(process.sessionId, [process]);
+  }
+  const reasons = pressure.reasons.map((reason) =>
+    reason === "CPU saturation"
+      ? "High CPU usage"
+      : reason === "Memory pressure"
+        ? "Low available memory"
+        : "Slow response",
+  );
   return (
     <>
       {pressure.active && chipHost
         ? createPortal(
             <button
               type="button"
+              aria-label="High resource usage"
+              aria-haspopup="dialog"
+              aria-expanded={open}
               onClick={() => setOpen(true)}
-              title={`${pressure.reasons.join(" · ")} · View processes`}
-              className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 text-content/70 hover:bg-content/10 hover:text-content"
+              title={`${reasons.join(" · ")} · Review running work`}
+              className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap ${insetChip ? "rounded-full px-2" : "rounded-md px-1.5"} text-content/55 transition-colors hover:bg-content/8 hover:text-content focus-visible:outline-2 focus-visible:outline-accent ${open ? "bg-content/8 text-content" : ""}`}
             >
               <CircleAlert
-                className="size-3.5 shrink-0 text-amber-400"
+                className="size-3.5 shrink-0 text-amber-500 dark:text-amber-400"
                 strokeWidth={1.75}
                 aria-hidden
               />
-              <span>Resource pressure</span>
+              <span>High usage</span>
             </button>,
             chipHost,
           )
         : null}
-      {pressure.active && !chipHost ? (
-        <article
-          className="approval-toast pointer-events-auto overflow-hidden rounded-xl border border-content/20 border-dashed bg-content/10 shadow-xl backdrop-blur-xl"
-          role="status"
-        >
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="flex w-full items-center gap-2 px-3.5 py-3 text-left hover:bg-content/5"
-          >
-            <CircleAlert className="size-4 shrink-0 text-amber-400" />
-            <span className="min-w-0 flex-1">
-              <span className="block text-[13px] font-semibold">
-                Resource pressure
-              </span>
-              <span className="block text-[12px] text-content/60">
-                {pressure.reasons.join(" · ")}
-              </span>
-            </span>
-            <span className="text-[11px] text-content/50">View processes</span>
-          </button>
-        </article>
-      ) : null}
-      {open ? (
+      {open && chipHost ? (
         <Modal
-          title="Resource pressure"
-          size="lg"
+          title="Running work"
+          size="sm"
           fitViewport
           onClose={() => setOpen(false)}
         >
-          <div className="space-y-4 p-4 text-[13px]">
-            <p className="text-content/70">
-              {pressure.active
-                ? `Sustained ${pressure.reasons.join(" and ").toLowerCase()} was detected.`
-                : "Resource pressure has recovered."}{" "}
-              Processes below were launched by vorkspace agents. Nothing is
-              stopped automatically.
-            </p>
-            {sample ? (
-              <p className="text-content/60">
-                CPU:{" "}
-                {sample.cpuPercent == null
-                  ? "unavailable"
-                  : `${Math.round(sample.cpuPercent)}%`}{" "}
-                · Memory:{" "}
-                {sample.memoryPressure == null
-                  ? "unavailable"
-                  : sample.memoryPressure >= 4
-                    ? "critical"
-                    : sample.memoryPressure >= 2
-                      ? "under pressure"
-                      : "normal"}{" "}
-                · UI stall time: {Math.round(sample.stallShare * 100)}%
-              </p>
-            ) : null}
-            <p className="text-content/60">
-              Stop build/tool stops that process tree while keeping the
-              conversation. Stop agent interrupts its current agent. Stop
-              session also stops its orchestration run and pauses queued work.
-            </p>
+          <div className="p-4 text-[13px]">
+            <div className="flex items-start gap-2.5 rounded-lg bg-content/[0.04] px-3 py-2.5">
+              {pressure.active ? (
+                <CircleAlert className="mt-0.5 size-4 shrink-0 text-amber-500 dark:text-amber-400" />
+              ) : (
+                <Check className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+              )}
+              <div className="min-w-0">
+                <p className="text-[12px] font-medium">
+                  {pressure.active
+                    ? reasons.join(" · ")
+                    : "Usage is back to normal"}
+                </p>
+                <p className="mt-0.5 text-[12px] leading-relaxed text-content/55">
+                  {pressure.active
+                    ? "Things may feel slower. Stop work you no longer need."
+                    : "The slowdown has cleared. You can close this window."}
+                </p>
+              </div>
+            </div>
             {error ? (
-              <p role="alert" className="text-red-400">
-                {error}
+              <p
+                role="alert"
+                title={error}
+                className="mt-3 text-[12px] text-red-500 dark:text-red-400"
+              >
+                Couldn't load running work. Trying again…
               </p>
             ) : null}
             {stopError ? (
-              <p role="alert" className="text-red-400">
-                {stopError}
+              <p
+                role="alert"
+                title={stopError}
+                className="mt-3 text-[12px] text-red-500 dark:text-red-400"
+              >
+                Couldn't stop this work. Please try again.
               </p>
             ) : null}
-            {loading ? (
-              <p>Loading processes…</p>
-            ) : !processes.length ? (
-              <p>
-                No running vorkspace-owned processes were found. Other
-                applications may be causing the pressure.
+            {loading && !processes.length ? (
+              <p
+                role="status"
+                className="flex items-center justify-center gap-2 py-8 text-[12px] text-content/50"
+              >
+                <Loader className="size-3.5 animate-spin" />
+                Checking running work…
+              </p>
+            ) : !processes.length && !error ? (
+              <p className="py-6 text-center text-[12px] leading-relaxed text-content/50">
+                No running work found in vorkspace.
+                {pressure.active
+                  ? " Other apps may be using these resources."
+                  : ""}
               </p>
             ) : null}
-            <div className="divide-y divide-stroke">
-              {processes.map((process) => (
-                <div key={process.identity} className="space-y-1 py-3">
-                  <div className="flex items-center gap-3">
-                    <span className="min-w-0 flex-1 truncate font-medium">
-                      {titleFor(process.sessionId)}
-                    </span>
-                    <span className="shrink-0 tabular-nums text-content/60">
-                      {process.cpuPercent.toFixed(0)}% CPU ·{" "}
-                      {(process.memoryBytes / 1024 / 1024).toFixed(0)} MB
-                    </span>
-                    <button
-                      type="button"
-                      aria-label={`${process.agent ? "Stop agent" : "Stop build/tool"} for ${titleFor(process.sessionId)} (PID ${process.pid})`}
-                      disabled={
-                        !!stopping ||
-                        (process.agent && !sessionFor(process.sessionId))
-                      }
-                      className="shrink-0 rounded-md border border-stroke px-2 py-1 hover:bg-content/8 disabled:opacity-40"
-                      onClick={() =>
-                        process.agent
-                          ? onStopAgent(process.sessionId)
-                          : void stopTool(process)
-                      }
-                    >
-                      {process.agent ? "Stop agent" : "Stop build/tool"}
-                    </button>
-                  </div>
-                  <code className="block break-all text-[11px] text-content/70">
-                    {process.command}
-                  </code>
-                  <p
-                    className="truncate text-[11px] text-content/45"
-                    title={process.cwd}
-                  >
-                    {process.cwd} · PID {process.pid}
-                  </p>
-                </div>
-              ))}
-            </div>
-            {[...new Set(processes.map((process) => process.sessionId))]
-              .filter((id) => sessionFor(id))
-              .map((id) => (
+            {processes.length ? (
+              <>
+                <p className="mt-4 mb-1 text-[11px] font-medium text-content/45">
+                  {groups.size} {groups.size === 1 ? "session" : "sessions"}{" "}
+                  running
+                </p>
                 <div
-                  key={id}
-                  className="flex items-center justify-between gap-3 border-t border-stroke pt-3"
+                  ref={lockOverscroll}
+                  role="list"
+                  aria-label="Running sessions"
+                  className="max-h-[min(320px,45dvh)] divide-y divide-stroke overflow-y-auto overscroll-contain"
                 >
-                  <span className="truncate">{titleFor(id)}</span>
-                  <button
-                    type="button"
-                    aria-label={`Stop session ${titleFor(id)}`}
-                    className="shrink-0 rounded-md border border-stroke px-3 py-1.5 hover:bg-content/8"
-                    onClick={() => onStopSession(id)}
-                  >
-                    Stop session
-                  </button>
+                  {[...groups].map(([id, rows]) => {
+                    const session = sessionFor(id);
+                    const title = titleFor(id);
+                    const memory = rows.reduce(
+                      (sum, row) => sum + row.memoryBytes,
+                      0,
+                    );
+                    return (
+                      <div
+                        key={id}
+                        role="listitem"
+                        data-resource-session={id}
+                        className="py-3"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className="grid size-6 shrink-0 place-items-center rounded-md bg-content/5 text-content/50">
+                            {session ? (
+                              <HarnessIcon harness={session.harness} />
+                            ) : (
+                              <CircleAlert className="size-3.5" />
+                            )}
+                          </span>
+                          <span
+                            className="min-w-0 flex-1 truncate font-medium"
+                            title={title}
+                          >
+                            {title}
+                          </span>
+                          {session ? (
+                            <button
+                              type="button"
+                              aria-label={`Stop session ${title}`}
+                              title="Stop this session and pause queued work"
+                              disabled={!!stopping}
+                              className="flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-content/6 px-2.5 text-[12px] text-content/70 hover:bg-red-500/10 hover:text-red-500 disabled:opacity-40 dark:hover:text-red-400"
+                              onClick={() =>
+                                void stopWork(`session:${id}`, () =>
+                                  onStopSession(id),
+                                )
+                              }
+                            >
+                              {stopping === `session:${id}` ? (
+                                <>
+                                  <Loader className="size-3 animate-spin" />
+                                  Stopping…
+                                </>
+                              ) : (
+                                "Stop"
+                              )}
+                            </button>
+                          ) : null}
+                        </div>
+                        <details className="group/processes ml-[34px] mt-0.5">
+                          <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] text-content/45 hover:text-content/75 [&::-webkit-details-marker]:hidden">
+                            <ChevronDown className="size-3 shrink-0 -rotate-90 transition-transform group-open/processes:rotate-0" />
+                            {rows.length}{" "}
+                            {rows.length === 1 ? "process" : "processes"} ·{" "}
+                            {formatMemory(memory)} memory
+                          </summary>
+                          <div className="mt-2 space-y-2 border-l border-stroke pl-2.5">
+                            {rows.map((process) => (
+                              <div
+                                key={process.identity}
+                                className="flex min-w-0 items-center gap-2"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <code
+                                    className="block truncate text-[11px] text-content/65"
+                                    title={process.command}
+                                  >
+                                    {process.command}
+                                  </code>
+                                  <p
+                                    className="truncate text-[10px] tabular-nums text-content/40"
+                                    title={process.cwd}
+                                  >
+                                    {process.cpuPercent.toFixed(0)}% CPU ·{" "}
+                                    {formatMemory(process.memoryBytes)} · PID{" "}
+                                    {process.pid}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  aria-label={`${process.agent ? "Stop agent" : "Stop build/tool"} for ${title} (PID ${process.pid})`}
+                                  title={
+                                    process.agent
+                                      ? "Interrupt the agent"
+                                      : "Stop this tool; keep the agent running"
+                                  }
+                                  disabled={
+                                    !!stopping || (process.agent && !session)
+                                  }
+                                  className="shrink-0 rounded px-1.5 py-1 text-[11px] text-content/50 hover:bg-red-500/10 hover:text-red-500 disabled:opacity-40 dark:hover:text-red-400"
+                                  onClick={() =>
+                                    void stopWork(process.identity, () =>
+                                      process.agent
+                                        ? onStopAgent(id)
+                                        : invoke("resource_stop_tool", {
+                                            pid: process.pid,
+                                            identity: process.identity,
+                                          }),
+                                    )
+                                  }
+                                >
+                                  {stopping === process.identity
+                                    ? "Stopping…"
+                                    : "Stop"}
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
+                <p className="mt-3 border-t border-stroke pt-3 text-[11px] text-content/40">
+                  Stopping work keeps your conversations saved.
+                </p>
+              </>
+            ) : null}
           </div>
         </Modal>
       ) : null}
     </>
   );
+}
+
+function formatMemory(bytes: number): string {
+  const mb = bytes / 1024 / 1024;
+  return mb >= 1024
+    ? `${(mb / 1024).toFixed(1)} GB`
+    : mb < 1
+      ? "<1 MB"
+      : `${Math.round(mb)} MB`;
 }

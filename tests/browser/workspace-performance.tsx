@@ -5,6 +5,10 @@ import {
   newSession,
   type Block,
 } from "../../src/features/sessions/model/session";
+import type {
+  ComposerDraftEnvelope,
+  ComposerDraftPayload,
+} from "../../src/features/sessions/model/draftCache";
 import { SessionStateStore } from "../../src/features/sessions/model/sessionStateStore";
 import { newTab } from "../../src/features/workspace/model/layout";
 import "../../src/styles/index.css";
@@ -125,6 +129,7 @@ if (new URLSearchParams(location.search).has("traceLayout")) {
     });
   };
 }
+const fixtureDrafts = new Map<string, ComposerDraftEnvelope>();
 const fixtureInvoke = async (
   command: string,
   args: Record<string, unknown> = {},
@@ -148,6 +153,7 @@ const fixtureInvoke = async (
     return;
   if (command === "session_checkpoint_status") return { files: [] };
   if (command === "plugin:window|set_title") return;
+  if (command === "set_window_background_blur") return;
   if (
     nativeInvoke &&
     [
@@ -187,18 +193,44 @@ const fixtureInvoke = async (
       ).join(""),
     };
   }
-  if (command === "composer_draft_get")
-    return {
-      sessionId: args.sessionId,
-      revision: 0,
-      cleared: true,
-      text: "",
-      selectionStart: 0,
-      selectionEnd: 0,
-      attachments: [],
-      mcpTags: [],
-      missingAttachments: [],
+  if (command === "composer_draft_get") {
+    const sessionId = String(args.sessionId);
+    return (
+      fixtureDrafts.get(sessionId) ?? {
+        sessionId,
+        revision: 0,
+        payload: {
+          cwd: projectRoot,
+          text: "",
+          selectionStart: 0,
+          selectionEnd: 0,
+          attachments: [],
+          mcpTags: [],
+        },
+      }
+    );
+  }
+  if (command === "composer_draft_set") {
+    const request = args.request as {
+      sessionId: string;
+      expectedRevision: number;
+      payload: ComposerDraftPayload;
     };
+    const current = fixtureDrafts.get(request.sessionId);
+    if ((current?.revision ?? 0) !== request.expectedRevision)
+      throw {
+        code: "conflict",
+        message: "A newer fixture draft exists",
+        current,
+      };
+    const saved = {
+      sessionId: request.sessionId,
+      revision: request.expectedRevision + 1,
+      payload: structuredClone(request.payload),
+    };
+    fixtureDrafts.set(request.sessionId, saved);
+    return saved;
+  }
   if (command === "git_diff_stats")
     return { files: 1, additions: 1, deletions: 1 };
   if (command === "git_diff_index" || command === "git_diff_files")
@@ -298,7 +330,10 @@ const sessions = Array.from({ length: 6 }, (_, index) => {
 });
 const tabs = sessions.map((session) => newTab(session.id));
 const commits: { duration: number; at: number }[] = [];
-Object.assign(window, { workspaceCommits: commits });
+Object.assign(window, {
+  workspaceCommits: commits,
+  workspaceSessions: sessions,
+});
 const { default: App } = await import("../../src/app/App");
 createRoot(document.getElementById("root")!).render(
   <Profiler
