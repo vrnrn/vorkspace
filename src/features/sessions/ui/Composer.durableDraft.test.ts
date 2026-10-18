@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Composer } from "./Composer";
 import { flushComposerDraft } from "../model/draftCache";
+import { writeComposer } from "../model/composerControl";
 
 const ipc = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", async (original) => ({
@@ -23,6 +24,7 @@ let root: Root;
 let container: HTMLDivElement;
 let owner: string;
 let count = 0;
+let onSubmit: ReturnType<typeof vi.fn>;
 const savedText = "A😀中\ne\u0301";
 const stored = () => ({
   sessionId: owner,
@@ -47,12 +49,13 @@ function render(initialDraft = "", persistDraft = true) {
       runtimeMode: "supervised",
       initialDraft,
       persistDraft,
-      onSubmit: vi.fn(),
+      onSubmit,
       onStop: vi.fn(),
     }),
   );
 }
 beforeEach(() => {
+  onSubmit = vi.fn();
   owner = `durable-ui-${++count}`;
   Object.defineProperty(window, "__TAURI_INTERNALS__", {
     configurable: true,
@@ -119,6 +122,50 @@ it("keeps temporary composers in memory while the native bridge exists", async (
       command.startsWith("composer_draft_"),
     ),
   ).toHaveLength(0);
+});
+
+it("fills a restored draft without sending and persists through the existing draft owner", async () => {
+  const file = {
+    id: "keep-file",
+    name: "keep.txt",
+    kind: "file",
+    mimeType: "text/plain",
+    size: 3,
+    path: "/tmp/keep.txt",
+  };
+  ipc.invoke.mockImplementation(async (command, args) => {
+    if (command === "composer_draft_get")
+      return {
+        ...stored(),
+        payload: { ...stored().payload, attachments: [file] },
+      };
+    if (command === "inspect_paths") return [{ path: file.path }];
+    if (command === "composer_draft_set")
+      return { ...args.request, revision: args.request.expectedRevision + 1 };
+    return [];
+  });
+  await act(async () => render());
+  await act(async () => {
+    await writeComposer(owner, { text: "Review this before sending" });
+  });
+  const field = container.querySelector("textarea")!;
+  const expected = savedText + "\n\nReview this before sending";
+  expect(field.value).toBe(expected);
+  expect(field.selectionStart).toBe(expected.length);
+  expect(onSubmit).not.toHaveBeenCalled();
+  await act(async () => flushComposerDraft(owner));
+  const writes = ipc.invoke.mock.calls.filter(
+    ([command]) => command === "composer_draft_set",
+  );
+  expect(writes.at(-1)?.[1].request.payload).toMatchObject({
+    text: expected,
+    attachments: [file],
+  });
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await act(async () => render());
+  expect(container.querySelector("textarea")?.value).toBe(expected);
+  expect(container.textContent).toContain("keep.txt");
 });
 
 it("keeps typing during hydration and displays both versions for an explicit recovery choice", async () => {

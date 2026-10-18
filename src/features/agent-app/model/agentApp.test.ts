@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { newSession } from "../../sessions/model/session";
+import { createMono, updateMono } from "../../monos/model/mono";
 import {
   resetHarnessModelOverlays,
   setHarnessModels,
@@ -129,6 +130,60 @@ function fixture() {
 }
 
 describe("agent app commands", () => {
+  it("gives the explicit workspace controller cross-project context and normal session delivery", async () => {
+    const { source, host } = fixture();
+    const target = { ...newSession("codex", "/tmp/second"), id: "target", blocks: [{ id: "u", role: "user" as const, text: "Existing question" }, { id: "a", role: "assistant" as const, text: "Existing answer" }] };
+    host.workspaceController = { projects: [source.cwd, target.cwd], sendMono: vi.fn() };
+    host.sessions = vi.fn(async () => [{ id: target.id, title: "Target", harness: target.harness, model: target.model, busy: false, hasDraft: false, archived: false }]);
+    host.session = vi.fn(async () => target);
+    const history = await handleAgentApp(source, "read-1", "sessions.read", { project: "second", sessionId: target.id }, host);
+    expect(JSON.stringify(history)).toContain("Existing answer");
+    await handleAgentApp(source, "send-1", "sessions.send", { project: "second", sessionId: target.id, prompt: "Continue the existing work" }, host);
+    expect(host.send).toHaveBeenCalledExactlyOnceWith(target.id, "Continue the existing work", "app-lead-send-1");
+    await expect(handleAgentApp(source, "send-2", "sessions.send", { project: "/tmp/unrelated", sessionId: target.id, prompt: "No" }, host)).rejects.toThrow("Not one of your projects");
+    expect(host.send).toHaveBeenCalledOnce();
+  });
+
+  it("lets Vox read and message a Mono as the user without creating a peer reply chain", async () => {
+    const { source, host } = fixture();
+    const mono = createMono([source.cwd]);
+    updateMono(mono.id, (current) => ({ ...current, name: "Helper" }));
+    const sendMono = vi.fn(async () => ({ alreadySubmitted: false }));
+    host.workspaceController = { projects: [source.cwd], sendMono };
+    host.monos = { session: vi.fn(async () => ({ ...newSession("codex", "~"), blocks: [{ id: "question", role: "user", text: "Earlier request" }, { id: "reply", role: "assistant", text: "Mono's recent answer" }] })), send: vi.fn() };
+    expect(JSON.stringify(await handleAgentApp(source, "list-1", "monos.list", {}, host))).toContain("Helper");
+    expect(JSON.stringify(await handleAgentApp(source, "read-1", "monos.read", { mono: "Helper" }, host))).toContain("Mono's recent answer");
+    const sent = await handleAgentApp(source, "send-1", "monos.send", { to: "Helper", message: "Please investigate", expectReply: false }, host);
+    expect(sent).toMatchObject({ submitted: true, to: { id: mono.id } });
+    expect(sendMono).toHaveBeenCalledExactlyOnceWith(mono.id, "Please investigate", "vox-lead-send-1");
+    expect(host.monos.send).not.toHaveBeenCalled();
+    await expect(handleAgentApp(source, "send-2", "monos.send", { to: "Helper", message: "More", expectReply: true }, host)).rejects.toThrow("one-way");
+    expect(sendMono).toHaveBeenCalledOnce();
+  });
+
+  it("does not infer workspace privileges from a Vox-looking session ID", async () => {
+    const { source, host } = fixture();
+    source.id = "vorkspace-vox-untrusted";
+    await expect(handleAgentApp(source, "r", "monos.list", {}, host)).rejects.toThrow("Only a Mono");
+    await expect(handleAgentApp(source, "r", "sessions.list", { project: "/tmp/second" }, host)).rejects.toThrow("project is only for a Mono");
+  });
+
+  it("routes spoken Mono names, refuses ambiguous names, and reports missing targets honestly", async () => {
+    const { source, host } = fixture();
+    const helper = createMono([source.cwd]);
+    updateMono(helper.id, (mono) => ({ ...mono, name: "Build Helper" }));
+    const sendMono = vi.fn(async () => ({ alreadySubmitted: false }));
+    host.workspaceController = { projects: [source.cwd], sendMono };
+    await handleAgentApp(source, "name-1", "monos.send", { to: "@build-helper", message: "What are you working on?" }, host);
+    expect(sendMono).toHaveBeenCalledWith(helper.id, "What are you working on?", expect.any(String));
+    const duplicate = createMono([source.cwd]);
+    updateMono(duplicate.id, (mono) => ({ ...mono, name: "Build Helper" }));
+    await expect(handleAgentApp(source, "name-2", "monos.send", { to: "build helper", message: "Do not guess" }, host)).rejects.toThrow("Several Monos match");
+    await expect(handleAgentApp(source, "name-3", "monos.send", { to: "Missing Bot", message: "No" }, host)).rejects.toThrow("No Mono found");
+    expect(sendMono).toHaveBeenCalledOnce();
+    await handleAgentApp(source, "id-1", "monos.send", { to: duplicate.id, message: "Explicit target" }, host);
+    expect(sendMono).toHaveBeenLastCalledWith(duplicate.id, "Explicit target", expect.any(String));
+  });
   it.each([undefined, true, false])(
     "uses the Mono's sidebar preference for both submitted and draft sessions: %s",
     async (showStartedSessionsInSidebar) => {

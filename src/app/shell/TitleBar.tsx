@@ -105,6 +105,7 @@ type Props = {
   onOpenMonoSettings?: () => void;
   /** The full-height Mono panel owns these while it is open. */
   hideWindowControls?: boolean;
+  voxControl?: ReactNode;
   projectRailOpen?: boolean;
   sessionSidebarOpen?: boolean;
   compactRail?: boolean;
@@ -634,6 +635,7 @@ function TitleBarComponent({
   monoOverviewOpen = false,
   onOpenMonoSettings,
   hideWindowControls = false,
+  voxControl,
   projectRailOpen = true,
   sessionSidebarOpen = true,
   compactRail = false,
@@ -914,10 +916,14 @@ function TitleBarComponent({
     railClosed &&
     Boolean(onOpenInbox || onOpenNotes || onOpenSettings);
   const trailingControls =
+    voxControl ||
     showTrailingActions ||
     (mono && (onToggleMonoOverview || onOpenMonoSettings)) ||
     (!IS_MAC && !hideWindowControls) ? (
       <div className="flex h-full shrink-0 items-stretch">
+        {voxControl ? (
+          <div className="flex items-center px-2">{voxControl}</div>
+        ) : null}
         {mono && (onToggleMonoOverview || onOpenMonoSettings) ? (
           <div className="flex items-center gap-1 px-3">
             {onToggleMonoOverview ? (

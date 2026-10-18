@@ -219,6 +219,30 @@ export function resolveMonoPeer(
   return matches[0];
 }
 
+/** Workspace controls may not choose the first of several matching bots. */
+export function resolveUniqueMonoPeer(
+  query: string,
+  roster: readonly Mono[] = listMonos(),
+): Mono | undefined {
+  const byId = roster.find((mono) => mono.id === query.trim());
+  if (byId) return byId;
+  const name = normalizeHandle(query);
+  const exact = roster.filter(
+    (mono) => normalizeHandle(monoLook(mono).name) === name,
+  );
+  const matches = exact.length
+    ? exact
+    : roster.filter((mono) => resolveMonoPeer(query, [mono]));
+  if (matches.length > 1)
+    throw new Error(
+      `Several Monos match "${query}". Ask which one: ${matches
+        .slice(0, 8)
+        .map((mono) => `${monoLook(mono).name} (${mono.id})`)
+        .join(", ")}`,
+    );
+  return matches[0];
+}
+
 /** Summary of every Mono for CLI discovery and prompt context. */
 export function listMonoPeerSummaries(
   optionsOrExcludeId?:
