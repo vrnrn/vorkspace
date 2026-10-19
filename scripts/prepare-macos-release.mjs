@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   mkdirSync,
@@ -208,9 +209,10 @@ if (
     join(process.env.RUNNER_TEMP, "macos-release-notes.md"),
     plan.notes,
   );
+  const notesDelimiter = `VORKSPACE_RELEASE_NOTES_${randomUUID()}`;
   appendFileSync(
     process.env.GITHUB_ENV,
-    `RELEASE_TAG=${plan.tag}\nRELEASE_VERSION=${plan.version}\nRELEASE_BUILD_NUMBER=${plan.build}\nRELEASE_NOTES<<VORKSPACE_RELEASE_NOTES\n${plan.notes}VORKSPACE_RELEASE_NOTES\n`,
+    `RELEASE_TAG=${plan.tag}\nRELEASE_VERSION=${plan.version}\nRELEASE_BUILD_NUMBER=${plan.build}\nRELEASE_NOTES<<${notesDelimiter}\n${plan.notes}${notesDelimiter}\n`,
   );
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,

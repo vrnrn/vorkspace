@@ -226,7 +226,7 @@ test("stamps all manifests and native build metadata without changing updater id
     const gh = join(bin, "gh");
     writeFileSync(
       gh,
-      '#!/usr/bin/env node\nif (process.argv.some(value => value.endsWith("/generate-notes"))) console.log(JSON.stringify({body: "## What’s Changed\\n\\n- Restore release notes."})); else if (!process.argv.at(-1).includes("matching-refs")) JSON.parse(process.env.RELEASE_TEST_PAGES).flat().forEach(value => console.log(JSON.stringify(value)));\n',
+      '#!/usr/bin/env node\nif (process.argv.some(value => value.endsWith("/generate-notes"))) console.log(JSON.stringify({body: "## What’s Changed\\n\\n- Restore release notes.\\nVORKSPACE_RELEASE_NOTES\\nKEEP_INSIDE_NOTES=yes"})); else if (!process.argv.at(-1).includes("matching-refs")) JSON.parse(process.env.RELEASE_TEST_PAGES).flat().forEach(value => console.log(JSON.stringify(value)));\n',
       { mode: 0o755 },
     );
     const ciEnv = {
@@ -253,10 +253,12 @@ test("stamps all manifests and native build metadata without changing updater id
     );
     assert(notes.includes("Build: 42.1\n"));
     assert(notes.includes(`Workflow: ${plan().workflow}\n`));
+    const delimiter = variables.match(
+      /^RELEASE_NOTES<<(VORKSPACE_RELEASE_NOTES_[a-f0-9-]+)$/m,
+    )?.[1];
+    assert(delimiter);
     assert(
-      variables.includes(
-        `RELEASE_NOTES<<VORKSPACE_RELEASE_NOTES\n${notes}VORKSPACE_RELEASE_NOTES\n`,
-      ),
+      variables.includes(`RELEASE_NOTES<<${delimiter}\n${notes}${delimiter}\n`),
     );
     // A failed API read must not produce a conflicting version or new notes.
     const beforeFailure = readFileSync(
