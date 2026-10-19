@@ -31,6 +31,14 @@ const fixture = `# Changelog
 `;
 
 describe("releaseNotesForVersion", () => {
+  it("keeps level-two sections in generated GitHub release bodies", () => {
+    const body =
+      "## [0.13.11]\n\n## What's Changed\n\n- Restore notes.\n\n## Contributors\n\nThanks.\n\n## [0.13.10]\n\nOlder.";
+    const notes = releaseNotesForVersion("0.13.11", body);
+    expect(notes?.markdown).toContain("## What's Changed");
+    expect(notes?.markdown).toContain("## Contributors");
+    expect(notes?.markdown).not.toContain("Older.");
+  });
   it("extracts only the requested release", () => {
     const release = releaseNotesForVersion("0.1.2", fixture);
 

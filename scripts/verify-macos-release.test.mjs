@@ -1,6 +1,53 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { verifyMacRelease } from "./verify-macos-release.mjs";
+import {
+  verifyBundledReleaseNotes,
+  verifyMacRelease,
+} from "./verify-macos-release.mjs";
+
+test("publication requires the built notes to match the exact version and GitHub body", async () => {
+  const root = mkdtempSync(join(tmpdir(), "vorkspace-bundled-notes-"));
+  try {
+    mkdirSync(join(root, "build"));
+    mkdirSync(join(root, "dist/.vite"), { recursive: true });
+    const body = "## What's Changed\n\n- Restore notes.\n";
+    const notes = `## [0.13.11]\n\n${body}`;
+    writeFileSync(join(root, "build/release-notes.md"), notes);
+    writeFileSync(
+      join(root, "dist/notes.mjs"),
+      `export default ${JSON.stringify(notes)};`,
+    );
+    const manifest = join(root, "dist/.vite/manifest.json");
+    writeFileSync(
+      manifest,
+      JSON.stringify({ "build/release-notes.md?raw": { file: "notes.mjs" } }),
+    );
+    await verifyBundledReleaseNotes(root, "0.13.11", body);
+    await assert.rejects(verifyBundledReleaseNotes(root, "0.13.10", body));
+    await assert.rejects(
+      verifyBundledReleaseNotes(root, "0.13.11", "Different notes."),
+    );
+    writeFileSync(join(root, "dist/wrong.mjs"), 'export default "Old notes";');
+    writeFileSync(
+      manifest,
+      JSON.stringify({ "build/release-notes.md?raw": { file: "wrong.mjs" } }),
+    );
+    await assert.rejects(
+      verifyBundledReleaseNotes(root, "0.13.11", body),
+      /Bundled release notes/,
+    );
+    writeFileSync(manifest, "{}");
+    await assert.rejects(
+      verifyBundledReleaseNotes(root, "0.13.11", body),
+      /missing from the frontend bundle/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function release() {
   const name = "vorkspace_aarch64.app.tar.gz";
@@ -125,4 +172,13 @@ test("rejects tag or feed version mismatches", () => {
   );
   value.feed.version = "0.13.2";
   assert.throws(() => verify(value), /feed must match/);
+});
+
+test("updater notes and the GitHub release must describe the same changes", () => {
+  const value = release();
+  value.body = "## What's Changed\n\n- Restore release notes.\n";
+  value.feed.notes = value.body.trimEnd();
+  verify(value);
+  value.feed.notes = "Old notes.";
+  assert.throws(() => verify(value), /Updater notes must match/);
 });

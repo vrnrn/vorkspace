@@ -41,6 +41,7 @@ mod pty;
 #[cfg(target_os = "macos")]
 mod quick_composer;
 mod rate_limits;
+mod release_notes;
 mod reminders;
 mod remote;
 mod remote_ssh;
@@ -533,6 +534,7 @@ pub fn run() {
             harness_updates::harness_latest_version,
             harness_updates::harness_update_check_claim,
             harness_updates::harness_update,
+            release_notes::read_release_notes,
             harness::provider_account_remove,
             account_identity::provider_account_identity,
             pi_usage::fetch_pi_usage,

@@ -48,7 +48,9 @@ Run **Actions → Mac release → Run workflow** from `main`. Each new run selec
 
 The native macOS build number (`CFBundleVersion`) uses `workflow-run-number.attempt`, such as `42.1`, and appears in the release body and Actions summary. Retrying a run can finish its own draft with a new attempt number; another run reserves a newer version. If a newer version has already been published, start a new workflow run instead of retrying an older draft. Explicit `mac-vX.Y.Z` tag builds still require the checked-in version to match and cannot overwrite a published release.
 
-The workflow validates the app version, build number, arm64 architecture, updater feed, title, and Mac-only asset list before publication. Ordinary pushes to `main` do not publish a release.
+Release preparation generates GitHub notes from merged changes since the preceding published stable Mac release. The same body is used for the GitHub release, updater feed, and ignored `build/release-notes.md` artifact bundled into the app for offline **What's new**. Other versions load their matching published notes on demand through a fixed native GitHub endpoint; failed reads can be retried. Source builds without a generated artifact use that endpoint too. No changelog is kept in the repository.
+
+The workflow validates the app version, build number, arm64 architecture, updater feed, title, Mac-only asset list, and the actual bundled notes before publication. Ordinary pushes to `main` do not publish a release.
 
 The Mac release workflow is this fork’s only release channel. It retains the existing updater key and publishes the signed feed in `vrnrn/vorkspace`; no Cloudflare upload or Apple notarization credentials are needed for this flow. Automated native builds run on macOS. Linux and Windows source-build helpers remain available for manual use.
 
