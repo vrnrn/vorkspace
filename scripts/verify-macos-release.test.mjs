@@ -85,7 +85,7 @@ test("a complete Mac release can be published with optional migration and licens
   verify();
   const value = release();
   value.assets.push(
-    { name: "LICENSE.vorkspace" },
+    { name: "LICENSE" },
     { name: "migrate-monocode-to-vorkspace.sh" },
   );
   verify(value);
