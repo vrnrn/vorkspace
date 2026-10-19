@@ -362,6 +362,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "glass inset translucent transparency opaque desktop blur layout",
   },
   {
+    id: "window-opacity",
+    section: "appearance",
+    label: "Window opacity",
+    keywords: "glass translucent transparency vibrancy desktop",
+  },
+  {
     id: "sidebar-opacity",
     section: "appearance",
     label: "Sidebar opacity",
@@ -553,20 +559,18 @@ function matchScore(
 
 const NO_HIDDEN_SETTINGS: ReadonlySet<string> = new Set();
 
-/** Appearance rows that only one layout shows: the inset workspace drops the
- * tint and translucency controls, and only it has workspace themes and its
- * own glass switch. */
+/** Layout-specific appearance rows; opacity and blur share persisted values. */
 export const INSET_LAYOUT_HIDDEN_SETTINGS: ReadonlySet<string> = new Set([
   "hue",
   "saturation",
   "dark-lightness",
   "sidebar-opacity",
-  "blur",
   "main-pane-glass",
 ]);
 export const CLASSIC_LAYOUT_HIDDEN_SETTINGS: ReadonlySet<string> = new Set([
   "workspace-theme",
   "inset-glass",
+  "window-opacity",
 ]);
 
 /** Individual settings first, then whole sections, so a row wins its own name. */

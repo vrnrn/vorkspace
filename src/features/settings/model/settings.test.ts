@@ -611,6 +611,7 @@ describe("settings search", () => {
       "Blur radius",
       "Sidebar opacity",
       "Transparent window",
+      "Window opacity",
       "Appearance",
     ]);
   });
@@ -619,7 +620,9 @@ describe("settings search", () => {
     const labels = (hidden: ReadonlySet<string>) =>
       searchSettings("glass", undefined, hidden).map((result) => result.label);
     expect(labels(INSET_LAYOUT_HIDDEN_SETTINGS)).toEqual([
+      "Blur radius",
       "Transparent window",
+      "Window opacity",
       "Appearance",
     ]);
     expect(labels(CLASSIC_LAYOUT_HIDDEN_SETTINGS)).toEqual([

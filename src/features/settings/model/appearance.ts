@@ -167,13 +167,6 @@ export const INSET_GLASS_DEFAULT = true;
 /** Fired on `window` when the inset layout setting flips. */
 export const INSET_LAYOUT_CHANGE_EVENT = "monocode:inset-layout-change";
 
-/** The inset layout's fixed glass: the 80% tint over the blur and the blur
- * radius its macOS window sets. The shell grey comes from the
- * workspace theme (`--inset-surface` in the stylesheet). The translucency
- * settings don't apply. */
-const INSET_GLASS_OPACITY = 0.8;
-const INSET_BLUR_RADIUS = 60;
-
 function insetLayoutActive(): boolean {
   return document.documentElement.classList.contains("layout-inset");
 }
@@ -517,7 +510,6 @@ function opaqueWindowBackground(): Rgb {
 /** Compose both shared CSS tints into the native fill, including the shell's
  * base tint, so the steady page and a newly exposed resize edge match. */
 function nativeWindowOpacity(): number {
-  if (insetLayoutActive()) return INSET_GLASS_OPACITY;
   const style = getComputedStyle(document.documentElement);
   const glass = clamp(
     Number.parseFloat(style.getPropertyValue("--sidebar-opacity")) ||
@@ -525,6 +517,7 @@ function nativeWindowOpacity(): number {
     SIDEBAR_OPACITY_MIN,
     SIDEBAR_OPACITY_MAX,
   );
+  if (insetLayoutActive()) return glass;
   const storedBase = Number.parseFloat(
     style.getPropertyValue("--window-background-opacity"),
   );
@@ -555,9 +548,7 @@ export function syncNativeGlass(scheme: ColorScheme) {
   const inset = insetLayoutActive() || loadInsetLayout();
   const enabled =
     scheme === "dark" &&
-    (inset
-      ? !IS_LINUX && loadInsetGlass()
-      : !IS_LINUX || loadBodyGlass());
+    (inset ? !IS_LINUX && loadInsetGlass() : !IS_LINUX || loadBodyGlass());
   const root = document.documentElement;
   const generation = ++glassSyncGeneration;
   const setWindow = () =>
@@ -659,7 +650,7 @@ export function saveSidebarBlur(value: number) {
 export function applySidebarBlur(value: number) {
   const next = Math.round(clamp(value, SIDEBAR_BLUR_MIN, SIDEBAR_BLUR_MAX));
   void invoke("set_window_background_blur", {
-    radius: insetLayoutActive() ? INSET_BLUR_RADIUS : next,
+    radius: next,
   });
   return next;
 }
@@ -707,7 +698,7 @@ export function subscribeInsetLayout(onStoreChange: () => void) {
 /** Only the main window has the inset shell, so only it applies the class. */
 export function applyInsetLayout(value: boolean) {
   document.documentElement.classList.toggle("layout-inset", value);
-  // Swaps between the fixed blur and tint and the user's own.
+  // Both layouts keep the shared blur; only their theme treatment changes.
   applySidebarBlur(loadSidebarBlur());
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemeDarkLightness(loadThemeDarkLightness());
