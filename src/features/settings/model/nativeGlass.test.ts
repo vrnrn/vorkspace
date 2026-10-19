@@ -55,6 +55,67 @@ describe("macOS native tint", () => {
     document.documentElement.classList.contains("has-native-glass-tint");
 
   it.each([false, true])(
+    "uses shared opacity and blur at inset startup (shell mounted: %s)",
+    async (mounted) => {
+      const appearance = await import("./appearance");
+      localStorage.setItem("monocode.insetLayout", "1");
+      localStorage.setItem("monocode.sidebarOpacity", "0.45");
+      localStorage.setItem("monocode.sidebarBlur", "37");
+      document.documentElement.classList.toggle("layout-inset", mounted);
+      appearance.applySidebarOpacity(appearance.loadSidebarOpacity());
+      appearance.applySidebarBlur(appearance.loadSidebarBlur());
+      appearance.activateWindowAppearance();
+      expect(invoke).toHaveBeenCalledWith("set_window_background_blur", {
+        radius: 37,
+      });
+      expect(invoke).toHaveBeenCalledWith(
+        "set_window_glass_enabled",
+        expect.objectContaining({
+          enabled: true,
+          opacity: expect.closeTo(mounted ? 0.45 : 0.67, 6),
+        }),
+      );
+      appearance.applyInsetLayout(true);
+      expect(invoke).toHaveBeenLastCalledWith(
+        "set_window_glass_enabled",
+        expect.objectContaining({ opacity: 0.45 }),
+      );
+      expect(
+        document.documentElement.style.getPropertyValue("--sidebar-opacity"),
+      ).toBe("0.45");
+    },
+  );
+
+  it("preserves shared preferences through layout changes and updates the native tint live", async () => {
+    const appearance = await import("./appearance");
+    appearance.saveSidebarOpacity(0.55);
+    appearance.saveSidebarBlur(31);
+    appearance.applySidebarOpacity(appearance.loadSidebarOpacity());
+    appearance.activateWindowAppearance();
+    for (const inset of [true, false, true]) {
+      appearance.saveInsetLayout(inset);
+      appearance.applyInsetLayout(inset);
+      expect(invoke).toHaveBeenCalledWith("set_window_background_blur", {
+        radius: 31,
+      });
+      expect(invoke).toHaveBeenLastCalledWith(
+        "set_window_glass_enabled",
+        expect.objectContaining({
+          opacity: expect.closeTo(inset ? 0.55 : 0.73, 6),
+        }),
+      );
+      expect(appearance.loadSidebarOpacity()).toBe(0.55);
+      expect(appearance.loadSidebarBlur()).toBe(31);
+      invoke.mockClear();
+    }
+    appearance.applySidebarOpacity(0.25);
+    expect(invoke).toHaveBeenLastCalledWith(
+      "set_window_glass_enabled",
+      expect.objectContaining({ opacity: 0.25 }),
+    );
+  });
+
+  it.each([false, true])(
     "preserves an opaque window across theme changes (inset shell mounted: %s)",
     async (mounted) => {
       const {

@@ -31,12 +31,7 @@ import {
 } from "../../providers/model/rateLimitsCache";
 import { HARNESSES, HARNESS_TITLE } from "../../sessions/model/session";
 import { saveMaskEmails, saveShowRemainingUsage } from "../model/displayPrefs";
-import {
-  createBot,
-  findBot,
-  botLook,
-  updateBot,
-} from "../../bots/model/bot";
+import { createBot, findBot, botLook, updateBot } from "../../bots/model/bot";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => undefined),
@@ -142,6 +137,47 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
+  it("exposes the shared opacity and blur in the new layout and preserves them while glass is disabled", async () => {
+    localStorage.setItem("monocode.insetLayout", "1");
+    localStorage.setItem("monocode.colorScheme", "dark");
+    localStorage.setItem("monocode.sidebarOpacity", "0.53");
+    localStorage.setItem("monocode.sidebarBlur", "37");
+    document.documentElement.classList.remove("theme-light");
+    await render("appearance");
+    const opacity = container.querySelector<HTMLInputElement>(
+      '[aria-label="Window opacity"]',
+    )!;
+    const blur = container.querySelector<HTMLInputElement>(
+      '[aria-label="Blur radius"]',
+    )!;
+    expect(opacity.value).toBe("53");
+    expect(blur.value).toBe("37");
+    expect(opacity.disabled).toBe(false);
+    expect(blur.disabled).toBe(false);
+    const transparent = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Transparent window"]',
+    )!;
+    await act(async () => transparent.click());
+    expect(opacity.disabled).toBe(true);
+    expect(blur.disabled).toBe(true);
+    expect(container.textContent).toContain("Turn on Transparent window");
+    await act(async () => transparent.click());
+    expect(opacity.disabled).toBe(false);
+    expect(blur.disabled).toBe(false);
+    const layout = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="New layout"]',
+    )!;
+    await act(async () => layout.click());
+    expect(
+      container.querySelector<HTMLInputElement>(
+        '[aria-label="Sidebar opacity"]',
+      )!.value,
+    ).toBe("53");
+    expect(blur.value).toBe("37");
+    expect(localStorage.getItem("monocode.sidebarOpacity")).toBe("0.53");
+    expect(localStorage.getItem("monocode.sidebarBlur")).toBe("37");
+  });
+
   it("saves vox's microphone without capturing audio or changing the system input", async () => {
     const capture = vi.fn();
     vi.stubGlobal("navigator", {

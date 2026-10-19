@@ -478,15 +478,14 @@ html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
 }
 
 /* Inset layout: the sidebar, tabs and footer sit on an outer layer around a
-   rounded card holding the workspace. Its surfaces ignore the translucency
-   settings. By default they are a neutral shell at 80% over the window blur
-   with a faint wash, and the content panel the deepest plane in dark mode,
-   white in light. A workspace
-   theme swaps the colours through the `--wt-*` variables. */
+   rounded card holding the workspace. The shell shares the user's opacity
+   and blur settings with the classic layout. A faint wash covers the shell;
+   the content panel is the deepest plane in dark mode and white in light.
+   Workspace themes swap the colours through the `--wt-*` variables. */
 html.layout-inset {
   --inset-surface: var(--wt-dark-surface, #0d0d0d);
   --inset-panel: var(--wt-dark-panel, #060606);
-  --inset-glass-alpha: 0.8;
+  --inset-glass-alpha: var(--sidebar-opacity);
   --inset-panel-alpha: 0.4;
   --inset-wash: hsl(0 0% 92% / 0.05);
   /* The card's edge, and every rule inside it and the sidebar, so the

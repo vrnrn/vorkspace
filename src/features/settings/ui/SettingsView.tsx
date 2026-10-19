@@ -974,7 +974,8 @@ function VoxPage() {
             onChange={(id) => {
               const next = {
                 id,
-                label: options.find((option) => option.value === id)?.label ?? id,
+                label:
+                  options.find((option) => option.value === id)?.label ?? id,
               };
               try {
                 saveVoxMicrophone(next);
@@ -2204,10 +2205,10 @@ function useAppearanceSettings(
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
   const percent = Math.round(appearance.opacity * 100);
   const glassDisabled = useColorScheme() === "light";
-  // The inset workspace takes its colours from the workspace theme and has a
-  // fixed tint and blur, so the tint and translucency groups only belong to
-  // the classic layout. Its one glass switch lives with the theme instead.
+  // Workspace themes own the inset palette; translucency is shared by layouts.
   const inset = appearance.insetLayout;
+  const translucencyDisabled =
+    glassDisabled || (inset && (!appearance.insetGlass || IS_LINUX));
 
   return (
     <>
@@ -2368,60 +2369,70 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
               />
             </Row>
           </Group>
-
-          <Group
-            title="Translucency"
-            description={
-              glassDisabled
-                ? "Light mode always uses an opaque window, so these are off. Your dark-mode values are preserved."
-                : "How much of the desktop shows through vorkspace. Blur costs more to composite the higher it goes."
-            }
-          >
-            <Row
-              id="sidebar-opacity"
-              label="Sidebar opacity"
-              description="Applies to the project rail and the other glass panes."
-            >
-              <Slider
-                label="Sidebar opacity"
-                value={percent}
-                display={`${percent}%`}
-                min={Math.round(SIDEBAR_OPACITY_MIN * 100)}
-                max={Math.round(SIDEBAR_OPACITY_MAX * 100)}
-                onChange={appearance.onOpacity}
-                disabled={glassDisabled}
-              />
-            </Row>
-            <Row
-              id="blur"
-              label="Blur radius"
-              description="Background blur behind the window."
-            >
-              <Slider
-                label="Blur radius"
-                value={appearance.blur}
-                display={String(appearance.blur)}
-                min={SIDEBAR_BLUR_MIN}
-                max={SIDEBAR_BLUR_MAX}
-                onChange={appearance.onBlur}
-                disabled={glassDisabled}
-              />
-            </Row>
-            <Row
-              id="main-pane-glass"
-              label="Main pane glass"
-              description="Extend the translucent treatment to the main pane behind sessions and editors."
-            >
-              <Toggle
-                label="Main pane glass"
-                on={appearance.bodyGlass}
-                onChange={appearance.onBodyGlass}
-                disabled={glassDisabled}
-              />
-            </Row>
-          </Group>
         </>
       )}
+
+      <Group
+        title="Translucency"
+        description={
+          inset && IS_LINUX
+            ? "The new layout stays opaque on Linux."
+            : glassDisabled
+              ? "Light mode always uses an opaque window, so these are off. Your dark-mode values are preserved."
+              : inset && !appearance.insetGlass
+                ? "Turn on Transparent window to adjust opacity and blur."
+                : "How much of the desktop shows through vorkspace. Both layouts use the same opacity and blur settings."
+        }
+      >
+        <Row
+          id={inset ? "window-opacity" : "sidebar-opacity"}
+          label={inset ? "Window opacity" : "Sidebar opacity"}
+          description={
+            inset
+              ? "Lower values let more of the desktop show through the window."
+              : "Applies to the project rail and the other glass panes."
+          }
+        >
+          <Slider
+            label={inset ? "Window opacity" : "Sidebar opacity"}
+            value={percent}
+            display={`${percent}%`}
+            min={Math.round(SIDEBAR_OPACITY_MIN * 100)}
+            max={Math.round(SIDEBAR_OPACITY_MAX * 100)}
+            onChange={appearance.onOpacity}
+            disabled={translucencyDisabled}
+          />
+        </Row>
+        <Row
+          id="blur"
+          label="Blur radius"
+          description="Background blur behind the window."
+        >
+          <Slider
+            label="Blur radius"
+            value={appearance.blur}
+            display={String(appearance.blur)}
+            min={SIDEBAR_BLUR_MIN}
+            max={SIDEBAR_BLUR_MAX}
+            onChange={appearance.onBlur}
+            disabled={translucencyDisabled}
+          />
+        </Row>
+        {inset ? null : (
+          <Row
+            id="main-pane-glass"
+            label="Main pane glass"
+            description="Extend the translucent treatment to the main pane behind sessions and editors."
+          >
+            <Toggle
+              label="Main pane glass"
+              on={appearance.bodyGlass}
+              onChange={appearance.onBodyGlass}
+              disabled={glassDisabled}
+            />
+          </Row>
+        )}
+      </Group>
 
       <ChatBackgroundCard appearance={appearance} />
 
@@ -2482,7 +2493,6 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
     </>
   );
 }
-
 
 function ChatBackgroundCard({
   appearance,
