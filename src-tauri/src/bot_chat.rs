@@ -223,43 +223,20 @@ pub fn bot_menu_bar_set_visible(app: AppHandle, visible: bool) -> Result<(), Str
 }
 
 fn menu_bar_icon() -> Result<tauri::image::Image<'static>, png::DecodingError> {
-    // Use the original monochrome mark, not the padded/shaded Dock tile.
-    // tray-icon sizes images to 18pt on macOS. Remove the Dock padding, then
-    // leave a 1pt margin so the mark itself is a slightly quieter 16pt.
+    // Anta Regular v_, outlined in menu-bar-icon.svg and rendered at 3×.
+    // No font installation is needed. The opaque template follows the system
+    // foreground (white on a dark menu bar), without the Dock icon's circle.
     let mut reader = png::Decoder::new(std::io::Cursor::new(include_bytes!(
-        "../macos/AppIcon.icon/Assets/icon.png"
+        "../macos/menu-bar-icon.png"
     )))
     .read_info()?;
-    let mut mask = vec![0; reader.output_buffer_size().unwrap()];
-    let frame = reader.next_frame(&mut mask)?;
-    let width = frame.width as usize;
-    let height = frame.height as usize;
-    let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
-    for (index, pixel) in mask.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-        let light = u32::from(pixel[0].max(pixel[1]).max(pixel[2]));
-        pixel[3] = (light * u32::from(pixel[3]) / 255) as u8;
-        pixel[..3].fill(0);
-        if pixel[3] > 0 {
-            let (x, y) = (index % width, index / width);
-            left = left.min(x);
-            top = top.min(y);
-            right = right.max(x + 1);
-            bottom = bottom.max(y + 1);
-        }
-    }
-    let padding = (bottom - top).div_ceil(16);
-    let image_width = right - left + padding * 2;
-    let image_height = bottom - top + padding * 2;
-    let mut rgba = vec![0; image_width * image_height * 4];
-    for y in top..bottom {
-        let start = ((y - top + padding) * image_width + padding) * 4;
-        rgba[start..start + (right - left) * 4]
-            .copy_from_slice(&mask[(y * width + left) * 4..(y * width + right) * 4]);
-    }
+    let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
+    let frame = reader.next_frame(&mut rgba)?;
+    rgba.truncate(frame.buffer_size());
     Ok(tauri::image::Image::new_owned(
         rgba,
-        image_width as u32,
-        image_height as u32,
+        frame.width,
+        frame.height,
     ))
 }
 
@@ -290,10 +267,9 @@ fn menu(
             builder = builder.item(&item);
         }
     }
+    builder = builder.separator();
     for action in &menu_bar::ACTIONS {
-        builder = builder
-            .separator()
-            .item(&MenuItemBuilder::with_id(action.id, action.title).build(app)?);
+        builder = builder.item(&MenuItemBuilder::with_id(action.id, action.title).build(app)?);
     }
     builder.build()
 }
@@ -914,28 +890,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn menu_bar_mark_is_sixteen_points_inside_the_standard_eighteen_point_image() {
+    fn menu_bar_mark_is_an_opaque_v_and_underscore_on_a_clear_background() {
         let icon = menu_bar_icon().unwrap();
-        let width = icon.width() as usize;
-        let height = icon.height() as usize;
-        assert!(width > 0 && height > 0);
-        let occupied_rows: Vec<_> = (0..height)
-            .filter(|y| (0..width).any(|x| icon.rgba()[(y * width + x) * 4 + 3] > 0))
-            .collect();
-        let visible_height = occupied_rows.last().unwrap() - occupied_rows.first().unwrap() + 1;
-        let points = 18.0 * visible_height as f64 / height as f64;
-        assert!((points - 16.0).abs() < 0.05, "mark height: {points}pt");
-        assert_eq!(
-            *occupied_rows.first().unwrap(),
-            height - occupied_rows.last().unwrap() - 1
-        );
-        // The terminal cutout and space around the orbit remain transparent.
+        let size = icon.width() as usize;
+        assert_eq!((icon.width(), icon.height()), (60, 54));
+        let alpha = |x: usize, y: usize| icon.rgba()[(y * size + x) * 4 + 3];
+        // Both arms, vertex and underscore have solid ink, not the Dock
+        // artwork's translucent orbit or circular background.
+        for (x, y) in [(7, 15), (15, 34), (23, 15), (43, 39)] {
+            assert_eq!(alpha(x, y), 255, "missing opaque stroke at {x},{y}");
+        }
+        for (x, y) in [
+            (0, 0),
+            (27, 0),
+            (0, 27),
+            (59, 27),
+            (27, 53),
+            (15, 15),
+            (29, 39),
+        ] {
+            assert_eq!(alpha(x, y), 0, "background ink at {x},{y}");
+        }
         assert!(icon
             .rgba()
             .as_chunks::<4>()
             .0
             .iter()
-            .any(|pixel| pixel[3] == 0));
+            .any(|pixel| (1..255).contains(&pixel[3])));
     }
 
     #[test]

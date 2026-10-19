@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/vorkspace-splash.png" alt="vorkspace banner" width="760" />
+  <img src="public/vorkspace-readmebanner.png" alt="vorkspace banner" width="760" />
 </p>
 
 <h1 align="center">vorkspace</h1>
@@ -31,7 +31,11 @@
 vorkspace is based on [MonoCode](https://github.com/hardbeat920/monocode), created by [Nick (hardbeat920)](https://github.com/hardbeat920). Thanks to Nick and the upstream contributors for the foundation.
 
 <p align="center">
-  <img src="public/vorkspace-workspace.png" alt="vorkspace desktop workspace showing multi-provider tabs, Bots, Channels, turn checkpoints, and git changes" width="960" />
+  <img src="public/vorkspace-workspace.png" alt="vorkspace workspace with the project explorer, a coding session, Bots, and Channels" width="960" />
+</p>
+
+<p align="center">
+  <img src="public/vorkspace-channels.png" alt="vorkspace Channel showing a conversation with multiple Bots and message routing" width="960" />
 </p>
 
 ---
