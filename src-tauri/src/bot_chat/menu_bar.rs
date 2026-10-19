@@ -6,25 +6,25 @@
 use std::panic::AssertUnwindSafe;
 
 use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
 use objc2::runtime::NSObjectProtocol;
-use objc2::runtime::{AnyObject, Bool};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSFont, NSFontWeightRegular,
-    NSFontWeightSemibold, NSImage, NSImageSymbolConfiguration, NSImageView, NSMenu, NSMenuItem,
-    NSTextField, NSView,
+    NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSFont, NSFontWeightSemibold, NSImage,
+    NSImageView, NSMenu, NSMenuItem, NSTextField, NSView,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use serde::Deserialize;
 
-const WIDTH: f64 = 260.0;
-const PORTRAIT_SIZE: f64 = 28.0;
-const ROW_HEIGHT: f64 = 34.0;
+const WIDTH: f64 = 310.0;
+const PORTRAIT_SIZE: f64 = 26.0;
+const ROW_HEIGHT: f64 = 32.0;
+const ACTION_HEIGHT: f64 = 28.0;
 /// Where AppKit placed the image and title of a plain item, so rows with a
 /// view line up with the header the same way.
-const IMAGE_X: f64 = 15.0;
-const TITLE_X: f64 = 49.0;
-const PORTRAIT_PIXELS: usize = 56;
+const IMAGE_X: f64 = 14.0;
+const TITLE_X: f64 = 48.0;
+const PORTRAIT_PIXELS: usize = 52;
 /// Pixels per mascot unit: a 1.5-unit sprite cell lands on exactly 3 pixels,
 /// and the 16-unit sprite fills a little over half the circle.
 const SPRITE_SCALE: f64 = 2.0;
@@ -32,25 +32,18 @@ const SPRITE_SCALE: f64 = 2.0;
 pub(super) struct Action {
     pub id: &'static str,
     pub title: &'static str,
-    symbol: &'static str,
-    /// Tinted red, like other menus' destructive items.
-    destructive: bool,
 }
 
-/// The actions below the Bots, each in its own group. Each gets a circle
-/// like a portrait's so every title in the menu shares one column.
+/// Plain footer actions, like the Settings link in macOS status menus.
+/// Quitting is a normal menu action, rather than a destructive data operation.
 pub(super) const ACTIONS: [Action; 2] = [
     Action {
         id: "bot-chat-composer",
         title: "Quick Composer",
-        symbol: "square.and.pencil",
-        destructive: false,
     },
     Action {
         id: "bot-chat-quit",
         title: "Quit vorkspace",
-        symbol: "power",
-        destructive: true,
     },
 ];
 
@@ -80,31 +73,30 @@ pub(super) fn decorate(tray: &tauri::tray::TrayIcon) -> tauri::Result<()> {
                 return;
             };
             style_menu(&menu, mtm);
-            for item in menu.itemArray() {
-                if item.isSeparatorItem() || !item.isEnabled() {
+            for item in menu.itemArray().iter().skip(1) {
+                if item.isSeparatorItem() {
                     continue;
                 }
                 let title = item.title().to_string();
-                if let Some(action) = ACTIONS.iter().find(|a| a.title == title) {
-                    let image = action_icon(action);
-                    item.setImage(image.as_deref());
-                    show_image(&item);
-                    let color = if action.destructive {
-                        NSColor::systemRedColor()
-                    } else {
-                        NSColor::labelColor()
-                    };
-                    item.setView(Some(&row(&title, image.as_deref(), &color, mtm)));
-                } else if let Some(image) = item.image() {
-                    // Muda stores the portrait in its IconMenuItem model and
-                    // initially sizes it to 18pt. Only adjust its display size.
+                let image = item.image();
+                // Bot portraits belong to their IconMenuItem. Footer actions
+                // carry no image, including when a Bot has the same name.
+                let is_bot = image.is_some();
+                if let Some(image) = &image {
+                    // Muda initially sizes the model's image to 18pt.
                     image.setSize(NSSize::new(PORTRAIT_SIZE, PORTRAIT_SIZE));
-                    item.setImage(Some(&image));
                     show_image(&item);
-                    let view = row(&title, Some(&image), &NSColor::labelColor(), mtm);
-                    view.setToolTip(Some(&NSString::from_str("Open floating chat")));
-                    item.setView(Some(&view));
                 }
+                let color = if item.isEnabled() {
+                    NSColor::labelColor()
+                } else {
+                    NSColor::secondaryLabelColor()
+                };
+                let view = row(&title, image.as_deref(), &color, mtm);
+                if is_bot {
+                    view.setToolTip(Some(&NSString::from_str("Open floating chat")));
+                }
+                item.setView(Some(&view));
             }
         }))
         .map_err(|exception| format!("Could not style the Bot menu: {exception:?}"))
@@ -119,56 +111,6 @@ fn show_image(item: &NSMenuItem) {
     if item.respondsToSelector(sel!(setPreferredImageVisibility:)) {
         let () = unsafe { msg_send![item, setPreferredImageVisibility: VISIBLE] };
     }
-}
-
-/// An SF Symbol in a faint circle the size of a Bot portrait. As a template
-/// image it follows the menu's text color, including when highlighted; a
-/// destructive action keeps its red instead.
-fn action_icon(action: &Action) -> Option<Retained<NSImage>> {
-    let red = NSColor::systemRedColor();
-    let mut config = NSImageSymbolConfiguration::configurationWithPointSize_weight(13.0, unsafe {
-        NSFontWeightRegular
-    });
-    if action.destructive {
-        config = config.configurationByApplyingConfiguration(
-            &NSImageSymbolConfiguration::configurationWithHierarchicalColor(&red),
-        );
-    }
-    let glyph = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        &NSString::from_str(action.symbol),
-        None,
-    )?
-    .imageWithSymbolConfiguration(&config)?;
-    let ink = if action.destructive {
-        red.colorWithAlphaComponent(0.15)
-    } else {
-        NSColor::colorWithWhite_alpha(0.0, 0.12)
-    };
-    let draw = block2::RcBlock::new(move |rect: NSRect| {
-        // Matches the portrait's circle: 1pt inside the image, faint ink.
-        ink.setFill();
-        NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
-            NSPoint::new(rect.origin.x + 1.0, rect.origin.y + 1.0),
-            NSSize::new(rect.size.width - 2.0, rect.size.height - 2.0),
-        ))
-        .fill();
-        let size = glyph.size();
-        glyph.drawInRect(NSRect::new(
-            NSPoint::new(
-                rect.origin.x + (rect.size.width - size.width) / 2.0,
-                rect.origin.y + (rect.size.height - size.height) / 2.0,
-            ),
-            size,
-        ));
-        Bool::YES
-    });
-    let image = NSImage::imageWithSize_flipped_drawingHandler(
-        NSSize::new(PORTRAIT_SIZE, PORTRAIT_SIZE),
-        false,
-        &draw,
-    );
-    image.setTemplate(!action.destructive);
-    Some(image)
 }
 
 define_class!(
@@ -203,6 +145,9 @@ define_class!(
             let Some(item) = self.enclosingMenuItem() else {
                 return;
             };
+            if !item.isEnabled() {
+                return;
+            }
             // The item is in the menu that is tracking this view.
             let Some(menu) = (unsafe { item.menu() }) else {
                 return;
@@ -219,25 +164,31 @@ fn row(
     color: &NSColor,
     mtm: MainThreadMarker,
 ) -> Retained<NSView> {
-    let frame = NSRect::new(NSPoint::ZERO, NSSize::new(WIDTH, ROW_HEIGHT));
+    let height = if image.is_some() {
+        ROW_HEIGHT
+    } else {
+        ACTION_HEIGHT
+    };
+    let frame = NSRect::new(NSPoint::ZERO, NSSize::new(WIDTH, height));
     let view: Retained<MenuRow> = unsafe { msg_send![MenuRow::alloc(mtm), initWithFrame: frame] };
     view.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
     if let Some(image) = image {
         let icon = NSImageView::imageViewWithImage(image, mtm);
         icon.setFrame(NSRect::new(
-            NSPoint::new(IMAGE_X, (ROW_HEIGHT - PORTRAIT_SIZE) / 2.0),
+            NSPoint::new(IMAGE_X, (height - PORTRAIT_SIZE) / 2.0),
             NSSize::new(PORTRAIT_SIZE, PORTRAIT_SIZE),
         ));
         view.addSubview(&icon);
     }
     let label = NSTextField::labelWithString(&NSString::from_str(title), mtm);
-    label.setFont(Some(&NSFont::systemFontOfSize(14.0)));
+    label.setFont(Some(&NSFont::systemFontOfSize(13.0)));
     label.setTextColor(Some(color));
     label.sizeToFit();
-    let height = label.frame().size.height;
+    let label_height = label.frame().size.height;
+    let title_x = if image.is_some() { TITLE_X } else { IMAGE_X };
     label.setFrame(NSRect::new(
-        NSPoint::new(TITLE_X, ((ROW_HEIGHT - height) / 2.0).round()),
-        NSSize::new(WIDTH - TITLE_X - 16.0, height),
+        NSPoint::new(title_x, ((height - label_height) / 2.0).round()),
+        NSSize::new(WIDTH - title_x - 14.0, label_height),
     ));
     label.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
     view.addSubview(&label);
@@ -246,15 +197,14 @@ fn row(
 
 fn style_menu(menu: &NSMenu, mtm: MainThreadMarker) {
     menu.setMinimumWidth(WIDTH);
-    unsafe { menu.setFont(Some(&NSFont::systemFontOfSize(14.0))) };
+    unsafe { menu.setFont(Some(&NSFont::systemFontOfSize(13.0))) };
     let Some(header) = menu.itemAtIndex(0) else {
         return;
     };
-    // A static header view gives the menu the hierarchy of macOS's status
-    // menus. Only this noninteractive item has a custom view.
+    // Keep the header aligned with the footer and the system status menus.
     let view = NSView::initWithFrame(
         NSView::alloc(mtm),
-        NSRect::new(NSPoint::ZERO, NSSize::new(WIDTH, 30.0)),
+        NSRect::new(NSPoint::ZERO, NSSize::new(WIDTH, 34.0)),
     );
     let title = NSTextField::labelWithString(&NSString::from_str("Bots"), mtm);
     title.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, unsafe {
@@ -262,8 +212,8 @@ fn style_menu(menu: &NSMenu, mtm: MainThreadMarker) {
     })));
     title.setTextColor(Some(&NSColor::labelColor()));
     title.setFrame(NSRect::new(
-        NSPoint::new(16.0, 7.0),
-        NSSize::new(WIDTH - 32.0, 17.0),
+        NSPoint::new(IMAGE_X, 9.0),
+        NSSize::new(WIDTH - 2.0 * IMAGE_X, 17.0),
     ));
     title.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
     view.addSubview(&title);
@@ -282,7 +232,7 @@ pub(super) fn icon_for(
 
 fn portrait(rects: &[MascotRect]) -> tauri::image::Image<'static> {
     // Feed real RGBA pixels to IconMenuItemBuilder so the native menu model
-    // owns the image. Render at 2× for a crisp 28pt Retina portrait, using the
+    // owns the image. Render at 2× for a crisp 26pt Retina portrait, using the
     // same shaded layers and crisp rectangle edges as the in-app mascot.
     let mut rgba = vec![0; PORTRAIT_PIXELS * PORTRAIT_PIXELS * 4];
     let center = PORTRAIT_PIXELS as f64 / 2.0;
@@ -410,14 +360,14 @@ mod tests {
                 fill: "#263331".into(),
             },
         ]);
-        assert_eq!((image.width(), image.height()), (56, 56));
-        let pixel = |x: usize, y: usize| &image.rgba()[(y * 56 + x) * 4..][..4];
+        assert_eq!((image.width(), image.height()), (52, 52));
+        let pixel = |x: usize, y: usize| &image.rgba()[(y * 52 + x) * 4..][..4];
         assert_eq!(pixel(0, 0), [0, 0, 0, 0]);
-        // The 16-unit sprite spans the middle 32 pixels, inset 12 on each side.
-        assert_eq!(pixel(18, 18), [255, 0, 0, 255]);
-        assert_eq!(pixel(23, 23), [38, 51, 49, 255]);
-        assert_eq!(pixel(23, 36), [255, 0, 0, 255], "sprite stays upright");
-        assert_ne!(pixel(14, 28), [255, 0, 0, 255], "sprite leaves a margin");
+        // The 16-unit sprite spans the middle 32 pixels, inset 10 on each side.
+        assert_eq!(pixel(16, 16), [255, 0, 0, 255]);
+        assert_eq!(pixel(21, 21), [38, 51, 49, 255]);
+        assert_eq!(pixel(21, 34), [255, 0, 0, 255], "sprite stays upright");
+        assert_ne!(pixel(12, 26), [255, 0, 0, 255], "sprite leaves a margin");
     }
 
     #[test]
@@ -457,23 +407,6 @@ mod tests {
     }
 
     #[test]
-    fn every_menu_action_draws_a_portrait_sized_symbol() {
-        objc2::exception::catch(|| {
-            for action in &ACTIONS {
-                let title = action.title;
-                let image = action_icon(action).unwrap_or_else(|| panic!("{title}"));
-                assert_eq!(image.size(), NSSize::new(PORTRAIT_SIZE, PORTRAIT_SIZE));
-                assert_eq!(image.isTemplate(), !action.destructive);
-                let raster = unsafe {
-                    image.CGImageForProposedRect_context_hints(std::ptr::null_mut(), None, None)
-                };
-                assert!(raster.is_some(), "{title} did not draw");
-            }
-        })
-        .unwrap_or_else(|exception| panic!("AppKit rejected an action icon: {exception:?}"));
-    }
-
-    #[test]
     fn each_bot_receives_its_own_portrait_when_the_payload_order_changes() {
         let mascots = [
             MenuMascot {
@@ -497,7 +430,7 @@ mod tests {
                 }],
             },
         ];
-        let center = (28 * 56 + 28) * 4;
+        let center = (26 * 52 + 26) * 4;
         assert_eq!(
             &icon_for("first", &mascots).unwrap().rgba()[center..][..4],
             [255, 0, 0, 255]
