@@ -119,4 +119,4 @@ npm run check
 
 ## License
 
-The original MonoCode code is covered by its [MIT license](LICENSE). vorkspace changes are covered by the [vorkspace MIT license](LICENSE.vorkspace). Provider names and logos are trademarks of their respective owners. See [NOTICE](NOTICE).
+vorkspace is distributed under the [MIT license](LICENSE). Provider names and logos are trademarks of their respective owners. See [NOTICE](NOTICE) for attribution.

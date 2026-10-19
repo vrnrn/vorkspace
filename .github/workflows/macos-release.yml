@@ -71,7 +71,7 @@ jobs:
           gh release upload "$RELEASE_TAG" --clobber \
             build/host-packages/vorkspace-host-darwin-{arm64,x64}.tar.gz \
             build/host-packages/vorkspace-host-darwin-{arm64,x64}.tar.gz.sha256 \
-            scripts/migrate-monocode-to-vorkspace.sh LICENSE.vorkspace
+            scripts/migrate-monocode-to-vorkspace.sh LICENSE
 
       - name: Verify app and updater feed before publication
         env:

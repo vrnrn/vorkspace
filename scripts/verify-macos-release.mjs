@@ -33,7 +33,7 @@ export function verifyMacRelease(tag, feed, release, version) {
     `vorkspace_${version}_aarch64.dmg`,
     "vorkspace_aarch64.app.tar.gz",
     "vorkspace_aarch64.app.tar.gz.sig",
-    "LICENSE.vorkspace",
+    "LICENSE",
     "migrate-monocode-to-vorkspace.sh",
     ...["arm64", "x64"].flatMap((arch) => [
       `vorkspace-host-darwin-${arch}.tar.gz`,
