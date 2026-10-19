@@ -36,3 +36,5 @@ Vorkspace opens a special **vorkspace Dev** app (`com.vrnrn.vorkspace.developmen
 - **Ubuntu / Debian Linux**: Run `npm run setup:linux:deb` once to install Linux window libraries, then `npm run build:linux` to create a `.deb` installer and an `.AppImage`.
 - **Fedora / Enterprise Linux 10**: Run `npm run setup:linux:fedora` and `npm run build:fedora` to create an `.rpm` package.
 - **Windows**: Run `npm run build:windows` to create a standard Windows installer (`.exe` via NSIS).
+
+Each published Mac build includes its own **What's new** notes, so you can read them offline. The release process creates these notes from the merged changes and checks that the app includes the same text as the release page. Notes for other versions, and source builds without a bundled copy, load from that version's GitHub release when you open them. If the connection fails, you can try again.

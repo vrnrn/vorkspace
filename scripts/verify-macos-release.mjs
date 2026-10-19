@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export function verifyMacRelease(tag, feed, release, version) {
@@ -19,6 +20,14 @@ export function verifyMacRelease(tag, feed, release, version) {
     `vorkspace ${version}`,
     "Release title must match the app version without a platform suffix",
   );
+  if (release.body !== undefined) {
+    assert.equal(typeof release.body, "string", "Release body is required");
+    assert.equal(
+      feed.notes?.trimEnd(),
+      release.body.trimEnd(),
+      "Updater notes must match the GitHub release body",
+    );
+  }
   const allowed = new Set([
     "latest.json",
     `vorkspace_${version}_aarch64.dmg`,
@@ -81,19 +90,40 @@ export function verifyMacRelease(tag, feed, release, version) {
   );
 }
 
+export async function verifyBundledReleaseNotes(root, version, body) {
+  assert.equal(typeof body, "string", "Release body is required");
+  assert(body.trim(), "Release body must not be empty");
+  const expected = `## [${version}]\n\n${body.trimEnd()}`;
+  assert.equal(
+    readFileSync(join(root, "build/release-notes.md"), "utf8").trimEnd(),
+    expected,
+  );
+  const manifest = JSON.parse(
+    readFileSync(join(root, "dist/.vite/manifest.json"), "utf8"),
+  );
+  const chunk = manifest["build/release-notes.md?raw"];
+  assert(chunk?.file, "Release notes are missing from the frontend bundle");
+  const bundled = await import(
+    pathToFileURL(join(root, "dist", chunk.file)).href
+  );
+  assert.equal(
+    bundled.default.trimEnd(),
+    expected,
+    "Bundled release notes must match the published body",
+  );
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
   const [tag, feedPath, assetsPath] = process.argv.slice(2);
   const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
-  verifyMacRelease(
-    tag,
-    readJson(feedPath),
-    readJson(assetsPath),
-    readJson("package.json").version,
-  );
+  const release = readJson(assetsPath);
+  const version = readJson("package.json").version;
+  verifyMacRelease(tag, readJson(feedPath), release, version);
+  await verifyBundledReleaseNotes(process.cwd(), version, release.body);
   console.log(
-    "Verified Mac release title, assets, updater feed, and fork download URLs.",
+    "Verified Mac release title, assets, updater feed, download URLs, and bundled release notes.",
   );
 }

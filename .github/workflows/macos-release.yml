@@ -90,6 +90,6 @@ jobs:
           fi
           cmp src-tauri/icons/icon.icns "$APP/Contents/Resources/icon.icns"
           gh release download "$RELEASE_TAG" --pattern latest.json --dir "$RUNNER_TEMP/feed"
-          gh release view "$RELEASE_TAG" --json name,assets > "$RUNNER_TEMP/assets.json"
+          gh release view "$RELEASE_TAG" --json name,assets,body > "$RUNNER_TEMP/assets.json"
           node scripts/verify-macos-release.mjs "$RELEASE_TAG" "$RUNNER_TEMP/feed/latest.json" "$RUNNER_TEMP/assets.json"
           gh release edit "$RELEASE_TAG" --draft=false --latest --notes-file "$RUNNER_TEMP/macos-release-notes.md"

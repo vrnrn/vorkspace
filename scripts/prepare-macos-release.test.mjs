@@ -13,7 +13,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { planMacRelease, stampMacRelease } from "./prepare-macos-release.mjs";
+import {
+  generateMacReleaseNotes,
+  planMacRelease,
+  stampMacRelease,
+} from "./prepare-macos-release.mjs";
 
 const env = {
   GITHUB_REPOSITORY: "vrnrn/vorkspace",
@@ -128,6 +132,36 @@ test("rejects invalid source refs, build counters, and versions before stamping"
   assert.throws(() => plan([release("0.13.9007199254740991")]));
 });
 
+test("generates notes for the exact source since the newest earlier published stable release", () => {
+  const result = plan([release("0.13.10")]);
+  const notes = generateMacReleaseNotes(
+    result,
+    [
+      release("0.13.9"),
+      release("0.13.10"),
+      release("0.13.12", { draft: true }),
+      release("0.13.11"),
+      { tag_name: "other", draft: false },
+    ],
+    env.GITHUB_SHA,
+    (fields) => {
+      assert.deepEqual(fields, {
+        tag_name: "mac-v0.13.11",
+        target_commitish: env.GITHUB_SHA,
+        previous_tag_name: "mac-v0.13.10",
+      });
+      return { body: "## What's Changed\n\n- Restore release notes." };
+    },
+  );
+  assert(notes.startsWith("## What's Changed\n\n- Restore release notes."));
+  assert(notes.includes(`Workflow: ${result.workflow}\n`));
+  for (const body of [null, "", " \n"]) {
+    assert.throws(() =>
+      generateMacReleaseNotes(result, [], env.GITHUB_SHA, () => ({ body })),
+    );
+  }
+});
+
 test("stamps all manifests and native build metadata without changing updater identity", () => {
   // Node resolves module URLs through macOS's /var -> /private/var symlink.
   const root = realpathSync(
@@ -159,6 +193,10 @@ test("stamps all manifests and native build metadata without changing updater id
       JSON.stringify(original),
     );
     stampMacRelease(root, { ...plan(), version: target });
+    assert.equal(
+      readFileSync(join(root, "build/release-notes.md"), "utf8"),
+      `## [${target}]\n\n${plan().notes}`,
+    );
     assert.equal(json("package.json").version, target);
     assert.equal(json("package-lock.json").version, target);
     assert.equal(json("package-lock.json").packages[""].version, target);
@@ -188,7 +226,7 @@ test("stamps all manifests and native build metadata without changing updater id
     const gh = join(bin, "gh");
     writeFileSync(
       gh,
-      '#!/usr/bin/env node\nif (!process.argv.at(-1).includes("matching-refs")) JSON.parse(process.env.RELEASE_TEST_PAGES).flat().forEach(value => console.log(JSON.stringify(value)));\n',
+      '#!/usr/bin/env node\nif (process.argv.some(value => value.endsWith("/generate-notes"))) console.log(JSON.stringify({body: "## What’s Changed\\n\\n- Restore release notes.\\nVORKSPACE_RELEASE_NOTES\\nKEEP_INSIDE_NOTES=yes"})); else if (!process.argv.at(-1).includes("matching-refs")) JSON.parse(process.env.RELEASE_TEST_PAGES).flat().forEach(value => console.log(JSON.stringify(value)));\n',
       { mode: 0o755 },
     );
     const ciEnv = {
@@ -208,12 +246,19 @@ test("stamps all manifests and native build metadata without changing updater id
     assert(variables.includes(`RELEASE_TAG=mac-v${expected}\n`));
     assert(variables.includes("RELEASE_BUILD_NUMBER=42.1\n"));
     const notes = readFileSync(join(root, "macos-release-notes.md"), "utf8");
+    assert(notes.includes("Restore release notes."));
+    assert.equal(
+      readFileSync(join(root, "build/release-notes.md"), "utf8"),
+      `## [${expected}]\n\n${notes}`,
+    );
     assert(notes.includes("Build: 42.1\n"));
     assert(notes.includes(`Workflow: ${plan().workflow}\n`));
+    const delimiter = variables.match(
+      /^RELEASE_NOTES<<(VORKSPACE_RELEASE_NOTES_[a-f0-9-]+)$/m,
+    )?.[1];
+    assert(delimiter);
     assert(
-      variables.includes(
-        `RELEASE_NOTES<<VORKSPACE_RELEASE_NOTES\n${notes}VORKSPACE_RELEASE_NOTES\n`,
-      ),
+      variables.includes(`RELEASE_NOTES<<${delimiter}\n${notes}${delimiter}\n`),
     );
     // A failed API read must not produce a conflicting version or new notes.
     const beforeFailure = readFileSync(

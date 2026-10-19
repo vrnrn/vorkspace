@@ -52,6 +52,7 @@ export default defineConfig(({ mode }): UserConfig => {
     },
     clearScreen: false,
     build: {
+      manifest: true,
       // The generated file-icon table is about 1.13 MB after minification.
       chunkSizeWarningLimit: 1150,
       rollupOptions: {

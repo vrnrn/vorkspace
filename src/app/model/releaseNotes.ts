@@ -26,7 +26,8 @@ export function releaseNotesForVersion(
   const match = heading.exec(changelog);
   if (!match) return null;
 
-  const nextHeading = /^## /gm;
+  // GitHub release bodies use level-two headings for their own sections.
+  const nextHeading = /^## \[[^\]\r\n]+\](?: - \d{4}-\d{2}-\d{2})?\r?$/gm;
   nextHeading.lastIndex = match.index + match[0].length;
   const next = nextHeading.exec(changelog);
   const markdown = changelog.slice(match.index, next?.index).trimEnd();

@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+const STABLE_TAG = /^mac-v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 function parts(version) {
   assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
@@ -91,9 +99,31 @@ export function planMacRelease(version, releases, env, tags = []) {
 }
 
 function compareRelease(tag, version) {
-  return /^mac-v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag ?? "")
-    ? compare(tag.slice(5), version)
-    : -1;
+  return STABLE_TAG.test(tag ?? "") ? compare(tag.slice(5), version) : -1;
+}
+
+export function generateMacReleaseNotes(plan, releases, sha, request) {
+  const previous = releases
+    .filter(
+      (release) =>
+        !release.draft &&
+        !release.prerelease &&
+        STABLE_TAG.test(release.tag_name) &&
+        compareRelease(release.tag_name, plan.version) < 0,
+    )
+    .sort((a, b) => compareRelease(b.tag_name, a.tag_name.slice(5)))[0];
+  const result = request({
+    tag_name: plan.tag,
+    target_commitish: sha,
+    ...(previous ? { previous_tag_name: previous.tag_name } : {}),
+  });
+  assert.equal(
+    typeof result.body,
+    "string",
+    "GitHub must return release notes",
+  );
+  assert(result.body.trim(), "GitHub returned empty release notes");
+  return `${result.body.trim()}\n\n${plan.notes}`;
 }
 
 function githubList(endpoint, projection) {
@@ -111,6 +141,7 @@ function githubList(endpoint, projection) {
 }
 
 export function stampMacRelease(root, plan) {
+  assert(plan.notes?.trim(), "Release notes are required before stamping");
   const readJson = (path) => JSON.parse(readFileSync(join(root, path), "utf8"));
   if (readJson("package.json").version !== plan.version)
     execFileSync(
@@ -124,6 +155,12 @@ export function stampMacRelease(root, plan) {
   config.bundle.macOS ??= {};
   config.bundle.macOS.bundleVersion = plan.build;
   writeFileSync(join(root, path), `${JSON.stringify(config, null, 2)}\n`);
+  // This build artifact is bundled lazily; no changelog is kept in the repo.
+  mkdirSync(join(root, "build"), { recursive: true });
+  writeFileSync(
+    join(root, "build/release-notes.md"),
+    `## [${plan.version}]\n\n${plan.notes}`,
+  );
 }
 
 if (
@@ -138,21 +175,44 @@ if (
   // unavailable release list as an empty one and risking an overwrite.
   const releases = githubList(
     "repos/vrnrn/vorkspace/releases?per_page=100",
-    ".[] | {tag_name, draft, target_commitish, body}",
+    ".[] | {tag_name, draft, prerelease, target_commitish, body}",
   );
   const tags = githubList(
     "repos/vrnrn/vorkspace/git/matching-refs/tags/mac-v",
     ".[] | .ref",
   ).map((ref) => ref.replace(/^refs\/tags\//, ""));
   const plan = planMacRelease(version, releases, process.env, tags);
+  plan.notes = generateMacReleaseNotes(
+    plan,
+    releases,
+    process.env.GITHUB_SHA,
+    (fields) =>
+      JSON.parse(
+        execFileSync(
+          "gh",
+          [
+            "api",
+            "--method",
+            "POST",
+            "repos/vrnrn/vorkspace/releases/generate-notes",
+            ...Object.entries(fields).flatMap(([key, value]) => [
+              "-f",
+              `${key}=${value}`,
+            ]),
+          ],
+          { encoding: "utf8", maxBuffer: 1024 * 1024 },
+        ),
+      ),
+  );
   stampMacRelease(root, plan);
   writeFileSync(
     join(process.env.RUNNER_TEMP, "macos-release-notes.md"),
     plan.notes,
   );
+  const notesDelimiter = `VORKSPACE_RELEASE_NOTES_${randomUUID()}`;
   appendFileSync(
     process.env.GITHUB_ENV,
-    `RELEASE_TAG=${plan.tag}\nRELEASE_VERSION=${plan.version}\nRELEASE_BUILD_NUMBER=${plan.build}\nRELEASE_NOTES<<VORKSPACE_RELEASE_NOTES\n${plan.notes}VORKSPACE_RELEASE_NOTES\n`,
+    `RELEASE_TAG=${plan.tag}\nRELEASE_VERSION=${plan.version}\nRELEASE_BUILD_NUMBER=${plan.build}\nRELEASE_NOTES<<${notesDelimiter}\n${plan.notes}${notesDelimiter}\n`,
   );
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,
