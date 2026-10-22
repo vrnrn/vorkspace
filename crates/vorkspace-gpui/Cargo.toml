@@ -1,0 +1,64 @@
+[package]
+name = "vorkspace-gpui"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+tempfile = "3"
+serde.workspace = true
+serde_json.workspace = true
+vorkspace-core = { path = "../vorkspace-core" }
+pulldown-cmark = "0.13"
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", default-features = false, features = ["font-kit", "runtime_shaders", "x11", "wayland"] }
+unicode-segmentation = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+async-channel = "2"
+base64 = "0.22"
+# The terminal dock: PTY, VT parser and grid (as Zed's terminal uses).
+alacritty_terminal = "0.26"
+libc = "0.2"
+rquickjs = "0.14.0"
+# The file editor's native syntax: incremental parses, highlights, folds and
+# syntax errors. Languages without a grammar here use the QuickJS fallback.
+tree-sitter = "0.26"
+tree-sitter-language = "0.1"
+streaming-iterator = "0.1"
+similar = "2.7"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-json = "0.24"
+tree-sitter-css = "0.25"
+tree-sitter-html = "0.23"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-go = "0.25"
+tree-sitter-bash = "0.25"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-yaml = "0.7"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-ruby = "0.23"
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false, features = ["test-support"] }
+
+# The vendored renderer's backdrop-blur marker for frosted popovers.
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui_apple = { package = "gpui-pre-apple", version = "=0.3.9" }
+# Pins the native traffic lights to the Tauri app's spacing.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSEvent", "NSApplication", "NSDockTile", "NSButton", "NSControl", "NSLayoutAnchor", "NSLayoutConstraint", "NSResponder", "NSView", "NSWindow", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSMenu", "NSMenuItem", "NSImage"] }
+raw-window-handle = "0.6"
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKPreferences", "WKWebsiteDataStore", "WKNavigation", "WKNavigationDelegate", "WKNavigationAction", "WKUIDelegate", "WKFrameInfo", "WKSecurityOrigin", "block2"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSGeometry", "NSData", "NSRange", "NSArray", "NSSet", "NSError", "NSBundle", "NSURL", "NSURLRequest"] }
+objc2-user-notifications = "0.3"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_apple = { package = "gpui-pre-apple", version = "=0.3.9", features = ["test-support", "runtime_shaders"] }
+parking_lot = "0.12"

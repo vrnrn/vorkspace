@@ -1,5 +1,0 @@
-{
-  "build": {
-    "beforeDevCommand": "npm run dev:stable -- --port 1430"
-  }
-}

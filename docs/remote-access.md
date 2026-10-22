@@ -56,7 +56,7 @@ node build/host/vorkspace-host.mjs pair --name "My laptop"
 
 `start` launches the host independently of the terminal. `pair` prints a device ID and a device token; copy the token to the receiving desktop. Create a separate credential for each desktop. Tokens grant control of the host as its OS user, including provider execution and workspace reads.
 
-The host binds only to `127.0.0.1:3774`. For compatibility with existing installations, the internal host data directory retains its legacy name. State and logs live in `~/.monocode-host` (`%USERPROFILE%\.monocode-host` on Windows). Unix permissions restrict access to the owner; Windows ACLs restrict it to the current user, SYSTEM, and Administrators. Use `--data-dir` and `--port` to override them. `serve` runs in the foreground for debugging.
+The host binds only to `127.0.0.1:3774`. For compatibility with existing installations, the internal host data directory retains its legacy name. State and logs live in `~/.vorkspace-host` (`%USERPROFILE%\.vorkspace-host` on Windows). Unix permissions restrict access to the owner; Windows ACLs restrict it to the current user, SYSTEM, and Administrators. Use `--data-dir` and `--port` to override them. `serve` runs in the foreground for debugging.
 
 Open an SSH tunnel from your laptop:
 
@@ -72,6 +72,8 @@ HTTPS endpoints can also be entered if you operate a reverse proxy to the loopba
 
 ## Manage the host
 
+Large history syncs are downloaded in chunks of one consistent revision. The host accepts at most 64 MiB of encoded JSON per transfer, eight active transfers, and 128 MiB of retained serialized text across transfers (accounted conservatively as two bytes per UTF-16 unit). Admission measures JSON size before creating its serialized copy. A full transfer budget returns a retryable capacity error and preserves existing downloads; it does not evict them. An oversized history returns an explicit size error. Completed downloads, two minutes of inactivity, and host shutdown release their transfer storage. These limits apply to download copies, independently of durable database history.
+
 ```sh
 node build/host/vorkspace-host.mjs status
 node build/host/vorkspace-host.mjs devices
@@ -82,29 +84,27 @@ node build/host/vorkspace-host.mjs service uninstall
 
 SSH setup names each device credential after the desktop's computer name. Removing a saved connection from the desktop does not stop the host. It revokes the device credential only when you choose **Revoke access and remove**. Otherwise, use `devices` and `revoke` on the host to remove access. Stopping the host interrupts active turns; restarting retains their transcripts and marks them interrupted. No uncertain provider operation is automatically replayed after a host crash.
 
-`service uninstall` is the cleanup path for a host you no longer want running. It removes the systemd user service, the LaunchAgent, or this user's scheduled task. It then stops the host, including a manually started one, and interrupts any running turns. It never deletes the data directory. Sessions, logs, and device credentials stay in `~/.monocode-host` until you delete that directory yourself. To remove access without stopping the host, use `revoke` instead. On Linux, the command prints how to turn off lingering if nothing else needs it.
+`service uninstall` is the cleanup path for a host you no longer want running. It removes the systemd user service, the LaunchAgent, or this user's scheduled task. It then stops the host, including a manually started one, and interrupts any running turns. It never deletes the data directory. Sessions, logs, and device credentials stay in `~/.vorkspace-host` until you delete that directory yourself. To remove access without stopping the host, use `revoke` instead. On Linux, the command prints how to turn off lingering if nothing else needs it.
 
 The machine must remain awake. Manual `start` launches a detached process. `service install` installs a user service; SSH setup runs it automatically. Only one host may own a data directory. Restart the host after changing its provider installation or PATH. Service installs preserve an already-running host, including one previously started manually.
 
-SSH-installed hosts have a launcher at `~/.monocode-host/bin/vorkspace-host`; use it in place of `node build/host/vorkspace-host.mjs` in management commands. Existing service identifiers also retain their legacy names. Linux services are named `monocode-host.service`; macOS uses `com.monocode.host`. A service manager can restart a stopped process, so use `service uninstall` rather than `stop` to keep the host stopped.
+SSH-installed hosts have a launcher at `~/.vorkspace-host/bin/vorkspace-host`; use it in place of `node build/host/vorkspace-host.mjs` in management commands. Existing service identifiers also retain their legacy names. Linux services are named `vorkspace-host.service`; macOS uses `com.vorkspace.host`. A service manager can restart a stopped process, so use `service uninstall` rather than `stop` to keep the host stopped.
 
-On Windows, the launcher is `%USERPROFILE%\.monocode-host\bin\vorkspace-host.cmd`. The scheduled task is named `vorkspace Host-<user SID>`; `service uninstall` unregisters it and stops the host. Normal cancellation and shutdown stop the provider's process tree. A plain manual `start` is detached, but use `service install` for SSH-hosted Windows sessions so Task Scheduler owns the process independently of the SSH login.
+On Windows, the launcher is `%USERPROFILE%\.vorkspace-host\bin\vorkspace-host.cmd`. The scheduled task is named `vorkspace Host-<user SID>`; `service uninstall` unregisters it and stops the host. Normal cancellation and shutdown stop the provider's process tree. A plain manual `start` is detached, but use `service install` for SSH-hosted Windows sessions so Task Scheduler owns the process independently of the SSH login.
 
 ## Release packaging
 
 `npm run host:package` builds a self-contained package for the current Windows/Mac/Linux architecture. `npm run host:package -- --all` builds all six archives, using pinned official Node binaries and checksums. Archives contain the host bundle, runtime, launcher, and licenses. `host/package.mjs` pins the runtime version. Cross-packaging Windows on Unix requires `zip` and `unzip`; native Windows packaging uses PowerShell.
 
-Published Mac releases include `vorkspace-host-darwin-{arm64,x64}.tar.gz` and their `.sha256` files. SSH setup downloads from the exact desktop version's GitHub release, then installs under `~/.monocode-host/runtime`. Linux and Windows hosts can still be built manually with the commands above, but their packages are not built or published by this fork's automation. Use the manual connection instructions for those hosts.
+Automatic SSH installation requires host archives and checksum files on the exact desktop version release. Build scripts do not publish these archives. For unpublished builds, use the manual connection procedure above. Updating a running host restarts its service and interrupts active turns; durable history remains on the host.
 
-**Unreleased development builds:** automatic first-time installation and **Update Host** require host archives published for the desktop version. Check that the selected vorkspace release includes matching host archives; a desktop-only release or unreleased checkout may not have them. Until the matching release is available, use the manual development connection above. A missing archive produces an explicit error in Settings. No fallback to an arbitrary latest release or unverified download is used. Connecting does not automatically upgrade a running host. When an SSH host lacks Explorer or Changes, Settings → Connections offers **Update Host**. This downloads and verifies the matching package, restarts the host service, and reconnects using the existing device credential. The restart interrupts active agent turns; sessions and history remain on the host. URL connections must be updated on the host manually.
-
-## Scope of this first version
+## Supported operations
 
 Supported: persistent remote text conversations with all five local provider adapters, follow-up turns, approvals, questions where the provider offers them, cancellation, per-device revocation, reconnect, remote file browsing and text editing, Git status, file diffs, and history, staging and commits, branch selection and creation, worktree selection and creation, and a tracked Git diff against HEAD. The desktop polls the host and downloads only transcript blocks that changed since its last update (every 0.75 s while a session runs, 3 s otherwise). The desktop rejects any single host response over 16 MiB. A sync above 4 MiB, such as reopening a very long transcript or one very large tool output, is sent as a series of bounded pieces of one consistent revision. Transcript size is therefore not limited by the response cap. The host writes streamed output in 120 ms batches and keeps a bounded event journal.
 
-Remote history appears in the Sessions sidebar of each project on a machine. Host snapshots also populate the app's normal session state while the tab is open; they are not written to the local session store. Remote `/compact` uses the provider's context compaction, and `/plan` selects the host provider's plan mode. Queued follow-ups and editing the last message still need host commands. Other local slash commands and skill expansion are not yet available remotely. Worktree deletion, terminals, generated image output, named provider accounts, `/operator`, automations, orchestration, LAN discovery, and account-based tunnels are not implemented yet. Other remote prompts are sent directly to the provider.
+Remote history appears in the Sessions sidebar of each project on a machine. Host snapshots also populate the app's normal session state while the tab is open; they are not written to the local session store. Remote `/compact` uses the provider's context compaction, and `/plan` selects the host provider's plan mode. Queued follow-ups and editing the last message still need host commands. Other local slash commands and skill expansion are not yet available remotely. Worktree deletion, terminals, named provider accounts, `/operator`, automations, orchestration, LAN discovery, and account-based tunnels are not implemented yet. Other remote prompts are sent directly to the provider.
 
-The headless host runs the reused TypeScript adapters with a Node process backend. It proves the execution boundary without introducing the planned Rust daemon/worker IPC yet. Node is included in host release archives, separately from the desktop application.
+The headless host runs the reused JavaScript adapters with a Node process backend. It proves the execution boundary without introducing the planned Rust daemon/worker IPC yet. Node is included in host release archives, separately from the desktop application.
 
 ## Verify
 
@@ -119,6 +119,14 @@ cargo test
 
 Host tests use fake provider executables and temporary loopback servers. They do not contact paid models. They cover the Codex and Claude transports, Pi/OMP RPC, Antigravity ACP, cross-client reattachment, duplicate sends, approval races, interruption recovery, device revocation, path checks, and detached host lifecycle. On Node 26, use `NODE_OPTIONS=--no-experimental-webstorage npm run check:web` to avoid its experimental global storage interfering with the existing happy-dom tests.
 
-For the real OpenSSH transport and native askpass smoke test on Linux/macOS, build with `npm run host:package` and `cargo build --bin vorkspace`, then run `python3 scripts/test-remote-ssh.py`. It uses a disposable loopback sshd, temporary keys and known-hosts file, and an isolated packaged host. It leaves personal SSH configuration, provider credentials, and OS services untouched.
+For the real OpenSSH transport and native askpass smoke test on Linux/macOS, build with `npm run host:package` and `cargo build --locked -p vorkspace-gpui --profile native-dev`, then run `python3 scripts/checks/test-remote-ssh.py`. It uses a disposable loopback sshd, temporary keys and known-hosts file, and an isolated packaged host. It leaves personal SSH configuration, provider credentials, and OS services untouched.
 
 Host CI runs on Windows, macOS, and Linux. Windows-specific tests cover ACL inheritance, Task Scheduler definitions, bootstrap parsing/installation, and provider child-process cleanup. They use temporary data and mocked task registration so normal test runs do not install or replace a real user's background task. Full SSH-to-Task-Scheduler setup must also be validated on a signed-in Windows host before a supported release.
+
+## Session synchronization
+
+The host stores session metadata beside durable transcripts and indexes that metadata separately. Session listings and unchanged-revision checks read the covering metadata index, so they do not load or parse transcript bodies. Missing or malformed legacy summaries fall back to the saved transcript.
+
+The desktop tracks the latest host metadata revision separately from the latest full configuration. Older responses cannot overwrite newer status or settings; a full snapshot may fill fields omitted by a listing at the same revision. Command receipts update their local journal while preserving newer host metadata. Revisionless legacy hosts remain readable until a versioned snapshot establishes that binding's revision boundary.
+
+Large changed snapshots use chunked transfer. The host retains up to eight serialized transfers, releases each on completion, expires abandoned transfers after two minutes of inactivity even when no further request arrives, and clears them when the server closes. A live transfer refreshes its inactivity deadline. The transfer count is bounded; total retained transfer bytes depend on the requested histories.

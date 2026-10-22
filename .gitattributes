@@ -1,2 +1,5 @@
 # Shell scripts are also embedded in the desktop app and sent to Unix hosts.
 *.sh text eol=lf
+
+# Generated editor snippets contain meaningful literal indentation.
+crates/vorkspace-gpui/assets/*.js whitespace=-blank-at-eol linguist-generated=true

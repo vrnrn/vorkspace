@@ -136,23 +136,12 @@ for (const target of targets) {
       join(folder, "vorkspace-host.cmd"),
       '@echo off\r\nsetlocal DisableDelayedExpansion\r\n"%~dp0node.exe" "%~dp0host.mjs" %*\r\nexit /b %errorlevel%\r\n',
     );
-    // Preserve the public launcher used by existing Windows installations.
-    await copyFile(
-      join(folder, "vorkspace-host.cmd"),
-      join(folder, "monocode-host.cmd"),
-    );
   } else {
     await writeFile(
       join(folder, "vorkspace-host"),
       '#!/bin/sh\nset -eu\nDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$DIR/bin/node" "$DIR/host.mjs" "$@"\n',
     );
     await chmod(join(folder, "vorkspace-host"), 0o755);
-    // Existing remote launchers resolve the same versioned runtime directory.
-    await copyFile(
-      join(folder, "vorkspace-host"),
-      join(folder, "monocode-host"),
-    );
-    await chmod(join(folder, "monocode-host"), 0o755);
   }
   if (target === `${process.platform}-${process.arch}`) {
     const executable = windows

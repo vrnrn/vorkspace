@@ -1,115 +1,23 @@
 # Vox
 
-Vox is an opt-in voice controller for Vorkspace sessions and Bots. It uses the
-default Codex CLI ChatGPT sign-in and requires live voice access, a compatible
-Codex installation, and microphone permission. Audio uses remote ChatGPT voice;
-this is not offline speech recognition.
+Vox is an optional voice conversation in the title bar. Enable it in Settings → Vox; it starts disabled. Clicking its face begins a call. Stop releases microphone capture immediately, ends the call, and denies late app actions. Silent mode keeps the reply bubble while suppressing spoken playback.
 
-## Using Vox
+Microphone capture uses the selected device exactly, or a uniquely matching label after WebKit rotates device IDs. The initial default prefers the built-in MacBook microphone. Capture never silently switches to another device when a selection disappears.
 
-Enable **Settings → Vox → General → Enable Vox**. It is off by default. Click
-the face in the top-right title bar to start a call, and click again to end it.
-Vox waits for spoken input without greeting you. The face animates while a call
-is active and shows static `vox` when stopped; Reduced Motion uses static faces.
+Vox can inspect and control supported local sessions and Bots through native handlers. It inherits the chosen provider account and model when creating a session. Ambiguous project names require a full path. Composer updates check revisions and preserve attachments and unsent user input; follow-ups use the durable queue.
 
-Calls stay connected while navigating between chats, projects, Bots, and
-Settings. Hiding or closing the workspace, quitting, or disabling Vox ends the
-call. Enabling Vox alone does not start a call or capture audio.
+The saved conversation uses the provider's native thread identity. Reset increments its revision so a late reply cannot restore a cleared thread. Memory belongs to the reserved `bots/vox` folder and is opened with the native conflict-aware editor.
 
-Under **Settings → Vox → Audio**:
+## Runtime
 
-- **Silent replies** mutes playback immediately without restarting the call.
-  Only the latest completed assistant reply appears below the face. The bubble
-  supports selection and scrolling; click-away or Escape dismisses it. User
-  speech and partial transcripts are not displayed. Errors remain visible in
-  either reply mode.
-- **Default microphone** applies to the next call without changing macOS input.
-  Vox defaults to the built-in MacBook microphone. The selector lists connected
-  hardware inputs once. An unavailable or unplugged selected input produces an
-  error rather than falling back to another microphone.
+`crates/vorkspace-core/src/voice/runtime.rs` owns the Codex app-server child, bounded JSON-RPC channels, exclusive call lock, tool receipts, and shutdown. It saves the accepted native thread identity with a revision check before opening audio. Resume failure never starts a replacement conversation automatically. Tool calls must match that thread and the embedded action schema; repeated call IDs reuse the prior result without repeating effects.
 
-Vox's control and displayed replies use lowercase and the app's grayscale
-styling. Settings retains the standard app casing and layout.
+`crates/vorkspace-gpui/src/vox/` owns the controls, ephemeral WebKit surface, and microphone permissions. `crates/vorkspace-gpui/src/shell/vox.rs` dispatches actions through existing conversation and Bot owners. `crates/vorkspace-core/src/voice.rs` owns durable identity and memory operations.
 
-## Controlling chats
+`embedded/vox/` builds the small WebRTC audio page embedded in the core. It exchanges SDP, microphone devices, and playback activity with a per-call capability-protected loopback endpoint. It cannot dispatch workspace tools or launch processes. WebRTC preserves the Codex subscription sign-in path and browser echo cancellation; the native PCM transport requires API-key authentication. No Node voice controller is started.
 
-Vox can find, read, open, and message sessions and Bots, start or stop sessions
-in known local projects, and read or fill their composers. For example:
+End, window disposal, and audio failures ask Codex to stop realtime and flush the transcript tail. The controller waits for the matching closed notification before releasing the helper; it reports uncertainty if closure cannot be confirmed. Shutdown does not replay accepted effects.
 
-- “Tell Helper to review the latest change.”
-- “Ask the session called tests to fix its failures.”
-- “Put ‘review the latest change’ in Helper's composer without sending.”
-- “Read the last reply in that session.”
+The private page uses an unpredictable URL, exact Host/Origin validation, bounded request and event queues, and scoped native commands. It has no general application IPC. Closing or stopping retains enough time to flush the conversation identity before helper termination.
 
-Targets are resolved against current app state. Ambiguous names require
-clarification. Coding runs in the target chat with its existing model,
-permissions, and execution path. Composer edits append by default and preserve
-attachments; replacement requires an unchanged prior read, so intervening typing
-wins. Message acceptance does not mean the task has finished. Ask Vox to read the
-reply; completion is not automatically relayed.
-
-## Conversation and memories
-
-Vox has one persistent conversation, independent of the selected chat or project.
-Later calls and app restarts resume it. Resume failures report an error rather
-than silently replacing the conversation.
-
-**Settings → Vox → Conversation → Reset conversation** ends the call and starts
-a fresh conversation on the next call. It keeps saved memories and does not
-erase the previous native history from disk.
-
-Vox can save facts and preferences through its memory tools. **Settings → Vox →
-Memory** lists them with the same add, edit, and delete controls as Bot memories.
-Saved memories load when the next call starts and survive conversation reset.
-
-## Implementation
-
-| Owner                                                                                                             | Responsibility                                                                       |
-| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| [VoxProvider](../src/features/vox/ui/VoxProvider.tsx)                                                             | Workspace call lifecycle and preferences, independent of mounted title-bar controls. |
-| [vox.ts](../src/features/vox/model/vox.ts)                                                                        | Exact microphone capture, WebRTC, Codex helper, request receipts, and shutdown.      |
-| [controller.ts](../src/features/vox/model/controller.ts)                                                          | Current target resolution and delegation through existing app and composer handlers. |
-| [conversation.ts](../src/features/vox/model/conversation.ts) and [memory.ts](../src/features/vox/model/memory.ts) | Saved native thread identity and Vox-owned Bot memory storage.                       |
-| [display.ts](../src/features/vox/model/display.ts) and [VoxButton](../src/features/vox/ui/VoxButton.tsx)          | Latest completed native reply, coarse activity, title-bar face, and reply bubble.    |
-
-WebRTC carries audio directly; the Codex app-server owns authentication and voice
-inference. Each call uses one helper and resumes the saved native thread. The
-voice model is `gpt-live-1-codex`; delegated app actions use `gpt-6.1-sol` with low
-reasoning effort and a read-only shell sandbox. The integration uses Codex's V3
-realtime and dynamic tools, verified with Codex 0.163.0.
-
-The boundaries that protect continuity and keep work bounded are:
-
-- Native admission permits one Vox writer across app windows. Saved thread
-  identity is revision guarded so a stale operation cannot undo a reset.
-- Shutdown releases media, requests transcript flushing, and waits for native
-  closure before killing the helper. A crash or force kill may lose unflushed
-  speech. Already accepted work in target chats continues independently.
-- Target actions revalidate the active call before dispatch. Duplicate tool IDs
-  reuse bounded receipts; changed arguments under a reused ID are rejected.
-  Existing chat handlers and mounted composers own sends, drafts, and persistence.
-- Conversation history stays in Codex. Startup projects at most four recent
-  turns and 3,000 UTF-16 characters from that conversation into voice context.
-  Saved facts reuse Bot storage under the reserved `vox` owner.
-- The display retains one completed assistant reply, capped at 4,000 UTF-16
-  characters with explicit truncation. Native transcript deltas are suppressed
-  before IPC. Audio samples and per-word transcript updates do not enter React.
-- Transport loads on demand. CSS drives face animation only while active, with
-  no frame timer, audio meter, or background history polling. Silent replies
-  mutes the audio element; the service still generates and transports audio.
-
-## Checks
-
-```sh
-NODE_OPTIONS=--no-experimental-webstorage npm run check:web
-npm run check:rust
-npx playwright test tests/browser/vox.spec.ts
-```
-
-The Node option avoids Node 26 web storage interfering with the test DOM. Tests
-cover call cancellation and replacement, named targets, composer conflicts,
-conversation resume/reset, memory ownership, microphone selection, silent
-replies, and title-bar lifecycle in Chromium and WebKit. Live checks use
-synthetic speech and targets; they do not establish physical microphone
-reliability or end-to-end performance. See [building](building.md) for local app
-builds.
+Run `npm run test:voice` for microphone and audio-page tests, and `npm run test:rust` for native lifecycle/persistence coverage. Physical microphone, WebRTC audio, and authenticated provider flows need live validation.

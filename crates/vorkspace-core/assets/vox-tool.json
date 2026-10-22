@@ -1,0 +1,59 @@
+{
+  "type": "function",
+  "name": "vorkspace",
+  "description": "Control vorkspace. Actions:\nmemory.read {topic?}: Vox's own persistent memory and topic names.\nmemory.search {query?,since?}: look up Vox's memories, topic notes and archive.\nmemory.add {fact,topic?,until?}: remember a lasting fact or preference, never credentials.\nmemory.replace {find,fact,topic?,until?}: supersede a saved fact.\nmemory.remove {find,topic?}: forget a matching saved fact.\nworkspace.current {}: selected session metadata and available projects, without loading history.\nworkspace.open {sessionId?:id,bot?:nameOrId}: open a session or named Bot. Supply exactly one target.\ncomposer.read {sessionId?:id,bot?:nameOrId}: open and read a target's unsent composer, defaulting to the current chat. Returns text, selection, and truncated flag; a truncated read cannot be used to replace the whole draft.\ncomposer.write {text,sessionId?:id,bot?:nameOrId,mode?:append|replace,expectedText?:string}: fill the target's text box WITHOUT sending. Default append preserves existing input and attachments. For explicit replacement, first read and pass the exact expectedText. Never replace newer user edits. Returns sent:false. Do not send after filling unless explicitly asked.\nmodels.list {}: available model IDs and permissions for new sessions.\nsessions.list {project?:pathOrName}: session IDs, titles, busy status and drafts in a project.\nsessions.read {project?,sessionId,limit?:1..3,maxChars?:200..6000,before?}: recent user/assistant exchanges; nextBefore pages older history.\nsessions.send {project?,sessionId,prompt}: send a normal follow-up, using the target's existing queue or live guidance when busy. Unsent drafts are preserved and rejected; report the rejection to the user.\nsessions.start {project?,prompt,harness?,model?,reveal?:false,notifyOnComplete:false}: start a normal coding session. Use an available model; keep the user's requested model.\nsessions.stop {project?,sessionId}: stop work only when asked.\nbots.list {}: Bot names, IDs and projects.\nbots.read {bot:nameOrId,limit?:1..3,maxChars?:200..6000,before?}: recent Bot history.\nbots.send {to:nameOrId,message,expectReply:false}: send the user's message to a Bot's normal chat.\nProject may be omitted for the current project. All sends return acceptance, not completion.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "memory.read",
+          "memory.search",
+          "memory.add",
+          "memory.replace",
+          "memory.remove",
+          "workspace.current",
+          "workspace.open",
+          "composer.read",
+          "composer.write",
+          "models.list",
+          "sessions.list",
+          "sessions.read",
+          "sessions.send",
+          "sessions.start",
+          "sessions.stop",
+          "bots.list",
+          "bots.read",
+          "bots.send"
+        ]
+      },
+      "input": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "expression": {
+        "type": "string",
+        "enum": [
+          "neutral",
+          "happy",
+          "focused",
+          "wink_left",
+          "wink_right",
+          "curious",
+          "surprised",
+          "unsure",
+          "concerned",
+          "delighted",
+          "cheeky"
+        ],
+        "description": "optional display-only mood; attach to an existing action, never make extra calls just to animate"
+      }
+    },
+    "required": [
+      "action",
+      "input"
+    ],
+    "additionalProperties": false
+  }
+}

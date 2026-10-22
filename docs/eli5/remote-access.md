@@ -30,3 +30,13 @@ When you click **Remove** on a connection in Settings, you get two choices:
 - **Remove from this desktop only**: Forgets the machine on your laptop, but leaves the remote computer and its agents running.
 - **Revoke access and remove**: Tells the remote computer to cancel your laptop's digital key first, then removes the connection.
 If you ever want to completely remove the background helper from the remote computer, run `vorkspace-host service uninstall` on that machine.
+
+The remote host is maintained in JavaScript and includes Node in packaged archives. Building an archive does not publish it; automatic SSH installation needs archives for the exact desktop version.
+
+The source for the remote host lives under `host/`. Its connection test is `scripts/checks/test-remote-ssh.py` and uses a temporary local server.
+
+Checking whether a remote chat changed reads its small summary instead of reopening the whole chat. Large downloads arrive in pieces. If a download is abandoned, the host releases its temporary copy after two minutes without activity.
+
+Temporary downloads share a size budget. If it is busy, retry after another download finishes; active downloads are kept intact. A chat that exceeds the download size limit gets a clear error and stays saved on the host. Download limits do not delete conversation data.
+
+A slow reply from the host cannot undo newer status or settings. Partial chat lists can be filled in by a matching complete reply without treating missing fields as deleted.

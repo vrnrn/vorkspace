@@ -1,38 +1,13 @@
-# How Vorkspace Works (ELI5)
+# Architecture
 
-Think of **Vorkspace** like a **mission control room** for your AI coding helpers (like Claude Code, Codex, Antigravity, Pi, and omp).
+The desktop app window is drawn by GPUI. Rust keeps track of conversations, files, Bots, and running agents in the same desktop process. Saved history lives in SQLite, with extra window settings beside it.
 
-Instead of talking to one helper at a time in a plain black terminal window, Vorkspace gives you a clean desk where several helpers can work side by side, each in their own folder, without bumping into each other.
+Rust controls Vox calls and translates desktop Copilot requests. Small JavaScript helpers handle editor language tools, voice audio, and remote machines. A remote machine keeps its own agents running and history saved even when your desktop disconnects. Voice and HTML previews use a limited browser surface inside the native app.
 
-For the full technical breakdown, see [Architecture overview](../architecture.md).
+The [repository map](repository.md) shows where each part lives. Embedded helper code has its own folder; the scripts folder contains developer tools.
 
----
+Long saved chats are read a piece at a time. Hidden views keep their work without repeatedly asking to redraw, and repeated terminal redraw requests are combined. Cleaning up one idle agent does not hold the shared lock that other agents need.
 
-## 1. The Three Parts of the App
+As a reply arrives, only changed chat blocks are saved. The screen can show a small preview while the full tool result stays safely in the database. A stale window cannot overwrite newer saved history.
 
-1. **The Screen You See (The Frontend — `src/`)**
-   - Built with React and TypeScript.
-   - It shows your chat tabs, code editor, Git changes, and floating helper windows (like the Quick Composer and floating Bot chat).
-   - You can use either the classic full-window layout or an **Inset Glass Layout** with 11 color themes, smooth sliding project spaces, and project-scoped tabs for Inbox, Notes, and Automations. **Settings → Appearance → Translucency** adjusts the opacity and blur in both layouts, and switching layouts keeps the same settings. In the new layout, turn on **Transparent window** and use dark mode to adjust them; Linux keeps that layout opaque.
-   - When an AI helper types back really fast, Vorkspace only redraws the specific chat box that is talking—and colors big Git diffs on a background worker thread—so the rest of the screen stays buttery smooth.
-
-2. **The Engine Under the Hood (The Rust Backend — `src-tauri/`)**
-   - Built in Rust so it is fast and safe.
-   - It starts and stops the AI command-line tools on your computer, watches over your files and Git branches, and saves your conversations into a local SQLite database (`monocode.db`).
-   - If an AI tool prints a giant wall of output from a command, the Rust engine tucks the giant output away on disk and only loads it when you click to expand it.
-   - It also lowers the priority of background AI tools so your computer never freezes while an agent runs tests, and shows a **High usage** badge in the footer if a tool or agent is hogging CPU or memory so you can stop just that process.
-
-3. **The Remote Helper on Other Computers (`host/`)**
-   - Sometimes your code lives on a big Linux server, a Mac mini, or a Windows desktop instead of your laptop.
-   - Vorkspace can connect over SSH and install a tiny background helper (`vorkspace-host`) on that other computer.
-   - Even if you close your laptop and walk away, the remote helper keeps your AI agents running and catches you up as soon as you reconnect.
-
----
-
-## 2. How Agents Stay Safe and Organized
-
-- **Separate Sandboxes (Git Worktrees)**: If you ask three agents to build three different features at the same time, Vorkspace gives each agent its own copy of the project folder (a Git worktree) so they don't overwrite each other's files.
-- **Seamless Account Switching**: If your Claude Code or Codex account hits a usage limit mid-chat, you can pick another account right in the banner. Vorkspace carefully copies all the hidden memory and subagent files to the new account before moving the main conversation file last, so your agent picks up right where it left off.
-- **Undo Checkpoints**: Before an agent touches your files on a turn, Vorkspace takes a quick snapshot so you can click **Undo** to roll back that turn's file edits.
-- **Locked Preview Windows**: When an agent builds an HTML preview for you, Vorkspace shows it inside a locked glass box (`iframe` sandbox) that cannot touch your computer or your private files.
-- **No Lost Messages**: Before sending your message to an agent, Vorkspace writes down a "receipt" on disk. If the app closes unexpectedly, it knows what was being sent and recovers your draft safely.
+Agent output has a size limit before it is buffered. A fast agent waits when the app is still handling earlier output. An individual response that is too large produces a clear error rather than silently losing part of its text. Stopping the connection also releases waiting readers.

@@ -1,70 +1,16 @@
-name: CI
-
+name: Native CI
 on:
   push:
     branches: [main]
   pull_request:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
-
+  workflow_dispatch:
 permissions:
   contents: read
-
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 jobs:
-  mac-release:
-    name: Mac release checks
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      - run: node --test scripts/*.test.mjs
-
-  browser:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npm run test:browser
-      - name: Upload browser failure traces
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: browser-test-results
-          path: test-results/
-          retention-days: 7
-          if-no-files-found: ignore
-
-  host:
-    name: Mac remote host
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm run test:host
-      # test:host builds the bundle before running the integration tests.
-      - run: node host/package.mjs
-
-  check:
-    name: Mac application
+  desktop:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -78,7 +24,13 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: npm ci
-      - run: npm run check:web
-      - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test
+      - run: npm run assets
+      - name: Verify generated assets
+        run: git diff --exit-code -- crates/vorkspace-gpui/assets/ crates/vorkspace-core/assets/
+      - run: npm run check
+      - run: cargo build --locked -p vorkspace-gpui --profile native-dev
+      - name: Package and verify native app signature
+        run: |
+          version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')
+          bash scripts/desktop/bundle-native-macos.sh native-dev target "$version" dev-data
+      - run: npm run host:package
