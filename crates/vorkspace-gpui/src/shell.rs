@@ -299,8 +299,6 @@ pub(crate) enum MenuTarget {
     TerminalDock,
     /// A dock terminal tab's context menu.
     TerminalTab(usize),
-    /// The footer chip's list of terminals running a process.
-    RunningTerminals,
 }
 pub(crate) struct ShellMenu {
     pub(crate) target: MenuTarget,
@@ -518,7 +516,7 @@ pub(crate) struct Shell {
     /// The sidebar rails under orchestrators and /operator threads.
     rails: rails::Rails,
     usage_footer: Entity<UsageFooter>,
-    /// The footer's high-usage chip and its running-work dialog.
+    /// Resource pressure indicator and its running-work dialog.
     resources: Entity<ResourceMonitor>,
     sidebar_frame: Entity<Chrome>,
     project_rail_frame: Entity<Chrome>,
@@ -678,8 +676,6 @@ pub(crate) struct Shell {
     dock_skip_click: bool,
     dock_tab_scroll: ScrollHandle,
     move_terminal_anchor: AnchorSlot,
-    terminal_chip_anchor: AnchorSlot,
-    live_mark: Option<Entity<terminal_dock::LiveMark>>,
     /// The sidebar collapsed itself to make room; it returns with the room.
     sidebar_auto_hidden: bool,
     viewport_width: f32,
@@ -983,8 +979,6 @@ impl Shell {
             dock_skip_click: false,
             dock_tab_scroll: ScrollHandle::new(),
             move_terminal_anchor: AnchorSlot::default(),
-            terminal_chip_anchor: AnchorSlot::default(),
-            live_mark: None,
             viewport_width: 1200.,
             viewport_height: 800.,
             observations: vec![
@@ -4779,9 +4773,7 @@ impl Shell {
         };
         match target {
             // Answered by terminal_menu_items above.
-            MenuTarget::TerminalTab(_) | MenuTarget::RunningTerminals => {
-                ("".into(), Vec::new(), 160., MenuStyle::Explorer)
-            }
+            MenuTarget::TerminalTab(_) => ("".into(), Vec::new(), 160., MenuStyle::Explorer),
             MenuTarget::Tab(_)
             | MenuTarget::BotTab(_)
             | MenuTarget::SearchTab
@@ -5061,7 +5053,6 @@ impl Shell {
         }
         match target {
             MenuTarget::TerminalTab(ix) => self.run_terminal_tab_menu(ix, action, window, cx),
-            MenuTarget::RunningTerminals => self.run_running_terminals_menu(action, window, cx),
             MenuTarget::TerminalDock => {
                 let side = match action {
                     "top" => DockSide::Top,
@@ -7601,9 +7592,6 @@ impl Render for Shell {
                     .when(open.target == MenuTarget::SidebarOptions, |p| {
                         p.align(Align::Start)
                     })
-                    .when(open.target == MenuTarget::RunningTerminals, |p| {
-                        p.side(Side::Top).align(crate::popover::Align::End)
-                    })
             }))
             .children(self.drag_ghost(cx))
             .children(self.background_modal(window, cx))
@@ -7884,10 +7872,13 @@ mod tests {
             .unwrap();
         visual.run_until_parked();
         let chip = visual.debug_bounds("resource-pressure-chip").unwrap();
-        let viewport = window.update(visual, |_, w, _| w.viewport_size()).unwrap();
+        let subscriptions = visual.debug_bounds("subscriptions").unwrap();
+        let rail = visual.debug_bounds("classic-project-rail").unwrap();
         assert!(
-            viewport.height - chip.bottom() < px(10.),
-            "the chip sits in the footer"
+            chip.bottom() <= subscriptions.top()
+                && chip.left() >= rail.left()
+                && chip.right() <= rail.right(),
+            "resource pressure stays visible in the sidebar above subscriptions"
         );
         visual.simulate_click(chip.center(), Default::default());
         visual.run_until_parked();
@@ -7897,6 +7888,30 @@ mod tests {
         visual.run_until_parked();
         assert!(visual.debug_bounds("resource-dialog").is_none());
         assert!(visual.debug_bounds("resource-pressure-chip").is_some());
+        window
+            .update(visual, |shell, _, cx| shell.toggle_project_rail(cx))
+            .unwrap();
+        visual.run_until_parked();
+        let chip = visual.debug_bounds("resource-pressure-chip").unwrap();
+        let rail = visual.debug_bounds("classic-project-rail").unwrap();
+        assert!(chip.left() >= rail.left() && chip.right() <= rail.right());
+        visual.simulate_click(chip.center(), Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("resource-dialog").is_some());
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, window, cx| {
+                shell.open_settings(crate::settings::Section::General, window, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let chip = visual.debug_bounds("resource-pressure-chip").unwrap();
+        let rail = visual.debug_bounds("classic-project-rail").unwrap();
+        assert!(
+            chip.bottom() <= rail.bottom(),
+            "settings keep the warning visible"
+        );
     }
     #[gpui::test]
     fn usage_footer_follows_active_tabs_and_provider_changes(cx: &mut TestAppContext) {

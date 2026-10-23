@@ -75,6 +75,13 @@ impl Shell {
             .border_color(content(0.08))
             .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0());
 
+        self.resources.update(cx, |resources, cx| {
+            resources.set_compact(
+                !self.workspace.project_rail_open && self.settings.is_none(),
+                cx,
+            )
+        });
+
         if let Some(settings) = &self.settings {
             let section = settings.read(cx).section;
             let select = cx.weak_entity();
@@ -89,8 +96,13 @@ impl Shell {
                         let _ = back.update(cx, |this, cx| this.close_settings(window, cx));
                     },
                 ))
+                .child(div().mx_2().child(self.resources.clone()))
                 .into_any_element();
         }
+
+        self.usage_footer.update(cx, |usage, cx| {
+            usage.set_compact(!self.workspace.project_rail_open, cx)
+        });
 
         if !self.workspace.project_rail_open {
             return self.compact_project_rail(rail, cx);
@@ -273,6 +285,10 @@ impl Shell {
                     )
                 },
             )
+            .child(div().mx_2().child(self.resources.clone()))
+            .when(self.workspace.sidebar_subscriptions_visible, |d| {
+                d.child(div().px_2().child(self.usage_footer.clone()))
+            })
             .child(self.classic_rail_footer(cx))
             .child(
                 div()
@@ -726,6 +742,10 @@ impl Shell {
                     }),
                 ),
         )
+        .child(div().mx_2().child(self.resources.clone()))
+        .when(self.workspace.sidebar_subscriptions_visible, |d| {
+            d.child(div().px_2().child(self.usage_footer.clone()))
+        })
         .child(
             div().p_2().child(
                 icon_button("classic-rail-settings", "Settings", "settings")

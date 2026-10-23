@@ -1,5 +1,5 @@
 // Original 0.13 composition: project rail, workspace tools, then conversations.
-// Each column owns its header; the conversation keeps its tabs and footer.
+// Each column owns its header; subscriptions live above the rail settings.
 use super::{CORNER_BUTTONS_WIDTH, Shell};
 use crate::{
     popover::{Anchor, popover},
@@ -23,8 +23,6 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        self.usage_footer
-            .update(cx, |footer, cx| footer.set_classic(true, cx));
         self.resources
             .update(cx, |resources, cx| resources.set_classic(true, cx));
         vec![self.classic_body(sidebar_width, right_shown, right_width, full, window, cx)]
@@ -46,7 +44,6 @@ impl Shell {
             .clone()
             .filter(|_| right_shown && self.settings.is_none())
             .map(|panel| self.right_panel_frame(panel, right_width, full, cx));
-        let footer = self.footer_row(cx);
         let tab_bar = self.titlebar(window, cx);
         let navigation = self.navigation(cx);
         let rail_width = self.classic_rail_width();
@@ -114,14 +111,7 @@ impl Shell {
                     .flex_col()
                     .bg(pane_fill())
                     .child(tab_bar)
-                    .child(card)
-                    .child(
-                        footer
-                            .h(px(28.))
-                            .px_3()
-                            .border_t_1()
-                            .border_color(crate::right_panel::stroke()),
-                    ),
+                    .child(card),
             )
             .children(self.sidebar_resize(cx))
             .children(panel.map(|panel| div().h_full().bg(pane_fill()).child(panel)))
@@ -292,51 +282,6 @@ impl Shell {
             .when_some(panel, |d, panel| {
                 d.child(self.right_panel_frame(panel, right_width, full, cx))
             })
-    }
-    /// The usage chips with the terminal controls at the far end.
-    fn footer_row(&mut self, cx: &mut Context<Self>) -> gpui::Div {
-        let height = if self.workspace.classic_layout {
-            28.
-        } else {
-            30.
-        };
-        div()
-            .w_full()
-            .h(px(30.))
-            .flex_shrink_0()
-            .when(!self.workspace.classic_layout, |d| {
-                d.overflow_hidden().bg(inset_chrome_wash())
-            })
-            .flex()
-            .items_center()
-            .child(
-                self.usage_footer
-                    .clone()
-                    .cached(StyleRefinement::default().flex_1().min_w_0().h(px(height))),
-            )
-            .children(self.pressure_chip(cx))
-            .children(self.terminal_footer(cx))
-    }
-    /// ResourcePressureNotice's chip, just before the terminal controls.
-    fn pressure_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.resources.read(cx).chip_shown() {
-            return None;
-        }
-        let classic = self.workspace.classic_layout;
-        // The terminal group sits 8px on; alone, the chip takes its inset margin.
-        let alone = self.app_view_open() || self.workspace.project.is_empty();
-        Some(
-            div()
-                .flex_shrink_0()
-                .map(|d| match (classic, alone) {
-                    (true, true) => d,
-                    (true, false) => d.mr(px(8.)),
-                    (false, true) => d.mr(px(6.)).pb(px(2.)),
-                    (false, false) => d.mr(px(8.)).pb(px(2.)),
-                })
-                .child(self.resources.clone())
-                .into_any_element(),
-        )
     }
     /// Modal.tsx at size `sm` with `fitViewport`: 420px, centred.
     pub(super) fn resource_modal(

@@ -1,5 +1,5 @@
-// ResourcePressureNotice.tsx: a footer chip while the machine is under
-// pressure, opening the running work vorkspace owns so it can be stopped.
+// A sidebar warning while the machine is under pressure, opening the running
+// work vorkspace owns so it can be stopped.
 use crate::{popover::AnchorSlot, right_panel::spinner, theme::*};
 use gpui::{
     AnyElement, Context, EventEmitter, FocusHandle, FontWeight, Role, ScrollHandle, SharedString,
@@ -30,6 +30,7 @@ pub(crate) struct ResourceMonitor {
     pressure: Pressure,
     open: bool,
     classic: bool,
+    compact: bool,
     processes: Vec<OwnedProcess>,
     loading: bool,
     error: Option<String>,
@@ -98,6 +99,7 @@ impl ResourceMonitor {
             pressure: Pressure::default(),
             open: false,
             classic: false,
+            compact: false,
             processes: Vec::new(),
             loading: false,
             error: None,
@@ -140,7 +142,14 @@ impl ResourceMonitor {
             cx.notify();
         }
     }
+    pub(crate) fn set_compact(&mut self, compact: bool, cx: &mut Context<Self>) {
+        if self.compact != compact {
+            self.compact = compact;
+            cx.notify();
+        }
+    }
     /// The chip shows only under pressure; the dialog stays until closed.
+    #[cfg(test)]
     pub(crate) fn chip_shown(&self) -> bool {
         self.pressure.active
     }
@@ -718,7 +727,7 @@ impl Render for ResourceMonitor {
                     })
                     .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
                     .child(icon("circle-alert", 14.).text_color(rgb(AMBER)))
-                    .child("High usage")
+                    .when(!self.compact, |d| d.child("High usage"))
                     .on_click(cx.listener(|this, _, window, cx| this.open(window, cx)))
                     .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                         if matches!(event.keystroke.key.as_str(), "enter" | "space") {

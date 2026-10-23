@@ -18,6 +18,8 @@ In **Settings → Providers**, use **Models** beside an agent to choose which mo
 
 ## Multiple accounts & usage-limit continuation
 
+The **Subscriptions** section above Settings in the project sidebar shows usage across connected provider accounts. Each row opens its usage details and account controls; its summary shows the most-used limit window, and the details include every window. Use **Sidebar options → Subscriptions** to show or hide it. This preference is saved without disconnecting accounts or changing active conversations. Terminal commands remain available from the application menu and keyboard shortcuts.
+
 In **Settings → Providers**, you can add multiple **Claude Code** and **Codex** accounts (each isolated under its own provider home directory) and switch the active account globally or per conversation.
 
 When a Claude Code or Codex conversation (or a Bot using one of those providers) hits a rate or usage limit, vorkspace offers **Switch account** / **Choose another account** directly in the usage-limit banner:
@@ -58,4 +60,4 @@ Remote hosts use their JavaScript adapter and their own credentials.
 Anthropic does not officially support non-Claude models in Claude Code.
 The adapter supports text, images, streamed tool calls, and tool results.
 
-When Claude Code reports Amazon Bedrock as its configured API provider, the usage chip displays **AWS Bedrock**. Subscription usage and Claude sign-in prompts do not apply to that connection.
+When Claude Code reports Amazon Bedrock as its configured API provider, its row in **Subscriptions** displays **AWS Bedrock**. Subscription percentages and Claude sign-in prompts do not apply to that connection. Configure AWS credentials, region, and model access through [Claude Code's Bedrock setup](https://code.claude.com/docs/en/amazon-bedrock); vorkspace retains the CLI's settings and forwards the Bedrock environment from your login shell when needed.

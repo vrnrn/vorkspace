@@ -1,22 +1,16 @@
-// The dock's tab strip (ProjectTerminalDock.tsx over SurfaceTabs.tsx) and the
-// footer's terminal controls (UsageFooter.tsx's Terminal button and
-// RunningTerminalChip).
+// Project terminal dock, tab actions and resize interactions.
 use super::{MenuTarget, Shell, TabShift};
 use crate::{
     popover::{Anchor, MenuAction, MenuItem, MenuStyle},
     terminal::Terminal,
     theme::*,
-    workspace::{DockSide, TerminalDock, project_name},
+    workspace::{DockSide, TerminalDock},
 };
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, EntityId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, Pixels, Role, SharedString, StyleRefinement, Task, Window, div, point,
-    prelude::*, px, rgb,
+    MouseMoveEvent, Pixels, Role, SharedString, Window, div, point, prelude::*, px,
 };
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, time::Instant};
 
 /// useAnimatedReorder's drag of one dock tab along the strip.
 pub(super) struct DockTabDrag {
@@ -26,86 +20,6 @@ pub(super) struct DockTabDrag {
     offset: Pixels,
     active: bool,
     bounds: Vec<Bounds<Pixels>>,
-}
-
-/// A terminal whose foreground process is not the shell (listRunningTerminals).
-struct Running {
-    ix: usize,
-    process: String,
-    label: String,
-}
-
-/// TerminalLiveMark: three bars that light in turn over 3.2s.
-pub(super) struct LiveMark {
-    epoch: Instant,
-    _tick: Task<()>,
-}
-const LIVE_CYCLE: f32 = 3.2;
-const LIVE_COLOR: u32 = 0xe39b4a;
-impl LiveMark {
-    fn new(cx: &mut Context<Self>) -> Self {
-        let tick = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_secs_f32(LIVE_CYCLE / 4.))
-                    .await;
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
-                    break;
-                }
-            }
-        });
-        Self {
-            epoch: Instant::now(),
-            _tick: tick,
-        }
-    }
-}
-impl Render for LiveMark {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let phase = (self.epoch.elapsed().as_secs_f32() / LIVE_CYCLE).fract();
-        let reduced = cx.reduce_motion();
-        div()
-            .flex()
-            .items_end()
-            .gap(px(2.))
-            .h(px(10.))
-            .children((1..=3).map(|bar| {
-                let opacity = if reduced {
-                    0.7
-                } else if phase >= bar as f32 * 0.25 {
-                    0.85
-                } else {
-                    0.4
-                };
-                div()
-                    .w(px(4.))
-                    .h(px(8.))
-                    .bg(rgb(LIVE_COLOR))
-                    .opacity(opacity)
-            }))
-    }
-}
-
-/// runningTerminalChipLabel: `vite`, or `vite · jest`, or `vite ×2`.
-fn chip_label<'a>(processes: impl IntoIterator<Item = &'a str>) -> String {
-    let mut counts: Vec<(&str, usize)> = Vec::new();
-    for process in processes {
-        match counts.iter_mut().find(|(name, _)| *name == process) {
-            Some((_, n)) => *n += 1,
-            None => counts.push((process, 1)),
-        }
-    }
-    counts
-        .into_iter()
-        .map(|(name, n)| {
-            if n > 1 {
-                format!("{name} ×{n}")
-            } else {
-                name.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" · ")
 }
 
 /// Where a tab is drawn now, easing toward `target` (the title strip's
@@ -151,57 +65,6 @@ impl Shell {
             .get(&self.workspace.project)
             .cloned()
             .unwrap_or_default()
-    }
-    fn running_terminals(&self, cx: &App) -> Vec<Running> {
-        self.live_terminals()
-            .iter()
-            .enumerate()
-            .filter_map(|(ix, terminal)| {
-                let t = terminal.read(cx);
-                let process = t.foreground.as_deref()?.trim();
-                (!process.is_empty()).then(|| Running {
-                    ix,
-                    process: process.to_owned(),
-                    label: project_name(&t.cwd),
-                })
-            })
-            .collect()
-    }
-    fn dock_open(&self) -> bool {
-        self.workspace
-            .docks
-            .get(&self.workspace.project)
-            .is_some_and(|d| d.open && !d.terminals.is_empty())
-    }
-    /// onToggleRunningTerminal: hide the open dock, else show it on `ix`.
-    fn toggle_running_terminal(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.dock_open()
-            && let Some(dock) = self.workspace.docks.get_mut(&self.workspace.project)
-        {
-            dock.active = ix.min(dock.terminals.len().saturating_sub(1));
-            self.dock_tab_scroll.scroll_to_item(dock.active);
-        }
-        self.toggle_terminal(window, cx);
-    }
-    pub(super) fn running_terminals_menu(&self, cx: &App) -> Vec<MenuItem> {
-        self.running_terminals(cx)
-            .into_iter()
-            .map(|r| {
-                MenuAction::new(SharedString::from(r.ix.to_string()), r.process)
-                    .value(r.label)
-                    .into()
-            })
-            .collect()
-    }
-    pub(super) fn run_running_terminals_menu(
-        &mut self,
-        action: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Ok(ix) = action.parse() {
-            self.toggle_running_terminal(ix, window, cx);
-        }
     }
     pub(super) fn terminal_tab_menu(&self, ix: usize) -> Vec<MenuItem> {
         let count = self
@@ -773,169 +636,16 @@ impl Shell {
             )
             .into_any_element()
     }
-    /// UsageFooter's right side: the running-terminal chip, else the
-    /// Terminal button.
-    pub(super) fn terminal_footer(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.app_view_open() || self.workspace.project.is_empty() {
-            self.live_mark = None;
-            return None;
-        }
-        let running = self.running_terminals(cx);
-        let open = self.dock_open();
-        let classic = self.workspace.classic_layout;
-        // The classic footer's own `px-3` and border hold these in place.
-        let group = div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(8.))
-            .when(!classic, |d| d.mr(px(6.)).pb(px(2.)))
-            .text_size(px(11.));
-        if running.is_empty() {
-            self.live_mark = None;
-            let has_terminals = self
-                .workspace
-                .docks
-                .get(&self.workspace.project)
-                .is_some_and(|d| !d.terminals.is_empty());
-            let label: SharedString = if has_terminals {
-                "Terminal".into()
-            } else {
-                NEW_TERMINAL_LABEL.into()
-            };
-            return Some(
-                group
-                    .child(
-                        div()
-                            .id("footer-terminal")
-                            .role(Role::Button)
-                            .aria_label(label)
-                            .aria_toggled(if open {
-                                gpui::Toggled::True
-                            } else {
-                                gpui::Toggled::False
-                            })
-                            .h(px(20.))
-                            .map(|d| {
-                                if classic {
-                                    d.px(px(6.)).rounded_md()
-                                } else {
-                                    d.px_2().rounded_full()
-                                }
-                            })
-                            .flex()
-                            .flex_shrink_0()
-                            .items_center()
-                            .gap(px(6.))
-                            .whitespace_nowrap()
-                            .map(|d| {
-                                if open {
-                                    d.text_color(accent_color()).hover(|s| s.bg(content(0.1)))
-                                } else {
-                                    d.text_color(content(0.4))
-                                        .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
-                                }
-                            })
-                            .child(icon("terminal", 14.))
-                            .child("Terminal")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)),
-                            ),
-                    )
-                    .into_any_element(),
-            );
-        }
-        let mark = self
-            .live_mark
-            .get_or_insert_with(|| cx.new(LiveMark::new))
-            .clone();
-        let many = running.len() > 1;
-        let aria = match (running.as_slice(), open) {
-            ([one], true) => format!("Hide {}", one.process),
-            ([one], false) => format!("Show {}", one.process),
-            (_, true) => "Hide running terminals".into(),
-            (all, false) => format!("{} terminals are running processes", all.len()),
-        };
-        let description = running
-            .iter()
-            .map(|r| format!("\"{}\" in {}", r.process, r.label))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let first = running[0].ix;
-        let label = chip_label(running.iter().map(|r| r.process.as_str()));
-        let anchor = self.terminal_chip_anchor.clone();
-        Some(
-            group
-                .child(
-                    div()
-                        .id("footer-running-terminals")
-                        .role(Role::Button)
-                        .aria_label(aria)
-                        .aria_description(description)
-                        .aria_toggled(if open { gpui::Toggled::True } else { gpui::Toggled::False })
-                        .when(many && !open, |d| {
-                            d.aria_expanded(
-                                matches!(&self.menu, Some(m) if m.target == MenuTarget::RunningTerminals),
-                            )
-                        })
-                        .relative()
-                        .map(|d| {
-                            if classic {
-                                d.mx(px(-4.)).px(px(4.)).rounded_md()
-                            } else {
-                                d.h(px(20.)).px_2().rounded_full()
-                            }
-                        })
-                        .max_w(px(256.))
-                        .min_w_0()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .whitespace_nowrap()
-                        .text_color(content(0.55))
-                        .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
-                        .child(anchor.probe())
-                        .child(
-                            mark.cached(StyleRefinement::default().w(px(16.)).h(px(10.)).flex_shrink_0()),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .font_family(crate::markdown::FIXED_FONT)
-                                .text_size(px(10.))
-                                .child(label),
-                        )
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if this.dock_open() || !many {
-                                this.toggle_running_terminal(first, window, cx);
-                            } else if matches!(&this.menu, Some(m) if m.target == MenuTarget::RunningTerminals) {
-                                this.close_menu(cx);
-                            } else {
-                                let anchor = Anchor::Slot(this.terminal_chip_anchor.clone());
-                                this.open_menu(MenuTarget::RunningTerminals, anchor, window, cx);
-                            }
-                        })),
-                )
-                .into_any_element(),
-        )
-    }
     pub(super) fn terminal_menu_items(
         &self,
         target: &MenuTarget,
-        cx: &App,
+        _cx: &App,
     ) -> Option<(SharedString, Vec<MenuItem>, f32, MenuStyle)> {
         match target {
             MenuTarget::TerminalTab(ix) => Some((
                 "File tab actions".into(),
                 self.terminal_tab_menu(*ix),
                 160.,
-                MenuStyle::Explorer,
-            )),
-            MenuTarget::RunningTerminals => Some((
-                "Running terminals".into(),
-                self.running_terminals_menu(cx),
-                192.,
                 MenuStyle::Explorer,
             )),
             _ => None,
@@ -953,15 +663,3 @@ const HIDE_TERMINAL_LABEL: &str = if cfg!(target_os = "macos") {
 } else {
     "Hide Terminal (Ctrl+J)"
 };
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn chip_labels_count_repeated_processes_in_order() {
-        assert_eq!(chip_label(["vite"]), "vite");
-        assert_eq!(chip_label(["vite", "jest"]), "vite · jest");
-        assert_eq!(chip_label(["vite", "jest", "vite"]), "vite ×2 · jest");
-    }
-}

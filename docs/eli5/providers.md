@@ -27,6 +27,8 @@ Some AI tools list dozens of different models. In **Settings → Providers**, yo
 
 ## 3. Switching Accounts When You Hit a Usage Limit
 
+Your connected accounts’ usage appears together just above Settings in the sidebar. Click an account to see its limits and refresh them. The number on each row shows the limit closest to running out. The sidebar’s three-dot menu has a **Subscriptions** switch to hide or show this section; hiding it keeps your accounts and chats connected.
+
 If you have more than one **Claude Code** or **Codex** account (for example, a personal account and a work account), you can add both in **Settings → Providers**:
 - If one account runs out of messages in the middle of a task, a **Switch account** / **Choose another account** button appears right in the chat banner.
 - When you pick your other account, Vorkspace copies the conversation's memory files (including subagents and undo history) over to the new account so you can keep working without starting over.
@@ -38,6 +40,6 @@ If you have more than one **Claude Code** or **Codex** account (for example, a p
 If you have a GitHub Copilot subscription (`gh auth login` or `COPILOT_GITHUB_TOKEN`) and Claude Code installed, Vorkspace has a neat trick:
 - It starts a small, private Rust translator on your computer that lets Claude Code use **GPT-6.1 Sol (1M)** and **GPT-6 Luna (1M)** through your Copilot account!
 - That translator stays with the running Claude process, including pauses between turns, and never alters your normal Claude settings.
-- And if your company uses **AWS Bedrock** for Claude Code, Vorkspace detects that automatically and shows an **AWS Bedrock** badge.
+- And if your company uses **AWS Bedrock** for Claude Code, Vorkspace uses that setup and shows **AWS Bedrock** in the sidebar's Subscriptions section. It won't ask you to sign into a Claude subscription or show made-up subscription percentages. Set up AWS access in Claude Code first, then restart Vorkspace.
 
 On a remote machine, the host supplies its own JavaScript translator and uses that machine’s GitHub login.

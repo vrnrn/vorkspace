@@ -128,6 +128,7 @@ pub(crate) struct Workspace {
     pub sidebar_automations_visible: bool,
     pub sidebar_inbox_visible: bool,
     pub sidebar_activity_visible: bool,
+    pub sidebar_subscriptions_visible: bool,
     /// The inset right panel: open state, tab, width and tab order.
     pub right_panel_open: bool,
     pub right_panel_tab: crate::right_panel::RightTab,
@@ -305,6 +306,7 @@ impl Default for Workspace {
             sidebar_automations_visible: true,
             sidebar_inbox_visible: true,
             sidebar_activity_visible: true,
+            sidebar_subscriptions_visible: true,
             right_panel_open: false,
             right_panel_tab: Default::default(),
             right_panel_width: crate::right_panel::WIDTH_DEFAULT,
@@ -1190,6 +1192,10 @@ mod tests {
         assert!(
             s.sidebar_activity_visible,
             "older workspaces keep the activity card visible"
+        );
+        assert!(
+            s.sidebar_subscriptions_visible,
+            "existing users keep usage visible"
         );
     }
     #[test]

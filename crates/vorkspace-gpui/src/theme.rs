@@ -254,10 +254,6 @@ pub(crate) fn pane_fill() -> Hsla {
         rgb(CHAT).into()
     }
 }
-/// Apply to surrounding chrome, leaving the content on the window's glass.
-pub(crate) fn inset_chrome_wash() -> Hsla {
-    content(0.05)
-}
 pub(crate) fn section_label(label: &'static str) -> Div {
     div()
         .h(px(28.))

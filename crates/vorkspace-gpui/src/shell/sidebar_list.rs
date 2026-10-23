@@ -413,6 +413,10 @@ impl Shell {
                 .toggle(self.workspace.sidebar_activity_visible)
                 .disabled(!self.workspace.preferences.working_agents)
                 .into(),
+            MenuAction::new("sidebar-subscriptions", "Subscriptions")
+                .icon("chart-square")
+                .toggle(self.workspace.sidebar_subscriptions_visible)
+                .into(),
             MenuItem::Separator,
             MenuAction::new("compact-session-cards", "Compact view")
                 .icon("list-bullet")
@@ -428,10 +432,14 @@ impl Shell {
             "sidebar-inbox" => &mut self.workspace.sidebar_inbox_visible,
             "sidebar-bots" => &mut self.workspace.preferences.bots,
             "sidebar-activity" => &mut self.workspace.sidebar_activity_visible,
+            "sidebar-subscriptions" => &mut self.workspace.sidebar_subscriptions_visible,
             "compact-session-cards" => &mut self.workspace.compact_session_cards,
             _ => return,
         };
         *value = !*value;
+        if action == "sidebar-subscriptions" && !self.workspace.sidebar_subscriptions_visible {
+            self.usage_footer.update(cx, |usage, cx| usage.hide(cx));
+        }
         if action == "sidebar-bots" {
             self.apply_preferences(cx);
             self.sync_settings(cx);
@@ -732,6 +740,9 @@ mod tests {
             .unwrap();
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
+        let subscriptions = visual.debug_bounds("subscriptions").unwrap();
+        let settings = visual.debug_bounds("classic-rail-settings").unwrap();
+        assert!(subscriptions.bottom() <= settings.top());
         let options = visual.debug_bounds("sidebar-options").unwrap();
         visual.simulate_click(options.center(), Default::default());
         visual.run_until_parked();
@@ -767,6 +778,7 @@ mod tests {
             ),
             ("menu-action-sidebar-inbox", "sidebar-navigation-Inbox"),
             ("menu-action-sidebar-bots", "new-bot"),
+            ("menu-action-sidebar-subscriptions", "subscriptions"),
         ] {
             assert!(visual.debug_bounds(navigation).is_some());
             let row = visual.debug_bounds(action).unwrap();
@@ -793,6 +805,7 @@ mod tests {
                     "sidebar-automations",
                     "sidebar-inbox",
                     "sidebar-bots",
+                    "sidebar-subscriptions",
                 ] {
                     assert_eq!(menu.toggle_state(id), Some(false));
                 }
@@ -802,6 +815,7 @@ mod tests {
                 assert!(!restored.sidebar_notes_visible);
                 assert!(!restored.sidebar_automations_visible);
                 assert!(!restored.sidebar_inbox_visible);
+                assert!(!restored.sidebar_subscriptions_visible);
                 assert!(!restored.preferences.bots);
             })
             .unwrap();
@@ -813,6 +827,7 @@ mod tests {
             ),
             ("menu-action-sidebar-inbox", "sidebar-navigation-Inbox"),
             ("menu-action-sidebar-bots", "new-bot"),
+            ("menu-action-sidebar-subscriptions", "subscriptions"),
         ] {
             let row = visual.debug_bounds(action).unwrap();
             visual.simulate_click(row.center(), Default::default());
