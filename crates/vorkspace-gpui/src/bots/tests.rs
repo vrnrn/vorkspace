@@ -1327,7 +1327,9 @@ fn titlebar_divider_resizes_bot_details_and_closed_panels_keep_the_corner(cx: &m
     let s = setup(cx);
     cx.update(|cx| cx.set_reduce_motion(true));
     s.window
-        .update(cx, |_, _, cx| {
+        .update(cx, |shell, _, cx| {
+            // This first section exercises the experimental inset title bar.
+            shell.workspace.classic_layout = false;
             s.manager.update(cx, |m, cx| {
                 m.settings = None;
                 cx.notify();
