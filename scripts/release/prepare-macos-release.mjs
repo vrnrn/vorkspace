@@ -96,7 +96,10 @@ export function planMacRelease(version, releases, env, tags = []) {
     }
   }
   const notes = `Personal Apple Silicon Mac build from vrnrn/vorkspace. Uses ad hoc Apple signing and signed in-app updates.\n\nBuild: ${build}\nWorkflow: ${workflow}\n`;
-  return { version, tag: `mac-v${version}`, build, workflow, notes };
+  return {
+    version, tag: `mac-v${version}`, build, workflow, notes,
+    reuseDraft: releases.some((release) => release.tag_name === `mac-v${version}`),
+  };
 }
 
 function compareRelease(tag, version) {
@@ -245,7 +248,7 @@ if (
   const notesDelimiter = `VORKSPACE_RELEASE_NOTES_${randomUUID()}`;
   appendFileSync(
     process.env.GITHUB_ENV,
-    `RELEASE_TAG=${plan.tag}\nRELEASE_VERSION=${plan.version}\nRELEASE_BUILD_NUMBER=${plan.build}\nVORKSPACE_BUILD_NUMBER=${plan.build}\nVORKSPACE_RELEASE_BUILD=1\nRELEASE_NOTES<<${notesDelimiter}\n${plan.notes}${notesDelimiter}\n`,
+    `RELEASE_TAG=${plan.tag}\nRELEASE_VERSION=${plan.version}\nRELEASE_BUILD_NUMBER=${plan.build}\nRELEASE_HAS_DRAFT=${plan.reuseDraft ? "1" : "0"}\nVORKSPACE_BUILD_NUMBER=${plan.build}\nVORKSPACE_RELEASE_BUILD=1\nRELEASE_NOTES<<${notesDelimiter}\n${plan.notes}${notesDelimiter}\n`,
   );
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,

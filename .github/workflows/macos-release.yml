@@ -97,18 +97,29 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-state.json"; then
+          # Drafts can exist before their Git tag is published.
+          read_release() {
+            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --json tagName,isDraft,targetCommitish,body \
+              --jq '{tag_name:.tagName,draft:.isDraft,target_commitish:.targetCommitish,body:.body}' > "$RUNNER_TEMP/release-state.json"
+          }
+          # Allocation used the full release list; a failed lookup is not absence.
+          if [ "${RELEASE_HAS_DRAFT:?Missing release allocation state}" = "1" ]; then
+            read_release
             node scripts/release/verify-release-draft.mjs "$RUNNER_TEMP/release-state.json"
             gh release edit "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/macos-release-notes.md"
-          else
+          elif [ "$RELEASE_HAS_DRAFT" = "0" ]; then
             gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" --title "vorkspace $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/macos-release-notes.md"
+          else
+            echo "Invalid release allocation state" >&2
+            exit 1
           fi
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-state.json"
+          read_release
           node scripts/release/verify-release-draft.mjs "$RUNNER_TEMP/release-state.json"
           gh release upload "$RELEASE_TAG" --clobber build/native-updates/* \
             build/host-packages/vorkspace-host-darwin-{arm64,x64}.tar.gz \
             build/host-packages/vorkspace-host-darwin-{arm64,x64}.tar.gz.sha256 LICENSE
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-state.json"
+          read_release
           node scripts/release/verify-release-draft.mjs "$RUNNER_TEMP/release-state.json"
           gh release edit "$RELEASE_TAG" --draft=false --latest --notes-file "$RUNNER_TEMP/macos-release-notes.md"
       - name: Remove signing files
