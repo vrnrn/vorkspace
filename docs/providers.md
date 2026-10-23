@@ -24,17 +24,17 @@ When a Claude Code or Codex conversation (or a Bot using one of those providers)
 - **Native context transfer**: For local sessions, vorkspace stops the limited CLI process, copies the conversation's native transcript/rollout files, subagent trees, file-history checkpoints, and closed subagent state into the newly selected account's home directory, and resumes the exact conversation byte-for-byte.
 - **Transcript handoff fallback**: When native context cannot be copied directly (for example, when using a custom shared `CODEX_SQLITE_HOME`, a private Bot store, or a remote host), vorkspace carries the conversation forward using a structured transcript handoff on the next turn.
 
-To run vorkspace from a checkout, see [building from source](building.md). Return to the [README](../README.md) for desktop downloads.
+To run vorkspace from a checkout, see [building from source](building.md). See the [README](../README.md) for the native application overview.
 
 ## GitHub Copilot credentials
 
-On macOS and Linux, desktop launches do not inherit your interactive shell environment. vorkspace forwards `COPILOT_GITHUB_TOKEN` from that shell to every provider process when the app environment lacks the variable. An inherited value takes precedence.
+On macOS and Linux, desktop launches do not inherit your interactive shell environment. vorkspace forwards `COPILOT_GITHUB_TOKEN` from that shell to Claude processes that need it when the app environment lacks the variable. An inherited value takes precedence.
 
 Export `COPILOT_GITHUB_TOKEN` in your shell configuration before you start vorkspace. Restart vorkspace after you change the token.
 
 ## Copilot GPT models in Claude Code
 
-Install Node.js 20 or later on the machine that runs Claude Code.
+The desktop gateway runs in Rust alongside the installed Claude Code CLI. Remote hosts include their own Node gateway.
 Export `COPILOT_GITHUB_TOKEN="$(gh auth token 2>/dev/null)"`, or sign in with `gh auth login`.
 Restart vorkspace after you change the credential.
 Select **Claude Code**, then select **GPT-6.1 Sol (1M)** or **GPT-6 Luna (1M)**.
@@ -51,9 +51,9 @@ Saved effort settings survive startup before model discovery finishes.
 Claude-only options such as Fast Mode and Ultrathink do not appear for Copilot models.
 
 Each Copilot session uses a private localhost adapter for the Anthropic Messages and Copilot Responses protocols.
-The adapter stops with the session and does not change your Claude settings.
+The desktop adapter stays alive while its Claude process is parked between turns, and stops when that process is released. It uses a per-process secret, rejects browser origins, bounds requests and streamed frames, and does not change your saved Claude settings.
 Ordinary Claude models retain your existing provider, including Bedrock.
-Remote hosts use the same adapter and their own credentials.
+Remote hosts use their JavaScript adapter and their own credentials.
 
 Anthropic does not officially support non-Claude models in Claude Code.
 The adapter supports text, images, streamed tool calls, and tool results.

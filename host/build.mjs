@@ -2,7 +2,7 @@ import { build } from "esbuild";
 import { copyFile } from "node:fs/promises";
 
 await build({
-  entryPoints: ["host/cli.ts"],
+  entryPoints: ["host/cli.js"],
   outfile: "build/host/vorkspace-host.mjs",
   bundle: true,
   platform: "node",

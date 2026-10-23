@@ -1,32 +1,11 @@
-# Vox Voice Controller (ELI5)
+# Vox
 
-**Vox** is a little voice assistant built into the top-right corner of Vorkspace's title bar. Instead of typing to every chat tab or Bot by hand, you can talk out loud to Vox and ask it to check on your sessions and Bots, start new tasks, or read replies back to you.
+Vox is the optional voice face in the title bar. Turn it on in Settings, then click it to start a call. It starts disabled. Stop ends the call; silent mode shows replies without speaking them.
 
-For the full implementation guide, see [Vox](../vox.md).
+You can select and copy a silent reply. Escape or clicking outside hides it until Vox finishes another reply. Very long replies show an ellipsis instead of filling memory with the full text; the full conversation stays with the provider.
 
----
+Vox uses your selected microphone and keeps its conversation and memories between calls. It can help with local sessions and Bots, while the native app checks and carries out its requests. Reset clears the conversation without letting an older reply bring it back.
 
-## 1. How to Turn It On and Use It
+Rust manages the call and checks every request. A small private browser surface handles only microphone and sound, keeping the existing Codex sign-in. End releases the microphone immediately and asks Codex to finish saving the conversation. Closing the window also lets an active call finish saving. If that save cannot be confirmed, Vox says so. A failed reconnection keeps the saved conversation available instead of silently replacing it.
 
-1. Vox is **off by default** so it never touches your microphone unless you want it. Turn it on in **Settings → Vox → General → Enable Vox** (it uses your signed-in OpenAI Codex ChatGPT live voice account).
-2. Click the little `vox` face in the top-right corner of the window to start a voice call, and speak naturally:
-   - *"Tell Helper to review the latest change."*
-   - *"Ask the session called tests to fix its failures."*
-   - *"Read the last reply in that session."*
-3. While you're on a call, the little ASCII face blinks, thinks, and talks. Click the face again anytime to hang up.
-
----
-
-## 2. Silent Replies Mode
-
-What if you are in a quiet office or on a train where you want to whisper instructions to Vox, but don't want your computer speaking out loud?
-- Turn on **Silent replies** in **Settings → Vox → Audio**.
-- Vox mutes its voice immediately (without dropping the call) and shows its latest reply in a small text bubble right underneath its face!
-
----
-
-## 3. Memory and Continuity
-
-- **One Ongoing Conversation**: Switching between project tabs or opening Settings doesn't hang up your call, and Vox remembers your conversation the next time you call it.
-- **Reset Anytime**: If you want a fresh start, click **Reset conversation** in **Settings → Vox → Conversation**.
-- **Long-Term Memory**: Vox can also remember helpful facts about how you like to work (**Settings → Vox → Memory**), and those memories stay saved even if you reset the conversation.
+The small audio page lives in `embedded/vox`; Rust owns the call and any actions it takes in the app.

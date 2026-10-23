@@ -8,24 +8,16 @@
 *.pfx
 *.cer
 *.certSigningRequest
-*.mobileprovision
 *.keystore
 *.jks
 id_rsa*
 id_ed25519*
-.tauri/
 node_modules/
-dist/
-dist-ssr/
 build/
 target/
-gen/schemas/
 coverage/
-playwright-report/
-test-results/
 .vite/
 .turbo/
-*.tsbuildinfo
 *.dmg
 *.app/
 *.msi
@@ -67,3 +59,7 @@ Desktop.ini
 /.impeccable/hook.cache.json
 /.impeccable/review/
 /design-qa.md
+
+# Python tooling caches
+__pycache__/
+*.py[cod]
