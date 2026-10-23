@@ -24,6 +24,7 @@ pub(super) struct Writer {
     owner: String,
     recoveries: Vec<vorkspace_core::store::ComposerRecovery>,
     generation: u64,
+    discarded: bool,
 }
 impl State {
     pub(super) fn new(store: Database, id: i64) -> Self {
@@ -39,6 +40,7 @@ impl State {
                 owner: vorkspace_core::bot::new_id(),
                 recoveries: Vec::new(),
                 generation: 0,
+                discarded: false,
             })),
             timer: None,
             restoring: false,
@@ -51,6 +53,15 @@ impl State {
     pub(super) fn flush(&self) -> Result<(), String> {
         flush(&self.writer)
     }
+    /// A failed fresh-session installation has no accepted composer owner.
+    /// Serialize with any running flush before its session is removed, and
+    /// prevent delayed hydration or Drop from recreating an orphan draft.
+    pub(super) fn discard(&mut self) {
+        self.timer = None;
+        let mut writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
+        writer.discarded = true;
+        writer.pending = None;
+    }
     pub(super) fn ready_for_replacement(&self) -> bool {
         !self.hydrating && self.error.is_none() && !self.resolving
     }
@@ -58,7 +69,7 @@ impl State {
 pub(super) fn flush(writer: &Arc<Mutex<Writer>>) -> Result<(), String> {
     let (pending, loaded) = {
         let state = writer.lock().unwrap_or_else(|e| e.into_inner());
-        (state.pending.is_some(), state.loaded)
+        (state.pending.is_some() && !state.discarded, state.loaded)
     };
     if !pending {
         return Ok(());
@@ -373,6 +384,9 @@ impl Conversation {
             .writer
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        if state.discarded {
+            return false;
+        }
         let current = state.pending.as_ref().unwrap_or(&state.base);
         let same_files = current["attachments"].as_array().is_some_and(|files| {
             files.len() == self.attachments.len()

@@ -99,43 +99,51 @@ impl Shell {
             cleanup,
         } = start;
         let id = summary.id;
+        // Preparation ran in the background. A view opened since then belongs
+        // to its newer owner, including any input it has already collected.
+        if self.sessions.contains_key(&id) || self.workspace.tab_of(id).is_some() {
+            return Err(format!(
+                "New session {id} was already opened; its state and working copy were preserved"
+            ));
+        }
         let valid = if !self.app_caller_allowed(caller, &summary.cwd, cx) {
             Err("The caller no longer owns this project's app capability".into())
         } else {
             self.check_app_placement(placement, &summary.cwd, cx)
         };
         if let Err(error) = valid {
-            let worktree = cleanup
-                .map(vorkspace_core::bot::launch::CreatedWorktree::rollback)
-                .transpose()
-                .err();
-            let removed = locked(&self.store)?.delete(id).err();
-            return Err(format!(
-                "{error}{}{}",
-                worktree.map(|e| format!("; {e}")).unwrap_or_default(),
-                removed
-                    .map(|e| format!("; unused session {id} could not be removed: {e}"))
-                    .unwrap_or_default()
-            ));
+            return Err(self.rollback_app_start(id, cleanup, error, cx));
         }
-        self.add(summary, cx);
-        self.started_by.insert(id, caller);
-        let view = self
+        // Pane, rail and caller links publish only after the fresh view owns a
+        // durable draft or queued prompt. No provider starts on a failed write.
+        let observations_before = self.observations.len();
+        self.add_loaded(summary.clone(), cx);
+        let accepted = self
             .sessions
             .get(&id)
             .cloned()
-            .ok_or("New session view is unavailable")?;
-        view.update(cx, |view, cx| {
-            view.install_transfer(settings, None, cx);
-            if draft {
-                view.input
-                    .update(cx, |input, cx| input.set_text(prompt, cx));
-                view.app_flush_draft(cx)?;
-            } else {
-                view.app_start_message(prompt, cx)?;
-            }
-            Ok::<_, String>(())
-        })?;
+            .ok_or_else(|| "New session view is unavailable".to_owned())
+            .and_then(|view| {
+                view.update(cx, |view, cx| {
+                    view.install_transfer(settings, None, cx);
+                    if draft {
+                        view.input
+                            .update(cx, |input, cx| input.set_text(prompt, cx));
+                        view.app_flush_draft(cx)?;
+                    } else {
+                        view.app_start_message(prompt, cx)?;
+                    }
+                    Ok(())
+                })
+            });
+        if let Err(error) = accepted {
+            // Shell owns these subscriptions independently of the discarded
+            // view. Nothing else can register one during this synchronous call.
+            self.observations.truncate(observations_before);
+            return Err(self.rollback_app_start(id, cleanup, error, cx));
+        }
+        self.workspace.add_project(&summary.cwd);
+        self.started_by.insert(id, caller);
         if let Some((target, edge)) = placement {
             let before = self.active_leaves();
             self.workspace.place(id, target, edge);
@@ -148,6 +156,40 @@ impl Shell {
         self.invalidate_chrome(cx);
         cx.notify();
         Ok(id)
+    }
+    fn rollback_app_start(
+        &mut self,
+        id: i64,
+        cleanup: Option<vorkspace_core::bot::launch::CreatedWorktree>,
+        error: String,
+        cx: &mut Context<Self>,
+    ) -> String {
+        if let Some(view) = self.sessions.get(&id) {
+            view.update(cx, |view, _| view.discard_unaccepted_app_start());
+        }
+        self.forget_session(id, cx);
+        self.started_by.remove(&id);
+        self.session_worktrees.remove(&id);
+        let removed = locked(&self.store).and_then(|mut store| store.delete(id));
+        let cleanup_error = match removed {
+            Ok(()) => cleanup
+                .map(vorkspace_core::bot::launch::CreatedWorktree::rollback)
+                .transpose()
+                .err(),
+            // Retain the checkout if its session could not be removed, so the
+            // persisted settings still identify the preserved resource.
+            Err(error) => Some(format!(
+                "unused session {id} could not be removed; its working copy was preserved: {error}"
+            )),
+        };
+        self.invalidate_chrome(cx);
+        cx.notify();
+        format!(
+            "{error}{}",
+            cleanup_error
+                .map(|error| format!("; {error}"))
+                .unwrap_or_default()
+        )
     }
     fn check_live_app_target(&self, id: i64, cx: &App) -> Result<(), String> {
         if self.orchestration_worker(id)
@@ -578,6 +620,330 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         rx.try_recv().expect("command completed")
+    }
+    fn rollback_window(
+        cx: &mut TestAppContext,
+        shared: bool,
+    ) -> (gpui::WindowHandle<Shell>, i64, tempfile::TempDir) {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec![
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "initial",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(&project)
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        let path = root.path().join("state.db");
+        let store = if shared {
+            vorkspace_core::store::Store::open_vorkspace(&path)
+        } else {
+            vorkspace_core::store::Store::open(&path)
+        }
+        .unwrap();
+        let project = project.to_string_lossy().into_owned();
+        let summary = store.create("codex", &project).unwrap();
+        let caller = summary.id;
+        let store = Arc::new(Mutex::new(store));
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| Shell::new(store, vec![summary], project, None, cx))
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, window, cx| {
+                shell.open(caller, window, cx);
+                shell.sessions[&caller].update(cx, |view, cx| {
+                    view.enable_mode("operator", cx);
+                    view.input.update(cx, |input, cx| {
+                        input.set_text("Keep the caller's newer draft".into(), cx)
+                    });
+                    view.app_flush_draft(cx).unwrap();
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        (window, caller, root)
+    }
+    /// The real admission, installation and receipt settlement run in one UI
+    /// callback. No hydration, Drop or provider task can conceal a failed write.
+    fn failed_install(
+        window: gpui::WindowHandle<Shell>,
+        caller: i64,
+        root: &std::path::Path,
+        draft: bool,
+        dirty: bool,
+        refuse_delete: bool,
+        cx: &mut TestAppContext,
+    ) -> (i64, std::path::PathBuf, String) {
+        window.update(cx, |shell, window, cx| {
+            let project = shell.workspace.project.clone();
+            let input = json!({"prompt":"/plan Unaccepted child request","draft":draft,"workspaceMode":"worktree","placement":"right"});
+            let mut launch = vorkspace_core::bot::launch::Launch::parse(&input,"codex",&project,&project,Settings::default(),true).unwrap();
+            let (summary, shared, original) = {
+                let mut store = locked(&shell.store).unwrap();
+                let summary = launch.create(&mut store,&project).unwrap();
+                store.save_started_link(summary.id,caller).unwrap();
+                let original = if store.uses_vorkspace_schema() { store.persisted_session_id(summary.id).unwrap() } else { summary.id.to_string() };
+                (summary,store.uses_vorkspace_schema(),original)
+            };
+            let id = summary.id;
+            let tree = std::path::PathBuf::from(launch.settings.worktree_cwd.as_ref().unwrap());
+            if dirty { std::fs::write(tree.join("newer-user-work.txt"),"Preserve this new work").unwrap(); }
+            let connection = rusqlite::Connection::open(root.join("state.db")).unwrap();
+            if shared && draft {
+                connection.execute_batch("CREATE TABLE IF NOT EXISTS composer_drafts(session_id TEXT PRIMARY KEY,cwd TEXT NOT NULL,revision INTEGER NOT NULL,payload_json TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL);").unwrap();
+            }
+            let trigger = if shared {
+                if draft {
+                    format!("CREATE TRIGGER reject_app_input BEFORE INSERT ON composer_drafts WHEN NEW.session_id='{original}' BEGIN SELECT RAISE(ABORT,'injected composer failure'); END;")
+                } else {
+                    format!("CREATE TRIGGER reject_app_input BEFORE UPDATE OF queued_messages_json ON sessions WHEN NEW.id='{original}' BEGIN SELECT RAISE(ABORT,'injected queue failure'); END;")
+                }
+            } else {
+                let key = if draft { "composer" } else { "follow-up" };
+                format!("CREATE TRIGGER reject_app_input BEFORE INSERT ON native_settings WHEN NEW.key='{key}:{id}' BEGIN SELECT RAISE(ABORT,'injected input failure'); END;")
+            };
+            connection.execute_batch(&trigger).unwrap();
+            if refuse_delete {
+                let (table,target) = if shared { ("sessions",original.clone()) } else { ("native_sessions",id.to_string()) };
+                connection.execute_batch(&format!("CREATE TRIGGER reject_app_delete BEFORE DELETE ON {table} WHEN OLD.id='{target}' BEGIN SELECT RAISE(ABORT,'injected cleanup failure'); END;")).unwrap();
+            }
+            let panes = shell.active_leaves();
+            let active = shell.workspace.active;
+            let projects = shell.workspace.projects.clone();
+            let observations = shell.observations.len();
+            locked(&shell.store).unwrap().admit_app_command(caller,"failed-install","sessions.start",&input).unwrap();
+            let result = shell.app_install_start(caller,AppStart {
+                summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:true,
+                placement:Some((caller,Edge::Right)),cleanup:launch.created_worktree,
+            },window,cx);
+            let error = result.unwrap_err();
+            assert!(error.contains("injected"),"{error}");
+            assert!(!shell.sessions.contains_key(&id));
+            assert!(!shell.session_summaries.contains_key(&id));
+            assert!(!shell.session_marks.contains_key(&id));
+            assert!(!shell.tab_marks.contains_key(&id));
+            assert!(!shell.started_by.contains_key(&id));
+            assert!(!shell.session_worktrees.contains_key(&id));
+            assert!(!shell.order.contains(&id));
+            assert!(shell.workspace.tab_of(id).is_none());
+            assert_eq!(shell.active_leaves(),panes);
+            assert_eq!(shell.workspace.active,active);
+            assert_eq!(shell.workspace.projects,projects);
+            assert_eq!(shell.observations.len(),observations);
+            assert_eq!(shell.sessions[&caller].read(cx).input.read(cx).content,"Keep the caller's newer draft");
+            assert!(!shell.sessions[&caller].read(cx).busy);
+            // Remove the write failure before deferred callbacks and Drop run:
+            // an undiscarded composer would now be free to recreate an orphan.
+            connection.execute_batch("DROP TRIGGER reject_app_input;").unwrap();
+            let (reply,rx) = std::sync::mpsc::channel();
+            shell.finish_app_call(Call { session:caller,request_id:"failed-install".into(),action:"sessions.start".into(),input:input.clone(),reply },Err(error.clone()));
+            assert_eq!(rx.try_recv().unwrap().unwrap_err(),error);
+            assert!(matches!(locked(&shell.store).unwrap().admit_app_command(caller,"failed-install","sessions.start",&input).unwrap(),vorkspace_core::store::AppCommandAdmission::Completed(Err(_))));
+            (id,tree,error)
+        }).unwrap()
+    }
+    #[gpui::test]
+    fn app_install_write_failures_remove_only_the_unaccepted_child(cx: &mut TestAppContext) {
+        for shared in [false, true] {
+            for draft in [false, true] {
+                let (window, caller, root) = rollback_window(cx, shared);
+                let (id, tree, _) =
+                    failed_install(window, caller, root.path(), draft, false, false, cx);
+                cx.run_until_parked();
+                window
+                    .update(cx, |shell, _, cx| {
+                        let store = locked(&shell.store).unwrap();
+                        assert!(store.bot_session(id).unwrap().is_none());
+                        assert!(store.bot_session(caller).unwrap().is_some());
+                        assert!(
+                            store
+                                .setting(&format!("started-by:{id}"))
+                                .unwrap()
+                                .is_none()
+                        );
+                        assert!(store.setting(&format!("agent:{id}")).unwrap().is_none());
+                        assert!(store.setting(&format!("follow-up:{id}")).unwrap().is_none());
+                        if !shared {
+                            assert!(store.composer_draft(id).unwrap().is_none());
+                        }
+                        assert!(store.composer_recoveries(id).unwrap().is_empty());
+                        assert!(!shell.sessions.contains_key(&id));
+                        assert_eq!(
+                            shell.sessions[&caller].read(cx).input.read(cx).content,
+                            "Keep the caller's newer draft"
+                        );
+                    })
+                    .unwrap();
+                assert!(!tree.exists());
+                let snapshot = vorkspace_core::git::snapshot(&root.path().join("project")).unwrap();
+                assert_eq!(snapshot.worktrees.len(), 1);
+                assert!(
+                    !snapshot
+                        .branches
+                        .iter()
+                        .any(|branch| branch.name.starts_with("mc/native-"))
+                );
+            }
+        }
+    }
+    #[gpui::test]
+    fn app_install_failure_preserves_dirty_created_worktree_and_reports_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, caller, root) = rollback_window(cx, true);
+        let (id, tree, error) = failed_install(window, caller, root.path(), true, true, false, cx);
+        assert!(error.contains("preserved"), "{error}");
+        assert!(error.contains(tree.to_str().unwrap()), "{error}");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .bot_session(id)
+                        .unwrap()
+                        .is_none()
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tree.join("newer-user-work.txt")).unwrap(),
+            "Preserve this new work"
+        );
+    }
+    #[gpui::test]
+    fn app_install_cleanup_failure_preserves_the_stored_session_and_its_worktree(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, caller, root) = rollback_window(cx, true);
+        let (id, tree, error) = failed_install(window, caller, root.path(), false, false, true, cx);
+        assert!(error.contains("could not be removed"), "{error}");
+        assert!(error.contains("injected cleanup failure"), "{error}");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .bot_session(id)
+                        .unwrap()
+                        .is_some()
+                );
+                assert!(!shell.sessions.contains_key(&id));
+            })
+            .unwrap();
+        assert!(tree.is_dir());
+    }
+    #[gpui::test]
+    fn app_install_keeps_a_child_opened_by_a_newer_owner(cx: &mut TestAppContext) {
+        let (window, caller, root) = rollback_window(cx, true);
+        let (id, tree) = window
+            .update(cx, |shell, window, cx| {
+                let project = shell.workspace.project.clone();
+                let input =
+                    json!({"prompt":"Original delegated request","workspaceMode":"worktree"});
+                let mut launch = vorkspace_core::bot::launch::Launch::parse(
+                    &input,
+                    "codex",
+                    &project,
+                    &project,
+                    Settings::default(),
+                    true,
+                )
+                .unwrap();
+                let summary = launch
+                    .create(&mut locked(&shell.store).unwrap(), &project)
+                    .unwrap();
+                let id = summary.id;
+                let tree = std::path::PathBuf::from(launch.settings.worktree_cwd.as_ref().unwrap());
+                shell.add(summary.clone(), cx);
+                shell.open(id, window, cx);
+                let adopted = shell.sessions[&id].clone();
+                adopted.update(cx, |view, cx| {
+                    view.input.update(cx, |input, cx| {
+                        input.set_text("The user's newer child draft".into(), cx)
+                    });
+                    view.app_flush_draft(cx).unwrap();
+                });
+                let active = shell.workspace.active;
+                let result = shell.app_install_start(
+                    caller,
+                    AppStart {
+                        summary,
+                        settings: launch.settings,
+                        prompt: launch.prompt,
+                        draft: false,
+                        reveal: true,
+                        placement: None,
+                        cleanup: launch.created_worktree,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(result.unwrap_err().contains("already opened"));
+                assert_eq!(shell.workspace.active, active);
+                assert_eq!(shell.sessions[&id], adopted);
+                assert_eq!(
+                    adopted.read(cx).input.read(cx).content,
+                    "The user's newer child draft"
+                );
+                assert!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .bot_session(id)
+                        .unwrap()
+                        .is_some()
+                );
+                (id, tree)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(tree.is_dir());
+        window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(
+                    shell.sessions[&id].read(cx).input.read(cx).content,
+                    "The user's newer child draft"
+                );
+                assert_eq!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .composer_draft(id)
+                        .unwrap()
+                        .unwrap()
+                        .payload["text"],
+                    "The user's newer child draft"
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            vorkspace_core::git::snapshot(&root.path().join("project"))
+                .unwrap()
+                .worktrees
+                .len(),
+            2
+        );
     }
     #[gpui::test]
     fn operator_launch_honors_access_model_and_worktree_and_durable_retries(

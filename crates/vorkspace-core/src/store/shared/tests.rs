@@ -1117,3 +1117,233 @@ fn fresh_receipt_preserves_the_matching_desktop_model_id_spelling() {
         "claude:sonnet-4.6"
     );
 }
+
+#[test]
+fn first_app_command_preserves_an_active_scalar_history_guard_and_append() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("history.db");
+    let mut store = Store::open_vorkspace(&path).unwrap();
+    assert!(!has_table(&store.conn, "app_command_receipts").unwrap());
+    let session = store.create("codex", "/project").unwrap();
+    let id = session.id;
+    let original = store.persisted_session_id(id).unwrap();
+    let source = json!([{"id":"saved-user","role":"user","text":"Keep this prompt","future":{"opaque":"retained"}}]);
+    store
+        .conn
+        .execute(
+            "UPDATE sessions SET blocks_json=?2 WHERE id=?1",
+            params![original, source.to_string()],
+        )
+        .unwrap();
+    let mut history = store.load(id).unwrap();
+    let from = history.begin("assistant");
+    history.append("Saved partial answer");
+    store.write_rows(id, from, &history.rows[from..]).unwrap();
+    assert!(matches!(
+        store.shared.as_ref().unwrap().snapshots.borrow()[&id],
+        HistoryRevision::Stored(_)
+    ));
+    let schema: i64 = store
+        .conn
+        .query_row("PRAGMA schema_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        store
+            .admit_app_command(
+                id,
+                "first-effect",
+                "notes.write",
+                &json!({"title":"A note","body":"Saved"})
+            )
+            .unwrap(),
+        crate::store::AppCommandAdmission::Admitted
+    );
+    store
+        .finish_app_command(
+            id,
+            "first-effect",
+            "notes.write",
+            &json!({"title":"A note","body":"Saved"}),
+            &Ok(json!({"accepted":true})),
+        )
+        .unwrap();
+    // A rejected child draft may record recovery input while its caller is
+    // still streaming. Those local metadata writes must preserve its guard.
+    let draft = json!({"cwd":"/project","text":"Keep newer input","selectionStart":0,"selectionEnd":0,"attachments":[],"mcpTags":[]});
+    store.save_composer_draft(id, 0, &draft).unwrap();
+    store
+        .save_composer_recovery(
+            id,
+            crate::store::ComposerRecovery {
+                owner: "failed-child-draft".into(),
+                revision: 0,
+                payload: draft,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .conn
+            .query_row("PRAGMA schema_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        schema
+    );
+    let from = history.begin("assistant");
+    history.append("Appended after the command");
+    store.write_rows(id, from, &history.rows[from..]).unwrap();
+    drop(store);
+    let reopened = Store::open_vorkspace(&path).unwrap();
+    let id = reopened.resolve_session_id(&original).unwrap();
+    assert_eq!(reopened.load(id).unwrap().rows, history.rows);
+    assert_eq!(
+        reopened.shared_blocks(id).unwrap()[0]["future"],
+        json!({"opaque":"retained"})
+    );
+}
+
+#[test]
+fn app_command_schema_coordination_does_not_bless_external_schema_drift() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("history.db");
+    let mut store = Store::open_vorkspace(&path).unwrap();
+    let session = store.create("codex", "/project").unwrap();
+    let id = session.id;
+    let mut history = crate::transcript::Transcript::default();
+    let from = history.begin("user");
+    history.append("Durable original");
+    store.write_rows(id, from, &history.rows[from..]).unwrap();
+    let original = history.rows.clone();
+    assert!(matches!(
+        store.shared.as_ref().unwrap().snapshots.borrow()[&id],
+        HistoryRevision::Stored(_)
+    ));
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE external_schema_change(value TEXT)")
+        .unwrap();
+    store
+        .admit_app_command(id, "after-external-ddl", "notes.write", &json!({}))
+        .unwrap();
+    store
+        .finish_app_command(
+            id,
+            "after-external-ddl",
+            "notes.write",
+            &json!({}),
+            &Ok(json!({})),
+        )
+        .unwrap();
+    let from = history.begin("assistant");
+    history.append("A stale append must be rejected");
+    assert!(store
+        .write_rows(id, from, &history.rows[from..])
+        .unwrap_err()
+        .contains("changed in another window"));
+    drop(store);
+    assert_eq!(
+        Store::open_vorkspace(&path).unwrap().load(id).unwrap().rows,
+        original
+    );
+}
+
+#[test]
+fn deleting_a_session_removes_only_its_own_sidecar_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("db");
+    let mut store = Store::open_vorkspace(&path).unwrap();
+    let child = store.create("codex", "/project").unwrap().id;
+    let other = store.create("codex", "/project").unwrap().id;
+    let prefixes = [
+        "agent",
+        "context",
+        "follow-up",
+        "started-by",
+        "orchestration",
+        "inbox-ask",
+        "automation",
+        "composer",
+        "edit-recovery",
+    ];
+    for prefix in prefixes {
+        store
+            .save_setting(&format!("{prefix}:{child}"), "remove child metadata")
+            .unwrap();
+        store
+            .save_setting(&format!("{prefix}:{other}"), "keep other metadata")
+            .unwrap();
+        store
+            .save_setting(&format!("{prefix}:{child}0"), "keep boundary lookalike")
+            .unwrap();
+    }
+    store
+        .save_setting(&format!("bot-delivered:{child}:message"), "1")
+        .unwrap();
+    store
+        .save_setting(&format!("bot-delivered:{child}0:message"), "keep")
+        .unwrap();
+    store
+        .save_setting("unrelated-setting", "keep unknown")
+        .unwrap();
+    store.delete(child).unwrap();
+    assert!(store.bot_session(child).unwrap().is_none());
+    assert!(store.bot_session(other).unwrap().is_some());
+    drop(store);
+    let store = Store::open_vorkspace(&path).unwrap();
+    for prefix in prefixes {
+        assert!(store
+            .setting(&format!("{prefix}:{child}"))
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .setting(&format!("{prefix}:{other}"))
+                .unwrap()
+                .as_deref(),
+            Some("keep other metadata")
+        );
+        assert_eq!(
+            store
+                .setting(&format!("{prefix}:{child}0"))
+                .unwrap()
+                .as_deref(),
+            Some("keep boundary lookalike")
+        );
+    }
+    let extras = store.shared.as_ref().unwrap().extras.borrow();
+    assert!(!extras.contains_key(&format!("bot-delivered:{child}:message")));
+    assert_eq!(extras[&format!("bot-delivered:{child}0:message")], "keep");
+    assert_eq!(extras["unrelated-setting"], "keep unknown");
+}
+
+#[test]
+fn failed_sidecar_removal_reports_committed_deletion_and_can_finish_cleanup() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("db");
+    let mut store = Store::open_vorkspace(&path).unwrap();
+    let child = store.create("codex", "/project").unwrap().id;
+    let key = format!("agent:{child}");
+    store
+        .save_setting(&key, "preserve until cleanup succeeds")
+        .unwrap();
+    let sidecar = store.shared.as_ref().unwrap().extras_path.clone().unwrap();
+    let backup = root.path().join("saved-extras.json");
+    std::fs::rename(&sidecar, &backup).unwrap();
+    std::fs::create_dir(&sidecar).unwrap();
+    let error = store.delete(child).unwrap_err();
+    assert!(
+        error.contains("Conversation was deleted, but its settings"),
+        "{error}"
+    );
+    assert!(store.bot_session(child).unwrap().is_none());
+    assert!(store.setting(&key).unwrap().is_some());
+    std::fs::remove_dir(&sidecar).unwrap();
+    std::fs::rename(&backup, &sidecar).unwrap();
+    store.delete(child).unwrap();
+    assert!(store.setting(&key).unwrap().is_none());
+    drop(store);
+    assert!(Store::open_vorkspace(&path)
+        .unwrap()
+        .setting(&key)
+        .unwrap()
+        .is_none());
+}

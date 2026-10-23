@@ -445,7 +445,9 @@ impl Bots {
                 .any(|m| m.habit_sessions.contains(&id))
     }
     pub(crate) fn protected_app_target(&self, id: i64, cx: &App) -> bool {
-        self.hidden_session(id)
+        // Sidebar visibility is a display choice. Only internal identities
+        // (and their active owners) are protected from ordinary app controls.
+        self.is_bot_session(id)
             || self.running.contains_key(&id)
             || self
                 .channels

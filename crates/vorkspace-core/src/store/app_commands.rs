@@ -43,7 +43,7 @@ fn fingerprint(action: &str, input: &Value) -> String {
     hash(input, &mut state);
     format!("{:x}", state.finalize())
 }
-fn ensure(conn: &Connection) -> Result<(), String> {
+pub(super) fn ensure(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS app_command_receipts(
         caller_session_id TEXT NOT NULL, request_id TEXT NOT NULL,
@@ -82,11 +82,10 @@ impl Store {
         let channels = crate::bot::channels::Channels::load(self)?;
         let protected = roster.hidden_sessions.contains(&target)
             || roster.of_session(target).is_some()
-            || roster.bots.iter().any(|bot| {
-                bot.habit_sessions.contains(&target)
-                    || (!bot.show_started_sessions_in_sidebar
-                        && bot.launches.iter().any(|l| l.session_id == target))
-            })
+            || roster
+                .bots
+                .iter()
+                .any(|bot| bot.habit_sessions.contains(&target))
             || channels
                 .channels
                 .iter()
@@ -97,8 +96,27 @@ impl Store {
             );
         }
         if self.shared.is_some() {
-            if self.shared_sidebar_hidden()?.contains(&target) {
-                return Err("Hidden sessions are protected from app commands".into());
+            let legacy_launch = if let Some(parent) = self.shared_app_launch_caller(target)? {
+                roster
+                    .of_session(parent)
+                    .is_some_and(|bot| bot.works_on(&session.cwd))
+                    || self.bot_session(parent)?.is_some_and(|parent| {
+                        crate::files::path_key(&parent.cwd) == crate::files::path_key(&session.cwd)
+                    })
+            } else {
+                false
+            };
+            let ordinary_launch = legacy_launch
+                || roster.bots.iter().any(|bot| {
+                    bot.launches
+                        .iter()
+                        .any(|launch| launch.session_id == target)
+                });
+            if self.shared_sidebar_hidden()?.contains(&target) && !ordinary_launch {
+                return Err(
+                    "Internal or unclassified hidden sessions are protected from app commands"
+                        .into(),
+                );
             }
             if super::shared::has_table(&self.conn, "orchestration_workers")? {
                 let original = self.persisted_session_id(target)?;
@@ -178,8 +196,13 @@ impl Store {
         validate(request, action, input)?;
         if self.shared.is_some() {
             self.shared_writable()?;
+            // Receipt DDL belongs to the same explicit-write schema owner as
+            // history guards. Adding it after scalar snapshots would invalidate
+            // active conversations as though an external writer changed schema.
+            self.shared_history_schema()?;
+        } else {
+            ensure(&self.conn)?;
         }
-        ensure(&self.conn)?;
         let caller = self.app_caller_identity(caller)?;
         let signature = fingerprint(action, input);
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
@@ -454,6 +477,106 @@ mod tests {
             .unwrap();
         assert!(store.bot_session(target).unwrap().is_none());
         assert!(store.bot_session(caller).unwrap().is_some());
+    }
+    #[test]
+    fn ordinary_background_launches_remain_mutable_after_reopen() {
+        for open in [
+            Store::open as fn(&std::path::Path) -> Result<Store, String>,
+            Store::open_vorkspace,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("db");
+            let store = open(&path).unwrap();
+            let caller = store.create("codex", "/project").unwrap().id;
+            let child = store.create("codex", "/project").unwrap().id;
+            let internal = store.create("codex", "/project").unwrap().id;
+            let mut roster = crate::bot::Roster::default();
+            let bot = roster.create(vec!["/project".into()]).id.clone();
+            let bot = roster.get_mut(&bot).unwrap();
+            bot.session_id = Some(caller);
+            bot.show_started_sessions_in_sidebar = false;
+            bot.launches.push(crate::bot::Launch {
+                session_id: child,
+                cwd: "/project".into(),
+                title: "Background work".into(),
+                harness: "codex".into(),
+                model: None,
+                origin_turn: 0,
+                notify_on_complete: false,
+                completed: false,
+                dismissed: false,
+            });
+            roster.hidden_sessions.push(internal);
+            roster.save(&store).unwrap();
+            if store.shared.is_some() {
+                store
+                    .shared_patch(child, &[("sidebar_hidden", json!(true))])
+                    .unwrap();
+            }
+            drop(store);
+            let mut store = open(&path).unwrap();
+            assert!(store.check_app_target(caller, child, "/project").is_ok());
+            assert!(store.check_app_target(caller, caller, "/project").is_err());
+            assert!(store
+                .check_app_target(caller, internal, "/project")
+                .is_err());
+            store
+                .archive_app_session(caller, child, "/project")
+                .unwrap();
+            assert!(store.bot_session(child).unwrap().unwrap().archived);
+            store.delete_app_session(caller, child, "/project").unwrap();
+            assert!(store.bot_session(child).unwrap().is_none());
+            assert!(store.bot_session(internal).unwrap().is_some());
+        }
+    }
+    #[test]
+    fn legacy_background_launch_identity_is_independent_of_sidebar_visibility() {
+        let store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+        let caller = store.create("codex", "/project").unwrap().id;
+        let source = store.persisted_session_id(caller).unwrap();
+        let mut roster = crate::bot::Roster::default();
+        let bot = roster
+            .create(vec!["/project".into(), "/assigned".into()])
+            .id
+            .clone();
+        roster.get_mut(&bot).unwrap().session_id = Some(caller);
+        roster.hidden_sessions.push(caller);
+        roster.save(&store).unwrap();
+        for (original, project, allowed) in [
+            (format!("app-{source}-background-task"), "/project", true),
+            (
+                format!("app-{source}-other-assigned-task"),
+                "/assigned",
+                true,
+            ),
+            (format!("app-{source}-unrelated-task"), "/unassigned", false),
+            ("unclassified-hidden".into(), "/project", false),
+        ] {
+            store.conn.execute("INSERT INTO sessions(id,cwd,harness,model,model_settings,runtime_mode,title,blocks_json,created_at,updated_at,sidebar_hidden) VALUES(?1,?2,'codex','codex:default','{}','supervised','Background','[]',1,1,1)",params![original,project]).unwrap();
+            let target = store.resolve_session_id(&original).unwrap();
+            assert_eq!(
+                store.check_app_target(caller, target, project).is_ok(),
+                allowed,
+                "{original}"
+            );
+            if allowed {
+                store.archive_app_session(caller, target, project).unwrap();
+                assert!(store.bot_session(target).unwrap().unwrap().archived);
+            }
+        }
+        let internal = format!("app-{source}-internal-chat");
+        store.conn.execute("INSERT INTO sessions(id,cwd,harness,model,model_settings,runtime_mode,title,blocks_json,created_at,updated_at,sidebar_hidden) VALUES(?1,'/project','codex','codex:default','{}','supervised','Internal','[]',1,1,1)",[&internal]).unwrap();
+        let internal = store.resolve_session_id(&internal).unwrap();
+        let other = roster.create(vec!["/project".into()]).id.clone();
+        roster.get_mut(&other).unwrap().session_id = Some(internal);
+        roster.save(&store).unwrap();
+        assert!(
+            store
+                .check_app_target(caller, internal, "/project")
+                .is_err(),
+            "an app-shaped child identity never overrides a real Bot identity"
+        );
+        assert!(store.check_app_target(caller, caller, "/project").is_err());
     }
     #[test]
     fn admission_does_not_commit_a_post_insert_corrupted_receipt() {

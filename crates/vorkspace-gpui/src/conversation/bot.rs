@@ -185,6 +185,11 @@ impl Conversation {
         self.capture_composer(cx);
         self.composer_draft.flush()
     }
+    pub(crate) fn discard_unaccepted_app_start(&mut self) {
+        self.settings_write_cancel.store(true, Ordering::Release);
+        self.catalog_epoch = self.catalog_epoch.wrapping_add(1);
+        self.composer_draft.discard();
+    }
     /// App management pauses even an idle queue. Publish the higher revision
     /// before replying so older queued writes cannot restore automatic sending.
     pub(crate) fn app_stop(&mut self, cx: &mut Context<Self>) -> Result<(), String> {

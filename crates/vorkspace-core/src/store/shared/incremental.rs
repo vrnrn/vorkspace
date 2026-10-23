@@ -159,9 +159,9 @@ impl Store {
     }
 
     /// Opening, listing and reading an old database remain read-only. The first
-    /// explicit history save adds normalized storage and mutation guards inside
-    /// its own transaction. Existing normalized rows and their identities stay put.
-    pub(super) fn shared_history_schema(&self) -> Result<(), String> {
+    /// explicit history save or app mutation adds storage and mutation guards
+    /// inside one coordinated transaction. Existing normalized rows and their identities stay put.
+    pub(in crate::store) fn shared_history_schema(&self) -> Result<(), String> {
         let schema: i64 = sql(self
             .conn
             .query_row("PRAGMA schema_version", [], |row| row.get(0)))?;
@@ -170,6 +170,11 @@ impl Store {
         }
         let changed_schema = self.shared.as_ref().unwrap().history_schema.get().is_some();
         let tx = sql(self.conn.unchecked_transaction())?;
+        super::super::app_commands::ensure(&tx)?;
+        // A failed child draft can record recovery while its caller streams.
+        // These local tables must exist before scalar history guards are live.
+        super::super::composer_draft::ensure_draft_schema(&tx)?;
+        super::super::composer_draft::ensure_recovery_schema(&tx)?;
         sql(tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS session_history_revisions(
                 session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,

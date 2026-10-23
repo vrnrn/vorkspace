@@ -875,6 +875,231 @@ fn app_commands_recheck_deferred_ownership_and_protect_cold_and_self_targets(
     );
 }
 #[gpui::test]
+fn background_delegation_keeps_controls_when_hidden_from_the_sidebar(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let child = call(
+        &s,
+        "background-start",
+        "sessions.start",
+        json!({"prompt":"Initial saved draft","draft":true,"reveal":false}),
+        cx,
+    )
+    .try_recv()
+    .unwrap()
+    .unwrap()["sessionId"]
+        .as_i64()
+        .unwrap();
+    let view = cx.update(|cx| {
+        let manager = s.manager.read(cx);
+        assert!(
+            !manager
+                .roster
+                .get(&s.id)
+                .unwrap()
+                .show_started_sessions_in_sidebar
+        );
+        assert!(manager.hidden_session(child));
+        assert!(!manager.protected_app_target(child, cx));
+        manager
+            .owner
+            .upgrade()
+            .unwrap()
+            .read(cx)
+            .bot_session_entity(child)
+            .unwrap()
+    });
+    view.update(cx, |view, cx| {
+        view.input
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        view.app_flush_draft(cx).unwrap();
+        view.settings.usage_limit = Some(Default::default());
+    });
+    assert!(
+        call(
+            &s,
+            "background-draft",
+            "sessions.draft",
+            json!({"sessionId":child,"prompt":"Draft in the background"}),
+            cx
+        )
+        .try_recv()
+        .unwrap()
+        .is_ok()
+    );
+    view.update(cx, |view, cx| {
+        assert_eq!(view.input.read(cx).content, "Draft in the background");
+        view.input
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        view.app_flush_draft(cx).unwrap();
+    });
+    assert!(
+        call(
+            &s,
+            "background-send",
+            "sessions.send",
+            json!({"sessionId":child,"prompt":"Durable background follow-up"}),
+            cx
+        )
+        .try_recv()
+        .unwrap()
+        .is_ok()
+    );
+    assert_eq!(
+        locked(&s.store)
+            .unwrap()
+            .follow_ups(child)
+            .unwrap()
+            .messages[0]
+            .text,
+        "Durable background follow-up"
+    );
+    // Hold the downstream provider through its existing usage-limit gate; these
+    // controls exercise real delegation without starting any external process.
+    assert!(!view.read_with(cx, |view, _| view.busy));
+    assert!(
+        call(
+            &s,
+            "background-stop",
+            "sessions.stop",
+            json!({"sessionId":child}),
+            cx
+        )
+        .try_recv()
+        .unwrap()
+        .is_ok()
+    );
+    assert!(locked(&s.store).unwrap().follow_ups(child).unwrap().paused);
+    assert!(
+        call(
+            &s,
+            "background-archive",
+            "sessions.archive",
+            json!({"sessionId":child}),
+            cx
+        )
+        .try_recv()
+        .unwrap()
+        .is_ok()
+    );
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .bot_session(child)
+            .unwrap()
+            .unwrap()
+            .archived
+    );
+    assert!(
+        call(
+            &s,
+            "background-delete",
+            "sessions.delete",
+            json!({"sessionId":child}),
+            cx
+        )
+        .try_recv()
+        .unwrap()
+        .is_ok()
+    );
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .bot_session(child)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .bot_session(s.session)
+            .unwrap()
+            .is_some()
+    );
+}
+#[gpui::test]
+fn cold_background_delegation_controls_do_not_require_a_visible_or_live_view(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let child = locked(&s.store)
+        .unwrap()
+        .create("codex", &s.project)
+        .unwrap();
+    let id = child.id;
+    s.manager.update(cx, |manager, cx| {
+        let bot = manager.roster.get_mut(&s.id).unwrap();
+        bot.show_started_sessions_in_sidebar = false;
+        bot.launches.push(bot::Launch {
+            session_id: id,
+            cwd: child.cwd,
+            title: child.title,
+            harness: child.provider,
+            model: None,
+            origin_turn: 0,
+            notify_on_complete: false,
+            completed: false,
+            dismissed: false,
+        });
+        manager.roster.save(&locked(&s.store).unwrap()).unwrap();
+        assert!(manager.hidden_session(id));
+        assert!(!manager.protected_app_target(id, cx));
+        assert!(
+            manager
+                .owner
+                .upgrade()
+                .unwrap()
+                .read(cx)
+                .bot_session_entity(id)
+                .is_none()
+        );
+    });
+    assert!(
+        call(
+            &s,
+            "cold-background-stop",
+            "sessions.stop",
+            json!({"sessionId":id}),
+            cx
+        )
+        .try_recv()
+        .unwrap()
+        .is_ok()
+    );
+    assert!(
+        call(
+            &s,
+            "cold-background-archive",
+            "sessions.archive",
+            json!({"sessionId":id}),
+            cx
+        )
+        .try_recv()
+        .unwrap()
+        .is_ok()
+    );
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .bot_session(id)
+            .unwrap()
+            .unwrap()
+            .archived
+    );
+    assert!(
+        call(
+            &s,
+            "cold-background-delete",
+            "sessions.delete",
+            json!({"sessionId":id}),
+            cx
+        )
+        .try_recv()
+        .unwrap()
+        .is_ok()
+    );
+    assert!(locked(&s.store).unwrap().bot_session(id).unwrap().is_none());
+}
+#[gpui::test]
 fn app_command_unknown_admission_does_not_repeat_a_mutation(cx: &mut TestAppContext) {
     let s = setup(cx);
     let input = json!({"name":"Only once","instructions":"Read status","schedule":{"kind":"daily","time":"09:00"}});

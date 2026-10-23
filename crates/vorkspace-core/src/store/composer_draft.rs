@@ -16,6 +16,17 @@ pub struct ComposerRecovery {
     pub revision: u64,
     pub payload: Value,
 }
+pub(super) fn ensure_draft_schema(conn: &rusqlite::Connection) -> Result<(), String> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS composer_drafts (
+        session_id TEXT PRIMARY KEY,cwd TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision>=1 AND revision<=9007199254740991),
+        payload_json TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN(0,1)),updated_at INTEGER NOT NULL);")
+        .map_err(|e| e.to_string())
+}
+pub(super) fn ensure_recovery_schema(conn: &rusqlite::Connection) -> Result<(), String> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS composer_draft_recoveries(session_id TEXT NOT NULL,owner TEXT NOT NULL,revision INTEGER NOT NULL,payload_json TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(session_id,owner));")
+        .map_err(|e| e.to_string())
+}
 fn validate(payload: &Value) -> Result<(), String> {
     let text = payload["text"]
         .as_str()
@@ -106,7 +117,7 @@ impl Store {
             .conn
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
-        tx.execute_batch("CREATE TABLE IF NOT EXISTS composer_draft_recoveries(session_id TEXT NOT NULL,owner TEXT NOT NULL,revision INTEGER NOT NULL,payload_json TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(session_id,owner));").map_err(|e|e.to_string())?;
+        ensure_recovery_schema(&tx)?;
         tx.execute("INSERT INTO composer_draft_recoveries VALUES(?1,?2,?3,?4,?5) ON CONFLICT(session_id,owner) DO UPDATE SET revision=excluded.revision,payload_json=excluded.payload_json,updated_at=excluded.updated_at",params![source,record.owner,record.revision.min(i64::MAX as u64) as i64,raw,crate::time::now_ms().min(i64::MAX as u64) as i64]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e| e.to_string())
     }
@@ -215,11 +226,7 @@ impl Store {
             .map_err(|e| e.to_string())?;
         // New stores create the same ordinary draft table on first save. No
         // existing row is copied, converted or rewritten during an upgrade.
-        tx.execute_batch("CREATE TABLE IF NOT EXISTS composer_drafts (
-            session_id TEXT PRIMARY KEY,cwd TEXT NOT NULL,
-            revision INTEGER NOT NULL CHECK(revision>=1 AND revision<=9007199254740991),
-            payload_json TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN(0,1)),updated_at INTEGER NOT NULL);")
-            .map_err(|e|e.to_string())?;
+        ensure_draft_schema(&tx)?;
         let source = self.persisted_session_id(id)?;
         let current = tx
             .query_row(

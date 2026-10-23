@@ -210,6 +210,8 @@ pub(crate) struct Conversation {
     // pane rest the composer where it docks.
     beside_pane: bool,
     cancel: Arc<AtomicBool>,
+    /// Failed fresh app installations must not leave detached settings writes.
+    settings_write_cancel: Arc<AtomicBool>,
     title_cancel: Option<Arc<AtomicBool>>,
     _submission: Subscription,
     response_events: Option<Subscription>,
@@ -558,6 +560,7 @@ impl Conversation {
             store,
             bot_turn: 0,
             submission_generation: 0,
+            settings_write_cancel: Arc::new(AtomicBool::new(false)),
             bot_ui: bot::ChatState::default(),
             transcript,
             review,
@@ -1922,10 +1925,14 @@ impl Conversation {
         let id = self.summary.id;
         let provider = self.summary.provider.clone();
         let remote = self.is_remote();
+        let cancelled = self.settings_write_cancel.clone();
         let title = (!self.summary.has_messages).then(|| self.summary.title.clone());
         cx.background_executor()
             .spawn(async move {
                 let saved = locked(&store).and_then(|s| {
+                    if cancelled.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
                     s.configure_agent(id, &provider, &settings)?;
                     if let Some(title) = title
                         && s.agent_settings(id)?
@@ -1935,7 +1942,7 @@ impl Conversation {
                     }
                     Ok(())
                 });
-                if saved.is_ok() && remote {
+                if saved.is_ok() && remote && !cancelled.load(Ordering::Acquire) {
                     let _ = crate::runtime::remote::configure_saved(store, id);
                 }
             })

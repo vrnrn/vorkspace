@@ -1336,6 +1336,22 @@ impl Store {
         }
         Ok(out)
     }
+    /// Reuse the persisted child parser from shared_started_links without its
+    /// sidebar visibility filter: a legitimate Bot caller may itself be hidden.
+    /// The command owner separately validates the caller's project relationship.
+    pub(super) fn shared_app_launch_caller(&self, id: i64) -> Result<Option<i64>, String> {
+        let original = self.persisted_session_id(id)?;
+        if !original.starts_with("app-") {
+            return Ok(None);
+        }
+        let mut query = sql(self.conn.prepare("SELECT id FROM sessions"))?;
+        let ids = sql(query.query_map([], |row| row.get::<_, String>(0)))?
+            .collect::<rusqlite::Result<HashSet<_>>>()
+            .map_err(|e| e.to_string())?;
+        started_caller(&original, &ids)
+            .map(|caller| self.shared_register(caller))
+            .transpose()
+    }
     pub(super) fn shared_started_links(&self) -> Result<HashMap<i64, i64>, String> {
         let mut query = sql(self.conn.prepare(&format!(
             "SELECT id,{} FROM sessions",
@@ -1526,6 +1542,33 @@ impl Store {
         sql(tx.commit())?;
         Ok(fired)
     }
+    fn shared_delete_session_settings(&self, id: i64) -> Result<(), String> {
+        let shared = self.shared.as_ref().unwrap();
+        let exact = [
+            "agent",
+            "context",
+            "follow-up",
+            "started-by",
+            "orchestration",
+            "inbox-ask",
+            "automation",
+            "composer",
+            "edit-recovery",
+        ]
+        .map(|prefix| format!("{prefix}:{id}"));
+        let delivered = format!("bot-delivered:{id}:");
+        let mut next = shared.extras.borrow().clone();
+        let before = next.len();
+        next.retain(|key, _| !exact.contains(key) && !key.starts_with(&delivered));
+        if next.len() == before {
+            return Ok(());
+        }
+        if let Some(path) = &shared.extras_path {
+            atomic_json(path, &next)?;
+        }
+        *shared.extras.borrow_mut() = next;
+        Ok(())
+    }
     pub(super) fn shared_delete_checked(
         &self,
         id: i64,
@@ -1587,7 +1630,17 @@ impl Store {
             .incremental
             .borrow_mut()
             .remove(&id);
-        Ok(())
+        self.shared
+            .as_ref()
+            .unwrap()
+            .queues
+            .borrow_mut()
+            .remove(&id);
+        // SQL deletion has committed. Publish sidecar removal atomically too;
+        // failure is an explicit partial cleanup, never a successful rollback.
+        self.shared_delete_session_settings(id).map_err(|error| {
+            format!("Conversation was deleted, but its settings could not be removed: {error}")
+        })
     }
     pub(super) fn shared_detach_worktree(
         &self,
