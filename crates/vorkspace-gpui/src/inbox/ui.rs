@@ -2331,6 +2331,8 @@ impl Inbox {
     }
 
     fn connection_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut background = shell_fill();
+        background.a = 0.9;
         let provider = self.connect_provider.clone().unwrap_or_default();
         let connected = self
             .snapshot
@@ -2367,7 +2369,7 @@ impl Inbox {
                     .rounded(px(16.))
                     .border_1()
                     .border_color(content(0.1))
-                    .bg(shell_fill())
+                    .bg(background)
                     .flex()
                     .flex_col()
                     .gap(px(12.))
@@ -2473,7 +2475,7 @@ impl Inbox {
                                     },
                                 )
                                 .bg(content(1.))
-                                .text_color(shell_fill())
+                                .text_color(floating_fill())
                                 .when(self.connecting, |d| d.opacity(0.4))
                                 .on_click(cx.listener(|this, _, _, cx| this.connect(false, cx))),
                             ),
