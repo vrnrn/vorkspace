@@ -98,7 +98,7 @@ pub(crate) enum SettingsEvent {
     CheckHarnessUpdates,
     ManageInboxProvider(String),
     Changed(Box<Preferences>),
-    /// The Appearance page's New layout switch.
+    /// The Appearance page's experimental layout switch.
     NewLayout(bool),
     Section(Section),
     OpenSession(i64),
@@ -502,7 +502,7 @@ impl SettingsView {
     fn restore_defaults(&mut self, cx: &mut Context<Self>) {
         self.accent_custom_open = false;
         self.update(cx, |p| p.restore_appearance());
-        // onInsetLayout(INSET_LAYOUT_DEFAULT): React's default is the classic layout.
+        // Appearance defaults return to the legacy layout.
         cx.emit(SettingsEvent::NewLayout(false));
     }
     /// Jump to a search result, on this page or another.

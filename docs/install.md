@@ -7,3 +7,5 @@ Published updates use the installed app's usual updater. Release preparation pro
 Local builds are ad-hoc signed by default. Sparkle is enabled by supplying its framework during release packaging. Developer ID signing and notarization are optional. Building alone never publishes a release.
 
 Release launches use existing desktop data. Development launches use isolated data. See [data continuity](data-storage.md) before choosing `--vorkspace-db` or overriding the development directory.
+
+The legacy layout is the default. Enable **New layout (Experimental)** in **Settings → Appearance → Layout** to try the redesigned sidebar and workspace, or turn it off to return to the legacy layout. The app remembers your choice and does not show a startup prompt for the experimental layout.

@@ -618,11 +618,30 @@ mod tests {
         let (window, _, _) = window(cx);
         window
             .update(cx, |shell, w, cx| {
+                shell.workspace.classic_layout = true;
                 shell.open_settings(Section::Appearance, w, cx)
             })
             .unwrap();
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
+        for expected_classic in [false, true] {
+            window
+                .update(visual, |shell, _, cx| {
+                    shell.settings.as_ref().unwrap().update(cx, |_, cx| {
+                        cx.emit(SettingsEvent::NewLayout(!expected_classic))
+                    });
+                })
+                .unwrap();
+            visual.run_until_parked();
+            window
+                .update(visual, |shell, _, _| {
+                    assert_eq!(shell.workspace.classic_layout, expected_classic);
+                    let saved = shell.latest_state.lock().unwrap().clone();
+                    let restored: Workspace = serde_json::from_str(&saved).unwrap();
+                    assert_eq!(restored.classic_layout, expected_classic);
+                })
+                .unwrap();
+        }
         let light = visual.debug_bounds("settings-theme-light").unwrap();
         visual.simulate_click(light.center(), Default::default());
         visual.run_until_parked();

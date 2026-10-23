@@ -457,8 +457,7 @@ impl Shell {
                 let caller=call.session;
                 self.app_background(call,move|store|{
                     let mut store=locked(&store)?;
-                    let summary=launch.create(&mut store,&project)?;
-                    store.save_started_link(summary.id,caller)?;
+                    let summary=launch.create_started(&mut store,&project,caller)?;
                     Ok((json!({"sessionId":summary.id,"accepted":true}),Effect::Start(Box::new(AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
                 },cx);return;
             }
@@ -806,6 +805,213 @@ mod tests {
                 );
             }
         }
+    }
+    #[gpui::test]
+    fn operator_preparation_link_failure_rolls_back_before_settling_the_request(
+        cx: &mut TestAppContext,
+    ) {
+        for workspace in ["current", "worktree", "existing"] {
+            let (window, caller, root) = rollback_window(cx, false);
+            let project = root.path().join("project");
+            let mut input = json!({"prompt":"Unaccepted request","draft":true});
+            if workspace == "existing" {
+                let tree = command(
+                    window,
+                    caller,
+                    "existing-tree",
+                    "worktrees.create",
+                    json!({"branch":"existing-fixture"}),
+                    cx,
+                )
+                .unwrap();
+                input["worktreeCwd"] = tree["path"].clone();
+                std::fs::write(
+                    std::path::Path::new(tree["path"].as_str().unwrap()).join("user-work.txt"),
+                    "Retain existing work",
+                )
+                .unwrap();
+            } else {
+                input["workspaceMode"] = json!(workspace);
+            }
+            let before = vorkspace_core::git::snapshot(&project).unwrap();
+            let worktrees_before = window
+                .update(cx, |shell, _, _| shell.session_worktrees.clone())
+                .unwrap();
+            let connection = rusqlite::Connection::open(root.path().join("state.db")).unwrap();
+            connection.execute_batch("CREATE TRIGGER reject_started_link BEFORE INSERT ON native_settings WHEN NEW.key LIKE 'started-by:%' BEGIN SELECT RAISE(ABORT,'injected started link failure'); END;").unwrap();
+            let error = command(
+                window,
+                caller,
+                "failed-preparation",
+                "sessions.start",
+                input.clone(),
+                cx,
+            )
+            .unwrap_err();
+            assert!(error.contains("injected started link failure"), "{error}");
+            window
+                .update(cx, |shell, _, cx| {
+                    let store = locked(&shell.store).unwrap();
+                    assert_eq!(
+                        store
+                            .sessions()
+                            .unwrap()
+                            .iter()
+                            .map(|session| session.id)
+                            .collect::<Vec<_>>(),
+                        vec![caller]
+                    );
+                    assert_eq!(shell.sessions.len(), 1);
+                    assert_eq!(shell.order, vec![caller]);
+                    assert_eq!(
+                        shell
+                            .active_leaves()
+                            .iter()
+                            .map(|leaf| leaf.id)
+                            .collect::<Vec<_>>(),
+                        vec![caller]
+                    );
+                    assert!(shell.started_by.is_empty());
+                    assert_eq!(shell.session_worktrees, worktrees_before);
+                    assert_eq!(
+                        shell.sessions[&caller].read(cx).input.read(cx).content,
+                        "Keep the caller's newer draft"
+                    );
+                })
+                .unwrap();
+            assert_eq!(connection.query_row("SELECT count(*) FROM native_settings WHERE key LIKE 'agent:%' AND key <> ?1",[format!("agent:{caller}")],|row|row.get::<_,i64>(0)).unwrap(),0);
+            let after = vorkspace_core::git::snapshot(&project).unwrap();
+            assert_eq!(after.worktrees.len(), before.worktrees.len());
+            assert_eq!(
+                after
+                    .branches
+                    .iter()
+                    .map(|branch| &branch.name)
+                    .collect::<Vec<_>>(),
+                before
+                    .branches
+                    .iter()
+                    .map(|branch| &branch.name)
+                    .collect::<Vec<_>>()
+            );
+            if let Some(path) = input["worktreeCwd"].as_str() {
+                assert_eq!(
+                    std::fs::read_to_string(std::path::Path::new(path).join("user-work.txt"))
+                        .unwrap(),
+                    "Retain existing work"
+                );
+            }
+            connection
+                .execute_batch("DROP TRIGGER reject_started_link;")
+                .unwrap();
+            // A saved failure stays a failure after reopen and after the disk
+            // fault is gone: retrying cannot allocate a replacement worker.
+            let reopened =
+                vorkspace_core::store::Store::open(&root.path().join("state.db")).unwrap();
+            assert!(
+                matches!(reopened.admit_app_command(caller,"failed-preparation","sessions.start",&input).unwrap(),vorkspace_core::store::AppCommandAdmission::Completed(Err(saved)) if saved==error)
+            );
+            assert_eq!(
+                command(
+                    window,
+                    caller,
+                    "failed-preparation",
+                    "sessions.start",
+                    input.clone(),
+                    cx
+                )
+                .unwrap_err(),
+                error
+            );
+            let accepted = command(
+                window,
+                caller,
+                "next-preparation",
+                "sessions.start",
+                input,
+                cx,
+            )
+            .unwrap();
+            assert!(accepted["sessionId"].as_i64().is_some());
+        }
+    }
+    #[gpui::test]
+    fn operator_preparation_cleanup_failure_keeps_the_session_and_worktree(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, caller, root) = rollback_window(cx, false);
+        let connection = rusqlite::Connection::open(root.path().join("state.db")).unwrap();
+        connection.execute_batch(&format!("CREATE TRIGGER reject_started_link BEFORE INSERT ON native_settings WHEN NEW.key LIKE 'started-by:%' BEGIN SELECT RAISE(ABORT,'injected started link failure'); END;
+            CREATE TRIGGER reject_child_delete BEFORE DELETE ON native_sessions WHEN OLD.id <> {caller} BEGIN SELECT RAISE(ABORT,'injected cleanup failure'); END;")).unwrap();
+        let input = json!({"prompt":"Unaccepted request","draft":true,"workspaceMode":"worktree"});
+        let error = command(
+            window,
+            caller,
+            "failed-preparation",
+            "sessions.start",
+            input.clone(),
+            cx,
+        )
+        .unwrap_err();
+        assert!(error.contains("injected started link failure"), "{error}");
+        assert!(error.contains("injected cleanup failure"), "{error}");
+        assert!(error.contains("preserved"), "{error}");
+        let tree = window
+            .update(cx, |shell, _, cx| {
+                let store = locked(&shell.store).unwrap();
+                let sessions = store.sessions().unwrap();
+                assert_eq!(sessions.len(), 2);
+                let child = sessions
+                    .iter()
+                    .find(|session| session.id != caller)
+                    .unwrap();
+                assert!(error.contains(&child.id.to_string()), "{error}");
+                let path = store
+                    .agent_settings(child.id)
+                    .unwrap()
+                    .unwrap()
+                    .worktree_cwd
+                    .unwrap();
+                assert!(!shell.sessions.contains_key(&child.id));
+                assert_eq!(
+                    shell
+                        .active_leaves()
+                        .iter()
+                        .map(|leaf| leaf.id)
+                        .collect::<Vec<_>>(),
+                    vec![caller]
+                );
+                assert_eq!(
+                    shell.sessions[&caller].read(cx).input.read(cx).content,
+                    "Keep the caller's newer draft"
+                );
+                std::path::PathBuf::from(path)
+            })
+            .unwrap();
+        assert!(tree.is_dir());
+        assert_eq!(
+            vorkspace_core::git::snapshot(&root.path().join("project"))
+                .unwrap()
+                .worktrees
+                .len(),
+            2
+        );
+        connection
+            .execute_batch("DROP TRIGGER reject_started_link; DROP TRIGGER reject_child_delete;")
+            .unwrap();
+        assert_eq!(
+            command(
+                window,
+                caller,
+                "failed-preparation",
+                "sessions.start",
+                input,
+                cx
+            )
+            .unwrap_err(),
+            error
+        );
+        assert!(tree.is_dir());
     }
     #[gpui::test]
     fn app_install_failure_preserves_dirty_created_worktree_and_reports_it(

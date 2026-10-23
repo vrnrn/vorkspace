@@ -111,6 +111,36 @@ export function assertDraftOwnership(plan, release, sha) {
 }
 
 export function generateMacReleaseNotes(plan, releases, sha, request) {
+  if (plan.version === "1.0.0") {
+    return `# Vorkspace 1.0
+
+The first 1.0 release. A native desktop, rebuilt in Rust and GPUI, with the workflows and data you've already made your own.
+
+## In this release
+
+- A native desktop with Rust-owned provider sessions, streaming conversations, terminals and file editing.
+- The familiar legacy layout by default, with a new experimental layout available in Appearance settings and no startup prompt.
+- Bots, Channels, Vox and the local Copilot gateway, with controls for delegated sessions and isolated worktrees.
+- Stronger draft recovery, conflict-aware saves, durable command receipts and safer local and remote operations.
+- Incremental conversation saves and byte limits for provider output and remote transfers.
+- Signed updates from existing installations, keeping your conversations, drafts, settings, accounts and Bot files in place.
+
+## Up next
+
+- Better session management.
+- Better diff viewing.
+- Inline Mermaid, SVG and other rendering.
+- Improved Bots and Vox.
+- Even better performance.
+
+## Longer term
+
+Modularization and plugins: make the app easier to extend and let people build on it.
+
+These are future plans, not features included in 1.0.0.
+
+${plan.notes}`;
+  }
   const previous = releases
     .filter(
       (release) =>

@@ -177,6 +177,24 @@ test("generates notes for the exact source since the newest earlier published st
   }
 });
 
+test("1.0.0 has milestone notes with shipped changes and separate future plans", () => {
+  const milestone = plan([release("0.13.13")], env, "1.0.0");
+  const notes = generateMacReleaseNotes(milestone, [], env.GITHUB_SHA, () => {
+    assert.fail("The 1.0 milestone uses its curated release notes");
+  });
+  assert(notes.startsWith("# Vorkspace 1.0\n"));
+  const shipped = notes.split("## Up next\n")[0];
+  assert(shipped.includes("## In this release\n"));
+  for (const text of ["Rust", "GPUI", "Vox", "Copilot", "draft", "Incremental", "Signed updates"])
+    assert(shipped.includes(text), text);
+  const future = notes.split("## Up next\n")[1].split("## Longer term\n")[0];
+  for (const text of ["session management", "diff viewing", "Mermaid, SVG", "Bots and Vox", "performance"])
+    assert(future.includes(text), text);
+  assert(notes.includes("## Longer term\n\nModularization and plugins"));
+  assert(notes.includes("future plans, not features included in 1.0.0"));
+  assert(notes.endsWith(milestone.notes));
+});
+
 test("stamps all manifests and native build metadata without changing updater identity", () => {
   // Node resolves module URLs through macOS's /var -> /private/var symlink.
   const root = realpathSync(

@@ -332,8 +332,8 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
     (
         "inset-layout",
         Section::Appearance,
-        "New layout",
-        "classic preview sidebar navigation tabs inset workspace card rounded floating linear frame",
+        "New layout (Experimental)",
+        "experimental legacy classic preview sidebar navigation tabs inset workspace card rounded floating linear frame",
     ),
     (
         "interface-scale",

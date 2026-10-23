@@ -290,9 +290,9 @@ impl SettingsView {
             self.row(
                 Some("inset-layout"),
                 true,
-                "New layout",
-                Some("Use the redesigned sidebar and workspace.".into()),
-                vec![self.toggle("inset-layout", "New layout", inset, false, cx, |_, on, cx| {
+                "New layout (Experimental)",
+                Some("Try the experimental sidebar and workspace. Turn off to return to the legacy layout.".into()),
+                vec![self.toggle("inset-layout", "New layout (Experimental)", inset, false, cx, |_, on, cx| {
                     cx.emit(SettingsEvent::NewLayout(on))
                 })],
             ),

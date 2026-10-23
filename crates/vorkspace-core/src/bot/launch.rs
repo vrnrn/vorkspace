@@ -267,6 +267,24 @@ impl Launch {
         store: &mut crate::store::Store,
         project: &str,
     ) -> Result<crate::store::Session, String> {
+        self.create_configured(store, project, None)
+    }
+    /// Keep preparation under one owner until its parent link is durable. A
+    /// failed link cannot escape with resources no UI installation will own.
+    pub fn create_started(
+        &mut self,
+        store: &mut crate::store::Store,
+        project: &str,
+        caller: i64,
+    ) -> Result<crate::store::Session, String> {
+        self.create_configured(store, project, Some(caller))
+    }
+    fn create_configured(
+        &mut self,
+        store: &mut crate::store::Store,
+        project: &str,
+        caller: Option<i64>,
+    ) -> Result<crate::store::Session, String> {
         self.validate_workspace(project)?;
         let mut summary = store.create(self.provider.id(), project)?;
         let configured = (|| {
@@ -282,27 +300,27 @@ impl Launch {
             }
             store.title(summary.id, &self.title)?;
             store.configure_agent(summary.id, self.provider.id(), &self.settings)?;
+            if let Some(caller) = caller {
+                store.save_started_link(summary.id, caller)?;
+            }
             Ok::<_, String>(())
         })();
         if let Err(error) = configured {
-            let cleanup = self
-                .created_worktree
-                .take()
-                .map(CreatedWorktree::rollback)
-                .transpose()
-                .err();
-            let removed = store.delete(summary.id).err();
+            // Remove durable ownership before its working copy. If deletion
+            // fails, preserve both and report the retained resource explicitly.
+            let cleanup = match store.delete(summary.id) {
+                Ok(()) => self.created_worktree.take().map(CreatedWorktree::rollback).transpose().err(),
+                Err(error) => Some(format!(
+                    "Unused session {} could not be removed; its working copy{} was preserved: {error}",
+                    summary.id,
+                    self.created_worktree.as_ref().map(|tree|format!(" {}",tree.path)).unwrap_or_default(),
+                )),
+            };
             return Err(format!(
-                "Launch was not accepted: {error}{}{}",
+                "Launch was not accepted: {error}{}",
                 cleanup
                     .map(|error| format!(". {error}"))
                     .unwrap_or_default(),
-                removed
-                    .map(|error| format!(
-                        ". Unused session {} could not be removed: {error}",
-                        summary.id
-                    ))
-                    .unwrap_or_default()
             ));
         }
         summary.title = self.title.clone();
@@ -461,6 +479,109 @@ mod tests {
             .unwrap_err()
             .contains("title failure"));
         assert!(store.sessions().unwrap().is_empty());
+    }
+    #[test]
+    fn started_launch_persists_parent_link_in_both_schemas() {
+        for shared in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("state.db");
+            let open = || {
+                if shared {
+                    crate::store::Store::open_vorkspace(&path)
+                } else {
+                    crate::store::Store::open(&path)
+                }
+            };
+            let mut store = open().unwrap();
+            let caller = store.create("codex", "/project").unwrap().id;
+            let mut launch = Launch::parse(
+                &json!({"prompt":"Child request"}),
+                "codex",
+                "/project",
+                "/project",
+                Settings::default(),
+                true,
+            )
+            .unwrap();
+            let summary = launch
+                .create_started(&mut store, "/project", caller)
+                .unwrap();
+            assert_eq!(
+                store.started_links().unwrap().get(&summary.id),
+                Some(&caller)
+            );
+            drop(store);
+            let reopened = open().unwrap();
+            assert_eq!(
+                reopened.started_links().unwrap().get(&summary.id),
+                Some(&caller)
+            );
+            assert_eq!(reopened.sessions().unwrap().len(), 2);
+        }
+    }
+    #[test]
+    fn failed_configuration_keeps_worktree_if_session_deletion_fails() {
+        for shared in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let project = root.path().join("project");
+            std::fs::create_dir(&project).unwrap();
+            for args in [
+                vec!["init", "-q"],
+                vec![
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "--allow-empty",
+                    "-qm",
+                    "initial",
+                ],
+            ] {
+                assert!(std::process::Command::new("git")
+                    .current_dir(&project)
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success());
+            }
+            let path = root.path().join("state.db");
+            let mut store = if shared {
+                crate::store::Store::open_vorkspace(&path)
+            } else {
+                crate::store::Store::open(&path)
+            }
+            .unwrap();
+            let table = if shared {
+                "sessions"
+            } else {
+                "native_sessions"
+            };
+            rusqlite::Connection::open(&path).unwrap().execute_batch(&format!("CREATE TRIGGER reject_title BEFORE UPDATE OF title ON {table} BEGIN SELECT RAISE(ABORT,'injected title failure'); END;
+                CREATE TRIGGER reject_cleanup BEFORE DELETE ON {table} BEGIN SELECT RAISE(ABORT,'injected cleanup failure'); END;")).unwrap();
+            let project_text = project.to_str().unwrap();
+            let mut launch = Launch::parse(
+                &json!({"prompt":"Child request","workspaceMode":"worktree"}),
+                "codex",
+                project_text,
+                project_text,
+                Settings::default(),
+                true,
+            )
+            .unwrap();
+            let error = launch
+                .create_started(&mut store, project_text, 1)
+                .unwrap_err();
+            assert!(error.contains("injected title failure"), "{error}");
+            assert!(error.contains("injected cleanup failure"), "{error}");
+            assert!(error.contains("preserved"), "{error}");
+            let tree = launch.settings.worktree_cwd.as_ref().unwrap();
+            assert!(error.contains(tree), "{error}");
+            assert!(Path::new(tree).is_dir());
+            assert_eq!(store.sessions().unwrap().len(), 1);
+            assert_eq!(crate::git::snapshot(&project).unwrap().worktrees.len(), 2);
+        }
     }
     #[test]
     fn new_worktree_is_rolled_back_after_a_later_database_failure() {

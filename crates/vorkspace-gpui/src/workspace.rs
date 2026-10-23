@@ -100,7 +100,6 @@ pub(crate) struct Workspace {
     /// React's classic layout: a full-height sidebar beside a full-height
     /// workspace that holds its own tabs and footer, instead of the inset card.
     pub classic_layout: bool,
-    pub new_layout_prompt_dismissed: bool,
     pub preferences: crate::settings::Preferences,
     pub session_filters: vorkspace_core::session_filters::Filters,
     pub project_appearance: HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
@@ -263,8 +262,7 @@ impl Default for Workspace {
             layouts: Default::default(),
             focused: Default::default(),
             docks: Default::default(),
-            classic_layout: false,
-            new_layout_prompt_dismissed: false,
+            classic_layout: true,
             preferences: crate::settings::Preferences::default(),
             session_filters: Default::default(),
             project_appearance: Default::default(),
@@ -768,6 +766,24 @@ pub(crate) fn project_name(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn layout_defaults_to_legacy_and_preserves_explicit_saved_choices() {
+        assert!(Workspace::default().classic_layout);
+        assert!(
+            serde_json::from_str::<Workspace>("{}")
+                .unwrap()
+                .classic_layout
+        );
+        for classic in [false, true] {
+            let saved =
+                serde_json::json!({"classic_layout":classic,"new_layout_prompt_dismissed":false});
+            let restored: Workspace = serde_json::from_value(saved).unwrap();
+            assert_eq!(restored.classic_layout, classic);
+            let reopened: Workspace =
+                serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
+            assert_eq!(reopened.classic_layout, classic);
+        }
+    }
     #[test]
     fn navigation_prunes_closed_tabs_and_a_new_visit_discards_forward() {
         let mut h = VisitHistory::default();

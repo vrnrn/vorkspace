@@ -8,7 +8,6 @@ use crate::notifications::{
     file_error::{FileActionError, FileActionErrorEvent},
     github_activity::{self, GithubActivity, GithubActivityEvent},
     harness_updates::{HarnessUpdates, HarnessUpdatesEvent},
-    layout_notice::{LayoutNotice, LayoutNoticeEvent},
     linked_activity::{Cleanup, LinkedActivity, LinkedActivityEvent},
     platform, reminders,
 };
@@ -19,7 +18,6 @@ pub(super) struct State {
     pub harness: Entity<HarnessUpdates>,
     pub approvals: Entity<ApprovalNotices>,
     pub reminders: Entity<reminders::View>,
-    pub layout: Entity<LayoutNotice>,
     pub installed: Entity<InstalledUpdateNotice>,
     pub file_error: Entity<FileActionError>,
     pub reminder_error: Option<String>,
@@ -52,12 +50,6 @@ impl State {
                 .new(|cx| HarnessUpdates::new(workspace.preferences.hidden_providers.clone(), cx)),
             approvals: cx.new(|_| ApprovalNotices::default()),
             reminders: cx.new(|_| reminders::View::default()),
-            layout: cx.new(|_| {
-                LayoutNotice::new(
-                    !workspace.classic_layout,
-                    workspace.new_layout_prompt_dismissed,
-                )
-            }),
             installed: cx.new(|_| InstalledUpdateNotice::new(None)),
             file_error: cx.new(|_| FileActionError::new()),
             reminder_error: None,
@@ -161,18 +153,6 @@ impl Shell {
                             view.decide_notification_request(request_id, decision.clone(), cx);
                         });
                     }
-                    cx.notify();
-                }
-            },
-        ));
-        self.observations.push(cx.subscribe(
-            &self.notification_state.layout,
-            |this, _, event, cx| {
-                this.workspace.new_layout_prompt_dismissed = true;
-                if matches!(event, LayoutNoticeEvent::Try) && this.workspace.classic_layout {
-                    this.toggle_layout(cx);
-                } else {
-                    this.persist(cx);
                     cx.notify();
                 }
             },
@@ -528,13 +508,6 @@ impl Shell {
         let error = self.notification_state.reminder_error.clone();
         self.notification_state.reminders.update(cx, |notices, cx| {
             notices.sync(due, error, prefs.notifications, cx)
-        });
-        self.notification_state.layout.update(cx, |notice, cx| {
-            notice.set_snapshot(
-                !self.workspace.classic_layout,
-                self.workspace.new_layout_prompt_dismissed,
-                cx,
-            )
         });
     }
 
@@ -909,9 +882,6 @@ impl Shell {
             })
             .when(state.harness.read(cx).is_visible(), |d| {
                 d.child(div().w(px(340.)).max_w_full().child(state.harness.clone()))
-            })
-            .when(state.layout.read(cx).is_visible(), |d| {
-                d.child(div().w(px(340.)).max_w_full().child(state.layout.clone()))
             })
             .when(!state.approvals.read(cx).is_empty(), |d| {
                 d.child(
