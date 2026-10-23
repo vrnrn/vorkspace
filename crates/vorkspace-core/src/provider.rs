@@ -2109,20 +2109,28 @@ mod process_tests {
     #[test]
     fn cancellation_reaps_child_and_descendant_promptly() {
         for kind in Kind::ALL {
-            let (_tmp, mut request) = fixture("#!/bin/sh\nsleep 30 &\nwait\n");
+            let (_tmp, mut request) =
+                fixture("#!/bin/sh\nsleep 30 &\nprintf ready > ready\nwait\n");
             request.kind = kind;
             request.settings.access = AccessMode::ReadOnly;
+            let ready = request.cwd.join("ready");
             let cancel = Arc::new(AtomicBool::new(false));
             let stop = cancel.clone();
             let timer = thread::spawn(move || {
-                thread::sleep(Duration::from_millis(60));
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !ready.exists() && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                let started = ready.exists();
+                let stopped_at = Instant::now();
                 stop.store(true, Ordering::Relaxed);
+                (started, stopped_at)
             });
-            let start = Instant::now();
             assert_eq!(run(request, cancel, |_| Ok(())).unwrap_err(), "Stopped");
-            timer.join().unwrap();
+            let (started, stopped_at) = timer.join().unwrap();
+            assert!(started, "{} fixture did not start", kind.label());
             assert!(
-                start.elapsed() < Duration::from_secs(2),
+                stopped_at.elapsed() < Duration::from_secs(2),
                 "{} cancellation must not wait on provider output",
                 kind.label()
             );
@@ -2131,7 +2139,7 @@ mod process_tests {
     #[test]
     fn crash_preserves_coalesced_partial_text() {
         let (_tmp, request) = fixture(
-            "#!/bin/sh\nprintf '%s\\n' '{\"method\":\"item/agentMessage/delta\",\"params\":{\"itemId\":\"a\",\"delta\":\"partial\"}}'\n",
+            "#!/bin/sh\nIFS= read -r init\nprintf '%s\\n' '{\"method\":\"item/agentMessage/delta\",\"params\":{\"itemId\":\"a\",\"delta\":\"partial\"}}'\n",
         );
         let mut text = String::new();
         let result = run(request, Arc::new(AtomicBool::new(false)), |events| {
@@ -2200,7 +2208,7 @@ for line in sys.stdin:
 
     #[test]
     fn malformed_provider_json_fails() {
-        let (_tmp, request) = fixture("#!/bin/sh\nprintf '{invalid json\\n'\n");
+        let (_tmp, request) = fixture("#!/bin/sh\nIFS= read -r init\nprintf '{invalid json\\n'\n");
         let error = run(request, Arc::new(AtomicBool::new(false)), |_| Ok(())).unwrap_err();
         assert!(error.starts_with("Invalid provider JSON:"), "{error}");
     }

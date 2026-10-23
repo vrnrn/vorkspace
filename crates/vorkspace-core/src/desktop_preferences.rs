@@ -101,7 +101,11 @@ impl DesktopPreferences {
         paths.sort();
         paths
             .into_iter()
-            .find_map(|path| Self::read_database(&path).ok())
+            .find_map(|path| {
+                Self::read_database(&path)
+                    .ok()
+                    .filter(|preferences| preferences.available)
+            })
             .unwrap_or_default()
     }
 
@@ -133,10 +137,8 @@ impl DesktopPreferences {
             }
         }
         let values = crate::compatibility::desktop_preferences(values);
-        Ok(Self {
-            values,
-            available: true,
-        })
+        let available = !values.is_empty();
+        Ok(Self { values, available })
     }
 
     /// Reconcile current desktop project settings on every workspace read.
@@ -668,6 +670,69 @@ mod tests {
         assert!(desktop_origin(&origin("https", "tauri.localhost")));
         assert!(!desktop_origin(b"tauri localhost"));
         assert_eq!(decode_webkit_value(&[0]), None);
+    }
+
+    #[test]
+    fn skips_empty_normalized_origins_and_keeps_the_source_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        // The first origin sorts first but carries no app-owned key after
+        // compatibility normalization. It must not mask the later snapshot.
+        let (empty, empty_bytes) =
+            create_origin_under(root.path(), "a-empty", &[("unrelated.key", "value")]);
+        let (populated, populated_bytes) = create_origin_under(
+            root.path(),
+            "b-populated",
+            &[("vorkspace.modelControls", "beside")],
+        );
+        let preferences = DesktopPreferences::load_webkit(root.path());
+        assert!(preferences.is_available());
+        assert_eq!(preferences.get("vorkspace.modelControls"), Some("beside"));
+        assert_eq!(std::fs::read(empty).unwrap(), empty_bytes);
+        assert_eq!(std::fs::read(populated).unwrap(), populated_bytes);
+
+        let all_empty = tempfile::tempdir().unwrap();
+        let (path, bytes) = create_origin_under(all_empty.path(), "only-empty", &[]);
+        let preferences = DesktopPreferences::load_webkit(all_empty.path());
+        assert!(!preferences.is_available());
+        let mut workspace = json!({
+            "projects": ["/code/native"],
+            "project": "/code/native",
+            "preferences": {"model_controls": "beside"},
+            "desktop_project_preferences": {"model_controls": "beside"}
+        });
+        let original = workspace.clone();
+        preferences.apply_workspace(&mut workspace);
+        assert_eq!(workspace, original);
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+
+    fn create_origin_under(
+        root: &Path,
+        name: &str,
+        entries: &[(&str, &str)],
+    ) -> (std::path::PathBuf, Vec<u8>) {
+        let path = root
+            .join(name)
+            .join(name)
+            .join("LocalStorage/localstorage.sqlite3");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path.parent().unwrap().parent().unwrap().join("origin"),
+            origin("tauri", "localhost"),
+        )
+        .unwrap();
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE ItemTable(key TEXT,value BLOB)")
+            .unwrap();
+        for (key, value) in entries {
+            conn.execute(
+                "INSERT INTO ItemTable VALUES(?1,?2)",
+                rusqlite::params![key, value],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        (path.clone(), std::fs::read(path).unwrap())
     }
 
     #[test]
