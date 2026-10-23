@@ -407,6 +407,23 @@ pub(crate) fn syntax_color(kind: &str) -> Hsla {
     )
 }
 
+/// Resolve cached Dark+ grammar colors through the live appearance palette.
+pub(crate) fn diff_syntax_color(color: u32) -> Hsla {
+    let kind = match color {
+        0x569cd6 | 0xc586c0 => "var(--syntax-keyword)",
+        0xdcdcaa => "var(--syntax-callable)",
+        0xce9178 | 0xd7ba7d => "var(--syntax-string)",
+        0x4ec9b0 | 0xb8d7a3 => "var(--syntax-type)",
+        0xb5cea8 => "var(--syntax-number)",
+        0x6a9955 | 0x608b4e => "var(--syntax-comment)",
+        0x9cdcfe => "var(--syntax-property)",
+        0xd16969 | 0x646695 => "var(--syntax-meta)",
+        0xf44747 => "var(--syntax-invalid)",
+        _ => return content(0.92),
+    };
+    syntax_color(kind)
+}
+
 fn diff_palette(name: &str, light: bool) -> [u32; 4] {
     match (name, light) {
         ("colorblind", false) => [0x388bfd, 0xdb6d28, 0x79c0ff, 0xffa657],
@@ -442,6 +459,31 @@ pub(crate) fn diff_background(add: bool, gutter: bool) -> Hsla {
 #[cfg(test)]
 mod composer_tests {
     use super::*;
+
+    #[test]
+    fn cached_diff_tokens_follow_live_light_dark_and_custom_palettes() {
+        let saved = TOKENS.with(|tokens| *tokens.borrow());
+        let mut preferences = crate::settings::Preferences::default();
+        configure(&preferences, false, true);
+        let dark = diff_syntax_color(0xd4d4d4);
+        preferences.theme = "light".into();
+        configure(&preferences, false, true);
+        let light = diff_syntax_color(0xd4d4d4);
+        assert!(dark.l > 0.6 && light.l < 0.3);
+        assert_eq!(
+            diff_syntax_color(0x569cd6),
+            syntax_color("var(--syntax-keyword)")
+        );
+        let keyword = diff_syntax_color(0x569cd6);
+        preferences.workspace_theme = "harbor".into();
+        configure(&preferences, false, true);
+        assert_ne!(keyword, diff_syntax_color(0x569cd6));
+        assert_eq!(
+            diff_syntax_color(0x6a9955),
+            syntax_color("var(--syntax-comment)")
+        );
+        TOKENS.with(|tokens| *tokens.borrow_mut() = saved);
+    }
 
     #[test]
     fn accent_reset_and_theme_switch_preserve_readable_controls() {

@@ -834,9 +834,6 @@ impl Service {
         }
     }
     pub fn diff(&self, item: &Item) -> Result<Diff, String> {
-        self.diff_context(item, false)
-    }
-    pub fn diff_context(&self, item: &Item, full_context: bool) -> Result<Diff, String> {
         match item.provider.as_str() {
             "gitlab" => convert(gitlab::gitlab_mr_diff(
                 self.data_dir.clone(),
@@ -847,7 +844,6 @@ impl Service {
                 self.project(item),
                 &item.repo,
                 item.number,
-                full_context,
             )?),
             _ => Err("This issue has no pull request diff".into()),
         }
@@ -909,12 +905,7 @@ fn run_command(
         .env("GH_PAGER", "cat")
         .env("GIT_PAGER", "cat");
     crate::scm::shell::apply_gui_env(&mut command);
-    let output = if program == "gh" {
-        bounded::output(&mut command)?
-    } else {
-        crate::process::configure_child(&mut command);
-        command.output().map_err(|e| e.to_string())?
-    };
+    let output = bounded::output(&mut command)?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();

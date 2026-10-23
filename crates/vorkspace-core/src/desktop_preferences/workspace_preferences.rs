@@ -139,8 +139,8 @@ impl DesktopPreferences {
             (
                 "diff_view",
                 "diffViewer",
-                &["editor", "unified"][..],
-                "editor",
+                &["unified", "split", "editor"][..],
+                "unified",
             ),
             (
                 "transcript_layout",

@@ -11,6 +11,12 @@ and automation trigger choices. Saved connection details, filters, read
 state, and default Bot choices remain available when it is enabled again.
 Disabling a source does not log out of GitHub CLI or delete credentials.
 
+The GitHub Code tab handles large diffs using the pull request's exact local
+commit objects when available, or paginated file patches otherwise. Reconstruction
+does not change the checkout or index. It retains up to 2 MiB of patches; the API
+fallback lists up to 3,000 files. Omitted patches or incomplete results are marked
+as truncated, and available hunks stay associated with their own file.
+
 Jira and GitLab offer a **Default Bot** in Settings. It is preselected as the
 destination when sending an item to chat. The destination menu also allows
 choosing another Bot or local project for that item. A missing or unavailable
@@ -26,3 +32,8 @@ successful comment or action in the app do not produce a cue.
 Old desktop connector switches, Jira filters, and default Bot choices are read
 from existing preferences. Subsequent changes are saved in the native settings
 database. Opening the app does not rewrite or delete existing credential files.
+
+All change reviews use **Unified** or **Side by side**. The choice is shared by
+Inbox, working-tree, commit, and session reviews and is saved for the next launch.
+Reviews show changed hunks with nearby context; there is no full-file diff mode.
+Ordinary files still open in the file editor.

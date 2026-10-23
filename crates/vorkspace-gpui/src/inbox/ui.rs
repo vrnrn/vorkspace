@@ -2001,50 +2001,12 @@ impl Inbox {
             .into_any_element()
     }
 
-    fn diff_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn diff_view(&self, _cx: &mut Context<Self>) -> AnyElement {
         div()
             .min_h_0()
             .flex_1()
             .flex()
             .flex_col()
-            .child(
-                div()
-                    .h(px(32.))
-                    .px(px(12.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .when(
-                        self.item().is_some_and(|item| item.provider == "github"),
-                        |d| {
-                            d.child(
-                                action("inbox-diff-hunks", "Hunks")
-                                    .h(px(24.))
-                                    .when(!self.diff_full, |d| d.bg(content(0.1)))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        if this.diff_full {
-                                            this.diff_full = false;
-                                            this.diff = None;
-                                            this.set_tab(Tab::Code, cx);
-                                        }
-                                    })),
-                            )
-                            .child(
-                                action("inbox-diff-full", "Full file")
-                                    .h(px(24.))
-                                    .when(self.diff_full, |d| d.bg(content(0.1)))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        if !this.diff_full {
-                                            this.diff_full = true;
-                                            this.diff = None;
-                                            this.set_tab(Tab::Code, cx);
-                                        }
-                                    })),
-                            )
-                        },
-                    ),
-            )
             .when(self.extra_loading, |d| d.child(message("Loading changes…")))
             .when_some(self.extra_error.clone(), |d, text| d.child(error(text)))
             .when(self.diff.is_some(), |d| {

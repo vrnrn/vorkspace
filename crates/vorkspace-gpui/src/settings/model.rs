@@ -391,7 +391,7 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "diff-view",
         Section::Chat,
         "Diff view",
-        "unified editor review changes working tree",
+        "unified side by side split review changes working tree",
     ),
     (
         "agent-clis",

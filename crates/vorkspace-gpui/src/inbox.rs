@@ -72,7 +72,6 @@ pub(crate) struct Inbox {
     comments: Vec<(model::Comment, Entity<document::InboxDocument>)>,
     diff: Option<Diff>,
     diff_view: Entity<DiffView>,
-    diff_full: bool,
     checks: Option<Checks>,
     tab: Tab,
     loading: bool,
@@ -252,7 +251,6 @@ impl Inbox {
             comments: vec![],
             diff: None,
             diff_view,
-            diff_full: false,
             checks: None,
             tab: Tab::Summary,
             loading: false,
@@ -679,7 +677,6 @@ impl Inbox {
         self.focus_comment = false;
         self.tab = Tab::Summary;
         self.diff = None;
-        self.diff_full = false;
         self.extra_request += 1;
         self.diff_view
             .update(cx, |view, cx| view.set_files(vec![], cx));
@@ -702,7 +699,6 @@ impl Inbox {
         self.comment
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         if let Some(item) = self.item() {
-            self.diff_full = item.kind == "pr" && item.provider == "github";
             if self.active {
                 self.state.seen.mark(&item);
                 self.save();
@@ -848,11 +844,10 @@ impl Inbox {
         self.extra_request += 1;
         let request = self.extra_request;
         let key = item.key();
-        let full_context = self.diff_full;
         let service = self.service.clone();
         let task = cx.background_executor().spawn(async move {
             if tab == Tab::Code {
-                service.diff_context(&item, full_context).map(|diff| {
+                service.diff(&item).map(|diff| {
                     let files = diff::models(&diff);
                     (Some((diff, files)), None)
                 })

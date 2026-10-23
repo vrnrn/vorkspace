@@ -7483,6 +7483,20 @@ impl Render for Shell {
                 this.invalidate_chrome(cx);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &crate::diff_view::Unified, _, cx| {
+                this.workspace.preferences.diff_view = "unified".into();
+                this.apply_preferences(cx);
+                this.persist(cx);
+                cx.notify();
+            }))
+            .on_action(
+                cx.listener(|this, _: &crate::diff_view::SideBySide, _, cx| {
+                    this.workspace.preferences.diff_view = "split".into();
+                    this.apply_preferences(cx);
+                    this.persist(cx);
+                    cx.notify();
+                }),
+            )
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_project_rail(cx)))
             .on_action(cx.listener(|this, _: &ToggleRightPanel, window, cx| {
                 this.toggle_right_panel(window, cx)

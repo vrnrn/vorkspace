@@ -359,23 +359,7 @@ impl ReviewPane {
             cx.subscribe(&git, |this, _, _: &GitChanged, cx| {
                 this.refresh(cx);
             }),
-            cx.observe_global::<crate::settings::Preferences>(|this, cx| {
-                let editor_mode = cx.global::<crate::settings::Preferences>().diff_view == "editor";
-                if this.sources.get(this.state.active).is_some_and(|source| {
-                    matches!(source.tab, ReviewTab::Changes { path: Some(_), .. })
-                        && source.editor_mode != editor_mode
-                }) {
-                    this.remember_body_focus(cx);
-                }
-                for source in &mut this.sources {
-                    if matches!(source.tab, ReviewTab::Changes { path: Some(_), .. }) {
-                        source.editor_mode = editor_mode;
-                        if !editor_mode && let Some(editor) = &source.editor {
-                            editor.update(cx, |e, cx| e.set_visible(false, cx));
-                        }
-                    }
-                }
-                this.load_active(cx);
+            cx.observe_global::<crate::settings::Preferences>(|_, cx| {
                 cx.notify();
             }),
         ];
@@ -423,30 +407,20 @@ impl ReviewPane {
             };
             this.diff_event(ix, event, cx);
         });
-        let editor_mode = matches!(tab, ReviewTab::File { .. })
-            || cx
-                .try_global::<crate::settings::Preferences>()
-                .is_none_or(|p| p.diff_view == "editor");
+        let editor_mode = matches!(tab, ReviewTab::File { .. });
         let editor_path = match &tab {
-            ReviewTab::File { path, .. } => Some((path, false)),
-            ReviewTab::Changes {
-                path: Some(path), ..
-            } => Some((path, true)),
+            ReviewTab::File { path, .. } => Some(path),
             _ => None,
         };
-        let editor = if let Some((path, show_diff)) = editor_path {
-            Some(cx.new(|cx| {
-                let mut editor = if self.deferred || !editor_mode {
+        let editor = editor_path.map(|path| {
+            cx.new(|cx| {
+                if self.deferred || !editor_mode {
                     FileEditor::new_deferred(path.clone(), self.git.clone(), cx)
                 } else {
                     FileEditor::new(path.clone(), self.git.clone(), cx)
-                };
-                editor.show_diff = show_diff;
-                editor
-            }))
-        } else {
-            None
-        };
+                }
+            })
+        });
         let editor_events = editor.as_ref().map(|editor| {
             cx.subscribe(editor, |this, editor, event: &FileEvent, cx| {
                 if matches!(event, FileEvent::Dirty) {
@@ -2233,10 +2207,9 @@ mod tests {
                 cx.new(|cx| {
                     let mut pane = ReviewPane::new(git, Default::default(), cx);
                     pane.open(
-                        ReviewTab::Changes {
+                        ReviewTab::File {
                             cwd: cwd.clone(),
-                            path: Some(path.clone()),
-                            staged: Some(false),
+                            path: path.clone(),
                         },
                         cx,
                     );
@@ -2251,7 +2224,6 @@ mod tests {
             .update(cx, |pane, w, cx| {
                 assert!(pane.sources[0].editor_mode);
                 let editor = pane.active_editor().unwrap();
-                assert!(editor.read(cx).show_diff);
                 editor
                     .read(cx)
                     .input
@@ -2269,14 +2241,12 @@ mod tests {
         cx.run_until_parked();
         window
             .update(cx, |pane, _, cx| {
-                assert!(!pane.sources[0].editor_mode);
+                assert!(pane.sources[0].editor_mode);
                 assert!(editor.read(cx).dirty);
             })
             .unwrap();
         cx.update(|cx| {
-            cx.update_global::<crate::settings::Preferences, _>(|p, _| {
-                p.diff_view = "editor".into()
-            })
+            cx.update_global::<crate::settings::Preferences, _>(|p, _| p.diff_view = "split".into())
         });
         cx.run_until_parked();
         window
@@ -2293,6 +2263,9 @@ mod tests {
                     cx,
                 );
                 assert_eq!(pane.sources.len(), 2);
+                assert!(!pane.sources[1].editor_mode);
+                assert!(pane.sources[1].editor.is_none());
+                assert!(editor.read(cx).dirty);
             })
             .unwrap();
     }
