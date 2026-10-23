@@ -4,6 +4,10 @@ Instead of constantly switching between your web browser and your code editor to
 
 For the full setup guide, see [Jira Cloud inbox](../jira.md).
 
+The Jira enable switch hides Jira without deleting its login details or filters.
+You can also pick a default Bot, then choose another Bot or project for an
+individual ticket before sending it to chat.
+
 ---
 
 ## 1. How to Connect

@@ -224,7 +224,9 @@ impl Bots {
             let run = std::rc::Rc::new(move |id: &str| {
                 let _ = entity.update(&mut *app.borrow_mut(), |this, cx| {
                     if id == "quit" {
-                        crate::quit(cx);
+                        // Use the workspace's unsaved-file guard, including
+                        // when this native menu belongs to a floating Bot.
+                        cx.defer(|cx| cx.dispatch_action(&crate::Quit));
                     } else if id == "composer" {
                         if let Some(handle) = this.parent_window {
                             let owner = this.owner.clone();
@@ -248,7 +250,12 @@ impl Bots {
                 .roster
                 .bots
                 .iter()
-                .map(|m| (m.id.clone(), m.label()))
+                .map(|m| status::MenuBot {
+                    id: m.id.clone(),
+                    name: m.label(),
+                    mascot: m.mascot.clone(),
+                    color: m.color,
+                })
                 .collect::<Vec<_>>();
             if let Some(status) = &mut self.status {
                 status.update(&bots, run);
@@ -997,6 +1004,7 @@ impl Bots {
             self.memory_edit = None;
             self.settings = None;
         }
+        self.close_classic_channels(cx);
         self.active = Some(id.into());
         self.ensure_chat(id, cx);
         self.reload_files(id, cx);
@@ -1020,6 +1028,7 @@ impl Bots {
         }
     }
     pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
+        self.close_classic_channels(cx);
         self.save_open_file(cx);
         self.pause_changes(cx);
         self.hide_html(cx);

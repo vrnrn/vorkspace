@@ -437,7 +437,8 @@ impl Conversation {
         )
     }
     pub(crate) fn ready_for_external(&self, cx: &gpui::App) -> bool {
-        self.composer_draft.ready_for_replacement()
+        Kind::parse(&self.summary.provider).is_some()
+            && self.composer_draft.ready_for_replacement()
             && self.pending_attachments.is_empty()
             && self.history_ready()
             && !self.editing_last_turn.pending()

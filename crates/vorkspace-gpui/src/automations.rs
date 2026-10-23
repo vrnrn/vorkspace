@@ -41,9 +41,7 @@ fn trigger_mark(kind: &str, side: f32) -> AnyElement {
     let (path, color) = match kind {
         "time" => ("clock", content(0.45)),
         "github" => ("inbox-github", content(0.65)),
-        "linear" => ("inbox-linear", content(0.65)),
         "jira" => ("inbox-jira", rgb(0x2684ff).into()),
-        "azuredevops" => ("inbox-azuredevops", content(0.65)),
         _ => ("zap", content(0.45)),
     };
     icon(path, side).text_color(color).into_any_element()

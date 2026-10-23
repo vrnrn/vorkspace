@@ -822,7 +822,20 @@ impl Conversation {
             .update(cx, |input, cx| input.set_text(prompt, cx));
         self.send(cx);
     }
+    fn execution_provider(&self) -> Result<Kind, String> {
+        Kind::parse(&self.summary.provider).ok_or_else(|| {
+            format!(
+                "Provider {} is no longer supported. Saved history and drafts are retained.",
+                self.summary.provider
+            )
+        })
+    }
     fn send(&mut self, cx: &mut Context<Self>) {
+        if let Err(error) = self.execution_provider() {
+            self.status = error;
+            cx.notify();
+            return;
+        }
         if let Some(error) = &self.composer_draft.error {
             self.status = error.clone();
             cx.notify();
@@ -953,6 +966,14 @@ impl Conversation {
         }
     }
     fn launch_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
+        let kind = match self.execution_provider() {
+            Ok(kind) => kind,
+            Err(error) => {
+                self.status = error;
+                cx.notify();
+                return;
+            }
+        };
         if self.stopping {
             let mode = if self.settings.orchestrator {
                 Some("orchestrator")
@@ -985,7 +1006,6 @@ impl Conversation {
         if self.account_switching {
             return;
         }
-        let kind = Kind::from_id(&self.summary.provider);
         if self.settings.account.id != vorkspace_core::accounts::DEFAULT
             && crate::accounts::get(cx)
                 .is_some_and(|center| !center.read(cx).book.exists(kind, &self.settings.account.id))
@@ -4359,8 +4379,9 @@ mod menu_tests {
             let window = conversation(cx);
             window
                 .update(cx, |view, _, cx| {
-                    // An unsupported synthetic provider stops before any CLI I/O.
-                    view.summary.provider = "fixture".into();
+                    // An absent directory prevents the supported CLI from starting.
+                    view.summary.provider = "codex".into();
+                    view.summary.cwd = "/missing/submitted-mode-project".into();
                     view.loaded = true;
                     view.input
                         .update(cx, |i, cx| i.set_text("check the composer".into(), cx));

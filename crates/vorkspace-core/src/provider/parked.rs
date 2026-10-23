@@ -222,7 +222,6 @@ pub(super) fn enforce_idle_limit() {
         .iter()
         .map(|entry| (entry.wire.child.id(), entry.at, entry.owner))
         .collect();
-    entries.extend(opencode::idle_entries());
     entries.sort_by_key(|(_, at, _)| *at);
     let limit = LIMIT.load(Ordering::Relaxed);
     let excess = entries.len().saturating_sub(limit);
@@ -241,7 +240,6 @@ pub(super) fn enforce_idle_limit() {
     }
     let retired = remove_matching(idle_pool(), |entry| retire.contains(&entry.wire.child.id()));
     drop(retired);
-    opencode::retire_idle(&retire);
 }
 pub(super) fn key(request: &Request) -> String {
     let mut settings = request.settings.clone();

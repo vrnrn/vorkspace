@@ -1,6 +1,4 @@
-//! Port of src/features/settings/ui/SettingsView.tsx and
-//! src/app/shell/SettingsRail.tsx: the Settings pages, their rail and the
-//! breadcrumb, search and actions the inset layout puts in its title bar.
+//! Settings pages, their navigation rail, and page-header actions.
 mod data;
 mod keymap;
 #[cfg(test)]
@@ -17,7 +15,6 @@ pub(crate) mod widgets;
 
 pub(crate) use keymap::apply as apply_keybindings;
 pub(crate) use model::Section;
-pub(crate) use pages::command_shortcut;
 pub(crate) use preferences::{ModelChoice, Preferences};
 
 use crate::{
@@ -48,7 +45,6 @@ pub(crate) struct SettingsContext {
     pub remote: Option<std::sync::Arc<vorkspace_core::remote::Connections>>,
     pub bots: Vec<BotSetting>,
     pub vox_devices: Vec<(String, String)>,
-    pub classic: bool,
     /// The selected project, or empty outside one.
     pub cwd: String,
     pub project_label: String,
@@ -59,6 +55,13 @@ pub(crate) struct SettingsContext {
     pub quick_error: Option<String>,
     pub catalogs: HashMap<String, Vec<(String, String)>>,
     pub inbox_connections: HashMap<String, (bool, String)>,
+    pub inbox_connection_revision: u64,
+    pub inbox_connectors: vorkspace_core::inbox::Connectors,
+    pub inbox_data_dir: Option<std::path::PathBuf>,
+    pub jira_filter: vorkspace_core::inbox::JiraFilter,
+    pub jira_projects: Vec<(String, String)>,
+    pub hidden_jira_projects: Vec<String>,
+    pub inbox_bots: vorkspace_core::inbox::BotDefaults,
 }
 impl PartialEq for SettingsContext {
     fn eq(&self, other: &Self) -> bool {
@@ -69,7 +72,6 @@ impl PartialEq for SettingsContext {
         }
         self.vox_devices == other.vox_devices
             && self.bots == other.bots
-            && self.classic == other.classic
             && self.cwd == other.cwd
             && self.project_label == other.project_label
             && self.archived == other.archived
@@ -78,6 +80,13 @@ impl PartialEq for SettingsContext {
             && self.quick_error == other.quick_error
             && self.catalogs == other.catalogs
             && self.inbox_connections == other.inbox_connections
+            && self.inbox_connection_revision == other.inbox_connection_revision
+            && self.inbox_connectors == other.inbox_connectors
+            && self.inbox_data_dir == other.inbox_data_dir
+            && self.jira_filter == other.jira_filter
+            && self.jira_projects == other.jira_projects
+            && self.hidden_jira_projects == other.hidden_jira_projects
+            && self.inbox_bots == other.inbox_bots
     }
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -97,9 +106,12 @@ pub(crate) enum SettingsEvent {
     VoxMemory,
     CheckHarnessUpdates,
     ManageInboxProvider(String),
+    InboxConnectorEnabled(String, bool),
+    JiraFilter(vorkspace_core::inbox::JiraFilter),
+    JiraProject(String, bool),
+    InboxBot(String, String),
+    RefreshInbox,
     Changed(Box<Preferences>),
-    /// The Appearance page's experimental layout switch.
-    NewLayout(bool),
     Section(Section),
     OpenSession(i64),
     Archive(i64, bool),
@@ -224,6 +236,7 @@ pub(crate) struct SettingsView {
     provider_scope: String,
     mcp_filter: String,
     fields: HashMap<&'static str, Entity<Input>>,
+    inbox: pages::InboxState,
     connections: pages::ConnectionsState,
     skill_preview: Option<std::path::PathBuf>,
     skill_preview_text: Option<Result<std::sync::Arc<skill_document::DocumentData>, String>>,
@@ -358,6 +371,7 @@ impl SettingsView {
             provider_scope: "global".into(),
             mcp_filter: "all".into(),
             fields: HashMap::new(),
+            inbox: pages::InboxState::default(),
             connections: pages::ConnectionsState::default(),
             skill_preview: None,
             skill_preview_text: None,
@@ -411,6 +425,11 @@ impl SettingsView {
     }
     pub(crate) fn set_context(&mut self, ctx: SettingsContext, cx: &mut Context<Self>) {
         if self.ctx != ctx {
+            if self.ctx.inbox_connection_revision != ctx.inbox_connection_revision
+                || self.ctx.inbox_connectors != ctx.inbox_connectors
+            {
+                self.inbox.revision += 1;
+            }
             let remote_changed = match (&self.ctx.remote, &ctx.remote) {
                 (Some(a), Some(b)) => !std::sync::Arc::ptr_eq(a, b),
                 (None, None) => false,
@@ -502,8 +521,6 @@ impl SettingsView {
     fn restore_defaults(&mut self, cx: &mut Context<Self>) {
         self.accent_custom_open = false;
         self.update(cx, |p| p.restore_appearance());
-        // Appearance defaults return to the legacy layout.
-        cx.emit(SettingsEvent::NewLayout(false));
     }
     /// Jump to a search result, on this page or another.
     fn go(&mut self, result: model::SearchResult, cx: &mut Context<Self>) {
@@ -547,8 +564,7 @@ impl SettingsView {
         self.scroll.set_offset(gpui::point(offset.x, y));
     }
 
-    /// The breadcrumb, Restore defaults and search: in the inset title bar,
-    /// or the page's own 40px header row in the classic layout.
+    /// The breadcrumb, Restore defaults action, and settings search.
     pub(crate) fn header(&mut self, in_title_bar: bool, cx: &mut Context<Self>) -> AnyElement {
         let results = model::search(&self.search_query);
         let open = !self.search_query.trim().is_empty();

@@ -50,6 +50,17 @@ impl Drop for TemporaryMedia {
     }
 }
 
+fn private_temporary(path: &Path) -> Result<std::fs::File, String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path).map_err(|error| error.to_string())
+}
+
 /// Resolve an editor link against its workspace without touching disk.
 pub fn resolve_path(path: &Path, cwd: &Path) -> PathBuf {
     if super::remote::is_remote(path) {
@@ -112,16 +123,7 @@ pub fn read_document(path: &Path) -> Result<Document, String> {
                 "vorkspace-video-{}-{stamp}.{extension}",
                 std::process::id()
             ));
-            let mut options = std::fs::OpenOptions::new();
-            options.create_new(true).write(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options
-                .open(&temporary)
-                .map_err(|error| error.to_string())?;
+            let mut file = private_temporary(&temporary)?;
             let source = std::sync::Arc::new(TemporaryMedia { path: temporary });
             file.write_all(&bytes).map_err(|error| error.to_string())?;
             return Ok(Document::Video {
@@ -326,11 +328,7 @@ pub fn save_document(path: &Path, document: &TextDocument, text: &str) -> Result
         std::process::id()
     ));
     let bytes = document.encode(text);
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|e| e.to_string())?;
+    let mut file = private_temporary(&temporary)?;
     let result = (|| {
         file.write_all(&bytes).map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
@@ -391,6 +389,26 @@ fn matches_disk(path: &Path, expected: &[u8]) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn temporary_document_bytes_are_private_before_publication_and_never_replace_a_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("private.tmp");
+        let mut file = private_temporary(&path).unwrap();
+        file.write_all(b"unfinished private document").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        assert!(private_temporary(&path).is_err());
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"unfinished private document"
+        );
+    }
     #[test]
     fn remote_links_resolve_inside_the_host_and_text_keeps_host_limits() {
         let cwd = Path::new("remote://linux/home/code");

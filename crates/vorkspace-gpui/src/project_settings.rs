@@ -106,40 +106,7 @@ pub(crate) fn project_icon(appearance: &ProjectAppearance, project: &str, side: 
         ),
     }
 }
-/// Sidebar.tsx's CurrentProjectIcon: a 10px mascot inside a 20px tile.
-pub(crate) fn header_project_icon(appearance: &ProjectAppearance, project: &str) -> AnyElement {
-    if project.starts_with("remote://") && appearance.logo.is_none() {
-        return div()
-            .size(px(20.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(icon("internet", 14.).text_color(content(0.7)))
-            .into_any_element();
-    }
-    match &appearance.logo {
-        Some(path) => img(PathBuf::from(path))
-            .relative()
-            .left(px(-1.))
-            .size(px(20.))
-            .rounded(px(5.))
-            .object_fit(ObjectFit::Contain)
-            .flex_shrink_0()
-            .into_any_element(),
-        None => div()
-            .relative()
-            .left(px(-1.))
-            .size(px(20.))
-            .flex_shrink_0()
-            .rounded(px(5.))
-            .bg(content(0.08))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(project_icon(appearance, project, 10.))
-            .into_any_element(),
-    }
-}
+
 fn button(
     id: impl Into<gpui::ElementId>,
     label: impl Into<SharedString>,

@@ -156,8 +156,7 @@ mod tests {
     use gpui::{TestAppContext, WindowHandle};
     fn fixture(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
         let store = vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap();
-        let mut summary = store.create("codex", "/missing/ticket-project").unwrap();
-        summary.provider = "fixture".into();
+        let summary = store.create("codex", "/missing/ticket-project").unwrap();
         cx.update(|cx| {
             input::bind(cx);
             cx.open_window(Default::default(), |_, cx| {

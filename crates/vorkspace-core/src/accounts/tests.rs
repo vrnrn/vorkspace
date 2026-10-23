@@ -24,8 +24,8 @@ fn account_metadata_selection_and_removal_round_trip_without_credentials() {
     book.rename(Kind::Codex, DEFAULT, "Personal").unwrap();
     assert_eq!(book.list(Kind::Codex)[0].label, "Personal");
     assert!(book.remove(Kind::Codex, DEFAULT).is_err());
-    assert!(book.add(Kind::Devin, "Second").is_err());
-    assert!(book.add(Kind::OpenCode, "Second").is_err());
+    assert!(book.add(Kind::from_id("devin"), "Second").is_err());
+    assert!(book.add(Kind::from_id("opencode"), "Second").is_err());
     let store = Store::open(Path::new(":memory:")).unwrap();
     store.save_provider_accounts(&book).unwrap();
     let mut saved = store.provider_accounts().unwrap();
@@ -78,7 +78,7 @@ fn isolated_profiles_override_environment_and_cannot_escape_their_root() {
             .directory(Kind::Codex)
             .is_err());
     }
-    assert!(profile.directory(Kind::Devin).is_err());
+    assert!(profile.directory(Kind::from_id("devin")).is_err());
     assert_eq!(Profile::new(DEFAULT, root.path()), Profile::default());
     assert!(Profile::default().remove_credentials(Kind::Codex).is_err());
     let serialized = serde_json::to_string(&Settings {

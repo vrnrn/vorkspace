@@ -52,7 +52,6 @@ impl Shell {
                     Command::Sidebar => window.dispatch_action(Box::new(ToggleSidebar), cx),
                     Command::Panel => window.dispatch_action(Box::new(ToggleRightPanel), cx),
                     Command::Terminal => window.dispatch_action(Box::new(ToggleTerminal), cx),
-                    Command::Layout => window.dispatch_action(Box::new(ToggleLayout), cx),
                     Command::Plan | Command::Operator | Command::Orchestrator => {
                         if let Some(view) =
                             this.workspace.active.and_then(|id| this.sessions.get(&id))

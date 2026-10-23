@@ -200,11 +200,6 @@ pub(crate) fn pane_fill() -> Hsla {
 pub(crate) fn inset_chrome_wash() -> Hsla {
     content(0.05)
 }
-pub(crate) fn inset_pane_fill() -> Hsla {
-    TOKENS
-        .with(|tokens| tokens.borrow().as_ref().map(|t| t.inset_pane))
-        .unwrap_or_else(pane_fill)
-}
 pub(crate) fn section_label(label: &'static str) -> Div {
     div()
         .h(px(28.))
@@ -228,15 +223,9 @@ pub(crate) fn icon(path: &'static str, side: f32) -> Svg {
 pub(crate) fn provider_icon(provider: &str, side: f32) -> Div {
     let (path, monochrome, scale) = match provider {
         "claude" => ("claude.svg", false, 1.),
-        "cursor" => ("cursor.svg", true, 1.),
-        "grok" => ("grok.svg", true, 1.),
-        "opencode" => ("opencode.svg", true, 1.),
         "antigravity" => ("antigravity.svg", false, 1.),
         "pi" => ("pi.svg", true, 1.),
         "omp" => ("omp.svg", false, 1.),
-        "fx" => ("fx.svg", true, 1.),
-        "hermes" => ("hermes.svg", true, 0.72),
-        "devin" => ("devin.svg", true, 0.88),
         _ => ("codex.svg", false, 1.),
     };
     // Like React's currentColor / CSS masks, GPUI's SVG mask follows the theme.

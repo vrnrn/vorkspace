@@ -6,16 +6,7 @@ static STEER_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 
 impl Kind {
     pub fn can_steer(self) -> bool {
-        matches!(
-            self,
-            Self::Codex
-                | Self::Claude
-                | Self::Cursor
-                | Self::Pi
-                | Self::Omp
-                | Self::Hermes
-                | Self::OpenCode
-        )
+        matches!(self, Self::Codex | Self::Claude | Self::Pi | Self::Omp)
     }
 }
 
@@ -102,29 +93,6 @@ impl Protocol {
                 }
                 write_json(stdin, command)?;
             }
-            Kind::Cursor => {
-                let params =
-                    json!({"sessionId":self.acp_active_session(),"prompt":request.acp_content()?});
-                // Match Cursor's adapter: retry the older notification name
-                // only when writing the current one fails.
-                if write_json(
-                    stdin,
-                    json!({"jsonrpc":"2.0","method":"session/steer","params":params}),
-                )
-                .is_err()
-                {
-                    write_json(
-                        stdin,
-                        json!({"jsonrpc":"2.0","method":"_session/steer","params":params}),
-                    )?;
-                }
-                self.text_key = None;
-                return Ok(vec![Event::FollowUp(message)]);
-            }
-            Kind::Hermes | Kind::OpenCode => write_json(
-                stdin,
-                json!({"jsonrpc":"2.0","id":wire,"method":"session/prompt","params":{"sessionId":self.acp_active_session(),"prompt":request.acp_content()?}}),
-            )?,
             _ => unreachable!(),
         }
         self.steering.insert(wire, (message, Instant::now()));
@@ -166,8 +134,6 @@ impl Protocol {
         // JSON-RPC steer request deliberately waits without a response timer.
         let timeout = match self.request.kind {
             Kind::Pi | Kind::Omp => Duration::from_secs(15),
-            Kind::Hermes => Duration::from_secs(20),
-            Kind::OpenCode => Duration::from_secs(30),
             _ => return Vec::new(),
         };
         let expired: Vec<_> = self

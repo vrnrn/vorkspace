@@ -51,6 +51,48 @@ impl TitleTab {
     }
 }
 
+/// The classic sidebar's three tools. History is a subview of Changes rather
+/// than another top-level tab, but remains addressable for restored selection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum SidebarTab {
+    #[default]
+    Sessions,
+    Files,
+    Changes,
+    Graph,
+}
+impl SidebarTab {
+    pub fn normalize(order: &[Self]) -> Vec<Self> {
+        let mut tabs = Vec::new();
+        for tab in order
+            .iter()
+            .chain(&[Self::Sessions, Self::Files, Self::Changes])
+        {
+            if *tab != Self::Graph && !tabs.contains(tab) {
+                tabs.push(*tab);
+            }
+        }
+        tabs
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sessions => "Sessions",
+            Self::Files => "Explorer",
+            Self::Changes => "Changes",
+            Self::Graph => "History",
+        }
+    }
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Sessions => "message-multiple",
+            Self::Files => "folder",
+            Self::Changes => "git-compare",
+            Self::Graph => "git-branch",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Workspace {
@@ -75,6 +117,12 @@ pub(crate) struct Workspace {
     pub collapsed: HashSet<String>,
     pub sidebar_visible: bool,
     pub sidebar_width: f32,
+    pub project_rail_open: bool,
+    pub project_rail_width: f32,
+    /// Explicit native group choices override the retained desktop defaults.
+    pub project_group_collapsed: HashMap<String, bool>,
+    pub sidebar_tabs: HashMap<String, SidebarTab>,
+    pub sidebar_tab_order: Vec<SidebarTab>,
     pub compact_session_cards: bool,
     pub sidebar_notes_visible: bool,
     pub sidebar_automations_visible: bool,
@@ -97,8 +145,8 @@ pub(crate) struct Workspace {
     pub focused: HashMap<i64, i64>,
     /// Each project's terminal dock (ProjectTerminalDock), by project path.
     pub docks: HashMap<String, TerminalDock>,
-    /// React's classic layout: a full-height sidebar beside a full-height
-    /// workspace that holds its own tabs and footer, instead of the inset card.
+    /// The original desktop layout. Kept for older serialized workspaces;
+    /// restored state always selects this layout.
     pub classic_layout: bool,
     pub preferences: crate::settings::Preferences,
     pub session_filters: vorkspace_core::session_filters::Filters,
@@ -247,6 +295,11 @@ impl Default for Workspace {
             collapsed: HashSet::new(),
             sidebar_visible: true,
             sidebar_width: 260.,
+            project_rail_open: true,
+            project_rail_width: 200.,
+            project_group_collapsed: HashMap::new(),
+            sidebar_tabs: HashMap::new(),
+            sidebar_tab_order: SidebarTab::normalize(&[]),
             compact_session_cards: true,
             sidebar_notes_visible: true,
             sidebar_automations_visible: true,
@@ -275,8 +328,15 @@ impl Default for Workspace {
 impl Workspace {
     pub fn restore(saved: Option<&str>, sessions: &[(i64, String)], cwd: &str) -> Self {
         let mut state = saved
-            .and_then(|s| serde_json::from_str::<Self>(s).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|mut value| {
+                vorkspace_core::desktop_preferences::DesktopPreferences::restore_sidebar_preferences(
+                    &mut value,
+                );
+                serde_json::from_value::<Self>(value).ok()
+            })
             .unwrap_or_default();
+        state.classic_layout = true;
         if state.project.is_empty() {
             state.project = cwd.into();
         }
@@ -367,6 +427,12 @@ impl Workspace {
             state.open(*id);
         }
         state.sidebar_width = state.sidebar_width.clamp(200., 560.);
+        state.project_rail_width = if state.project_rail_width.is_finite() {
+            state.project_rail_width.clamp(180., 360.).round()
+        } else {
+            200.
+        };
+        state.sidebar_tab_order = SidebarTab::normalize(&state.sidebar_tab_order);
         state.right_panel_width = state
             .right_panel_width
             .clamp(crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX)
@@ -401,6 +467,22 @@ impl Workspace {
         }
         state.add_project(&state.project.clone());
         state
+    }
+    pub fn sidebar_tab(&self) -> SidebarTab {
+        self.sidebar_tabs
+            .get(&self.project)
+            .or_else(|| {
+                self.sidebar_tabs
+                    .get(&vorkspace_core::files::path_key(&self.project))
+            })
+            .copied()
+            .unwrap_or_else(|| {
+                self.sidebar_tab_order
+                    .iter()
+                    .find(|tab| **tab != SidebarTab::Graph)
+                    .copied()
+                    .unwrap_or_default()
+            })
     }
     pub fn add_project(&mut self, path: &str) {
         if !self.projects.iter().any(|p| p == path) {
@@ -767,7 +849,7 @@ pub(crate) fn project_name(path: &str) -> String {
 mod tests {
     use super::*;
     #[test]
-    fn layout_defaults_to_legacy_and_preserves_explicit_saved_choices() {
+    fn original_layout_is_used_for_fresh_and_previously_experimental_workspaces() {
         assert!(Workspace::default().classic_layout);
         assert!(
             serde_json::from_str::<Workspace>("{}")
@@ -777,12 +859,83 @@ mod tests {
         for classic in [false, true] {
             let saved =
                 serde_json::json!({"classic_layout":classic,"new_layout_prompt_dismissed":false});
-            let restored: Workspace = serde_json::from_value(saved).unwrap();
-            assert_eq!(restored.classic_layout, classic);
-            let reopened: Workspace =
-                serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
-            assert_eq!(reopened.classic_layout, classic);
+            let restored = Workspace::restore(Some(&saved.to_string()), &[], "/work");
+            assert!(restored.classic_layout);
+            let reopened = Workspace::restore(
+                Some(&serde_json::to_string(&restored).unwrap()),
+                &[],
+                "/work",
+            );
+            assert!(reopened.classic_layout);
         }
+    }
+    #[test]
+    fn sidebar_tools_keep_per_project_selection_and_normalize_main_tab_order() {
+        assert_eq!(
+            SidebarTab::normalize(&[SidebarTab::Changes, SidebarTab::Graph, SidebarTab::Changes]),
+            [SidebarTab::Changes, SidebarTab::Sessions, SidebarTab::Files]
+        );
+        let saved = serde_json::json!({
+            "project":"/work",
+            "project_rail_open":false,
+            "project_rail_width":900.,
+            "sidebar_tabs":{"/work":"graph","/other":"files"},
+            "sidebar_tab_order":["changes","graph","changes"]
+        });
+        let mut state = Workspace::restore(Some(&saved.to_string()), &[], "/work");
+        assert_eq!(state.sidebar_tab(), SidebarTab::Graph);
+        assert!(!state.project_rail_open);
+        assert_eq!(state.project_rail_width, 360.);
+        assert_eq!(
+            state.sidebar_tab_order,
+            [SidebarTab::Changes, SidebarTab::Sessions, SidebarTab::Files]
+        );
+        state.project = "/other".into();
+        assert_eq!(state.sidebar_tab(), SidebarTab::Files);
+        state
+            .sidebar_tabs
+            .insert("/other".into(), SidebarTab::Sessions);
+        state.project_rail_width = 225.;
+        let reopened =
+            Workspace::restore(Some(&serde_json::to_string(&state).unwrap()), &[], "/other");
+        assert_eq!(reopened.sidebar_tab(), SidebarTab::Sessions);
+        assert_eq!(reopened.project_rail_width, 225.);
+        state.project = "/new".into();
+        assert_eq!(state.sidebar_tab(), SidebarTab::Changes);
+    }
+    #[test]
+    fn earlier_native_save_recovers_original_sidebar_from_retained_desktop_metadata() {
+        let saved = serde_json::json!({
+            "project":"/work",
+            "preferences":{"sounds":false},
+            "desktop_preferences_metadata":{
+                "vorkspace.projectRailOpen":"0",
+                "vorkspace.projectRailWidth":"246",
+                "vorkspace.projectSidebarTabs.v1":r#"{"/work":"files"}"#,
+                "vorkspace.sidebarTabOrder":r#"["changes","inbox","sessions"]"#
+            }
+        });
+        let state = Workspace::restore(Some(&saved.to_string()), &[], "/work");
+        assert!(!state.project_rail_open);
+        assert_eq!(state.project_rail_width, 246.);
+        assert_eq!(state.sidebar_tab(), SidebarTab::Files);
+        assert!(!state.preferences.sounds);
+        assert_eq!(
+            serde_json::to_value(state.desktop_preferences_metadata).unwrap(),
+            saved["desktop_preferences_metadata"]
+        );
+        let malformed = serde_json::json!({
+            "project":"/work",
+            "project_rail_open":"invalid",
+            "project_rail_width":-20.,
+            "sidebar_tabs":{"/work":"files","/bad":7},
+            "sidebar_tab_order":["changes",null,"graph"]
+        });
+        let restored = Workspace::restore(Some(&malformed.to_string()), &[], "/work");
+        assert_eq!(restored.project, "/work");
+        assert!(restored.project_rail_open);
+        assert_eq!(restored.project_rail_width, 180.);
+        assert_eq!(restored.sidebar_tab(), SidebarTab::Files);
     }
     #[test]
     fn navigation_prunes_closed_tabs_and_a_new_visit_discards_forward() {

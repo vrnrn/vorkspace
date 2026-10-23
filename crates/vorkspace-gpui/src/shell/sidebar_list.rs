@@ -6,13 +6,10 @@ use vorkspace_core::session_groups::Entry;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Row {
-    Navigation,
-    Bots,
     Pinned,
     Folders,
     Group(Entry),
     Gap,
-    Heading { label: &'static str, first: bool },
     Session(i64),
     GroupedSession { id: i64, first: bool, last: bool },
     Empty,
@@ -102,21 +99,6 @@ impl SidebarList {
             );
         }
         self.rows = rows;
-        // Navigation and the Bot overview can change height independently.
-        self.state.remeasure_items(0..self.rows.len().min(2));
-    }
-}
-
-fn age_label(updated_at: u64, now: u64) -> &'static str {
-    let today = chrono::DateTime::from_timestamp_millis(now.min(i64::MAX as u64) as i64)
-        .map(|t| t.with_timezone(&chrono::Local).date_naive());
-    let day = chrono::DateTime::from_timestamp_millis(updated_at.min(i64::MAX as u64) as i64)
-        .map(|t| t.with_timezone(&chrono::Local).date_naive());
-    match today.zip(day).map(|(today, day)| (today - day).num_days()) {
-        Some(days) if days <= 0 => "Today",
-        Some(1) => "Yesterday",
-        Some(2..=6) => "Last 7 days",
-        _ => "Older",
     }
 }
 
@@ -252,10 +234,9 @@ impl Shell {
         )
     }
 
-    pub(super) fn prepare_sidebar_list(&mut self, entries: &[Entry], cx: &App) {
+    pub(super) fn prepare_sidebar_list(&mut self, entries: &[Entry], _cx: &App) {
         let groups = self.project_groups();
-        let now = vorkspace_core::time::now_ms();
-        let mut rows = vec![Row::Navigation, Row::Bots];
+        let mut rows = Vec::new();
         let mut folders = false;
         for entry in entries {
             let (members, collapsed) = match entry {
@@ -306,31 +287,15 @@ impl Shell {
         if folders {
             rows.push(Row::Gap);
         }
-        let mut previous = None;
-        let mut first = true;
         for entry in entries {
-            let Entry::Session(id) = entry else {
-                continue;
-            };
-            if self.rails.children.contains(id) {
-                continue;
+            if let Entry::Session(id) = entry
+                && !self.rails.children.contains(id)
+            {
+                rows.push(Row::Session(*id));
             }
-            let label = age_label(self.session_metadata(*id, cx).summary.updated_at, now);
-            if previous != Some(label) {
-                rows.push(Row::Heading { label, first });
-                previous = Some(label);
-                first = false;
-            }
-            rows.push(Row::Session(*id));
         }
-        if first {
-            rows.push(Row::Heading {
-                label: "Sessions",
-                first: true,
-            });
-            if entries.is_empty() {
-                rows.push(Row::Empty);
-            }
+        if entries.is_empty() {
+            rows.push(Row::Empty);
         }
         self.sidebar_list.update(self.sidebar_scope(), rows);
     }
@@ -384,18 +349,6 @@ impl Shell {
         };
         self.sidebar_list.visible_rows.borrow_mut().push(ix);
         let content = match row {
-            Row::Navigation => return self.sidebar_navigation(cx),
-            Row::Bots => {
-                return self
-                    .bots
-                    .clone()
-                    .map(|bots| {
-                        bots.update(cx, |bots, cx| {
-                            bots.rail(Some(self.workspace.project.clone()), cx)
-                        })
-                    })
-                    .unwrap_or_else(|| div().into_any());
-            }
             Row::Pinned => section_label("Pinned").into_any(),
             Row::Folders => section_label("Folders").into_any(),
             Row::Group(entry) => {
@@ -407,10 +360,6 @@ impl Shell {
                 self.sidebar_group_header(&entry, cx)
             }
             Row::Gap => return div().h(px(12.)).into_any(),
-            Row::Heading { label, first } => section_label(label)
-                .when(!first, |d| d.mt_3())
-                .when(first, |d| d.child(self.sidebar_filter_button(cx)))
-                .into_any(),
             Row::Session(id) => self.session_card(id, cx),
             Row::GroupedSession { id, first, last } => {
                 return div()
@@ -493,7 +442,7 @@ impl Shell {
         cx.notify();
     }
 
-    fn sidebar_navigation(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn sidebar_navigation(&mut self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .w_full()
             .px_2()
@@ -505,6 +454,10 @@ impl Shell {
             .child(
                 div()
                     .id("rail-search")
+                    .role(Role::Button)
+                    .aria_label("Search")
+                    .focusable()
+                    .tab_stop(true)
                     .debug_selector(|| "sidebar-search-field".into())
                     .group("rail-search")
                     .w_full()
@@ -534,13 +487,9 @@ impl Shell {
                     .on_hover(cx.listener(|this, hovered, _, cx| {
                         this.sidebar_hover = if *hovered { Some("Search") } else { None };
                         this.sidebar_frame.update(cx, |_, cx| cx.notify());
+                        this.project_rail_frame.update(cx, |_, cx| cx.notify());
                     }))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.focus_search(window, cx);
-                        }),
-                    )
+                    .on_click(cx.listener(|this, _, window, cx| this.focus_search(window, cx)))
                     .flex()
                     .items_center()
                     .gap_2()
@@ -631,12 +580,13 @@ impl Shell {
                                 this.sidebar_hover = None;
                             }
                             this.sidebar_frame.update(cx, |_, cx| cx.notify());
+                            this.project_rail_frame.update(cx, |_, cx| cx.notify());
                         }))
                 }),
             )
             .into_any()
     }
-    fn sidebar_filter_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn sidebar_filter_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         icon_button("filter-sessions", "Filter sessions", "filter")
             .debug_selector(|| "sidebar-filter-button".into())
             .mr(px(-5.))
@@ -667,19 +617,17 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::super::*;
-    use super::age_label;
-    use chrono::TimeZone;
     use gpui::TestAppContext;
 
     #[gpui::test]
-    fn search_field_fills_the_virtual_sidebar_row(cx: &mut TestAppContext) {
+    fn search_field_fills_the_original_project_rail(cx: &mut TestAppContext) {
         let (window, _, _) = super::super::tests::window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
-        let sidebar = visual.debug_bounds("sidebar-content").unwrap();
+        let sidebar = visual.debug_bounds("classic-project-rail").unwrap();
         let search = visual.debug_bounds("sidebar-search-field").unwrap();
         assert_eq!(search.left() - sidebar.left(), px(8.));
-        assert_eq!(sidebar.right() - search.right(), px(8.));
+        assert_eq!(sidebar.right() - search.right(), px(9.));
     }
 
     #[gpui::test]
@@ -719,7 +667,8 @@ mod tests {
             Box::leak(format!("session-workspace-{id}").into_boxed_str());
         let title_selector: &'static str =
             Box::leak(format!("session-title-{id}").into_boxed_str());
-        for classic in [false, true] {
+        {
+            let classic = true;
             window
                 .update(visual, |shell, _, cx| {
                     shell.workspace.classic_layout = classic;
@@ -912,7 +861,8 @@ mod tests {
             })
             .unwrap();
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        for classic in [false, true] {
+        {
+            let classic = true;
             window
                 .update(visual, |shell, _, cx| {
                     shell.workspace.classic_layout = classic;
@@ -1123,24 +1073,5 @@ mod tests {
                 assert!(shell.session_row_bounds[&(first - 1)].get().is_none());
             })
             .unwrap();
-    }
-
-    #[test]
-    fn sidebar_dates_use_local_calendar_days_and_match_the_tauri_sections() {
-        let ms = |day, hour, minute| {
-            chrono::Local
-                .with_ymd_and_hms(2026, 10, day, hour, minute, 0)
-                .single()
-                .unwrap()
-                .timestamp_millis() as u64
-        };
-        let now = ms(20, 0, 5);
-        assert_eq!(age_label(ms(20, 0, 1), now), "Today");
-        assert_eq!(age_label(ms(19, 23, 59), now), "Yesterday");
-        assert_eq!(age_label(ms(14, 0, 0), now), "Last 7 days");
-        assert_eq!(age_label(ms(13, 23, 59), now), "Older");
-        assert_eq!(age_label(0, now), "Older");
-        // A local calendar day remains Yesterday across daylight-saving changes.
-        assert_eq!(age_label(ms(25, 0, 1), ms(26, 0, 5)), "Yesterday");
     }
 }

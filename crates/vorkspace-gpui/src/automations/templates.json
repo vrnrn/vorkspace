@@ -137,19 +137,6 @@
     "prompt": "A new GitHub issue was opened. Triage it against this repo.\n\n- Reproduce or locate the relevant code if the report is specific enough\n- Label the severity in your summary (blocker / bug / request / unclear)\n- Add a concrete next step: file paths, likely cause, or the missing information\n- Do not implement a large fix unless the issue is clearly a small, validated bug"
   },
   {
-    "id": "triage-new-issues",
-    "category": "incidents",
-    "icon": "inbox",
-    "name": "Triage new issues",
-    "description": "When a Linear issue is created, inspect the repo and add a concrete reproduction or next step",
-    "trigger": {
-      "kind": "linear",
-      "event": "issue_created"
-    },
-    "triggerLabel": "Issue created",
-    "prompt": "A new Linear issue was created. Triage it against this repo.\n\n- Reproduce or locate the relevant code if the report is specific enough\n- Label the severity in your summary (blocker / bug / request / unclear)\n- Add a concrete next step: file paths, likely cause, or the missing information\n- Do not implement a large fix unless the issue is clearly a small, validated bug"
-  },
-  {
     "id": "failing-ci-watch",
     "category": "incidents",
     "icon": "alert",

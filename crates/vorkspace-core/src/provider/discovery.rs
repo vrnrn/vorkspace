@@ -1,25 +1,13 @@
-//! Some unrelated programs also install `pi`, `omp`, `fx` or `grok`. As in the
+//! Some unrelated programs also install `pi` or `omp`. As in the
 //! legacy binary resolver, verify their CLI contract before marking them installed.
 use super::*;
 use std::sync::OnceLock;
 type IdentityCache = HashMap<(Kind, PathBuf), Option<std::time::SystemTime>>;
 pub(super) fn matches(kind: Kind, path: &Path) -> bool {
-    if kind == Kind::Cursor {
-        if path.components().any(|p| p.as_os_str() == ".grok") {
-            return false;
-        }
-        if path.file_stem().is_some_and(|name| name == "agent") {
-            // Inspect only one symlink hop, as in the Tauri resolver. Never
-            // mistake Grok's unrelated `agent` shim for Cursor.
-            return std::fs::read_link(path).ok().is_some_and(|target| {
-                target
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .contains("cursor-agent")
-            });
-        }
+    if !kind.is_supported() {
+        return false;
     }
-    if !matches!(kind, Kind::Pi | Kind::Omp | Kind::Fx | Kind::Grok) {
+    if !matches!(kind, Kind::Pi | Kind::Omp) {
         return true;
     }
     static CACHE: OnceLock<Mutex<IdentityCache>> = OnceLock::new();
@@ -61,10 +49,6 @@ pub(super) fn matches(kind: Kind, path: &Path) -> bool {
 fn help_matches(kind: Kind, text: &str) -> bool {
     match kind {
         Kind::Pi | Kind::Omp => text.contains("--mode") && text.contains("rpc"),
-        Kind::Fx => {
-            text.contains("acp") && (text.contains("fx.sh") || text.contains("coding agent"))
-        }
-        Kind::Grok => text.contains("agent") && (text.contains("x.ai") || text.contains("grok")),
         _ => true,
     }
 }
@@ -74,18 +58,9 @@ mod tests {
     #[test]
     fn rejects_unrelated_binaries_with_the_same_name() {
         assert!(!help_matches(
-            Kind::Fx,
-            "fx: command-line json processing tool"
-        ));
-        assert!(help_matches(
-            Kind::Fx,
-            "fx: coding agent. acp stdio. https://fx.sh"
-        ));
-        assert!(!help_matches(
             Kind::Pi,
             "pi: print digits of pi --precision"
         ));
         assert!(help_matches(Kind::Pi, "pi --mode rpc"));
-        assert!(help_matches(Kind::Grok, "grok build: x.ai agent stdio"));
     }
 }

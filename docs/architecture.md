@@ -18,7 +18,9 @@ A transcript view owns one elapsed-time task while it is visible and streaming. 
 
 Parked provider leases are removed under their pool lock, then destroyed after releasing it. Cancellation epochs prevent a settling cancelled lease from reappearing after its binding is invalidated.
 
-Provider transports admit encoded output before growing their buffers. A single NDJSON or OpenCode event frame is limited to 128 MiB; each transport shares a 256 MiB allocation budget across frames being read, queued, and processed, with at most 16 queued frames. A full budget applies backpressure; an oversized frame fails explicitly instead of being truncated. Closing the receiver wakes blocked producers before their threads are joined. These limits cover encoded transport buffers, not the provider subprocess or parsed conversation state.
+Provider transports admit encoded output before growing their buffers. A single encoded provider event frame is limited to 128 MiB; each transport shares a 256 MiB allocation budget across frames being read, queued, and processed, with at most 16 queued frames. A full budget applies backpressure; an oversized frame fails explicitly instead of being truncated. Closing the receiver wakes blocked producers before their threads are joined. These limits cover encoded transport buffers, not the provider subprocess or parsed conversation state.
+
+Interface scale is a per-window GPUI transform, separate from display DPI. The window maps platform input and text-input geometry to the same logical layout used for rendering and accessibility. Native HTML and video hosts convert their clipped bounds at the platform boundary; changing scale invalidates cached paint geometry.
 
 ## JavaScript boundaries
 

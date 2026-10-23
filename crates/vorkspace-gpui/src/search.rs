@@ -140,10 +140,7 @@ impl SearchView {
             _changed: changed,
         }
     }
-    pub(crate) fn set_classic(&mut self, classic: bool, cx: &mut Context<Self>) {
-        self.classic = classic;
-        cx.notify();
-    }
+
     pub(crate) fn draft(&self, cx: &App) -> (String, Scope) {
         (self.input.read(cx).content.to_string(), self.scope)
     }

@@ -129,7 +129,7 @@ mod model_label_tests {
                 assert!(list.hidden.is_empty());
                 assert!(list.enabled(Kind::Claude));
                 assert!(!list.enabled(Kind::Codex));
-                assert!(!list.enabled(Kind::Cursor));
+                assert!(!list.enabled(Kind::Antigravity));
                 // Until its host catalog arrives, no local Claude aliases
                 // are advertised as available remote models.
                 let entries = list.entries(cx);

@@ -1,10 +1,7 @@
 //! Read-only adaptation of original Block.btwThreads. Opening the side surface
 //! never rewrites source blocks, provider bindings, or the desktop schema.
 use super::{shared, Store};
-use crate::{
-    provider::Kind,
-    transcript::{Row, Transcript},
-};
+use crate::transcript::{Row, Transcript};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -189,9 +186,11 @@ fn provider(blocks: &[Value], owner: usize, thread: &Value, fallback: &str) -> O
                 .find_map(|block| block["handoff"]["from"].as_str())
         })
         .unwrap_or(fallback);
-    let kind = Kind::parse(kind)?;
-    (!matches!(kind, Kind::Fx | Kind::Hermes | Kind::Antigravity)).then(|| kind.id().into())
+    // This is a read-only history adapter. Availability belongs to execution
+    // admission, so retiring a provider must not hide its saved side threads.
+    (!kind.is_empty()).then(|| kind.into())
 }
+
 impl Store {
     pub fn desktop_side_threads(&self, id: i64) -> Result<Vec<DesktopSideThread>, String> {
         if self.shared.is_none() {
@@ -294,5 +293,86 @@ impl Store {
         }
         imported.sort_by_key(|thread| thread.original["createdAt"].as_u64().unwrap_or(0));
         Ok(imported)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn historical_provider_identity_is_preserved_without_falling_back() {
+        let blocks = [json!({"turnModel":{"harness":"codex"}})];
+        for kind in [
+            "cursor", "grok", "opencode", "fx", "hermes", "devin", "unknown",
+        ] {
+            assert_eq!(
+                provider(&blocks, 0, &json!({"harness":kind}), "claude").as_deref(),
+                Some(kind)
+            );
+        }
+        assert_eq!(
+            provider(&blocks, 0, &json!({}), "claude").as_deref(),
+            Some("codex")
+        );
+    }
+
+    #[test]
+    fn unsupported_side_history_remains_readable_without_rewriting_its_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let store = Store::open_vorkspace(&path).unwrap();
+        let session = store.create("codex", "/project").unwrap();
+        let original = store.persisted_session_id(session.id).unwrap();
+        let threads = [
+            "cursor", "grok", "opencode", "fx", "hermes", "devin", "unknown",
+        ]
+        .map(|kind| {
+            json!({
+                "id":kind,"harness":kind,"model":format!("{kind}:saved-model"),
+                "sourceEndBlockId":"answer","providerThreadId":"preserved-provider-id",
+                "status":"error","messages":[{"role":"assistant","text":"Retained side answer"}]
+            })
+        });
+        let blocks = json!([
+            {"id":"question","role":"user","text":"Question","btwThreads":threads},
+            {"id":"answer","role":"assistant","text":"Main answer"}
+        ]);
+        store
+            .conn
+            .execute(
+                "UPDATE sessions SET blocks_json=?1 WHERE id=?2",
+                rusqlite::params![blocks.to_string(), original],
+            )
+            .unwrap();
+        let imported = store.desktop_side_threads(session.id).unwrap();
+        assert_eq!(imported.len(), threads.len());
+        for thread in &imported {
+            assert_eq!(thread.id, thread.provider);
+            assert_eq!(thread.model.as_deref(), Some("saved-model"));
+            assert_eq!(thread.original["providerThreadId"], "preserved-provider-id");
+            assert!(thread
+                .rows
+                .iter()
+                .any(|row| row.text == "Retained side answer"));
+        }
+        store.title(session.id, "Edited main title").unwrap();
+        drop(store);
+
+        let reopened = Store::open_vorkspace(&path).unwrap();
+        assert_eq!(
+            reopened.desktop_side_threads(session.id).unwrap().len(),
+            threads.len()
+        );
+        let after: String = reopened
+            .conn
+            .query_row(
+                "SELECT blocks_json FROM sessions WHERE id=?1",
+                [&original],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&after).unwrap(), blocks);
     }
 }

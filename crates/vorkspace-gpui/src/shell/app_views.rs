@@ -259,11 +259,41 @@ impl Shell {
                 |this, _, event: &inbox::Event, window, cx| match event {
                     inbox::Event::Close => this.close_app_view(window, cx),
                     inbox::Event::OpenSession(id) => this.open(*id, window, cx),
-                    inbox::Event::StartSession { item, prompt } => {
-                        this.start_inbox_session(item.as_ref().clone(), prompt.clone(), cx);
+                    inbox::Event::StartSession { item, prompt, bot } => {
+                        if let Some(id) = bot {
+                            let result = if !this.workspace.preferences.bots {
+                                Err("Enable Bots before sending this item".into())
+                            } else {
+                                this.bots
+                                    .as_ref()
+                                    .ok_or_else(|| "Bots unavailable".to_string())
+                                    .and_then(|bots| {
+                                        bots.update(cx, |bots, cx| {
+                                            bots.send_message(id, prompt.clone(), Vec::new(), cx)
+                                        })
+                                    })
+                            };
+                            match result {
+                                Ok(()) => {
+                                    this.close_app_view(window, cx);
+                                    if let Some(bots) = &this.bots {
+                                        bots.update(cx, |bots, cx| bots.open(id, window, cx));
+                                    }
+                                }
+                                Err(error) => {
+                                    this.error = Some(error);
+                                    cx.notify();
+                                }
+                            }
+                        } else {
+                            this.start_inbox_session(item.as_ref().clone(), prompt.clone(), cx);
+                        }
                     }
                     inbox::Event::ItemsChanged(items) => {
                         this.inbox_automation_events(items.clone(), cx)
+                    }
+                    inbox::Event::Activity { projects, changed } => {
+                        this.inbox_activity(projects, changed, cx)
                     }
                 },
             ));
@@ -288,7 +318,21 @@ impl Shell {
         if let Some(inbox) = &self.inbox {
             let projects = self.workspace.projects.iter().map(Into::into).collect();
             let cwd = self.workspace.project.clone().into();
+            let bots = self
+                .bots
+                .as_ref()
+                .filter(|_| self.workspace.preferences.bots)
+                .map(|bots| {
+                    bots.read(cx)
+                        .roster
+                        .bots
+                        .iter()
+                        .map(|bot| (bot.id.clone(), bot.name.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
             inbox.update(cx, |inbox, cx| {
+                inbox.set_bots(bots, cx);
                 inbox.set_appearances(self.workspace.project_appearance.clone(), cx);
                 inbox.set_context(projects, cwd, cx);
             });

@@ -60,16 +60,7 @@ pub struct GeneratedTitle {
 }
 
 pub fn supports(kind: Kind) -> bool {
-    matches!(
-        kind,
-        Kind::Codex
-            | Kind::Claude
-            | Kind::Cursor
-            | Kind::Grok
-            | Kind::OpenCode
-            | Kind::Pi
-            | Kind::Omp
-    )
+    matches!(kind, Kind::Codex | Kind::Claude | Kind::Pi | Kind::Omp)
 }
 pub fn prompt(message: &str) -> String {
     format!(

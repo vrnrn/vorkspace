@@ -1,17 +1,20 @@
-//! Native Inbox services. Provider adapters preserve the Tauri API's requests,
-//! validation, response parsers and credential file formats.
+//! Native Inbox services and the desktop app's existing credential formats.
 mod avatar;
 mod bounded;
+mod connectors;
+pub use connectors::Connectors;
+mod preferences;
+pub use preferences::{BotDefaults, JiraFilter};
+mod notifications;
+pub use notifications::NotificationProject;
 mod media;
-pub use media::png as media_png;
-pub mod azure_devops;
 pub use avatar::png as avatar_png;
+pub use media::png as media_png;
 mod github;
 pub mod gitlab;
 pub mod jira;
-pub mod linear;
 
-use crate::{desktop_preferences::DesktopPreferences, session_groups::WorkItem, store::Store};
+use crate::{session_groups::WorkItem, store::Store};
 use chrono::{Datelike, Local, TimeZone};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
@@ -20,18 +23,17 @@ use std::{
     process::Command,
 };
 
-pub const PROVIDERS: [&str; 5] = ["github", "linear", "jira", "gitlab", "azuredevops"];
+pub const PROVIDERS: [&str; 3] = ["github", "gitlab", "jira"];
 pub fn provider_label(provider: &str) -> &'static str {
     match provider {
-        "linear" => "Linear",
         "jira" => "Jira",
         "gitlab" => "GitLab",
-        "azuredevops" => "ADO",
-        _ => "GitHub",
+        "github" => "GitHub",
+        _ => "Unknown",
     }
 }
 pub fn is_tracker(provider: &str) -> bool {
-    matches!(provider, "linear" | "jira")
+    provider == "jira"
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,25 +69,12 @@ pub struct Item {
     pub repo: String,
     pub team_id: String,
     pub team_name: String,
-    pub project_id: String,
-    pub project_name: String,
     pub project_path: String,
     pub attention_reason: String,
 }
 impl Item {
     pub fn key(&self) -> String {
-        let identity = if self.provider == "linear" {
-            let id = if self.identifier.trim().is_empty() {
-                self.id.trim()
-            } else {
-                self.identifier.trim()
-            };
-            if id.is_empty() {
-                format!("linear:{}", self.number)
-            } else {
-                id.to_lowercase()
-            }
-        } else if self.provider == "jira" {
+        let identity = if self.provider == "jira" {
             let id = if self.id.trim().is_empty() {
                 self.identifier.trim()
             } else {
@@ -267,7 +256,6 @@ pub struct Status {
     pub url: String,
     pub site: String,
     pub email: String,
-    pub organization: String,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct OptionRow {
@@ -289,7 +277,6 @@ pub struct StatusFilter {
 pub struct Filters {
     pub assigned_to_me: bool,
     pub hidden_projects: Vec<String>,
-    pub hidden_linear_projects: Vec<String>,
     pub hidden_kinds: Vec<String>,
     pub time: String,
     pub status: StatusFilter,
@@ -299,7 +286,6 @@ impl Default for Filters {
         Self {
             assigned_to_me: false,
             hidden_projects: vec![],
-            hidden_linear_projects: vec![],
             hidden_kinds: vec![],
             time: "all".into(),
             status: StatusFilter::default(),
@@ -320,25 +306,12 @@ impl Filters {
         }
         let tracker = is_tracker(source);
         if !tracker
-            && !((source == "gitlab" || source == "azuredevops") && self.assigned_to_me)
+            && !(source == "gitlab" && self.assigned_to_me)
             && self.hidden_projects.contains(&item.project_path)
         {
             return false;
         }
         if !tracker && self.hidden_kinds.contains(&item.kind) {
-            return false;
-        }
-        let linear_project = if item.project_id.is_empty() {
-            "~none"
-        } else {
-            &item.project_id
-        };
-        if source == "linear"
-            && self
-                .hidden_linear_projects
-                .iter()
-                .any(|id| id == linear_project)
-        {
             return false;
         }
         let s = &self.status;
@@ -417,9 +390,14 @@ impl Seen {
 #[serde(default)]
 pub struct ViewState {
     pub source: String,
+    #[serde(skip)]
+    pub connectors: Connectors,
+    #[serde(skip)]
+    pub jira_filter: JiraFilter,
+    #[serde(skip)]
+    pub default_bots: BotDefaults,
     pub filters: Filters,
     pub seen: Seen,
-    pub hidden_linear_teams: Vec<String>,
     pub hidden_jira_projects: Vec<String>,
     pub list_width: f32,
 }
@@ -427,9 +405,14 @@ impl Default for ViewState {
     fn default() -> Self {
         Self {
             source: "github".into(),
+            connectors: Connectors::default(),
+            jira_filter: JiraFilter {
+                mode: "project".into(),
+                jql: String::new(),
+            },
+            default_bots: BotDefaults::default(),
             filters: Filters::default(),
             seen: Seen::default(),
-            hidden_linear_teams: vec![],
             hidden_jira_projects: vec![],
             list_width: 280.,
         }
@@ -443,32 +426,35 @@ impl ViewState {
             .collect::<Vec<_>>();
         paths.sort();
         paths.dedup();
-        let mut teams = self.hidden_linear_teams.clone();
-        teams.sort();
         let mut jira = self.hidden_jira_projects.clone();
         jira.sort();
         format!(
-            "{}:{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}",
             self.filters.assigned_to_me,
             self.filters.fetch_state(),
             paths.join("|"),
-            teams.join(","),
-            jira.join(",")
+            self.connectors
+                .enabled_providers()
+                .collect::<Vec<_>>()
+                .join(","),
+            jira.join(","),
+            serde_json::to_string(&self.jira_filter).unwrap_or_default()
         )
     }
     pub fn load(store: &Store) -> Self {
-        if let Some(state) = store
+        if let Some(mut state) = store
             .setting("native-inbox-state")
             .ok()
             .flatten()
-            .and_then(|s| serde_json::from_str(&s).ok())
+            .and_then(|s| serde_json::from_str::<Self>(&s).ok())
         {
+            state.connectors = Connectors::load(store);
+            state.jira_filter = JiraFilter::load(store);
+            state.default_bots = BotDefaults::load(store);
+            state.normalize_source();
             return state;
         }
-        let desktop = store
-            .data_dir()
-            .map(DesktopPreferences::load)
-            .unwrap_or_default();
+        let desktop = store.desktop_preferences().cloned().unwrap_or_default();
         let mut state = Self::default();
         if let Some(source) = desktop
             .get("vorkspace.inboxSource")
@@ -488,15 +474,25 @@ impl ViewState {
                 items: serde_json::from_value(seen).unwrap_or_default(),
             });
         }
-        state.hidden_linear_teams = desktop
-            .json("vorkspace.linearHiddenTeams")
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default();
         state.hidden_jira_projects = desktop
             .json("vorkspace.jiraHiddenProjects")
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
+        state.connectors = Connectors::load(store);
+        state.jira_filter = JiraFilter::load(store);
+        state.default_bots = BotDefaults::load(store);
+        state.normalize_source();
         state
+    }
+    pub fn normalize_source(&mut self) {
+        if !self.connectors.enabled(&self.source) {
+            self.source = self
+                .connectors
+                .enabled_providers()
+                .next()
+                .unwrap_or("")
+                .into();
+        }
     }
     pub fn save(&self, store: &Store) -> Result<(), String> {
         store.save_setting(
@@ -510,11 +506,10 @@ pub struct Snapshot {
     pub items: Vec<Item>,
     pub errors: BTreeMap<String, String>,
     pub connections: BTreeMap<String, Status>,
-    pub linear_teams: Vec<OptionRow>,
     pub jira_projects: Vec<OptionRow>,
 }
 
-/// The Tauri InboxNotificationTracker: provider baselines and revisions are
+/// Provider notification baselines and revisions are
 /// separate from the user's read state. Startup and query changes never
 /// trigger automations for an existing backlog.
 #[derive(Default)]
@@ -523,42 +518,32 @@ pub struct NotificationTracker {
     primed: HashSet<String>,
     scope: Option<String>,
 }
+#[derive(Default)]
+pub struct Observation {
+    pub appeared: Vec<Item>,
+    pub changed: Vec<Item>,
+}
 impl NotificationTracker {
     pub fn observe(&mut self, snapshot: &Snapshot, scope: String) -> Vec<Item> {
+        self.observe_snapshot(snapshot, scope).appeared
+    }
+    pub fn observe_snapshot(&mut self, snapshot: &Snapshot, scope: String) -> Observation {
         if self.scope.as_ref() != Some(&scope) {
             self.primed.clear();
         }
         self.scope = Some(scope);
-        let mut appeared = vec![];
+        let mut observation = Observation::default();
         for item in &snapshot.items {
-            if snapshot.errors.contains_key(&item.provider) {
+            if !PROVIDERS.contains(&item.provider.as_str())
+                || snapshot.errors.contains_key(&item.provider)
+            {
                 continue;
             }
             let at = item.updated_ms();
             if at == 0 {
                 continue;
             }
-            let project = match item.provider.as_str() {
-                "linear" if !item.project_id.is_empty() => {
-                    format!("linear:project:{}", item.project_id)
-                }
-                "linear" => format!("linear:team:{}:unassigned", item.team_id),
-                "jira" => format!(
-                    "jira:{}:project:{}",
-                    item.url
-                        .split('/')
-                        .nth(2)
-                        .unwrap_or("unknown")
-                        .to_lowercase(),
-                    if item.team_id.is_empty() {
-                        &item.repo
-                    } else {
-                        &item.team_id
-                    }
-                ),
-                _ if !item.project_path.is_empty() => crate::files::path_key(&item.project_path),
-                _ => format!("{}:{}", item.provider, item.repo.to_lowercase()),
-            };
+            let project = item.notification_project().id;
             let id = if item.id.is_empty() {
                 item.number.to_string()
             } else {
@@ -567,7 +552,12 @@ impl NotificationTracker {
             let key = format!("{project}:{}:{id}", item.kind);
             let previous = self.revisions.get(&key).copied();
             if self.primed.contains(&item.provider) && previous.is_none() {
-                appeared.push(item.clone());
+                observation.appeared.push(item.clone());
+                observation.changed.push(item.clone());
+            } else if self.primed.contains(&item.provider)
+                && previous.is_some_and(|previous| at > previous)
+            {
+                observation.changed.push(item.clone());
             }
             self.revisions.insert(key, previous.unwrap_or(0).max(at));
         }
@@ -576,7 +566,7 @@ impl NotificationTracker {
                 self.primed.insert(provider.into());
             }
         }
-        appeared
+        observation
     }
 }
 
@@ -592,11 +582,9 @@ fn convert<T: Serialize, U: DeserializeOwned>(value: T) -> Result<U, String> {
 impl Service {
     pub fn status(&self, provider: &str) -> Result<Status, String> {
         match provider {
-            "linear" => convert(linear::linear_status(self.data_dir.clone())?),
             "jira" => convert(jira::jira_status(self.data_dir.clone())?),
             "gitlab" => convert(gitlab::gitlab_status(self.data_dir.clone())?),
-            "azuredevops" => convert(azure_devops::azure_devops_status(self.data_dir.clone())?),
-            _ => {
+            "github" => {
                 let installed = crate::scm::resolve_gui_binary("gh").is_some();
                 let authenticated = installed
                     && run_gh(
@@ -612,6 +600,7 @@ impl Service {
                     ..Default::default()
                 })
             }
+            _ => Err("Unsupported inbox provider".into()),
         }
     }
     pub fn connect(
@@ -622,7 +611,6 @@ impl Service {
         token: String,
     ) -> Result<Status, String> {
         match provider {
-            "linear" => convert(linear::linear_set_token(self.data_dir.clone(), token)?),
             "jira" => convert(jira::jira_set_config(
                 self.data_dir.clone(),
                 url,
@@ -634,12 +622,8 @@ impl Service {
                 url,
                 token,
             )?),
-            "azuredevops" => convert(azure_devops::azure_devops_set_config(
-                self.data_dir.clone(),
-                url,
-                token,
-            )?),
-            _ => self.status("github"),
+            "github" => self.status("github"),
+            _ => Err("Unsupported inbox provider".into()),
         }
     }
     pub fn list(&self, projects: &[PathBuf], state: &ViewState) -> Snapshot {
@@ -649,7 +633,7 @@ impl Service {
         } else {
             40
         };
-        for provider in PROVIDERS {
+        for provider in state.connectors.enabled_providers() {
             let status = match self.status(provider) {
                 Ok(status) => status,
                 Err(error) => {
@@ -663,30 +647,17 @@ impl Service {
                 continue;
             }
             let result: Result<Vec<Item>, String> = (|| {
-                if provider == "linear" {
-                    let teams = linear::linear_list_teams(self.data_dir.clone())?;
-                    let visible = teams
-                        .iter()
-                        .filter(|t| !state.hidden_linear_teams.contains(&t.id))
-                        .map(|t| t.id.clone())
-                        .collect::<Vec<_>>();
-                    snapshot.linear_teams = convert(teams)?;
-                    if !state.hidden_linear_teams.is_empty() && visible.is_empty() {
-                        return Ok(vec![]);
-                    }
-                    return convert(linear::linear_list_issues(
-                        self.data_dir.clone(),
-                        state.filters.assigned_to_me,
-                        state.filters.fetch_state().into(),
-                        if state.hidden_linear_teams.is_empty() {
-                            vec![]
-                        } else {
-                            visible
-                        },
-                        Some(limit),
-                    )?);
-                }
                 if provider == "jira" {
+                    if let Some(jql) = state.jira_filter.custom_jql() {
+                        return convert(jira::jira_list_issues(
+                            self.data_dir.clone(),
+                            false,
+                            "all".into(),
+                            vec![],
+                            Some(100),
+                            Some(jql.into()),
+                        )?);
+                    }
                     let projects = jira::jira_list_projects(self.data_dir.clone())?;
                     let visible = projects
                         .iter()
@@ -707,25 +678,18 @@ impl Service {
                             visible
                         },
                         Some(limit),
+                        None,
                     )?);
                 }
                 let mut items = Vec::new();
                 let mut visited = HashSet::new();
-                if state.filters.assigned_to_me && provider != "github" {
+                if state.filters.assigned_to_me && provider == "gitlab" {
                     for kind in ["issue", "pr"] {
-                        let rows: Vec<Item> = if provider == "gitlab" {
-                            convert(gitlab::gitlab_list_todos(
-                                self.data_dir.clone(),
-                                kind.into(),
-                                Some(limit),
-                            )?)?
-                        } else {
-                            convert(azure_devops::azure_devops_list_todos(
-                                self.data_dir.clone(),
-                                kind.into(),
-                                Some(limit),
-                            )?)?
-                        };
+                        let rows: Vec<Item> = convert(gitlab::gitlab_list_todos(
+                            self.data_dir.clone(),
+                            kind.into(),
+                            Some(limit),
+                        )?)?;
                         items.extend(rows.into_iter().map(|mut item| {
                             item.provider = provider.into();
                             item
@@ -741,11 +705,7 @@ impl Service {
                             project.to_string_lossy().into_owned(),
                         )
                         .map(|r| vec![r]),
-                        _ => azure_devops::azure_devops_repo(
-                            self.data_dir.clone(),
-                            project.to_string_lossy().into_owned(),
-                        )
-                        .map(|r| vec![r]),
+                        _ => Err("Unsupported inbox provider".into()),
                     };
                     let Ok(repos) = repos else {
                         continue;
@@ -773,14 +733,7 @@ impl Service {
                                     state.filters.fetch_state().into(),
                                     Some(limit),
                                 )?)?,
-                                _ => convert(azure_devops::azure_devops_list_work_items(
-                                    self.data_dir.clone(),
-                                    project.to_string_lossy().into_owned(),
-                                    kind.into(),
-                                    false,
-                                    state.filters.fetch_state().into(),
-                                    Some(limit),
-                                )?)?,
+                                _ => return Err("Unsupported inbox provider".into()),
                             };
                             items.extend(rows.into_iter().map(|mut item| {
                                 item.provider = provider.into();
@@ -810,10 +763,6 @@ impl Service {
     }
     pub fn details(&self, item: &Item) -> Result<Details, String> {
         match item.provider.as_str() {
-            "linear" => convert(linear::linear_issue_details(
-                self.data_dir.clone(),
-                item.id.clone(),
-            )?),
             "jira" => convert(jira::jira_issue_details(
                 self.data_dir.clone(),
                 item.identifier.clone(),
@@ -824,18 +773,13 @@ impl Service {
                 item.kind.clone(),
                 item.number,
             )?),
-            "azuredevops" => convert(azure_devops::azure_devops_work_item_details(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.kind.clone(),
-                item.number,
-            )?),
-            _ => convert(github::git_github_work_item_details_for(
+            "github" => convert(github::git_github_work_item_details_for(
                 self.project(item),
                 &item.repo,
                 &item.kind,
                 item.number,
             )?),
+            _ => Err("Unsupported inbox provider".into()),
         }
     }
     fn project<'a>(&'a self, item: &'a Item) -> &'a Path {
@@ -847,10 +791,6 @@ impl Service {
     }
     pub fn thread(&self, item: &Item) -> Result<Thread, String> {
         match item.provider.as_str() {
-            "linear" => convert(linear::linear_issue_thread(
-                self.data_dir.clone(),
-                item.id.clone(),
-            )?),
             "jira" => convert(jira::jira_issue_thread(
                 self.data_dir.clone(),
                 item.identifier.clone(),
@@ -861,25 +801,17 @@ impl Service {
                 item.kind.clone(),
                 item.number,
             )?),
-            "azuredevops" => convert(azure_devops::azure_devops_work_item_thread(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.kind.clone(),
-                item.number,
-            )?),
-            _ => convert(github::git_github_work_item_thread_for(
+            "github" => convert(github::git_github_work_item_thread_for(
                 self.project(item),
                 &item.repo,
                 &item.kind,
                 item.number,
             )?),
+            _ => Err("Unsupported inbox provider".into()),
         }
     }
     pub fn comment(&self, item: &Item, body: String, reply_to: String) -> Result<String, String> {
         match item.provider.as_str() {
-            "linear" => {
-                linear::linear_issue_comment(self.data_dir.clone(), item.id.clone(), body, reply_to)
-            }
             "jira" => {
                 jira::jira_issue_comment(self.data_dir.clone(), item.identifier.clone(), body)
             }
@@ -890,14 +822,7 @@ impl Service {
                 item.number,
                 body,
             ),
-            "azuredevops" => azure_devops::azure_devops_work_item_comment(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.kind.clone(),
-                item.number,
-                body,
-            ),
-            _ => github::git_github_work_item_comment_for(
+            "github" => github::git_github_work_item_comment_for(
                 self.project(item),
                 &item.repo,
                 &item.kind,
@@ -905,6 +830,7 @@ impl Service {
                 &body,
                 &reply_to,
             ),
+            _ => Err("Unsupported inbox provider".into()),
         }
     }
     pub fn diff(&self, item: &Item) -> Result<Diff, String> {
@@ -913,11 +839,6 @@ impl Service {
     pub fn diff_context(&self, item: &Item, full_context: bool) -> Result<Diff, String> {
         match item.provider.as_str() {
             "gitlab" => convert(gitlab::gitlab_mr_diff(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.number,
-            )?),
-            "azuredevops" => convert(azure_devops::azure_devops_mr_diff(
                 self.data_dir.clone(),
                 item.repo.clone(),
                 item.number,
@@ -932,6 +853,9 @@ impl Service {
         }
     }
     pub fn checks(&self, item: &Item) -> Result<Checks, String> {
+        if item.provider != "github" {
+            return Err("This action requires a GitHub item".into());
+        }
         convert(github::git_github_pr_checks_for(
             self.project(item),
             &item.repo,
@@ -939,6 +863,9 @@ impl Service {
         )?)
     }
     pub fn action(&self, item: &Item, action: &str) -> Result<Item, String> {
+        if item.provider != "github" {
+            return Err("This action requires a GitHub item".into());
+        }
         let mut updated: Item = convert(github::git_github_pr_action_for(
             self.project(item),
             &item.repo,
@@ -1041,16 +968,41 @@ mod notification_tests {
     }
 
     #[test]
+    fn changed_revisions_are_distinct_from_new_items_and_never_replay_on_query_switch() {
+        let mut tracker = NotificationTracker::default();
+        let first = snapshot(vec![item(1, "jira")]);
+        let baseline = tracker.observe_snapshot(&first, "project".into());
+        assert!(baseline.changed.is_empty() && baseline.appeared.is_empty());
+        let mut revised = item(1, "jira");
+        revised.updated_at = "2026-10-23T10:00:00Z".into();
+        let observation = tracker.observe_snapshot(
+            &snapshot(vec![revised.clone(), item(2, "jira")]),
+            "project".into(),
+        );
+        assert_eq!(observation.changed.len(), 2);
+        assert_eq!(observation.appeared.len(), 1);
+        let same = snapshot(vec![revised, item(2, "jira")]);
+        assert!(tracker
+            .observe_snapshot(&same, "project".into())
+            .changed
+            .is_empty());
+        assert!(tracker
+            .observe_snapshot(&same, "jql-filter".into())
+            .changed
+            .is_empty());
+    }
+
+    #[test]
     fn failed_provider_has_its_own_successful_baseline() {
         let mut tracker = NotificationTracker::default();
-        let mut failed = snapshot(vec![item(1, "linear")]);
-        failed.errors.insert("linear".into(), "offline".into());
+        let mut failed = snapshot(vec![item(1, "jira")]);
+        failed.errors.insert("jira".into(), "offline".into());
         assert!(tracker.observe(&failed, "scope".into()).is_empty());
         assert!(tracker
-            .observe(&snapshot(vec![item(2, "linear")]), "scope".into())
+            .observe(&snapshot(vec![item(2, "jira")]), "scope".into())
             .is_empty());
         let appeared = tracker.observe(
-            &snapshot(vec![item(2, "linear"), item(3, "linear")]),
+            &snapshot(vec![item(2, "jira"), item(3, "jira")]),
             "scope".into(),
         );
         assert_eq!(appeared.len(), 1);
@@ -1085,9 +1037,9 @@ mod notification_tests {
         let mut github = item(12, "github");
         github.url = "https://GitHub.com/Acme/App/pull/12/".into();
         assert_eq!(github.key(), "github:acme/app:issue:12");
-        let mut linear = item(7, "linear");
-        linear.id = "stable-id".into();
-        linear.identifier = "MON-7".into();
-        assert_eq!(linear.key(), "linear:mon-7");
+        let mut jira = item(7, "jira");
+        jira.id = "ENG-7".into();
+        jira.identifier = "ENG-7".into();
+        assert_eq!(jira.key(), "jira:eng-7");
     }
 }

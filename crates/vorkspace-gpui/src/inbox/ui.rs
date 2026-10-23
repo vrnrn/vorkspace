@@ -9,7 +9,8 @@ fn action(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Statef
     let id: SharedString = id.into();
     let label = label.into();
     div()
-        .id(id)
+        .id(id.clone())
+        .debug_selector(move || id.to_string())
         .role(Role::Button)
         .aria_label(label.clone())
         .h(px(28.))
@@ -36,7 +37,8 @@ fn icon_action_ink(
 ) -> Stateful<Div> {
     let id: SharedString = id.into();
     div()
-        .id(id)
+        .id(id.clone())
+        .debug_selector(move || id.to_string())
         .role(Role::Button)
         .aria_label(label.to_owned())
         .h(px(28.))
@@ -168,7 +170,8 @@ fn menu_row(
     let id: SharedString = id.into();
     let label = label.into();
     div()
-        .id(id)
+        .id(id.clone())
+        .debug_selector(move || id.to_string())
         .role(Role::MenuItemCheckBox)
         .aria_label(label.clone())
         .h(px(28.))
@@ -211,10 +214,8 @@ fn error(text: impl Into<SharedString>) -> Div {
 }
 fn provider_mark(provider: &str) -> gpui::Svg {
     let (path, color) = match provider {
-        "linear" => ("inbox-linear", content(0.8)),
         "jira" => ("inbox-jira", rgb(0x2684ff).into()),
         "gitlab" => ("inbox-gitlab", rgb(0xfc6d26).into()),
-        "azuredevops" => ("inbox-azuredevops", content(0.8)),
         _ => ("inbox-github", content(0.8)),
     };
     icon(path, 14.).text_color(color)
@@ -326,10 +327,12 @@ impl Inbox {
         let connected = model::PROVIDERS
             .into_iter()
             .filter(|provider| {
-                self.snapshot
-                    .connections
-                    .get(*provider)
-                    .is_some_and(|s| s.connected)
+                self.state.connectors.enabled(provider)
+                    && self
+                        .snapshot
+                        .connections
+                        .get(*provider)
+                        .is_some_and(|s| s.connected)
             })
             .collect::<Vec<_>>();
         let items = self.visible_items(cx);
@@ -343,9 +346,11 @@ impl Inbox {
             .border_b_1()
             .border_color(content(0.07))
             .children(connected.iter().map(|provider| {
+                let provider = *provider;
                 let source = provider.to_string();
                 div()
                     .id(SharedString::from(format!("inbox-source-{provider}")))
+                    .debug_selector(move || format!("inbox-source-{provider}"))
                     .role(Role::Tab)
                     .aria_label(model::provider_label(provider))
                     .flex_1()
@@ -358,12 +363,12 @@ impl Inbox {
                     .gap(px(6.))
                     .rounded(px(6.))
                     .text_size(px(12.))
-                    .text_color(content(if self.state.source == *provider {
+                    .text_color(content(if self.state.source == provider {
                         1.
                     } else {
                         0.5
                     }))
-                    .when(self.state.source == *provider, |d| d.bg(content(0.1)))
+                    .when(self.state.source == provider, |d| d.bg(content(0.1)))
                     .hover(|s| s.bg(content(0.05)))
                     .child(provider_mark(provider))
                     .child(
@@ -463,7 +468,9 @@ impl Inbox {
                     this.load_detail(false, cx);
                 })),
             );
-        let empty = if connected.is_empty() && !self.loading {
+        let empty = if self.state.connectors.enabled_providers().next().is_none() {
+            "No Inbox connectors are enabled. Enable a source in Settings → Inbox.".into()
+        } else if connected.is_empty() && !self.loading {
             "Add a connection to start using the Inbox.".into()
         } else if self.loading && self.snapshot.items.is_empty() {
             "Loading inbox…".into()
@@ -806,10 +813,7 @@ impl Inbox {
                             })
                             .when(
                                 item.assignees.is_empty()
-                                    && matches!(
-                                        item.provider.as_str(),
-                                        "github" | "gitlab" | "azuredevops"
-                                    ),
+                                    && matches!(item.provider.as_str(), "github" | "gitlab"),
                                 |d| d.child("·").child("Unassigned"),
                             )
                             .when(!item.created_at.is_empty(), |d| {
@@ -897,9 +901,9 @@ impl Inbox {
                             .flex_wrap()
                             .items_center()
                             .gap(px(8.))
-                            .when(!is_pr, |d| {
+                            .when(!is_pr || item.provider == "gitlab", |d| {
                                 d.child(
-                                    action("inbox-send-agent", "Send to agent")
+                                    action("inbox-send-agent", "Send to chat")
                                         .px(px(12.))
                                         .bg(content(1.))
                                         .text_color(shell_fill())
@@ -914,26 +918,46 @@ impl Inbox {
                                         })),
                                 )
                             })
-                            .when(!is_pr && item.project_path.is_empty(), |d| {
-                                d.child(
-                                    icon_action(
-                                        "inbox-choose-project",
-                                        &project_name(&self.start_project),
-                                        "folder",
+                            .when(
+                                (!is_pr || item.provider == "gitlab")
+                                    && (item.project_path.is_empty()
+                                        || matches!(item.provider.as_str(), "gitlab" | "jira")),
+                                |d| {
+                                    d.child(
+                                        icon_action(
+                                            "inbox-choose-project",
+                                            &self
+                                                .start_bot
+                                                .as_ref()
+                                                .and_then(|id| {
+                                                    self.bots
+                                                        .iter()
+                                                        .find(|(key, _)| key == id)
+                                                        .map(|(_, name)| name.clone())
+                                                })
+                                                .unwrap_or_else(|| {
+                                                    project_name(&self.start_project)
+                                                }),
+                                            if self.start_bot.is_some() {
+                                                "bot"
+                                            } else {
+                                                "folder"
+                                            },
+                                        )
+                                        .relative()
+                                        .border_1()
+                                        .border_color(content(0.1))
+                                        .child(icon("chevron-down", 12.))
+                                        .child(self.project_anchor.probe())
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.project_picker = !this.project_picker;
+                                                cx.notify();
+                                            }),
+                                        ),
                                     )
-                                    .relative()
-                                    .border_1()
-                                    .border_color(content(0.1))
-                                    .child(icon("chevron-down", 12.))
-                                    .child(self.project_anchor.probe())
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            this.project_picker = !this.project_picker;
-                                            cx.notify();
-                                        },
-                                    )),
-                                )
-                            })
+                                },
+                            )
                             .when(is_pr && item.provider == "github", |d| {
                                 d.child(self.pr_actions(&item, cx))
                             })
@@ -1183,9 +1207,7 @@ impl Inbox {
         } else {
             &comment.author
         };
-        let reply_id = if item.provider == "linear" {
-            comment.id.clone()
-        } else if item.provider == "github" {
+        let reply_id = if item.provider == "github" {
             comment.thread_id.clone()
         } else {
             String::new()
@@ -2050,7 +2072,7 @@ impl Inbox {
                                 if item.project_path.is_empty() { item.project_path = this.start_project.to_string_lossy().into_owned(); }
                                 let evidence = failed.iter().map(|check| format!("{}: {} {}", check.name, check.state, check.url.as_deref().unwrap_or(""))).collect::<Vec<_>>().join("\n");
                                 let prompt = format!("Investigate and repair the failing CI checks for {} {}: {}\n{}\n\n{}\n\nRead the check logs, reproduce the failures, implement the fix, and run relevant checks.", item.repo, item.reference(), item.title, item.url, evidence);
-                                cx.emit(Event::StartSession { item: Box::new(item), prompt });
+                                cx.emit(Event::StartSession { item: Box::new(item), prompt, bot: None });
                             }
                         })))))
                     .children(checks.checks.iter().enumerate().map(|(ix, check)| {
@@ -2071,19 +2093,19 @@ impl Inbox {
 
     fn filters_active(&self) -> bool {
         let f = &self.state.filters;
-        f.assigned_to_me
+        (f.assigned_to_me && !(self.state.source == "jira" && self.state.jira_filter.mode == "jql"))
             || !f.hidden_projects.is_empty()
-            || !f.hidden_linear_projects.is_empty()
             || !f.hidden_kinds.is_empty()
             || f.time != "all"
             || f.status.open
             || f.status.draft
             || f.status.closed
             || f.status.merged
-            || (self.state.source == "linear" && !self.state.hidden_linear_teams.is_empty())
-            || (self.state.source == "jira" && !self.state.hidden_jira_projects.is_empty())
+            || (self.state.source == "jira"
+                && self.state.jira_filter.mode != "jql"
+                && !self.state.hidden_jira_projects.is_empty())
     }
-    fn filters_changed(&mut self, refetch: bool, cx: &mut Context<Self>) {
+    pub(super) fn filters_changed(&mut self, refetch: bool, cx: &mut Context<Self>) {
         self.save();
         if let Some(item) = self.visible_items(cx).first() {
             self.select(item.key(), cx);
@@ -2097,24 +2119,26 @@ impl Inbox {
         let weak = cx.entity().downgrade();
         let f = &self.state.filters;
         let tracker = model::is_tracker(&self.state.source);
-        let mut rows = vec![
-            caption("FILTER INBOX").into_any_element(),
-            menu_row(
-                "inbox-assigned",
-                if matches!(self.state.source.as_str(), "gitlab" | "azuredevops") {
-                    "Needs my attention"
-                } else {
-                    "Assigned to me"
-                },
-                f.assigned_to_me,
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.state.filters.assigned_to_me = !this.state.filters.assigned_to_me;
-                this.filters_changed(true, cx);
-            }))
-            .into_any_element(),
-            caption("UPDATED").into_any_element(),
-        ];
+        let mut rows = vec![caption("FILTER INBOX").into_any_element()];
+        if !(tracker && self.state.jira_filter.mode == "jql") {
+            rows.push(
+                menu_row(
+                    "inbox-assigned",
+                    if self.state.source == "gitlab" {
+                        "Needs my attention"
+                    } else {
+                        "Assigned to me"
+                    },
+                    f.assigned_to_me,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.state.filters.assigned_to_me = !this.state.filters.assigned_to_me;
+                    this.filters_changed(true, cx);
+                }))
+                .into_any_element(),
+            );
+        }
+        rows.push(caption("UPDATED").into_any_element());
         for (time, label) in [
             ("all", "Any time"),
             ("today", "Today"),
@@ -2200,27 +2224,12 @@ impl Inbox {
                 );
             }
         }
-        let provider_options = if self.state.source == "linear" {
-            &self.snapshot.linear_teams
-        } else {
-            &self.snapshot.jira_projects
-        };
-        if tracker && !provider_options.is_empty() {
-            rows.push(
-                caption(if self.state.source == "linear" {
-                    "TEAMS"
-                } else {
-                    "PROJECTS"
-                })
-                .into_any_element(),
-            );
+        let provider_options = &self.snapshot.jira_projects;
+        if tracker && self.state.jira_filter.mode != "jql" && !provider_options.is_empty() {
+            rows.push(caption("PROJECTS").into_any_element());
             for (ix, option) in provider_options.iter().enumerate() {
                 let id = option.id.clone();
-                let hidden = if self.state.source == "linear" {
-                    &self.state.hidden_linear_teams
-                } else {
-                    &self.state.hidden_jira_projects
-                };
+                let hidden = &self.state.hidden_jira_projects;
                 rows.push(
                     menu_row(
                         format!("inbox-tracker-filter-{ix}"),
@@ -2228,50 +2237,8 @@ impl Inbox {
                         !hidden.contains(&id),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.state.source == "linear" {
-                            toggle(&mut this.state.hidden_linear_teams, id.clone());
-                        } else {
-                            toggle(&mut this.state.hidden_jira_projects, id.clone());
-                        }
+                        toggle(&mut this.state.hidden_jira_projects, id.clone());
                         this.filters_changed(true, cx);
-                    }))
-                    .into_any_element(),
-                );
-            }
-        }
-        if self.state.source == "linear" {
-            let mut projects = std::collections::BTreeMap::new();
-            for item in self
-                .snapshot
-                .items
-                .iter()
-                .filter(|i| i.provider == "linear")
-            {
-                projects
-                    .entry(if item.project_id.is_empty() {
-                        "~none".into()
-                    } else {
-                        item.project_id.clone()
-                    })
-                    .or_insert_with(|| {
-                        if item.project_name.is_empty() {
-                            "No project".into()
-                        } else {
-                            item.project_name.clone()
-                        }
-                    });
-            }
-            rows.push(caption("LINEAR PROJECTS").into_any_element());
-            for (ix, (id, name)) in projects.into_iter().enumerate() {
-                rows.push(
-                    menu_row(
-                        format!("inbox-linear-project-{ix}"),
-                        name,
-                        !f.hidden_linear_projects.contains(&id),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        toggle(&mut this.state.filters.hidden_linear_projects, id.clone());
-                        this.filters_changed(false, cx);
                     }))
                     .into_any_element(),
                 );
@@ -2284,7 +2251,6 @@ impl Inbox {
                 .mt(px(8.))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.state.filters = model::Filters::default();
-                    this.state.hidden_linear_teams.clear();
                     this.state.hidden_jira_projects.clear();
                     this.filters_changed(true, cx);
                 }))
@@ -2328,7 +2294,7 @@ impl Inbox {
             });
         })
         .child(caption("CONNECTIONS"))
-        .children(model::PROVIDERS.into_iter().map(|provider| {
+        .children(self.state.connectors.enabled_providers().map(|provider| {
             let connected = self
                 .snapshot
                 .connections
@@ -2341,6 +2307,7 @@ impl Inbox {
             );
             div()
                 .id(SharedString::from(format!("inbox-connect-{provider}")))
+                .debug_selector(move || format!("inbox-connect-{provider}"))
                 .role(Role::Button)
                 .aria_label(label.clone())
                 .w_full()
@@ -2379,14 +2346,11 @@ impl Inbox {
             "github" => {
                 "Install GitHub CLI, then run gh auth login in a terminal. Check again when signed in."
             }
-            "linear" => "Create a personal API key in Linear → Settings → Security & Access.",
             "jira" => "Connect your Jira Cloud site with your Atlassian email and an API token.",
             "gitlab" => {
                 "Connect GitLab.com or your GitLab instance with a personal access token with API access."
             }
-            _ => {
-                "Connect your ADO organization using a personal access token with Boards and Repos read & write access."
-            }
+            _ => "Unsupported inbox provider.",
         };
         div()
             .absolute()
@@ -2441,7 +2405,7 @@ impl Inbox {
                             .text_color(content(0.5))
                             .child(hint),
                     )
-                    .when(provider != "github" && provider != "linear", |d| {
+                    .when(provider != "github", |d| {
                         d.child(
                             div()
                                 .px(px(10.))
@@ -2537,15 +2501,40 @@ impl Inbox {
             menu_row(
                 format!("inbox-start-project-{ix}"),
                 project_name(project),
-                *project == self.start_project,
+                self.start_bot.is_none() && *project == self.start_project,
             )
             .child(self.project_mark(&project.to_string_lossy(), 14.))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.start_project = path.clone();
+                this.start_bot = None;
+                this.destination_explicit = true;
                 this.project_picker = false;
                 cx.notify();
             }))
         }))
+        .children(
+            self.bots
+                .iter()
+                .filter(|_| {
+                    self.item()
+                        .is_some_and(|item| matches!(item.provider.as_str(), "jira" | "gitlab"))
+                })
+                .map(|(id, name)| {
+                    let id = id.clone();
+                    menu_row(
+                        format!("inbox-start-bot-{id}"),
+                        name.clone(),
+                        self.start_bot.as_ref() == Some(&id),
+                    )
+                    .child(icon("bot", 14.))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.start_bot = Some(id.clone());
+                        this.destination_explicit = true;
+                        this.project_picker = false;
+                        cx.notify();
+                    }))
+                }),
+        )
         .into_any_element()
     }
 
@@ -2937,6 +2926,259 @@ mod tests {
         cx.refresh().unwrap();
         cx.run_until_parked();
     }
+    fn inbox_window(cx: &mut TestAppContext) -> WindowHandle<Inbox> {
+        cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        point(px(0.), px(0.)),
+                        size(px(1100.), px(700.)),
+                    ))),
+                    ..Default::default()
+                },
+                |_, cx| {
+                    cx.new(|cx| {
+                        let store = Arc::new(Mutex::new(
+                            vorkspace_core::store::Store::open(std::path::Path::new(":memory:"))
+                                .unwrap(),
+                        ));
+                        Inbox::new_inner(
+                            store,
+                            vec![],
+                            PathBuf::from("/private/tmp/inbox-connectors"),
+                            false,
+                            cx,
+                        )
+                    })
+                },
+            )
+            .unwrap()
+        })
+    }
+    #[gpui::test]
+    fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight_results(
+        cx: &mut TestAppContext,
+    ) {
+        let window = inbox_window(cx);
+        let items = model::PROVIDERS
+            .into_iter()
+            .map(|provider| Item {
+                provider: provider.into(),
+                kind: "issue".into(),
+                number: 1,
+                title: provider.into(),
+                updated_at: "2026-10-22T10:00:00Z".into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let old_scope = window
+            .update(cx, |inbox, _, cx| {
+                inbox.snapshot.items = items.clone();
+                inbox.state.seen.seeded = true;
+                for provider in model::PROVIDERS {
+                    inbox.snapshot.connections.insert(
+                        provider.into(),
+                        model::Status {
+                            connected: true,
+                            ..Default::default()
+                        },
+                    );
+                }
+                inbox.selected = Some(items[0].key());
+                inbox.details = Some(Details::default());
+                inbox.loading = true;
+                inbox.generation = 7;
+                let old_scope = inbox.state.fetch_scope(&inbox.projects);
+                inbox.set_connector_enabled("github", false, cx).unwrap();
+                assert_eq!(inbox.unread_count(), 2);
+                assert_eq!(inbox.state.source, "gitlab");
+                assert!(inbox.selected.is_none() && inbox.details.is_none());
+                assert!(!inbox.connection_statuses().contains_key("github"));
+                assert_eq!(
+                    inbox
+                        .visible_items(cx)
+                        .iter()
+                        .map(|item| item.provider.as_str())
+                        .collect::<Vec<_>>(),
+                    ["gitlab"]
+                );
+                assert!(!model::Connectors::load(&locked(&inbox.store).unwrap()).enabled("github"));
+                old_scope
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("inbox-source-github").is_none());
+        assert!(visual.debug_bounds("inbox-source-gitlab").is_some());
+        assert!(visual.debug_bounds("inbox-source-jira").is_some());
+        window
+            .update(visual, |inbox, _, cx| {
+                inbox.set_connector_enabled("gitlab", false, cx).unwrap();
+                inbox.set_connector_enabled("jira", false, cx).unwrap();
+                assert!(inbox.state.source.is_empty());
+                assert_eq!(inbox.unread_count(), 0);
+                let stale = Snapshot {
+                    items,
+                    connections: [(
+                        "github".into(),
+                        model::Status {
+                            connected: true,
+                            ..Default::default()
+                        },
+                    )]
+                    .into(),
+                    ..Default::default()
+                };
+                inbox.finish_refresh(7, old_scope, stale, vec![], cx);
+                assert!(inbox.snapshot.items.is_empty());
+                assert!(inbox.connection_statuses().is_empty());
+                for provider in ["github", "linear", "azuredevops"] {
+                    inbox.open_connection(provider.into(), cx);
+                    assert!(inbox.connect_provider.is_none());
+                }
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(visual, |inbox, _, _| {
+                assert!(
+                    !inbox.loading,
+                    "the replacement all-disabled refresh must complete without adapters"
+                );
+                assert!(inbox.snapshot.items.is_empty() && inbox.snapshot.connections.is_empty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chime(
+        cx: &mut TestAppContext,
+    ) {
+        let window = inbox_window(cx);
+        let changes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let output = changes.clone();
+        let _subscription = window
+            .update(cx, |inbox, _, cx| {
+                let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
+                    if let Event::Activity { changed, .. } = event {
+                        output.borrow_mut().push(changed.len());
+                    }
+                });
+                let mut item = Item {
+                    provider: "jira".into(),
+                    kind: "jira".into(),
+                    id: "42".into(),
+                    identifier: "ENG-42".into(),
+                    updated_at: "2026-10-22T10:00:00Z".into(),
+                    ..Default::default()
+                };
+                inbox.generation = 1;
+                let scope = inbox.state.fetch_scope(&inbox.projects);
+                inbox.finish_refresh(
+                    1,
+                    scope.clone(),
+                    Snapshot {
+                        items: vec![item.clone()],
+                        ..Default::default()
+                    },
+                    vec![],
+                    cx,
+                );
+                inbox.self_activity.insert(item.key(), Instant::now());
+                item.updated_at = "2026-10-22T11:00:00Z".into();
+                inbox.finish_refresh(
+                    1,
+                    scope.clone(),
+                    Snapshot {
+                        items: vec![item.clone()],
+                        ..Default::default()
+                    },
+                    vec![],
+                    cx,
+                );
+                assert!(!inbox.state.seen.unseen(&item));
+                assert!(
+                    inbox.self_activity.is_empty(),
+                    "coalesced own mutations are consumed by one remote revision"
+                );
+                item.updated_at = "2026-10-22T12:00:00Z".into();
+                inbox.finish_refresh(
+                    1,
+                    scope,
+                    Snapshot {
+                        items: vec![item],
+                        ..Default::default()
+                    },
+                    vec![],
+                    cx,
+                );
+                subscription
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(*changes.borrow(), vec![0, 0, 1]);
+    }
+
+    #[gpui::test]
+    fn saved_bot_destination_is_preselected_and_explicit_project_choice_wins(
+        cx: &mut TestAppContext,
+    ) {
+        let window = inbox_window(cx);
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let output = sent.clone();
+        let _subscription = window
+            .update(cx, |inbox, _, cx| {
+                let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
+                    if let Event::StartSession { item, prompt, bot } = event {
+                        output.borrow_mut().push((
+                            item.project_path.clone(),
+                            prompt.clone(),
+                            bot.clone(),
+                        ));
+                    }
+                });
+                let item = Item {
+                    provider: "jira".into(),
+                    kind: "jira".into(),
+                    identifier: "ENG-42".into(),
+                    title: "Preserve context".into(),
+                    ..Default::default()
+                };
+                inbox.snapshot.items = vec![item.clone()];
+                inbox.selected = Some(item.key());
+                inbox.details = Some(Details {
+                    body: "Ticket description".into(),
+                    ..Default::default()
+                });
+                inbox.set_bots(vec![("helper".into(), "Helper".into())], cx);
+                inbox.set_default_bot("jira", "helper", cx).unwrap();
+                assert_eq!(inbox.start_bot.as_deref(), Some("helper"));
+                inbox.start(cx);
+                inbox.start_project = "/chosen/project".into();
+                inbox.start_bot = None;
+                inbox.destination_explicit = true;
+                inbox.set_default_bot("jira", "helper", cx).unwrap();
+                assert!(
+                    inbox.start_bot.is_none(),
+                    "saved defaults cannot override a deliberate destination"
+                );
+                inbox.start(cx);
+                inbox.destination_explicit = false;
+                inbox.set_bots(vec![], cx);
+                assert!(inbox.start_bot.is_none());
+                assert_eq!(inbox.state.default_bots.get("jira"), Some("helper"));
+                subscription
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let sent = sent.borrow();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].2.as_deref(), Some("helper"));
+        assert!(sent[0].1.contains("ENG-42") && sent[0].1.contains("Ticket description"));
+        assert_eq!(sent[1].0, "/chosen/project");
+        assert_eq!(sent[1].2, None);
+    }
+
     #[gpui::test]
     fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_composer(
         cx: &mut TestAppContext,

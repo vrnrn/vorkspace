@@ -10,4 +10,6 @@ Long saved chats are read a piece at a time. Hidden views keep their work withou
 
 As a reply arrives, only changed chat blocks are saved. The screen can show a small preview while the full tool result stays safely in the database. A stale window cannot overwrite newer saved history.
 
-Agent output has a size limit before it is buffered. A fast agent waits when the app is still handling earlier output. An individual response that is too large produces a clear error rather than silently losing part of its text. Stopping the connection also releases waiting readers.
+Every supported agent has an output size limit before it is buffered. A fast agent waits when the app is still handling earlier output. An individual response that is too large produces a clear error rather than silently losing part of its text. Stopping the connection also releases waiting readers.
+
+Interface zoom makes the whole workspace larger or smaller. Clicking, typing, native previews, and screen-reader controls follow the same zoom level, including after moving the window to a different display.

@@ -254,21 +254,22 @@ impl Conversation {
                 .into(),
         ];
         items.extend(ACCESS_MODES.iter().map(|(id, label, hint, glyph)| {
-                    let hint = match (provider,*id) {
-                        (Kind::Cursor,"supervised") => "Confirm commands using Cursor's permission policy; Cursor may accept edits automatically.",
-                        (Kind::Pi | Kind::Omp,_) => "Tool confirmations follow this provider's configured extensions.",
-                        _ => *hint,
-                    };
-                    let action = MenuAction::new(format!("access:{id}"), *label)
-                        .icon(glyph)
-                        .description(hint)
-                        .checked(self.settings.access.id() == *id);
-                    MenuItem::from(if *id == "full-access" {
-                        action.icon_color(tint(AMBER_400, 0.9))
-                    } else {
-                        action
-                    })
-                }));
+            let hint = match (provider, *id) {
+                (Kind::Pi | Kind::Omp, _) => {
+                    "Tool confirmations follow this provider's configured extensions."
+                }
+                _ => *hint,
+            };
+            let action = MenuAction::new(format!("access:{id}"), *label)
+                .icon(glyph)
+                .description(hint)
+                .checked(self.settings.access.id() == *id);
+            MenuItem::from(if *id == "full-access" {
+                action.icon_color(tint(AMBER_400, 0.9))
+            } else {
+                action
+            })
+        }));
         if self.busy {
             items.push(MenuItem::Note("Changes apply to the next turn.".into()));
         }
@@ -326,10 +327,6 @@ impl Conversation {
         }
         if let Some(model) = self.model_info() {
             for control in &model.controls {
-                if Kind::from_id(&self.summary.provider) == Kind::OpenCode && control.id == "agent"
-                {
-                    continue;
-                }
                 let selected = self
                     .settings
                     .model_settings
@@ -870,10 +867,6 @@ impl Conversation {
                 );
             }
             for (ix, control) in model.controls.iter().enumerate() {
-                if Kind::from_id(&self.summary.provider) == Kind::OpenCode && control.id == "agent"
-                {
-                    continue;
-                }
                 let kind = ComposerMenu::Setting(ix + 1);
                 let toggle = model_control_toggle(control);
                 let open = !toggle && self.menu_is(kind);

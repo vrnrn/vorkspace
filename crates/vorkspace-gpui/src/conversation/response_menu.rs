@@ -458,7 +458,7 @@ mod tests {
                     Some(vec![
                         (Kind::Codex, None),
                         (Kind::Claude, None),
-                        (Kind::Cursor, None),
+                        (Kind::Antigravity, None),
                     ]),
                     window,
                     cx,

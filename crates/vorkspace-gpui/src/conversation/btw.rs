@@ -13,7 +13,16 @@ const SNAPSHOT_CHARS: usize = 64_000;
 const BLOCK_CHARS: usize = 8_000;
 
 fn supported(kind: Kind) -> bool {
-    !matches!(kind, Kind::Fx | Kind::Hermes | Kind::Antigravity)
+    kind.is_supported() && kind != Kind::Antigravity
+}
+fn turn_provider(provider: &str, session_provider: &str) -> Kind {
+    // Older turns omitted this field. An explicit historical ID must never
+    // acquire the current session's different execution identity.
+    Kind::from_id(if provider.is_empty() {
+        session_provider
+    } else {
+        provider
+    })
 }
 fn bounded(text: &str, chars: usize) -> String {
     text.chars().take(chars).collect()
@@ -483,6 +492,9 @@ impl Btw {
         {
             return false;
         }
+        if !self.admit_execution(cx) {
+            return false;
+        }
         let text = self.input.read(cx).content.trim().to_owned();
         if text.is_empty() {
             return false;
@@ -503,7 +515,21 @@ impl Btw {
         self.run(cx);
         true
     }
+    fn admit_execution(&mut self, cx: &mut Context<Self>) -> bool {
+        if self
+            .active()
+            .is_none_or(|thread| !supported(Kind::from_id(&thread.provider)))
+        {
+            self.error = Some("This side question's provider is unavailable. Its saved history and draft were retained.".into());
+            cx.notify();
+            return false;
+        }
+        true
+    }
     fn run(&mut self, cx: &mut Context<Self>) {
+        if !self.admit_execution(cx) {
+            return;
+        }
         let Some(thread) = self.active_mut() else {
             return;
         };
@@ -624,6 +650,9 @@ impl Btw {
             .active()
             .is_none_or(|thread| !matches!(thread.status.as_str(), "error" | "stopped"))
         {
+            return;
+        }
+        if !self.admit_execution(cx) {
             return;
         }
         if let Some(thread) = self.active_mut()
@@ -975,10 +1004,7 @@ impl Conversation {
             .iter()
             .filter(|(_, info)| {
                 info.completed_at.is_some()
-                    && supported(
-                        Kind::parse(&info.provider)
-                            .unwrap_or_else(|| Kind::from_id(&self.summary.provider)),
-                    )
+                    && supported(turn_provider(&info.provider, &self.summary.provider))
             })
             .max_by_key(|(turn, _)| **turn)?;
         let user = rows[..(*turn).min(rows.len())]
@@ -988,8 +1014,7 @@ impl Conversation {
             .iter()
             .position(|row| row.first && row.role == "user")
             .map_or(rows.len(), |offset| user + 1 + offset);
-        let provider =
-            Kind::parse(&info.provider).unwrap_or_else(|| Kind::from_id(&self.summary.provider));
+        let provider = turn_provider(&info.provider, &self.summary.provider);
         if !supported(provider) {
             return None;
         }
@@ -1063,6 +1088,89 @@ impl Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn unsupported_side_history_preserves_drafts_and_rows_on_submit_and_retry(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let view = cx.update(|cx| {
+            let store = vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap();
+            let session = store.create("codex", "/project").unwrap();
+            let parent = cx.new(input::Input::side_question);
+            cx.new(|cx| {
+                Btw::new(
+                    session.id,
+                    Arc::new(std::sync::Mutex::new(store)),
+                    parent,
+                    Target {
+                        source_turn: 0,
+                        snapshot: "Saved main context".into(),
+                        provider: Kind::Codex,
+                        model: None,
+                        cwd: "/project".into(),
+                        settings: Settings::default(),
+                    },
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        for provider in [
+            "cursor", "grok", "opencode", "fx", "hermes", "devin", "unknown",
+        ] {
+            cx.update(|cx| {
+                view.update(cx, |view, cx| {
+                    view.threads = vec![Thread {
+                        id: "saved-side".into(),
+                        source_turn: 0,
+                        snapshot: "Saved main context".into(),
+                        provider: provider.into(),
+                        model: Some("original-model".into()),
+                        cwd: "/project".into(),
+                        account: Default::default(),
+                        effort: None,
+                        model_settings: HashMap::new(),
+                        environment: HashMap::new(),
+                        rows: vec![
+                            row("user", "Saved request", true),
+                            row("assistant", "Saved partial answer", true),
+                        ],
+                        draft: "Unsent side draft".into(),
+                        status: "error".into(),
+                        error: Some("Saved failure".into()),
+                        desktop: None,
+                    }];
+                    view.active = Some("saved-side".into());
+                    view.input.update(cx, |input, cx| {
+                        input.set_text("Unsent side draft".into(), cx)
+                    });
+                    let before = serde_json::to_value(&view.threads).unwrap();
+                    let revision = view.revision;
+                    assert!(!view.submit(cx));
+                    view.retry(cx);
+                    view.run(cx);
+                    assert_eq!(serde_json::to_value(&view.threads).unwrap(), before);
+                    assert_eq!(view.input.read(cx).content.as_str(), "Unsent side draft");
+                    assert_eq!(view.revision, revision);
+                    assert!(view.cancel.is_empty());
+                    assert!(view.error.as_deref().unwrap().contains("unavailable"));
+                })
+            });
+        }
+    }
+    #[test]
+    fn unsupported_turn_never_inherits_the_current_session_provider() {
+        for provider in [
+            "cursor", "grok", "opencode", "fx", "hermes", "devin", "unknown",
+        ] {
+            let kind = turn_provider(provider, "codex");
+            assert_eq!(kind, Kind::Unsupported);
+            assert!(!supported(kind));
+        }
+        assert_eq!(turn_provider("", "codex"), Kind::Codex);
+        assert_eq!(turn_provider("claude", "codex"), Kind::Claude);
+        assert_eq!(turn_provider("", "devin"), Kind::Unsupported);
+    }
     fn row(role: &str, text: &str, first: bool) -> Row {
         Row {
             role: role.into(),

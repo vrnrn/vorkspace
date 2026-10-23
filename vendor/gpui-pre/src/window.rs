@@ -16,13 +16,14 @@ use crate::{
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
     PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
     RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
-    StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
-    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration,
-    TextInputStateChange, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
-    TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
-    WindowVisibility, point, prelude::*, px, rems, size, transparent_black,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, ScrollDelta, Shadow,
+    SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription,
+    SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
+    TextInputConfiguration, TextInputStateChange, TextRenderingMode, TextStyle,
+    TextStyleRefinement, ThermalState, TransformationMatrix, Underline, UnderlineStyle,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
+    WindowOptions, WindowParams, WindowTextSystem, WindowVisibility, point, prelude::*, px, rems,
+    size, transparent_black,
 };
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
@@ -1263,6 +1264,8 @@ pub struct Window {
     modifiers: Modifiers,
     capslock: Capslock,
     scale_factor: f32,
+    platform_scale_factor: f32,
+    ui_scale: f32,
     pub(crate) bounds_observers: SubscriberSet<(), AnyObserver>,
     appearance: WindowAppearance,
     pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
@@ -1635,11 +1638,21 @@ impl Window {
 
         let display_id = platform_window.display().map(|display| display.id());
         let sprite_atlas = platform_window.sprite_atlas();
-        let mouse_position = platform_window.mouse_position();
+        let platform_mouse_position = platform_window.mouse_position();
         let modifiers = platform_window.modifiers();
         let capslock = platform_window.capslock();
         let content_size = platform_window.content_size();
-        let scale_factor = platform_window.scale_factor();
+        let platform_scale_factor = platform_window.scale_factor();
+        let ui_scale = 1.;
+        let scale_factor = platform_scale_factor * ui_scale;
+        let viewport_size = size(
+            px(content_size.width.0 / ui_scale),
+            px(content_size.height.0 / ui_scale),
+        );
+        let mouse_position = point(
+            px(platform_mouse_position.x.0 / ui_scale),
+            px(platform_mouse_position.y.0 / ui_scale),
+        );
         let appearance = platform_window.appearance();
         let text_system = Arc::new(WindowTextSystem::new(cx.text_system().clone()));
         let invalidator = WindowInvalidator::new(handle.window_id());
@@ -2135,7 +2148,7 @@ impl Window {
             text_rendering_mode: cx.text_rendering_mode.clone(),
             rem_size: px(16.),
             rem_size_override_stack: SmallVec::new(),
-            viewport_size: content_size,
+            viewport_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
             root: None,
             element_id_stack: ElementIdStack::default(),
@@ -2163,6 +2176,8 @@ impl Window {
             modifiers,
             capslock,
             scale_factor,
+            platform_scale_factor,
+            ui_scale,
             bounds_observers: SubscriberSet::new(),
             appearance,
             appearance_observers: SubscriberSet::new(),
@@ -2516,7 +2531,14 @@ impl Window {
     /// - `Some(&[])` is an empty region, so the window receives no pointer or touch input.
     /// - `None` resets the region to the default, so the whole window receives input again.
     pub fn set_input_region(&self, region: Option<&[Bounds<Pixels>]>) {
-        self.platform_window.set_input_region(region);
+        let scaled_region = region.map(|region| {
+            region
+                .iter()
+                .map(|bounds| self.logical_to_platform_bounds(*bounds))
+                .collect::<Vec<_>>()
+        });
+        self.platform_window
+            .set_input_region(scaled_region.as_deref());
     }
 
     /// Return the `WindowBounds` to indicate that how a window should be opened
@@ -2789,9 +2811,8 @@ impl Window {
     /// the platform window, then notifies observers. Normally called automatically
     /// by the platform's resize callback, but exposed publicly for test infrastructure.
     pub fn bounds_changed(&mut self, cx: &mut App) {
-        self.scale_factor = self.platform_window.scale_factor();
-        self.viewport_size = self.platform_window.content_size();
-        self.mouse_position = self.platform_window.mouse_position();
+        self.platform_scale_factor = self.platform_window.scale_factor();
+        self.update_ui_geometry();
 
         self.refresh();
 
@@ -2935,7 +2956,7 @@ impl Window {
     /// During drawing this is a consistent frame snapshot. Outside drawing it
     /// reflects the latest platform sample, not a synchronous geometry query.
     pub fn visual_viewport_bounds(&self) -> Bounds<Pixels> {
-        self.platform_window.visual_viewport_bounds()
+        self.platform_to_logical_bounds(self.platform_window.visual_viewport_bounds())
     }
 
     /// Returns a conservative rectangle avoiding platform-known obscured content.
@@ -2943,7 +2964,13 @@ impl Window {
     /// Intersects the visual viewport with the full layout area inset by system
     /// safe areas and keyboard occlusion. Unknown overlays cannot be excluded.
     pub fn fully_visible_bounds(&self) -> Bounds<Pixels> {
-        let insets = self.platform_window.insets().effective();
+        let platform_insets = self.platform_window.insets().effective();
+        let insets = Edges {
+            top: px(platform_insets.top.0 / self.ui_scale),
+            right: px(platform_insets.right.0 / self.ui_scale),
+            bottom: px(platform_insets.bottom.0 / self.ui_scale),
+            left: px(platform_insets.left.0 / self.ui_scale),
+        };
         let viewport = self.viewport_size();
         let left = insets.left.max(Pixels::ZERO).min(viewport.width);
         let top = insets.top.max(Pixels::ZERO).min(viewport.height);
@@ -2996,7 +3023,8 @@ impl Window {
 
     /// Opens the native title bar context menu, useful when implementing client side decorations (Wayland and X11)
     pub fn show_window_menu(&self, position: Point<Pixels>) {
-        self.platform_window.show_window_menu(position)
+        self.platform_window
+            .show_window_menu(self.logical_to_platform_point(position))
     }
 
     /// Handle window movement for Linux and macOS.
@@ -3010,7 +3038,8 @@ impl Window {
     /// When using client side decorations, set this to the width of the invisible decorations (Wayland and X11)
     pub fn set_client_inset(&mut self, inset: Pixels) {
         self.client_inset = Some(inset);
-        self.platform_window.set_client_inset(inset);
+        self.platform_window
+            .set_client_inset(px(inset.0 * self.ui_scale));
     }
 
     /// Returns the client_inset value by [`Self::set_client_inset`].
@@ -3085,17 +3114,112 @@ impl Window {
         self.platform_window.show_character_palette();
     }
 
-    /// The scale factor of the display associated with the window. For example, it could
-    /// return 2.0 for a "retina" display, indicating that each logical pixel should actually
-    /// be rendered as two pixels on screen.
+    /// The scale factor used to render this window, including the display DPI
+    /// and the window's UI zoom factor.
     pub fn scale_factor(&self) -> f32 {
         self.scale_factor
+    }
+
+    /// The display's scale factor, without the UI zoom factor.
+    pub fn platform_scale_factor(&self) -> f32 {
+        self.platform_scale_factor
+    }
+
+    /// The UI zoom factor for this window.
+    pub fn ui_scale(&self) -> f32 {
+        self.ui_scale
+    }
+
+    /// Sets the UI zoom factor. Pixel geometry and input are mapped through this
+    /// value while the platform's display scale remains independent.
+    pub fn set_ui_scale(&mut self, ui_scale: f32, _cx: &mut App) {
+        if !ui_scale.is_finite() {
+            return;
+        }
+        let ui_scale = ui_scale.clamp(0.5, 2.0);
+        if self.ui_scale == ui_scale {
+            return;
+        }
+        if self.invalidator.not_drawing() {
+            self.apply_ui_scale(ui_scale);
+        } else {
+            // Keep the frame that is currently rendering on one geometry
+            // snapshot. Apply zoom only after it completes, then repaint and
+            // publish fresh IME bounds from the new layout.
+            self.on_next_frame(move |window, _| window.apply_ui_scale(ui_scale));
+        }
+    }
+
+    fn apply_ui_scale(&mut self, ui_scale: f32) {
+        if self.ui_scale == ui_scale {
+            return;
+        }
+        self.ui_scale = ui_scale;
+        self.update_ui_geometry();
+        if let Some(inset) = self.client_inset {
+            self.platform_window
+                .set_client_inset(px(inset.0 * self.ui_scale));
+        }
+        self.refresh();
+        self.invalidate_character_coordinates();
+    }
+
+    /// Maps window-local GPUI bounds to the platform's window-local pixel space.
+    /// This applies UI zoom only; the platform backend owns display-DPI conversion.
+    pub fn logical_to_platform_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        let scale = self.ui_scale;
+        Bounds::new(
+            point(px(bounds.origin.x.0 * scale), px(bounds.origin.y.0 * scale)),
+            size(
+                px(bounds.size.width.0 * scale),
+                px(bounds.size.height.0 * scale),
+            ),
+        )
+    }
+
+    /// Maps a window-local GPUI point to the platform's window-local pixel space.
+    pub fn logical_to_platform_point(&self, logical: Point<Pixels>) -> Point<Pixels> {
+        point(
+            px(logical.x.0 * self.ui_scale),
+            px(logical.y.0 * self.ui_scale),
+        )
+    }
+
+    /// Maps a window-local platform bounds rectangle into GPUI's zoomed coordinate space.
+    pub fn platform_to_logical_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        let scale = self.ui_scale;
+        Bounds::new(
+            point(px(bounds.origin.x.0 / scale), px(bounds.origin.y.0 / scale)),
+            size(
+                px(bounds.size.width.0 / scale),
+                px(bounds.size.height.0 / scale),
+            ),
+        )
+    }
+
+    /// Maps a window-local platform point into GPUI's zoomed coordinate space.
+    pub fn platform_to_logical_point(&self, platform: Point<Pixels>) -> Point<Pixels> {
+        point(
+            px(platform.x.0 / self.ui_scale),
+            px(platform.y.0 / self.ui_scale),
+        )
+    }
+
+    fn update_ui_geometry(&mut self) {
+        self.scale_factor = self.platform_scale_factor * self.ui_scale;
+        let content_size = self.platform_window.content_size();
+        self.viewport_size = size(
+            px(content_size.width.0 / self.ui_scale),
+            px(content_size.height.0 / self.ui_scale),
+        );
+        self.mouse_position = self.platform_to_logical_point(self.platform_window.mouse_position());
     }
 
     /// Overrides the display scale factor for tests.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_scale_factor(&mut self, scale_factor: f32) {
-        self.scale_factor = scale_factor;
+        self.platform_scale_factor = scale_factor;
+        self.update_ui_geometry();
         self.refresh();
     }
 
@@ -5591,6 +5715,7 @@ impl Window {
     /// Dispatch a mouse, keyboard, or touch event on the window.
     #[profiling::function]
     pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
+        let event = self.platform_input_to_logical(event);
         #[cfg(feature = "profiler")]
         self.window_profiler.begin_input(event.kind_name());
         let update_count_before = self.invalidator.update_count();
@@ -5757,6 +5882,74 @@ impl Window {
         DispatchEventResult {
             propagate: cx.propagate_event,
             default_prevented: self.default_prevented,
+        }
+    }
+
+    fn platform_input_to_logical(&self, event: PlatformInput) -> PlatformInput {
+        let point = |point: Point<Pixels>| self.platform_to_logical_point(point);
+        let delta = |delta: Point<Pixels>| self.platform_to_logical_point(delta);
+        match event {
+            PlatformInput::MouseDown(mut event) => {
+                event.position = point(event.position);
+                PlatformInput::MouseDown(event)
+            }
+            PlatformInput::MouseUp(mut event) => {
+                event.position = point(event.position);
+                PlatformInput::MouseUp(event)
+            }
+            PlatformInput::MouseMove(mut event) => {
+                event.position = point(event.position);
+                PlatformInput::MouseMove(event)
+            }
+            PlatformInput::MousePressure(mut event) => {
+                event.position = point(event.position);
+                PlatformInput::MousePressure(event)
+            }
+            PlatformInput::MouseExited(mut event) => {
+                event.position = point(event.position);
+                PlatformInput::MouseExited(event)
+            }
+            PlatformInput::ScrollWheel(mut event) => {
+                event.position = point(event.position);
+                if let ScrollDelta::Pixels(pixels) = event.delta {
+                    event.delta = ScrollDelta::Pixels(delta(pixels));
+                }
+                PlatformInput::ScrollWheel(event)
+            }
+            PlatformInput::Pinch(mut event) => {
+                event.position = point(event.position);
+                PlatformInput::Pinch(event)
+            }
+            PlatformInput::LongPress(mut event) => {
+                event.start_position = point(event.start_position);
+                event.position = point(event.position);
+                PlatformInput::LongPress(event)
+            }
+            PlatformInput::TouchDrag(mut event) => {
+                event.start_position = point(event.start_position);
+                event.position = point(event.position);
+                PlatformInput::TouchDrag(event)
+            }
+            PlatformInput::FileDrop(event) => PlatformInput::FileDrop(match event {
+                FileDropEvent::Entered { position, paths } => FileDropEvent::Entered {
+                    position: point(position),
+                    paths,
+                },
+                FileDropEvent::Pending { position } => FileDropEvent::Pending {
+                    position: point(position),
+                },
+                FileDropEvent::Submit { position } => FileDropEvent::Submit {
+                    position: point(position),
+                },
+                FileDropEvent::Exited => FileDropEvent::Exited,
+                FileDropEvent::Ended => FileDropEvent::Ended,
+            }),
+            PlatformInput::Touch(mut event) => {
+                event.position = point(event.position);
+                event.predicted_position = event.predicted_position.map(point);
+                PlatformInput::Touch(event)
+            }
+            event => event,
         }
     }
 
@@ -7055,7 +7248,10 @@ impl Window {
         match request.action {
             accesskit::Action::Click => {
                 if let Some(bounds) = self.a11y.node_bounds.get(&request.target_node).copied() {
-                    let center = bounds.center();
+                    // AccessKit geometry is reported in platform coordinates,
+                    // while node_bounds stores GPUI coordinates. dispatch_event
+                    // expects platform input and applies the inverse zoom.
+                    let center = self.logical_to_platform_point(bounds.center());
                     let mouse_down = PlatformInput::MouseDown(crate::MouseDownEvent {
                         button: MouseButton::Left,
                         position: center,
@@ -7881,13 +8077,94 @@ mod tests {
     use crate::{
         AnyWindowHandle, AppContext as _, Bounds, ContentMask, Context, DispatchPhase,
         DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent,
-        FocusHandle, InputEvent as _, InteractiveElement as _, IntoElement, KeyDownEvent,
-        Keystroke, LongPressEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement,
-        Pixels, PlatformInput, Point, Render, RequestFrameOptions, ScaledPixels,
-        StatefulInteractiveElement as _, Styled, TestAppContext, TouchDragEvent, TouchEvent,
-        TouchId, TouchPhase, Underline, UnderlineStyle, Window, WindowAppearance, WindowOptions,
-        canvas, div, hsla, point, px, size,
+        FocusHandle, InputEvent as _, InputHandler, InteractiveElement as _, IntoElement,
+        KeyDownEvent, Keystroke, LongPressEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+        ParentElement, Pixels, PlatformInput, PlatformInputHandler, Point, Render,
+        RequestFrameOptions, ScaledPixels, ScrollDelta, StatefulInteractiveElement as _, Styled,
+        TestAppContext, TouchDragEvent, TouchEvent, TouchId, TouchPhase, UTF16Selection, Underline,
+        UnderlineStyle, Window, WindowAppearance, WindowOptions, canvas, div, hsla, point, px,
+        size,
     };
+
+    struct GeometryInputHandler {
+        last_character_point: Rc<RefCell<Option<Point<Pixels>>>>,
+    }
+
+    impl InputHandler for GeometryInputHandler {
+        fn selected_text_range(
+            &mut self,
+            _: bool,
+            _: &mut Window,
+            _: &mut crate::App,
+        ) -> Option<UTF16Selection> {
+            Some(UTF16Selection {
+                range: 0..0,
+                reversed: false,
+            })
+        }
+
+        fn marked_text_range(
+            &mut self,
+            _: &mut Window,
+            _: &mut crate::App,
+        ) -> Option<std::ops::Range<usize>> {
+            None
+        }
+
+        fn text_for_range(
+            &mut self,
+            _: std::ops::Range<usize>,
+            _: &mut Option<std::ops::Range<usize>>,
+            _: &mut Window,
+            _: &mut crate::App,
+        ) -> Option<String> {
+            None
+        }
+
+        fn replace_text_in_range(
+            &mut self,
+            _: Option<std::ops::Range<usize>>,
+            _: &str,
+            _: &mut Window,
+            _: &mut crate::App,
+        ) {
+        }
+
+        fn replace_and_mark_text_in_range(
+            &mut self,
+            _: Option<std::ops::Range<usize>>,
+            _: &str,
+            _: Option<std::ops::Range<usize>>,
+            _: &mut Window,
+            _: &mut crate::App,
+        ) {
+        }
+
+        fn unmark_text(&mut self, _: &mut Window, _: &mut crate::App) {}
+
+        fn bounds_for_range(
+            &mut self,
+            _: std::ops::Range<usize>,
+            _: &mut Window,
+            _: &mut crate::App,
+        ) -> Option<Bounds<Pixels>> {
+            Some(Bounds::new(point(px(2.), px(4.)), size(px(6.), px(8.))))
+        }
+
+        fn character_index_for_point(
+            &mut self,
+            point: Point<Pixels>,
+            _: &mut Window,
+            _: &mut crate::App,
+        ) -> Option<usize> {
+            *self.last_character_point.borrow_mut() = Some(point);
+            Some(0)
+        }
+
+        fn element_bounds(&mut self, _: &mut Window, _: &mut crate::App) -> Option<Bounds<Pixels>> {
+            Some(Bounds::new(point(px(1.), px(3.)), size(px(5.), px(7.))))
+        }
+    }
 
     #[cfg(feature = "profiler")]
     #[gpui::test]
@@ -8202,6 +8479,122 @@ mod tests {
                 Empty
             }
         }
+    }
+
+    #[gpui::test]
+    fn ui_scale_maps_viewport_input_and_display_scale_independently(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let mut platform_window = cx.test_window(window.into());
+        platform_window.simulate_resize(size(px(600.), px(900.)));
+
+        window
+            .update(cx, |_, window, cx| {
+                assert_eq!(window.platform_scale_factor(), 2.);
+                assert_eq!(window.scale_factor(), 2.);
+                window.set_ui_scale(1.5, cx);
+                assert_eq!(window.ui_scale(), 1.5);
+                assert_eq!(window.platform_scale_factor(), 2.);
+                assert_eq!(window.scale_factor(), 3.);
+                assert_eq!(window.viewport_size(), size(px(400.), px(600.)));
+                assert_eq!(
+                    window.logical_to_platform_bounds(Bounds::new(
+                        point(px(10.), px(20.)),
+                        size(px(30.), px(40.)),
+                    )),
+                    Bounds::new(point(px(15.), px(30.)), size(px(45.), px(60.)))
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: point(px(30.), px(45.)),
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                assert_eq!(window.mouse_position(), point(px(20.), px(30.)));
+
+                let PlatformInput::ScrollWheel(scroll) = window.platform_input_to_logical(
+                    PlatformInput::ScrollWheel(crate::ScrollWheelEvent {
+                        position: point(px(30.), px(45.)),
+                        delta: ScrollDelta::Pixels(point(px(15.), px(30.))),
+                        ..Default::default()
+                    }),
+                ) else {
+                    panic!("scroll-wheel input remains a scroll-wheel event");
+                };
+                assert_eq!(scroll.position, point(px(20.), px(30.)));
+                assert!(matches!(
+                    scroll.delta,
+                    ScrollDelta::Pixels(delta) if delta == point(px(10.), px(20.))
+                ));
+            })
+            .unwrap();
+
+        platform_window.simulate_resize(size(px(300.), px(450.)));
+        window
+            .update(cx, |_, window, _| {
+                assert_eq!(window.ui_scale(), 1.5);
+                assert_eq!(window.scale_factor(), 3.);
+                assert_eq!(window.viewport_size(), size(px(200.), px(300.)));
+            })
+            .unwrap();
+        platform_window.simulate_scale_factor_change(1.5);
+        window
+            .update(cx, |_, window, _| {
+                assert_eq!(window.platform_scale_factor(), 1.5);
+                assert_eq!(window.scale_factor(), 2.25);
+                assert_eq!(window.viewport_size(), size(px(200.), px(300.)));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn ui_scale_maps_platform_text_geometry_in_both_directions(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let mut platform_window = cx.test_window(window.into());
+        platform_window.simulate_resize(size(px(600.), px(900.)));
+        let last_character_point = Rc::new(RefCell::new(None));
+        let mut input_handler = window
+            .update(cx, |_, window, cx| {
+                window.set_ui_scale(1.5, cx);
+                PlatformInputHandler::new(
+                    window.to_async(cx),
+                    Box::new(GeometryInputHandler {
+                        last_character_point: last_character_point.clone(),
+                    }),
+                )
+            })
+            .unwrap();
+
+        let expected_text_bounds = Bounds::new(point(px(3.), px(6.)), size(px(9.), px(12.)));
+        assert_eq!(
+            input_handler.bounds_for_range(0..0),
+            Some(expected_text_bounds)
+        );
+        assert_eq!(
+            input_handler.element_bounds(),
+            Some(Bounds::new(
+                point(px(1.5), px(4.5)),
+                size(px(7.5), px(10.5)),
+            ))
+        );
+        assert_eq!(
+            input_handler.character_index_for_point(point(px(30.), px(45.))),
+            Some(0)
+        );
+
+        let mut handler = input_handler;
+        window
+            .update(cx, |_, window, cx| {
+                assert_eq!(
+                    last_character_point.borrow().as_ref(),
+                    Some(&point(px(20.), px(30.)))
+                );
+                assert_eq!(
+                    handler.selected_bounds(window, cx),
+                    Some(expected_text_bounds)
+                );
+            })
+            .unwrap();
     }
 
     #[gpui::test]

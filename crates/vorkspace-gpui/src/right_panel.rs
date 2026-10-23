@@ -324,12 +324,20 @@ impl RightPanel {
         self.sync_panes(cx);
     }
     pub(crate) fn select(&mut self, tab: RightTab, cx: &mut Context<Self>) {
+        self.restore_tab(tab, cx);
+        cx.emit(PanelEvent::Tab(tab));
+    }
+    /// Layout and project restoration reads the workspace's selection without
+    /// publishing a user action back into another project's saved selection.
+    pub(crate) fn restore_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
+        if self.tab == tab {
+            return;
+        }
         if self.tab != tab {
             self.reveal = Some(TabReveal::new(tab, self.tab));
         }
         self.tab = tab;
         self.sync_panes(cx);
-        cx.emit(PanelEvent::Tab(tab));
         cx.notify();
     }
     fn sync_panes(&mut self, cx: &mut Context<Self>) {

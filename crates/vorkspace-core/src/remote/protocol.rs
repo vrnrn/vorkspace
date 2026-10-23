@@ -6,19 +6,7 @@ use std::collections::HashMap;
 pub const HOST_PROTOCOL_VERSION: u64 = 1;
 
 pub fn supported_providers() -> &'static [&'static str] {
-    &[
-        "codex",
-        "claude",
-        "cursor",
-        "grok",
-        "opencode",
-        "pi",
-        "omp",
-        "fx",
-        "hermes",
-        "antigravity",
-        "devin",
-    ]
+    &["claude", "codex", "pi", "omp", "antigravity"]
 }
 
 /// The native common controls use the same provider-specific keys as the

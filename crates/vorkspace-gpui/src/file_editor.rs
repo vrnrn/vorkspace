@@ -70,35 +70,7 @@ pub(crate) fn bind(cx: &mut App) {
     ]);
 }
 pub(crate) fn menus(prefs: &crate::settings::Preferences, cx: &mut App) {
-    use gpui::{Menu, MenuItem};
-    cx.set_menus(vec![
-        Menu::new("vorkspace Native")
-            .items([MenuItem::action("Quit vorkspace Native", crate::Quit)]),
-        Menu::new("File").items([
-            MenuItem::action("Save", Save),
-            MenuItem::action("Reload file", ReloadFile),
-            MenuItem::action("Autosave", ToggleAutosave).checked(prefs.autosave),
-        ]),
-        Menu::new("Edit").items([
-            MenuItem::action("Undo", input::Undo),
-            MenuItem::action("Redo", input::Redo),
-            MenuItem::separator(),
-            MenuItem::action("Cut", input::Cut),
-            MenuItem::action("Copy", input::Copy),
-            MenuItem::action("Paste", input::Paste),
-            MenuItem::action("Select All", input::SelectAll),
-            MenuItem::separator(),
-            MenuItem::action("Find", Find),
-            MenuItem::action("Replace", Replace),
-            MenuItem::action("Format Document", Format),
-            MenuItem::action("Word wrap", ToggleWordWrap).checked(prefs.file_word_wrap),
-            MenuItem::separator(),
-            MenuItem::action("Fold", input::FoldCode),
-            MenuItem::action("Unfold", input::UnfoldCode),
-            MenuItem::action("Fold All", input::FoldAll),
-            MenuItem::action("Unfold All", input::UnfoldAll),
-        ]),
-    ]);
+    cx.set_menus(crate::app_menu::build(prefs));
 }
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
 #[action(namespace = file_editor, no_json)]

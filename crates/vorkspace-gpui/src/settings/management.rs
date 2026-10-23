@@ -404,8 +404,6 @@ impl SettingsView {
                                     ("claude", "Claude Code"),
                                     ("claude_desktop", "Claude Desktop"),
                                     ("codex", "Codex"),
-                                    ("cursor", "Cursor"),
-                                    ("opencode", "OpenCode"),
                                 ]
                                 .into_iter()
                                 .map(|(id, label)| (id.into(), label.into(), None))

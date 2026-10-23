@@ -1187,7 +1187,9 @@ fn chat_composer_keeps_attach_under_the_box_and_opens_the_model_list(cx: &mut Te
 }
 
 #[gpui::test]
-fn details_tabs_share_the_session_titlebar_in_both_layouts(cx: &mut TestAppContext) {
+fn bot_details_share_the_original_titlebar_and_project_tools_stay_on_the_left(
+    cx: &mut TestAppContext,
+) {
     let s = setup(cx);
     cx.update(|cx| {
         cx.set_reduce_motion(true);
@@ -1195,82 +1197,67 @@ fn details_tabs_share_the_session_titlebar_in_both_layouts(cx: &mut TestAppConte
     });
     let session = s
         .window
-        .update(cx, |shell, w, cx| {
-            s.manager.update(cx, |m, cx| {
-                m.settings = None;
-                m.focus_active(w, cx);
+        .update(cx, |shell, window, cx| {
+            assert!(shell.workspace.classic_layout);
+            s.manager.update(cx, |manager, cx| {
+                manager.settings = None;
+                manager.focus_active(window, cx);
                 cx.notify();
             });
             shell.workspace.active.unwrap()
         })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
-    for classic in [false, true] {
-        s.window
-            .update(visual, |shell, _, cx| {
-                shell.workspace.classic_layout = classic;
-                cx.notify();
-            })
-            .unwrap();
-        visual.run_until_parked();
-        let panel = visual.debug_bounds("right-panel-frame").unwrap();
-        let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
-        let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-        let title_tabs = visual.debug_bounds("title-tab-strip").unwrap();
-        assert!((tabs.top() - title_tabs.top()).abs() <= px(0.5));
-        assert_eq!(tabs.size.height, px(TITLE_BAR_HEIGHT));
-        assert_eq!(
-            tabs.left(),
-            panel.left() + px(if classic { 6. } else { 7. })
-        );
-        let activity = visual.debug_bounds("bot-activity").unwrap();
-        let search = visual.debug_bounds("titlebar-file-search").unwrap();
-        assert_eq!(search.left() - activity.right(), px(6.));
-        assert_eq!(toggle.left() - search.right(), px(4.));
-        assert!(tabs.bottom() <= panel.top() + px(if classic { TITLE_BAR_HEIGHT } else { 0. }));
-        assert_eq!(
-            visual.debug_bounds("bot-session-list").unwrap().top(),
-            panel.top() + px(if classic { TITLE_BAR_HEIGHT } else { 0. })
-        );
-        assert!(
-            visual.debug_bounds("bot-overview-toggle").is_none(),
-            "only the shell owns the panel toggle"
-        );
-        assert!(title_tabs.right() <= tabs.left());
-        s.window
-            .update(visual, |shell, w, cx| shell.open(session, w, cx))
-            .unwrap();
-        visual.run_until_parked();
-        if !s
-            .window
-            .update(visual, |shell, _, _| shell.workspace.right_panel_open)
-            .unwrap()
-        {
-            let button = visual.debug_bounds("toggle-right-panel").unwrap();
-            visual.simulate_click(button.center(), Default::default());
-            visual.run_until_parked();
-        }
-        assert_eq!(
-            visual.debug_bounds("toggle-right-panel").unwrap(),
-            toggle,
-            "the toggle stays put when changing tab types"
-        );
-        let selector = if classic {
-            "right-panel-explorer"
-        } else {
-            "project-tabs-separator"
-        };
-        assert_eq!(
-            visual.debug_bounds(selector).unwrap().center().y,
-            tabs.center().y
-        );
-        s.window
-            .update(visual, |_, w, cx| {
-                s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
-            })
-            .unwrap();
-        visual.run_until_parked();
-    }
+    visual.run_until_parked();
+    let panel = visual.debug_bounds("right-panel-frame").unwrap();
+    let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
+    let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
+    let title_tabs = visual.debug_bounds("title-tab-strip").unwrap();
+    assert!((tabs.top() - title_tabs.top()).abs() <= px(0.5));
+    assert_eq!(tabs.size.height, px(TITLE_BAR_HEIGHT));
+    assert_eq!(tabs.left(), panel.left() + px(6.));
+    let activity = visual.debug_bounds("bot-activity").unwrap();
+    let search = visual.debug_bounds("titlebar-file-search").unwrap();
+    assert_eq!(search.left() - activity.right(), px(6.));
+    assert_eq!(toggle.left() - search.right(), px(4.));
+    assert!(tabs.bottom() <= panel.top() + px(TITLE_BAR_HEIGHT));
+    assert_eq!(
+        visual.debug_bounds("bot-session-list").unwrap().top(),
+        panel.top() + px(TITLE_BAR_HEIGHT)
+    );
+    assert!(
+        visual.debug_bounds("bot-overview-toggle").is_none(),
+        "only the shell owns the details toggle"
+    );
+    assert!(
+        visual.debug_bounds("sidebar-frame").is_none(),
+        "a Bot owns the main surface beside the project rail"
+    );
+    assert!(title_tabs.right() <= tabs.left());
+    let selector = Box::leak(format!("title-tab-{session}").into_boxed_str());
+    let tab = visual.debug_bounds(selector).unwrap();
+    visual.simulate_click(tab.center(), Default::default());
+    visual.run_until_parked();
+    let rail = visual.debug_bounds("classic-project-rail").unwrap();
+    let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+    assert_eq!(sidebar.left(), rail.right());
+    assert!(visual.debug_bounds("classic-workspace-tabs").is_some());
+    assert!(visual.debug_bounds("right-panel-frame").is_none());
+    assert!(visual.debug_bounds("toggle-right-panel").is_none());
+    s.window
+        .update(visual, |shell, window, cx| {
+            assert_eq!(shell.workspace.active, Some(session));
+            assert!(
+                shell.workspace.right_panel_open,
+                "leaving the Bot retains its details preference"
+            );
+            s.manager
+                .update(cx, |manager, cx| manager.open(&s.id, window, cx));
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert_eq!(visual.debug_bounds("toggle-right-panel").unwrap(), toggle);
+    assert_eq!(visual.debug_bounds("right-panel-frame").unwrap(), panel);
 }
 
 #[gpui::test]
@@ -1323,17 +1310,16 @@ fn titlebar_details_tabs_switch_pages_and_keep_activity_and_habit_actions(cx: &m
 }
 
 #[gpui::test]
-fn titlebar_divider_resizes_bot_details_and_closed_panels_keep_the_corner(cx: &mut TestAppContext) {
+fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut TestAppContext) {
     let s = setup(cx);
     cx.update(|cx| cx.set_reduce_motion(true));
     s.window
         .update(cx, |shell, _, cx| {
-            // This first section exercises the experimental inset title bar.
-            shell.workspace.classic_layout = false;
-            s.manager.update(cx, |m, cx| {
-                m.settings = None;
+            assert!(shell.workspace.classic_layout);
+            s.manager.update(cx, |manager, cx| {
+                manager.settings = None;
                 cx.notify();
-            })
+            });
         })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
@@ -1346,24 +1332,18 @@ fn titlebar_divider_resizes_bot_details_and_closed_panels_keep_the_corner(cx: &m
             })
             .unwrap();
         visual.run_until_parked();
-        assert_eq!(
-            visual
-                .debug_bounds("project-tabs-separator")
-                .unwrap()
-                .left(),
-            visual.debug_bounds("right-panel-frame").unwrap().left()
-        );
+        let panel = visual.debug_bounds("right-panel-frame").unwrap();
+        let divider = visual.debug_bounds("right-panel-resize").unwrap();
+        assert!((divider.center().x - panel.left() - px(0.5)).abs() <= px(0.5));
+        assert_eq!(panel.size.width, px(width));
         let activity = visual.debug_bounds("bot-activity").unwrap();
         let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
         assert!(
             activity.right() < toggle.left(),
-            "Bot controls fit the session sidebar's minimum width"
+            "Bot header actions stay available at the minimum details width"
         );
     }
-    let start = visual
-        .debug_bounds("titlebar-right-panel-resize")
-        .unwrap()
-        .center();
+    let start = visual.debug_bounds("right-panel-resize").unwrap().center();
     let end = start - gpui::point(px(40.), px(0.));
     visual.simulate_mouse_down(start, MouseButton::Left, Default::default());
     visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
@@ -1375,20 +1355,18 @@ fn titlebar_divider_resizes_bot_details_and_closed_panels_keep_the_corner(cx: &m
         })
         .unwrap();
     assert_eq!(
-        visual
-            .debug_bounds("project-tabs-separator")
-            .unwrap()
-            .left(),
-        visual.debug_bounds("right-panel-frame").unwrap().left()
+        visual.debug_bounds("right-panel-frame").unwrap().size.width,
+        px(540.)
     );
-    for classic in [false, true] {
-        s.window
-            .update(visual, |shell, _, cx| {
-                shell.workspace.classic_layout = classic;
-                shell.git.update(cx, |g, cx| g.set_project("~".into(), cx));
-                cx.notify();
-            })
-            .unwrap();
+    s.window
+        .update(visual, |shell, _, cx| {
+            shell
+                .git
+                .update(cx, |git, cx| git.set_project("~".into(), cx));
+            cx.notify();
+        })
+        .unwrap();
+    for _ in 0..2 {
         visual.run_until_parked();
         let open = visual.debug_bounds("toggle-right-panel").unwrap();
         visual.simulate_click(open.center(), Default::default());
@@ -1396,53 +1374,105 @@ fn titlebar_divider_resizes_bot_details_and_closed_panels_keep_the_corner(cx: &m
         assert!(visual.debug_bounds("bot-overview-tabs").is_none());
         assert!(visual.debug_bounds("bot-overview-panel").is_none());
         assert_eq!(visual.debug_bounds("toggle-right-panel").unwrap(), open);
+        let saved = locked(&s.store).unwrap().ui_state().unwrap().unwrap();
+        let saved: crate::workspace::Workspace = serde_json::from_str(&saved).unwrap();
+        assert!(!saved.right_panel_open);
+        assert_eq!(saved.right_panel_width, 540.);
         visual.simulate_click(open.center(), Default::default());
         visual.run_until_parked();
         assert!(visual.debug_bounds("bot-overview-tabs").is_some());
+        assert_eq!(
+            visual.debug_bounds("right-panel-frame").unwrap().size.width,
+            px(540.)
+        );
     }
 }
 
 #[gpui::test]
-fn opening_a_session_card_uses_the_shared_sidebar_state(cx: &mut TestAppContext) {
+fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original_workspace(
+    cx: &mut TestAppContext,
+) {
     let s = setup(cx);
     cx.update(|cx| cx.set_reduce_motion(true));
-    let session = s
+    let (session, preview) = s
         .window
         .update(cx, |shell, _, cx| {
-            s.manager.update(cx, |m, cx| {
-                m.settings = None;
+            s.manager.update(cx, |manager, cx| {
+                manager.settings = None;
                 cx.notify();
             });
-            shell.workspace.active.unwrap()
+            let session = shell.workspace.active.unwrap();
+            let preview = shell.bot_ensure_session(session, cx).unwrap();
+            preview.update(cx, |session, cx| {
+                session.input.update(cx, |input, cx| {
+                    input.set_text("Keep this preview draft".into(), cx)
+                })
+            });
+            (session, preview)
         })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
+    assert!(visual.debug_bounds("sidebar-frame").is_none());
     let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
     visual.simulate_click(toggle.center(), Default::default());
     visual.run_until_parked();
     assert!(visual.debug_bounds("right-panel-frame").is_none());
-    s.window
-        .update(visual, |_, _, cx| {
-            s.manager.update(cx, |m, cx| {
-                m.card_action(&s.id, &json!({"type":"session", "sessionId":session}), cx);
-            })
-        })
-        .unwrap();
+    s.manager.update(visual, |manager, cx| {
+        manager.card_action(&s.id, &json!({"type":"session","sessionId":session}), cx)
+    });
     visual.run_until_parked();
     let details = visual.debug_bounds("right-panel-frame").unwrap();
     assert!(s.manager.read_with(
         visual,
-        |m, _| matches!(m.route, Some(Route::Session(id)) if id == session)
+        |manager, _| matches!(manager.route,Some(Route::Session(id)) if id==session)
     ));
+    let selector = Box::leak(format!("title-tab-{session}").into_boxed_str());
+    let open = visual.debug_bounds(selector).unwrap();
+    visual.simulate_click(open.center(), Default::default());
+    visual.run_until_parked();
+    let rail = visual.debug_bounds("classic-project-rail").unwrap();
+    let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+    assert_eq!(sidebar.left(), rail.right());
+    assert!(
+        visual.debug_bounds("right-panel-frame").is_none(),
+        "ordinary sessions keep project tools in the left workspace pane"
+    );
     s.window
-        .update(visual, |shell, w, cx| {
-            assert!(shell.workspace.right_panel_open);
-            shell.open(session, w, cx);
+        .update(visual, |shell, window, cx| {
+            assert_eq!(shell.workspace.active, Some(session));
+            assert!(
+                shell.workspace.right_panel_open,
+                "Bot details stay enabled for the next Bot visit"
+            );
+            let actual = shell.bot_ensure_session(session, cx).unwrap();
+            assert_eq!(actual.entity_id(), preview.entity_id());
+            assert_eq!(
+                actual.read(cx).input.read(cx).content,
+                "Keep this preview draft"
+            );
+            assert!(
+                actual
+                    .read(cx)
+                    .input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .contains_focused(window, cx)
+            );
+            s.manager
+                .update(cx, |manager, cx| manager.open(&s.id, window, cx));
         })
         .unwrap();
     visual.run_until_parked();
     assert_eq!(visual.debug_bounds("right-panel-frame").unwrap(), details);
+    assert_eq!(
+        preview.read_with(visual, |session, cx| session
+            .input
+            .read(cx)
+            .content
+            .to_string()),
+        "Keep this preview draft"
+    );
 }
 
 #[gpui::test]

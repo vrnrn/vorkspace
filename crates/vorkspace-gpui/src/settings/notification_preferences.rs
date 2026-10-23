@@ -20,7 +20,7 @@ use std::{
 
 pub(crate) const CATEGORIES: [(&str, &str); 5] = [
     ("pullRequests", "Pull requests / Merge requests"),
-    ("issues", "Issues and Linear tasks"),
+    ("issues", "Issues"),
     ("agentFinished", "Agent finished"),
     ("agentInput", "Agent approvals and questions"),
     ("reminders", "Reminders"),
@@ -172,16 +172,32 @@ impl Preferences {
     }
 }
 fn valid_project(p: &Value) -> bool {
+    // Keep local-path identities for session notifications, while retired
+    // connector-only catalog entries remain stored without being offered.
+    let retired_orphan = p["paths"].as_array().is_some_and(Vec::is_empty)
+        && p["id"].as_str().is_some_and(|id| {
+            let id = id.to_lowercase();
+            id.strip_prefix("repository:").is_some_and(|remote| {
+                remote.starts_with("azuredevops:")
+                    || remote.starts_with("dev.azure.com/")
+                    || remote.split_once('/').is_some_and(|(host, _)| {
+                        host.strip_suffix(".visualstudio.com")
+                            .is_some_and(|organization| !organization.is_empty())
+                    })
+            })
+        });
     ["id", "name", "detail"]
         .iter()
         .all(|key| p[*key].is_string())
         && p["kind"]
             .as_str()
-            .is_some_and(|kind| ["repository", "local", "linear", "jira"].contains(&kind))
+            .is_some_and(|kind| ["repository", "local", "jira"].contains(&kind))
         && p["paths"]
             .as_array()
             .is_some_and(|paths| paths.iter().all(Value::is_string))
+        && !retired_orphan
 }
+
 struct MuteMenu {
     menu: Entity<Menu>,
     anchor: AnchorSlot,
@@ -378,7 +394,12 @@ impl SettingsView {
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|p| valid_project(p))
+            .filter(|p| {
+                valid_project(p)
+                    && (p["kind"] != "jira"
+                        || (self.ctx.inbox_connectors.enabled("jira")
+                            && self.ctx.jira_filter.mode != "jql"))
+            })
         {
             if p["paths"].as_array().is_some_and(|entries| {
                 entries.is_empty()
@@ -660,7 +681,7 @@ impl SettingsView {
             let categories: Vec<_> = CATEGORIES
                 .iter()
                 .filter(|(cat, _)| match project.kind.as_str() {
-                    "linear" | "jira" => *cat == "issues",
+                    "jira" => *cat == "issues",
                     "local" => !["pullRequests", "issues"].contains(cat),
                     _ => true,
                 })
@@ -1214,5 +1235,34 @@ impl SettingsView {
                     .children(weeks),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+    #[test]
+    fn retired_connector_only_projects_are_hidden_and_local_notification_identity_is_kept() {
+        for id in [
+            "repository:azuredevops:org/project/repo",
+            "repository:DEV.AZURE.COM/org/project/repo",
+            "repository:Legacy.VisualStudio.Com/project/repo",
+        ] {
+            let mut project = json!({"id":id,"name":"Saved repository","detail":"Saved remote","kind":"repository","paths":[]});
+            assert!(!valid_project(&project), "{id}");
+            project["paths"] = json!(["/local/project"]);
+            assert!(
+                valid_project(&project),
+                "local agent preferences must survive: {id}"
+            );
+        }
+        for id in [
+            "repository:github.com/acme/app",
+            "repository:gitlab.com/acme/app",
+            "jira:team.atlassian.net:project:10001",
+        ] {
+            let project = json!({"id":id,"name":"Current project","detail":"Current remote","kind":if id.starts_with("jira:"){"jira"}else{"repository"},"paths":[]});
+            assert!(valid_project(&project), "{id}");
+        }
     }
 }

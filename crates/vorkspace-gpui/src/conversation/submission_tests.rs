@@ -4,6 +4,84 @@ use std::sync::Mutex;
 use vorkspace_core::{store::Store, transcript::attachments};
 
 #[gpui::test]
+fn unsupported_history_keeps_the_unsent_composer_and_declines_external_work(
+    cx: &mut TestAppContext,
+) {
+    let window = conversation(cx);
+    for provider in [
+        "cursor", "grok", "opencode", "fx", "hermes", "devin", "unknown",
+    ] {
+        window
+            .update(cx, |view, _, cx| {
+                view.summary.provider = provider.into();
+                view.input
+                    .update(cx, |input, cx| input.set_text("My unsent draft".into(), cx));
+                view.attachments = vec!["/missing/retained.png".into()];
+                let generation = view.submission_generation;
+                view.send(cx);
+                assert!(!view.busy);
+                assert!(view.status.contains("no longer supported"));
+                assert_eq!(view.input.read(cx).content.as_str(), "My unsent draft");
+                assert_eq!(
+                    view.attachments,
+                    vec![std::path::PathBuf::from("/missing/retained.png")]
+                );
+                assert_eq!(view.submission_generation, generation);
+                assert!(view.transcript.read(cx).source_rows().is_empty());
+                assert!(
+                    locked(&view.store)
+                        .unwrap()
+                        .local_submissions(view.summary.id)
+                        .unwrap()
+                        .is_empty()
+                );
+                view.input
+                    .update(cx, |input, cx| input.set_text(String::new(), cx));
+                view.attachments.clear();
+                assert!(!view.ready_for_external(cx));
+                assert!(
+                    view.voice_send("Voice request".into(), cx)
+                        .unwrap_err()
+                        .contains("no longer supported")
+                );
+                assert!(
+                    view.app_start_message("/operator App request".into(), cx)
+                        .is_err()
+                );
+                assert!(!view.settings.operator);
+                assert!(view.follow_ups.state.messages.is_empty());
+                assert!(
+                    locked(&view.store)
+                        .unwrap()
+                        .follow_ups(view.summary.id)
+                        .unwrap()
+                        .messages
+                        .is_empty()
+                );
+
+                let queued = vorkspace_core::follow_up::Message {
+                    id: "saved-queue".into(),
+                    text: "Retained queued request".into(),
+                    ..Default::default()
+                };
+                view.follow_ups.state.messages = vec![queued.clone()];
+                view.follow_ups.state.revision = 1;
+                view.follow_ups.persisted = 1;
+                view.settings.new_worktree = true;
+                view.pump_follow_ups(cx);
+                assert!(!view.preparing_worktree);
+                assert!(view.follow_ups.sending.is_none());
+                assert_eq!(view.follow_ups.state.messages, vec![queued]);
+                view.launch_prompt("Direct retry".into(), cx);
+                assert!(!view.busy);
+                assert!(view.transcript.read(cx).source_rows().is_empty());
+                view.follow_ups.state.messages.clear();
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
 fn dropped_sender_releases_the_current_ui_and_pauses_queue_without_replay(cx: &mut TestAppContext) {
     for stop_before_close in [false, true] {
         let window = conversation(cx);
@@ -198,10 +276,9 @@ fn an_old_dropped_sender_cannot_release_a_successor_turn(cx: &mut TestAppContext
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     let store = Store::open(Path::new(":memory:")).unwrap();
     // Fail after saving the turn, without ever launching a real provider.
-    let mut summary = store
+    let summary = store
         .create("codex", "/missing/optimistic-send-project")
         .unwrap();
-    summary.provider = "fixture".into();
     cx.update(|cx| {
         input::bind(cx);
         cx.open_window(Default::default(), |_, cx| {

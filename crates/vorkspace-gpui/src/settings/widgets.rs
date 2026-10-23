@@ -257,7 +257,6 @@ impl SettingsView {
                     | "working-agents"
                     | "close-to-tray"
                     | "main-pane-glass"
-                    | "inset-layout"
                     | "show-excluded-files"
                     | "anchor-prompts"
                     | "paced-reveal"

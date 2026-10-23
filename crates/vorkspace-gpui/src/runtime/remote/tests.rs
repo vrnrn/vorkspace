@@ -96,7 +96,7 @@ impl Host {
                         payload["params"]["supportedProviders"]
                             .as_array()
                             .unwrap()
-                            .contains(&json!("devin"))
+                            .contains(&json!("antigravity"))
                     );
                     Some(
                         json!({"protocolVersion":1,"environmentId":"env","name":"Fixture","providers":["codex"]}),

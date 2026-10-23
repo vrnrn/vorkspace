@@ -8,4 +8,4 @@ Local builds are ad-hoc signed by default. Sparkle is enabled by supplying its f
 
 Release launches use existing desktop data. Development launches use isolated data. See [data continuity](data-storage.md) before choosing `--vorkspace-db` or overriding the development directory.
 
-The legacy layout is the default. Enable **New layout (Experimental)** in **Settings → Appearance → Layout** to try the redesigned sidebar and workspace, or turn it off to return to the legacy layout. The app remembers your choice and does not show a startup prompt for the experimental layout.
+The desktop uses the original 0.13 layout: a project rail, a sidebar with Sessions, Explorer, and Changes navigation, and the main workspace. Settings → Appearance controls its theme, translucency, and interface scale.

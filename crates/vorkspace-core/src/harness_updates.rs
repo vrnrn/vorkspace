@@ -25,7 +25,6 @@ fn package(kind: Kind) -> Option<&'static str> {
     match kind {
         Kind::Claude => Some("@anthropic-ai/claude-code"),
         Kind::Codex => Some("@openai/codex"),
-        Kind::OpenCode => Some("opencode-ai"),
         Kind::Pi => Some("@earendil-works/pi-coding-agent"),
         _ => None,
     }
@@ -102,7 +101,6 @@ pub fn find_updates(hidden: &[String]) -> Vec<Update> {
 pub fn run_update(update: &Update) -> Result<String, String> {
     let args: &[&str] = match update.harness {
         Kind::Claude | Kind::Codex => &["update"],
-        Kind::OpenCode => &["upgrade"],
         Kind::Pi => &["update", "--self"],
         _ => return Err("No updater for harness".into()),
     };

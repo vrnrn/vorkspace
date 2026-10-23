@@ -41,7 +41,7 @@ pub fn native_prompt(kind: Kind, text: &str) -> String {
     text.into()
 }
 
-/// OMP and Devin own slash arguments, including @file-like text. Expanding a
+/// OMP owns slash arguments, including @file-like text. Expanding a
 /// local skill or mention ahead of them would turn a command into normal text.
 pub fn prepare_prompt(
     kind: Kind,
@@ -50,7 +50,7 @@ pub fn prepare_prompt(
     attachments: &[PathBuf],
 ) -> Result<String, String> {
     let text = native_prompt(kind, text);
-    if matches!(kind, Kind::Omp | Kind::Devin) && text.trim_start().starts_with('/') {
+    if kind == Kind::Omp && text.trim_start().starts_with('/') {
         crate::composer::validate_attachments(attachments)?;
         return Ok(text);
     }
@@ -124,16 +124,7 @@ pub(super) fn parse_commands(kind: Kind, rows: &Value) -> Vec<NativeCommand> {
 }
 
 pub fn supports_compact(kind: Kind) -> bool {
-    matches!(
-        kind,
-        Kind::Codex
-            | Kind::Claude
-            | Kind::Pi
-            | Kind::Omp
-            | Kind::Grok
-            | Kind::Devin
-            | Kind::OpenCode
-    )
+    matches!(kind, Kind::Codex | Kind::Claude | Kind::Pi | Kind::Omp)
 }
 
 /// Compaction owns the provider transport, but creates no user or assistant turn.
@@ -247,16 +238,6 @@ mod tests {
             )
             .unwrap(),
             "/plan @missing-file"
-        );
-        assert_eq!(
-            prepare_prompt(
-                Kind::Devin,
-                "/custom @missing-file",
-                "/missing-project",
-                &[]
-            )
-            .unwrap(),
-            "/custom @missing-file"
         );
     }
     #[test]

@@ -41,6 +41,108 @@ fn material(name: &str, x: usize, y: usize, base: Hsla) -> Hsla {
         _ => base,
     }
 }
+fn paint_sprite(
+    sprite: &Sprite,
+    color: u32,
+    talk: bool,
+    blink: bool,
+    needs_you: bool,
+    mut draw: impl FnMut(f32, f32, f32, f32, Hsla),
+) {
+    let rows = if talk { &sprite.talk } else { &sprite.rest };
+    let mut base: Hsla = rgb(color).into();
+    base.s *= 0.55;
+    base.l += (0.82 - base.l) * 0.55;
+    let filled = |x: isize, y: isize| {
+        x >= 0
+            && y >= 0
+            && rows
+                .get(y as usize)
+                .and_then(|s| s.as_bytes().get(x as usize))
+                == Some(&b'#')
+    };
+    for depth in [true, false] {
+        for (y, row) in rows.iter().enumerate() {
+            for (x, pixel) in row.bytes().enumerate() {
+                if pixel != b'#' {
+                    continue;
+                }
+                let face = tone(
+                    material(&sprite.name, x, y, base),
+                    0.04 + (7. - y as f32) * 0.009 + (3. - x as f32) * 0.006,
+                );
+                let offset = if depth { 0.14 } else { 0. };
+                draw(
+                    2. + (x as f32 + offset) * 1.5,
+                    2. + (y as f32 + offset * 0.66) * 1.5,
+                    1.5,
+                    1.5,
+                    if depth { tone(face, -0.32) } else { face },
+                );
+                if !depth {
+                    if !filled(x as isize, y as isize - 1) {
+                        draw(
+                            2. + x as f32 * 1.5,
+                            2. + y as f32 * 1.5,
+                            1.5,
+                            0.12,
+                            rgba(0xffffed3d).into(),
+                        );
+                    }
+                    if !filled(x as isize - 1, y as isize) {
+                        draw(
+                            2. + x as f32 * 1.5,
+                            2. + y as f32 * 1.5,
+                            0.09,
+                            1.5,
+                            rgba(0xffffed21).into(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    for &[x, y] in &sprite.eyes[usize::from(talk)] {
+        let x = 2. + x as f32 * 1.5;
+        let y = 2. + y as f32 * 1.5;
+        if blink {
+            draw(x, y + 0.825, 1.5, 0.375, rgb(0x263331).into());
+        } else {
+            draw(
+                x,
+                y,
+                1.5,
+                1.5,
+                rgb(if sprite.name == "rocket" {
+                    0x243e51
+                } else {
+                    0x263331
+                })
+                .into(),
+            );
+            draw(x + 0.225, y + 0.225, 0.375, 0.375, rgba(0xfffff4bf).into());
+        }
+    }
+    if sprite.name == "mushroom" {
+        for (x, y, w, h) in [
+            (3., 0.42, 0.6, 0.35),
+            (1.65, 1.4, 0.5, 0.38),
+            (5.5, 1.7, 0.35, 0.4),
+        ] {
+            draw(
+                2. + x * 1.5,
+                2. + (y + if talk { 1. } else { 0. }) * 1.5,
+                w * 1.5,
+                h * 1.5,
+                rgba(0xfff8e2a8).into(),
+            );
+        }
+    }
+    if needs_you {
+        draw(12.5, -2.5, 3., 3., rgb(0xffd24a).into());
+        draw(13.25, 0.5, 1.5, 1., rgb(0x8c8680).into());
+    }
+}
 pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: bool) -> AnyElement {
     let index = SPRITES.iter().position(|m| m.name == name).unwrap_or(1);
     let status = status.to_string();
@@ -53,9 +155,6 @@ pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: boo
                 window.request_animation_frame();
             }
             let talk = animate && status == "working" && (t * 3.).floor() as u64 % 2 == 1;
-            let sprite = &SPRITES[index];
-            let rows = if talk { &sprite.talk } else { &sprite.rest };
-            let unit = bounds.size.width / 16.;
             let hop = if animate {
                 if status == "working" {
                     -(t * 9.).sin().abs() * 0.9
@@ -67,124 +166,136 @@ pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: boo
             } else {
                 0.
             };
-            let draw = |x: f32, y: f32, w: f32, h: f32, color: Hsla, window: &mut gpui::Window| {
-                window.paint_quad(gpui::fill(
-                    gpui::Bounds::new(
-                        bounds.origin + gpui::point(unit * x, unit * (y + hop)),
-                        gpui::size(unit * w, unit * h),
-                    ),
-                    color,
-                ));
-            };
-            let mut base: Hsla = rgb(color).into();
-            base.s *= 0.55;
-            base.l += (0.82 - base.l) * 0.55;
-            let filled = |x: isize, y: isize| {
-                x >= 0
-                    && y >= 0
-                    && rows
-                        .get(y as usize)
-                        .and_then(|s| s.as_bytes().get(x as usize))
-                        == Some(&b'#')
-            };
-            for depth in [true, false] {
-                for (y, row) in rows.iter().enumerate() {
-                    for (x, pixel) in row.bytes().enumerate() {
-                        if pixel != b'#' {
-                            continue;
-                        }
-                        let face = tone(
-                            material(&sprite.name, x, y, base),
-                            0.04 + (7. - y as f32) * 0.009 + (3. - x as f32) * 0.006,
-                        );
-                        let offset = if depth { 0.14 } else { 0. };
-                        draw(
-                            2. + (x as f32 + offset) * 1.5,
-                            2. + (y as f32 + offset * 0.66) * 1.5,
-                            1.5,
-                            1.5,
-                            if depth { tone(face, -0.32) } else { face },
-                            window,
-                        );
-                        if !depth {
-                            if !filled(x as isize, y as isize - 1) {
-                                draw(
-                                    2. + x as f32 * 1.5,
-                                    2. + y as f32 * 1.5,
-                                    1.5,
-                                    0.12,
-                                    rgba(0xffffed3d).into(),
-                                    window,
-                                );
-                            }
-                            if !filled(x as isize - 1, y as isize) {
-                                draw(
-                                    2. + x as f32 * 1.5,
-                                    2. + y as f32 * 1.5,
-                                    0.09,
-                                    1.5,
-                                    rgba(0xffffed21).into(),
-                                    window,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            for &[x, y] in &sprite.eyes[usize::from(talk)] {
-                let x = 2. + x as f32 * 1.5;
-                let y = 2. + y as f32 * 1.5;
-                let blink =
-                    animate && status != "needs-you" && (t + index as f32 * 0.37) % 5.2 > 5.05;
-                if blink {
-                    draw(x, y + 0.825, 1.5, 0.375, rgb(0x263331).into(), window);
-                } else {
-                    draw(
-                        x,
-                        y,
-                        1.5,
-                        1.5,
-                        rgb(if sprite.name == "rocket" {
-                            0x243e51
-                        } else {
-                            0x263331
-                        })
-                        .into(),
-                        window,
-                    );
-                    draw(
-                        x + 0.225,
-                        y + 0.225,
-                        0.375,
-                        0.375,
-                        rgba(0xfffff4bf).into(),
-                        window,
-                    );
-                }
-            }
-            if sprite.name == "mushroom" {
-                for (x, y, w, h) in [
-                    (3., 0.42, 0.6, 0.35),
-                    (1.65, 1.4, 0.5, 0.38),
-                    (5.5, 1.7, 0.35, 0.4),
-                ] {
-                    draw(
-                        2. + x * 1.5,
-                        2. + (y + if talk { 1. } else { 0. }) * 1.5,
-                        w * 1.5,
-                        h * 1.5,
-                        rgba(0xfff8e2a8).into(),
-                        window,
-                    );
-                }
-            }
-            if status == "needs-you" {
-                draw(12.5, -2.5, 3., 3., rgb(0xffd24a).into(), window);
-                draw(13.25, 0.5, 1.5, 1., rgb(0x8c8680).into(), window);
-            }
+            let blink = animate && status != "needs-you" && (t + index as f32 * 0.37) % 5.2 > 5.05;
+            let unit = bounds.size.width / 16.;
+            paint_sprite(
+                &SPRITES[index],
+                color,
+                talk,
+                blink,
+                status == "needs-you",
+                |x, y, w, h, color| {
+                    window.paint_quad(gpui::fill(
+                        gpui::Bounds::new(
+                            bounds.origin + gpui::point(unit * x, unit * (y + hop)),
+                            gpui::size(unit * w, unit * h),
+                        ),
+                        color,
+                    ));
+                },
+            );
         },
     )
     .size(px(side))
     .flex_shrink_0()
     .into_any_element()
+}
+
+/// The AppKit menu owns a crisp 26pt, 2× portrait. Its sprite geometry and
+/// shading come from the same painter as the in-app avatar.
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn menu_portrait(name: &str, color: u32) -> Vec<u8> {
+    const SIDE: usize = 52;
+    let mut pixels = vec![0; SIDE * SIDE * 4];
+    let blend = |pixel: &mut [u8], color: gpui::Rgba| {
+        let previous = pixel[3] as f32 / 255.;
+        let alpha = color.a + previous * (1. - color.a);
+        if alpha > 0. {
+            for (channel, source) in pixel[..3].iter_mut().zip([color.r, color.g, color.b]) {
+                *channel = ((source * color.a + *channel as f32 / 255. * previous * (1. - color.a))
+                    / alpha
+                    * 255.)
+                    .round() as u8;
+            }
+            pixel[3] = (alpha * 255.).round() as u8;
+        }
+    };
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            let distance = ((x as f32 + 0.5 - 26.).powi(2) + (y as f32 + 0.5 - 26.).powi(2)).sqrt();
+            blend(
+                &mut pixels[(y * SIDE + x) * 4..][..4],
+                gpui::Rgba {
+                    r: 0.5,
+                    g: 0.5,
+                    b: 0.5,
+                    a: (24.5 - distance).clamp(0., 1.) * 0.12,
+                },
+            );
+        }
+    }
+    let index = SPRITES
+        .iter()
+        .position(|sprite| sprite.name == name)
+        .unwrap_or(1);
+    paint_sprite(
+        &SPRITES[index],
+        color,
+        false,
+        false,
+        false,
+        |x, y, w, h, color| {
+            let edge = |value: f32| (10. + value * 2.).round().clamp(0., SIDE as f32) as usize;
+            let color: gpui::Rgba = color.into();
+            for py in edge(y)..edge(y + h) {
+                for px in edge(x)..edge(x + w) {
+                    blend(&mut pixels[(py * SIDE + px) * 4..][..4], color);
+                }
+            }
+        },
+    );
+    pixels
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn menu_portrait_png(name: &str, color: u32) -> Option<Vec<u8>> {
+    let rgba = menu_portrait(name, color);
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, 52, 52);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().ok()?.write_image_data(&rgba).ok()?;
+    }
+    Some(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_portraits_keep_transparent_corners_crisp_sprite_eyes_and_individual_appearance() {
+        let image = menu_portrait("cat", 0xff4444);
+        assert_eq!(image.len(), 52 * 52 * 4);
+        for (x, y) in [(0, 0), (51, 0), (0, 51), (51, 51)] {
+            assert_eq!(&image[(y * 52 + x) * 4..][..4], &[0, 0, 0, 0]);
+        }
+        let sprite = SPRITES.iter().find(|sprite| sprite.name == "cat").unwrap();
+        let &[x, y] = &sprite.eyes[0][0];
+        // The last pixel in the eye's 3×3 block stays dark beneath its
+        // one-pixel highlight, matching the in-app sprite.
+        let (x, y) = (14 + x as usize * 3 + 2, 14 + y as usize * 3 + 2);
+        assert_eq!(&image[(y * 52 + x) * 4..][..4], &[38, 51, 49, 255]);
+        assert!(image.as_chunks::<4>().0.contains(&[38, 51, 49, 255]));
+        assert_ne!(image, menu_portrait("cat", 0x4444ff));
+        assert_ne!(image, menu_portrait("robot", 0xff4444));
+        assert_eq!(
+            menu_portrait("unknown", 0xff4444),
+            menu_portrait(&SPRITES[1].name, 0xff4444)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn appkit_decodes_the_portrait_used_by_native_menu_items() {
+        use objc2::AnyThread;
+        use objc2_app_kit::NSImage;
+        use objc2_foundation::{NSData, NSSize};
+        let bytes = menu_portrait_png("cat", 0x4da3f5).unwrap();
+        let image = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&bytes)).unwrap();
+        image.setSize(NSSize::new(26., 26.));
+        assert_eq!(image.size(), NSSize::new(26., 26.));
+        assert!(image.TIFFRepresentation().is_some());
+    }
 }

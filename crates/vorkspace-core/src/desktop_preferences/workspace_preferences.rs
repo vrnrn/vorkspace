@@ -3,6 +3,69 @@ use super::{reconcile_preference, DesktopPreferences};
 use serde_json::{json, Map, Value};
 
 impl DesktopPreferences {
+    /// Decode sidebar state retained by desktop versions that did not expose
+    /// these fields natively. Existing canonical fields always take precedence;
+    /// unavailable WebKit storage must not discard a saved native selection.
+    pub fn restore_sidebar_preferences(workspace: &mut Value) {
+        let Some(target) = workspace.as_object_mut() else {
+            return;
+        };
+        let retained = retained_preferences(target);
+        for (field, source) in retained.sidebar_preferences() {
+            let value = target.get(field).cloned().unwrap_or(source);
+            let value = match field {
+                "project_rail_open" => json!(value.as_bool().unwrap_or(true)),
+                "project_rail_width" => json!(value
+                    .as_f64()
+                    .filter(|width| width.is_finite())
+                    .unwrap_or(200.)
+                    .clamp(180., 360.)
+                    .round()),
+                "sidebar_tabs" => sidebar_tabs(&value, true),
+                "sidebar_tab_order" => sidebar_tab_order(&value),
+                _ => unreachable!(),
+            };
+            target.insert(field.into(), value);
+        }
+    }
+
+    fn sidebar_preferences(&self) -> [(&'static str, Value); 4] {
+        [
+            (
+                "project_rail_open",
+                json!(!matches!(
+                    self.get("vorkspace.projectRailOpen"),
+                    Some("0" | "false")
+                )),
+            ),
+            (
+                "project_rail_width",
+                json!(self
+                    .number("projectRailWidth")
+                    .unwrap_or(200.)
+                    .clamp(180., 360.)
+                    .round()),
+            ),
+            (
+                "sidebar_tabs",
+                sidebar_tabs(
+                    &self
+                        .json("vorkspace.projectSidebarTabs.v1")
+                        .unwrap_or(Value::Null),
+                    false,
+                ),
+            ),
+            (
+                "sidebar_tab_order",
+                sidebar_tab_order(
+                    &self
+                        .json("vorkspace.sidebarTabOrder")
+                        .unwrap_or(Value::Null),
+                ),
+            ),
+        ]
+    }
+
     pub(super) fn apply_preferences(
         &self,
         target: &mut Map<String, Value>,
@@ -352,6 +415,39 @@ impl DesktopPreferences {
     ) {
         let old = baseline.get("workspace").unwrap_or(&Value::Null);
         let mut source = Map::new();
+        let retained = retained_preferences(target);
+        for ((field, value), (_, recovered)) in self
+            .sidebar_preferences()
+            .into_iter()
+            .zip(retained.sidebar_preferences())
+        {
+            let source_key = match field {
+                "project_rail_open" => "vorkspace.projectRailOpen",
+                "project_rail_width" => "vorkspace.projectRailWidth",
+                "sidebar_tabs" => "vorkspace.projectSidebarTabs.v1",
+                "sidebar_tab_order" => "vorkspace.sidebarTabOrder",
+                _ => unreachable!(),
+            };
+            if old.get(field).is_none()
+                && !target.contains_key(field)
+                && self.get(source_key).is_none()
+                && retained.get(source_key).is_some()
+            {
+                target.insert(field.into(), recovered);
+            }
+            // These fields were absent from the first native schema. If a
+            // canonical value already exists, establish the source baseline
+            // without treating that explicit native value as stale desktop data.
+            let initial = (old.get(field).is_none() && target.contains_key(field))
+                .then(|| json!({(field):value.clone()}));
+            reconcile_preference(
+                target,
+                initial.as_ref().unwrap_or(old),
+                &mut source,
+                field,
+                value,
+            );
+        }
         reconcile_preference(
             target,
             old,
@@ -359,13 +455,10 @@ impl DesktopPreferences {
             "new_layout_prompt_dismissed",
             json!(self.flag("newLayoutPromptDismissed").unwrap_or(false)),
         );
-        reconcile_preference(
-            target,
-            old,
-            &mut source,
-            "classic_layout",
-            json!(!self.flag("insetLayout").unwrap_or(false)),
-        );
+        // Only the original desktop layout is supported. Earlier saved inset
+        // choices cannot reactivate the removed layout when reopening a store.
+        target.insert("classic_layout".into(), json!(true));
+        source.insert("classic_layout".into(), json!(true));
         reconcile_preference(
             target,
             old,
@@ -450,7 +543,12 @@ impl DesktopPreferences {
         );
         next.insert("workspace".into(), json!(source));
         // Preserve exact strings for source concepts with no native equivalent.
-        let metadata: Map<String, Value> = [
+        let mut metadata = target
+            .get("desktop_preferences_metadata")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        for key in [
             "vorkspace.sessionFolders",
             "vorkspace.pinnedSessionsCollapsed",
             "vorkspace.reminderSessionsCollapsed",
@@ -468,15 +566,18 @@ impl DesktopPreferences {
             "vorkspace.projectSidebarTabs.v1",
             "vorkspace.projectRailOpen",
             "vorkspace.projectRailWidth",
+            "vorkspace.projectRailPinned",
+            "vorkspace.sidebarTabOrder",
             "vorkspace.transcriptZen",
             "vorkspace.projectNotifications.v1",
             "vorkspace.notificationProjects.v2",
             "vorkspace.newLayoutPromptDismissed",
             "vorkspace.linkedSessionSeen",
-        ]
-        .into_iter()
-        .filter_map(|key| self.get(key).map(|value| (key.to_owned(), json!(value))))
-        .collect();
+        ] {
+            if let Some(value) = self.get(key) {
+                metadata.insert(key.to_owned(), json!(value));
+            }
+        }
         target.insert("desktop_preferences_metadata".into(), json!(metadata));
     }
 
@@ -490,6 +591,56 @@ impl DesktopPreferences {
             .ok()
             .filter(|v| v.is_finite())
     }
+}
+
+fn retained_preferences(target: &Map<String, Value>) -> DesktopPreferences {
+    DesktopPreferences {
+        values: target
+            .get("desktop_preferences_metadata")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+            .collect(),
+        available: true,
+    }
+}
+
+fn sidebar_tabs(value: &Value, allow_history: bool) -> Value {
+    Value::Object(
+        value
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(project, tab)| {
+                let tab = tab.as_str()?;
+                if project.is_empty()
+                    || project == "~"
+                    || !(["sessions", "files", "changes"].contains(&tab)
+                        || allow_history && tab == "graph")
+                {
+                    return None;
+                }
+                Some((project.clone(), json!(tab)))
+            })
+            .collect(),
+    )
+}
+
+fn sidebar_tab_order(value: &Value) -> Value {
+    let mut tabs = Vec::new();
+    for tab in value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .chain(["sessions", "files", "changes"])
+    {
+        if ["sessions", "files", "changes"].contains(&tab) && !tabs.contains(&tab) {
+            tabs.push(tab);
+        }
+    }
+    json!(tabs)
 }
 
 fn model_choice(provider: &str, model: &str) -> Option<Value> {
@@ -699,7 +850,7 @@ mod tests {
         assert_eq!(settings["default_models"]["claude"], "claude-opus-4-8");
         assert_eq!(settings["keybindings"]["App: Search"], "cmd-j");
         assert!(settings["keybindings"]["App: Settings"].is_null());
-        assert_eq!(workspace["classic_layout"], false);
+        assert_eq!(workspace["classic_layout"], true);
         assert_eq!(workspace["sidebar_visible"], false);
         assert_eq!(
             workspace["right_panel_tabs"],
@@ -829,5 +980,223 @@ mod tests {
         let mut isolated = json!({"classic_layout":false});
         DesktopPreferences::default().apply_workspace(&mut isolated);
         assert_eq!(isolated["classic_layout"], false);
+    }
+
+    #[test]
+    fn classic_sidebar_preferences_survive_native_edits_save_and_desktop_reread() {
+        let initial = source(&[
+            ("vorkspace.projectRailOpen", "0"),
+            ("vorkspace.projectRailWidth", "900"),
+            (
+                "vorkspace.projectSidebarTabs.v1",
+                r#"{"/work":"files","/other":"sessions","/bad":"other","/graph":"graph"}"#,
+            ),
+            (
+                "vorkspace.sidebarTabOrder",
+                r#"["changes","inbox","changes","sessions"]"#,
+            ),
+        ]);
+        let mut workspace = json!({
+            "project":"/work", "draft":"keep", "project_group_collapsed":{"group":true}
+        });
+        initial.apply_workspace(&mut workspace);
+        assert_eq!(workspace["project_rail_open"], false);
+        assert_eq!(workspace["project_rail_width"], 360.);
+        assert_eq!(
+            workspace["sidebar_tabs"],
+            json!({"/work":"files","/other":"sessions"})
+        );
+        assert_eq!(
+            workspace["sidebar_tab_order"],
+            json!(["changes", "sessions", "files"])
+        );
+
+        workspace["project_rail_open"] = json!(true);
+        workspace["project_rail_width"] = json!(245.);
+        workspace["sidebar_tabs"]["/work"] = json!("changes");
+        workspace["sidebar_tabs"]["/native"] = json!("graph");
+        workspace["sidebar_tab_order"] = json!(["files", "changes", "sessions"]);
+        let saved = serde_json::to_string(&workspace).unwrap();
+        let mut reopened: Value = serde_json::from_str(&saved).unwrap();
+        initial.apply_workspace(&mut reopened);
+        assert_eq!(reopened, workspace);
+
+        let mut changed = initial.clone();
+        changed.values.insert(
+            "vorkspace.projectSidebarTabs.v1".into(),
+            r#"{"/work":"files","/other":"changes"}"#.into(),
+        );
+        changed.apply_workspace(&mut reopened);
+        assert_eq!(reopened["sidebar_tabs"]["/work"], "changes");
+        assert_eq!(reopened["sidebar_tabs"]["/native"], "graph");
+        assert_eq!(reopened["sidebar_tabs"]["/other"], "changes");
+        assert_eq!(reopened["project_rail_width"], 245.);
+        assert_eq!(reopened["draft"], "keep");
+        assert_eq!(reopened["project_group_collapsed"]["group"], true);
+        assert_eq!(
+            reopened["desktop_preferences_metadata"]["vorkspace.sidebarTabOrder"],
+            r#"["changes","inbox","changes","sessions"]"#
+        );
+        changed
+            .values
+            .insert("vorkspace.projectRailWidth".into(), "275".into());
+        changed.apply_workspace(&mut reopened);
+        assert_eq!(reopened["project_rail_width"], 275.);
+    }
+
+    #[test]
+    fn new_sidebar_source_baselines_preserve_existing_canonical_native_choices() {
+        let mut workspace = json!({
+            "classic_layout":false,
+            "project_rail_open":false,
+            "project_rail_width":245.,
+            "sidebar_tabs":{"/work":"graph"},
+            "sidebar_tab_order":["changes","files","sessions"],
+            "desktop_project_preferences":{"workspace":{"classic_layout":false}}
+        });
+        let preferences = source(&[
+            ("vorkspace.insetLayout", "1"),
+            ("vorkspace.projectRailOpen", "1"),
+            ("vorkspace.projectRailWidth", "180"),
+            ("vorkspace.projectSidebarTabs.v1", r#"{"/work":"files"}"#),
+            ("vorkspace.sidebarTabOrder", r#"["sessions"]"#),
+        ]);
+        preferences.apply_workspace(&mut workspace);
+        assert_eq!(workspace["classic_layout"], true);
+        assert_eq!(workspace["project_rail_open"], false);
+        assert_eq!(workspace["project_rail_width"], 245.);
+        assert_eq!(workspace["sidebar_tabs"]["/work"], "graph");
+        assert_eq!(
+            workspace["sidebar_tab_order"],
+            json!(["changes", "files", "sessions"])
+        );
+        let saved = workspace.clone();
+        preferences.apply_workspace(&mut workspace);
+        assert_eq!(workspace, saved);
+    }
+
+    #[test]
+    fn sidebar_preferences_survive_actual_store_save_close_and_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vorkspace.db");
+        let preferences = std::sync::Arc::new(source(&[
+            ("vorkspace.projectRailOpen", "0"),
+            ("vorkspace.projectRailWidth", "215"),
+            ("vorkspace.projectSidebarTabs.v1", r#"{"/work":"files"}"#),
+            ("vorkspace.projectRailPinned", r#"["/work"]"#),
+        ]));
+        let store = crate::store::Store::open_vorkspace_with_preferences_for_test(
+            &path,
+            preferences.clone(),
+        )
+        .unwrap();
+        let session = store.create("codex", "/work").unwrap();
+        let persisted_session = store.persisted_session_id(session.id).unwrap();
+        let mut workspace: Value =
+            serde_json::from_str(&store.ui_state().unwrap().unwrap()).unwrap();
+        workspace["project_rail_open"] = json!(true);
+        workspace["project_rail_width"] = json!(285.);
+        workspace["sidebar_tabs"]["/work"] = json!("changes");
+        workspace["sidebar_tab_order"] = json!(["files", "sessions", "changes"]);
+        workspace["project_group_collapsed"] = json!({"group":true});
+        store.save_ui_state(&workspace.to_string()).unwrap();
+        drop(store);
+
+        let reopened =
+            crate::store::Store::open_vorkspace_with_preferences_for_test(&path, preferences)
+                .unwrap();
+        let actual: Value = serde_json::from_str(&reopened.ui_state().unwrap().unwrap()).unwrap();
+        assert_eq!(actual, workspace);
+        assert_eq!(
+            actual["desktop_preferences_metadata"]["vorkspace.projectRailPinned"],
+            r#"["/work"]"#
+        );
+        assert_eq!(
+            reopened
+                .persisted_session_id(reopened.sessions().unwrap()[0].id)
+                .unwrap(),
+            persisted_session
+        );
+    }
+
+    #[test]
+    fn first_native_sidebar_schema_recovers_retained_source_without_webkit() {
+        let metadata = json!({
+            "vorkspace.projectRailOpen":"false",
+            "vorkspace.projectRailWidth":"234",
+            "vorkspace.projectSidebarTabs.v1":r#"{"/work":"changes"}"#,
+            "vorkspace.sidebarTabOrder":r#"["files","changes"]"#,
+            "opaque":"kept"
+        });
+        let original = json!({
+            "project":"/work",
+            "preferences":{"theme":"light"},
+            "desktop_project_preferences":{"workspace":{"classic_layout":true}},
+            "desktop_preferences_metadata":metadata
+        });
+        let mut restored = original.clone();
+        DesktopPreferences::restore_sidebar_preferences(&mut restored);
+        assert_eq!(restored["project_rail_open"], false);
+        assert_eq!(restored["project_rail_width"], 234.);
+        assert_eq!(restored["sidebar_tabs"]["/work"], "changes");
+        assert_eq!(
+            restored["sidebar_tab_order"],
+            json!(["files", "changes", "sessions"])
+        );
+        assert_eq!(restored["desktop_preferences_metadata"], metadata);
+        assert_eq!(restored["preferences"], original["preferences"]);
+        restored["project_rail_width"] = json!(260.);
+        restored["sidebar_tabs"]["/work"] = json!("sessions");
+        DesktopPreferences::restore_sidebar_preferences(&mut restored);
+        assert_eq!(restored["project_rail_width"], 260.);
+        assert_eq!(restored["sidebar_tabs"]["/work"], "sessions");
+
+        let mut available_but_missing = original;
+        source(&[]).apply_workspace(&mut available_but_missing);
+        assert_eq!(available_but_missing["project_rail_width"], 234.);
+        assert_eq!(available_but_missing["sidebar_tabs"]["/work"], "changes");
+        assert_eq!(
+            available_but_missing["desktop_preferences_metadata"],
+            metadata
+        );
+        source(&[]).apply_workspace(&mut available_but_missing);
+        assert_eq!(available_but_missing["project_rail_width"], 234.);
+    }
+
+    #[test]
+    fn malformed_sidebar_source_uses_defaults_and_does_not_clobber_other_fields() {
+        let mut workspace = json!({"project":"/work", "draft":"keep"});
+        source(&[
+            ("vorkspace.projectRailOpen", "invalid"),
+            ("vorkspace.projectRailWidth", "NaN"),
+            (
+                "vorkspace.projectSidebarTabs.v1",
+                r#"{"/work":2,"/bad":"other","":"files","~":"changes"}"#,
+            ),
+            ("vorkspace.sidebarTabOrder", r#"[null,4,"inbox","graph"]"#),
+        ])
+        .apply_workspace(&mut workspace);
+        assert_eq!(workspace["classic_layout"], true);
+        assert_eq!(workspace["project_rail_open"], true);
+        assert_eq!(workspace["project_rail_width"], 200.);
+        assert_eq!(workspace["sidebar_tabs"], json!({}));
+        assert_eq!(
+            workspace["sidebar_tab_order"],
+            json!(["sessions", "files", "changes"])
+        );
+        assert_eq!(workspace["draft"], "keep");
+        workspace["project_rail_open"] = json!("bad");
+        workspace["project_rail_width"] = json!(-10.);
+        workspace["sidebar_tabs"] = json!({"/work":"graph","/bad":4});
+        workspace["sidebar_tab_order"] = json!(["graph", "files", "files", 4]);
+        DesktopPreferences::restore_sidebar_preferences(&mut workspace);
+        assert_eq!(workspace["project_rail_open"], true);
+        assert_eq!(workspace["project_rail_width"], 180.);
+        assert_eq!(workspace["sidebar_tabs"], json!({"/work":"graph"}));
+        assert_eq!(
+            workspace["sidebar_tab_order"],
+            json!(["files", "sessions", "changes"])
+        );
+        assert_eq!(workspace["draft"], "keep");
     }
 }

@@ -62,10 +62,11 @@ impl SidebarPeek {
 }
 
 impl Shell {
-    /// Only the inset layout's collapsed sidebar peeks.
+    /// A collapsed workspace pane peeks beside the project rail.
     fn peek_available(&self) -> bool {
-        !self.workspace.classic_layout
-            && !self.workspace.sidebar_visible
+        !self.workspace.sidebar_visible
+            && !self.app_view_open()
+            && self.app_search.is_none()
             && self.sidebar_slide.is_none()
             && self.settings.is_none()
     }
@@ -95,6 +96,7 @@ impl Shell {
             self.close_preview(cx);
         }
         self.sidebar_peek = Some(SidebarPeek::new(open, current, cx.reduce_motion()));
+        self.sync_right_panel(cx);
         self.peek_animating = true;
         cx.notify();
     }
@@ -127,8 +129,8 @@ impl Shell {
 
     fn peek_contains(&self, position: Point<Pixels>) -> bool {
         let (x, y) = (position.x.as_f32(), position.y.as_f32());
-        x >= PEEK_INSET
-            && x <= PEEK_INSET + self.workspace.sidebar_width
+        x >= self.classic_rail_width() + PEEK_INSET
+            && x <= self.classic_rail_width() + PEEK_INSET + self.workspace.sidebar_width
             && y >= TITLE_BAR_HEIGHT
             && y <= self.viewport_height - PEEK_INSET
     }
@@ -150,8 +152,9 @@ impl Shell {
     }
 
     fn peek_pointer(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let edge =
-            event.position.x.as_f32() <= PEEK_EDGE && event.position.y.as_f32() > TITLE_BAR_HEIGHT;
+        let edge = event.position.x.as_f32() >= self.classic_rail_width()
+            && event.position.x.as_f32() <= self.classic_rail_width() + PEEK_EDGE
+            && event.position.y.as_f32() > TITLE_BAR_HEIGHT;
         if edge && event.pressed_button.is_none() {
             self.set_peek(true, cx);
             return;
@@ -276,7 +279,9 @@ impl Shell {
             // Closing, it lets the pointer through to the workspace.
             .when(self.peek_open(), |d| d.occlude())
             .absolute()
-            .left(px(PEEK_INSET - PEEK_DRIFT * (1. - progress)))
+            .left(px(
+                self.classic_rail_width() + PEEK_INSET - PEEK_DRIFT * (1. - progress)
+            ))
             .top(px(TITLE_BAR_HEIGHT))
             .bottom(px(PEEK_INSET))
             .w(px(self.workspace.sidebar_width))

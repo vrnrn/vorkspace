@@ -151,8 +151,6 @@ fn gui_search_path_from(
             ".cargo/bin",
             ".claude/local",
             ".local/share/claude",
-            ".opencode/bin",
-            ".grok/bin",
             ".npm-global/bin",
             ".bun/bin",
             "AppData/Roaming/npm",

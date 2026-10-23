@@ -27,8 +27,11 @@ fn claude_desktop_config(home: &Path) -> PathBuf {
 }
 
 fn server_from_json(provider: &str, name: &str, config: &str) -> Result<(String, Value), String> {
+    if !matches!(provider, "claude" | "codex" | "claude_desktop") {
+        return Err("Unsupported MCP provider".into());
+    }
     let value: Value = serde_json::from_str(config).map_err(|e| format!("Invalid JSON: {e}"))?;
-    let (name, mut server) = if let Some(servers) = value.get("mcpServers") {
+    let (name, server) = if let Some(servers) = value.get("mcpServers") {
         let servers = servers.as_object().ok_or("mcpServers must be an object")?;
         if servers.len() != 1 {
             return Err("Add one server at a time".into());
@@ -44,37 +47,14 @@ fn server_from_json(provider: &str, name: &str, config: &str) -> Result<(String,
     if name.is_empty() || name.chars().any(char::is_control) {
         return Err("Server name cannot be empty or contain control characters".into());
     }
-    if provider != "opencode"
-        && !name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    if !name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     {
         return Err("Server name must use letters, numbers, hyphens, or underscores".into());
     }
     if !server.is_object() {
         return Err("Server configuration must be an object".into());
-    }
-    if provider == "opencode" {
-        if let Some(parts) = server.get("command").and_then(Value::as_array) {
-            let parts = parts
-                .iter()
-                .map(|part| {
-                    part.as_str()
-                        .filter(|text| !text.is_empty())
-                        .map(str::to_owned)
-                })
-                .collect::<Option<Vec<_>>>()
-                .ok_or("OpenCode command must contain non-empty strings")?;
-            let (command, args) = parts
-                .split_first()
-                .ok_or("OpenCode command cannot be empty")?;
-            let object = server.as_object_mut().unwrap();
-            if object.contains_key("args") {
-                return Err("Use either a command array or separate args".into());
-            }
-            object.insert("command".into(), Value::String(command.clone()));
-            object.insert("args".into(), serde_json::json!(args));
-        }
     }
     let command = server
         .get("command")
@@ -107,31 +87,14 @@ pub fn mcp_add(
             return Err("Project directory does not exist".into());
         }
         match provider.as_str() {
-            "cursor" | "claude_desktop" => {
-                let path = match (provider.as_str(), scope.as_str()) {
-                    ("cursor", "user") => Path::new(&home).join(".cursor/mcp.json"),
-                    ("cursor", "project") => project.join(".cursor/mcp.json"),
-                    ("claude_desktop", "user") => claude_desktop_config(Path::new(&home)),
-                    _ => return Err("Unsupported scope for this provider".into()),
-                };
-                if provider == "claude_desktop" && server.get("command").is_none() {
+            "claude_desktop" => {
+                if scope != "user" {
+                    return Err("Unsupported scope for this provider".into());
+                }
+                if server.get("command").is_none() {
                     return Err("Claude Desktop local configuration requires a command".into());
                 }
-                write_json_server(&path, &name, server)
-            }
-            "opencode" => {
-                if !matches!(scope.as_str(), "user" | "project") {
-                    return Err("Invalid OpenCode MCP scope".into());
-                }
-                let major = opencode_major_version(&cwd, binary_path.as_deref())?;
-                let override_path = std::env::var_os("OPENCODE_CONFIG").map(PathBuf::from);
-                let path = opencode_config_path(
-                    Path::new(&home),
-                    &project,
-                    &scope,
-                    override_path.as_deref(),
-                );
-                write_opencode_server(&path, &name, server, major)
+                write_json_server(&claude_desktop_config(Path::new(&home)), &name, server)
             }
             "claude" | "codex" => add_mcp_via_cli(
                 &provider,
@@ -144,202 +107,6 @@ pub fn mcp_add(
             _ => Err("Unsupported MCP provider".into()),
         }
     }
-}
-
-fn opencode_config_path(
-    home: &Path,
-    project: &Path,
-    scope: &str,
-    override_path: Option<&Path>,
-) -> PathBuf {
-    if scope == "user" {
-        if let Some(path) = override_path {
-            return path.to_path_buf();
-        }
-    }
-    let directory = if scope == "user" {
-        home.join(".config/opencode")
-    } else {
-        project.to_path_buf()
-    };
-    let candidates: &[&str] = if scope == "user" {
-        &["opencode.json", "opencode.jsonc"]
-    } else {
-        &[
-            "opencode.json",
-            "opencode.jsonc",
-            ".opencode/opencode.json",
-            ".opencode/opencode.jsonc",
-        ]
-    };
-    candidates
-        .iter()
-        .map(|name| directory.join(name))
-        .find(|path| path.exists())
-        .unwrap_or_else(|| directory.join("opencode.json"))
-}
-
-fn normalize_opencode_server(server: Value, major: u32) -> Result<Value, String> {
-    let mut object = server
-        .as_object()
-        .ok_or("Server configuration must be an object")?
-        .clone();
-    let local = object.get("command").is_some();
-    let allowed: &[&str] = if local {
-        &[
-            "type",
-            "command",
-            "args",
-            "env",
-            "environment",
-            "enabled",
-            "disabled",
-            "cwd",
-            "timeout",
-            "codemode",
-            "protocol",
-        ]
-    } else {
-        &[
-            "type", "url", "headers", "enabled", "disabled", "oauth", "timeout", "codemode",
-            "protocol",
-        ]
-    };
-    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
-        return Err(format!("OpenCode configuration cannot preserve '{key}'"));
-    }
-    let kind = object
-        .remove("type")
-        .and_then(|value| value.as_str().map(str::to_owned));
-    if local {
-        if !matches!(kind.as_deref(), None | Some("stdio") | Some("local")) {
-            return Err("OpenCode local server type must be local".into());
-        }
-        let command = object
-            .remove("command")
-            .ok_or("Local server needs a command")?;
-        let mut parts = if let Some(command) = command.as_str() {
-            vec![Value::String(command.to_owned())]
-        } else {
-            command
-                .as_array()
-                .cloned()
-                .ok_or("OpenCode command must be an array or string")?
-        };
-        if let Some(args) = object.remove("args") {
-            parts.extend(
-                args.as_array()
-                    .ok_or("args must be an array")?
-                    .iter()
-                    .cloned(),
-            );
-        }
-        if parts.is_empty()
-            || parts
-                .iter()
-                .any(|part| part.as_str().is_none_or(str::is_empty))
-        {
-            return Err("OpenCode command must contain non-empty strings".into());
-        }
-        if object.contains_key("env") && object.contains_key("environment") {
-            return Err("Use either env or environment".into());
-        }
-        if let Some(environment) = object
-            .remove("env")
-            .or_else(|| object.remove("environment"))
-        {
-            let values = environment
-                .as_object()
-                .ok_or("environment must be an object")?;
-            if values.values().any(|value| !value.is_string()) {
-                return Err("environment values must be strings".into());
-            }
-            object.insert("environment".into(), environment);
-        }
-        object.insert("command".into(), Value::Array(parts));
-        object.insert("type".into(), Value::String("local".into()));
-    } else {
-        if !matches!(
-            kind.as_deref(),
-            None | Some("http") | Some("sse") | Some("remote")
-        ) {
-            return Err("OpenCode remote server type must be remote".into());
-        }
-        let url = object
-            .get("url")
-            .and_then(Value::as_str)
-            .ok_or("Remote server needs a URL")?;
-        let parsed = url::Url::parse(url).map_err(|_| "Invalid server URL")?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return Err("MCP URL must use HTTP or HTTPS".into());
-        }
-        object.insert("type".into(), Value::String("remote".into()));
-    }
-    if major == 1 {
-        if let Some(disabled) = object.remove("disabled") {
-            object.insert(
-                "enabled".into(),
-                Value::Bool(!disabled.as_bool().ok_or("disabled must be a boolean")?),
-            );
-        }
-    } else if let Some(enabled) = object.remove("enabled") {
-        object.insert(
-            "disabled".into(),
-            Value::Bool(!enabled.as_bool().ok_or("enabled must be a boolean")?),
-        );
-    }
-    Ok(Value::Object(object))
-}
-
-fn is_opencode_timeout_settings(value: &Value) -> bool {
-    value.as_object().is_some_and(|timeouts| {
-        timeouts.iter().all(|(key, value)| {
-            matches!(key.as_str(), "startup" | "catalog" | "execution")
-                && value
-                    .as_f64()
-                    .is_some_and(|milliseconds| milliseconds > 0.0 && milliseconds.fract() == 0.0)
-        })
-    })
-}
-
-fn write_opencode_server(path: &Path, name: &str, server: Value, major: u32) -> Result<(), String> {
-    let server = normalize_opencode_server(server, major)?;
-    write_json_config(path, |root| {
-        let object = root
-            .as_object_mut()
-            .ok_or("Existing config must be a JSON object")?;
-        let mcp = object.entry("mcp").or_insert_with(|| serde_json::json!({}));
-        let mcp = mcp
-            .as_object_mut()
-            .ok_or("Existing mcp must be an object")?;
-        let servers = if major == 1 {
-            if mcp
-                .get("servers")
-                .and_then(Value::as_object)
-                .is_some_and(|nested| nested.values().all(Value::is_object))
-            {
-                return Err("Existing OpenCode config uses the 2.x MCP layout".into());
-            }
-            mcp
-        } else {
-            if mcp.iter().any(|(key, value)| {
-                key != "servers"
-                    && value.is_object()
-                    && !(key == "timeout" && is_opencode_timeout_settings(value))
-            }) {
-                return Err("Existing OpenCode config uses the 1.x MCP layout".into());
-            }
-            mcp.entry("servers")
-                .or_insert_with(|| serde_json::json!({}))
-                .as_object_mut()
-                .ok_or("Existing mcp.servers must be an object")?
-        };
-        if servers.contains_key(name) {
-            return Err(format!("{name} is already configured in this file"));
-        }
-        servers.insert(name.to_owned(), server);
-        Ok(())
-    })
 }
 
 fn write_json_server(path: &Path, name: &str, server: Value) -> Result<(), String> {
@@ -435,13 +202,11 @@ pub fn mcp_discover(cwd: String) -> Result<Vec<McpConnection>, String> {
         let project = expand_home(&cwd);
         let codex_home = std::env::var_os("CODEX_HOME").map(PathBuf::from);
         let desktop_config = claude_desktop_config(Path::new(&home));
-        let opencode_config = std::env::var_os("OPENCODE_CONFIG").map(PathBuf::from);
         Ok(discover(
             Path::new(&home),
             &project,
             codex_home.as_deref(),
             &desktop_config,
-            opencode_config.as_deref(),
         ))
     }
 }
@@ -451,7 +216,6 @@ fn discover(
     project: &Path,
     codex_home_override: Option<&Path>,
     desktop_config: &Path,
-    opencode_config: Option<&Path>,
 ) -> Vec<McpConnection> {
     let mut connections = Vec::new();
     let claude = home.join(".claude.json");
@@ -474,8 +238,6 @@ fn discover(
                 .and_then(|entry| entry.get("mcpServers")),
         );
     }
-    let cursor = home.join(".cursor/mcp.json");
-    add_json_file(&mut connections, "cursor", "user", &cursor, "mcpServers");
     add_json_file(
         &mut connections,
         "claude_desktop",
@@ -494,19 +256,6 @@ fn discover(
         &codex_home.join("config.toml"),
     );
 
-    for file in ["opencode.json", "opencode.jsonc"] {
-        add_json_file(
-            &mut connections,
-            "opencode",
-            "user",
-            &home.join(".config/opencode").join(file),
-            "mcp",
-        );
-    }
-    if let Some(custom) = opencode_config {
-        add_json_file(&mut connections, "opencode", "user", custom, "mcp");
-    }
-
     // Project configuration is inherited from parent directories. Stop at the
     // repository boundary so an unrelated parent project is not shown.
     for directory in project.ancestors() {
@@ -520,33 +269,12 @@ fn discover(
             &directory.join(".mcp.json"),
             "mcpServers",
         );
-        add_json_file(
-            &mut connections,
-            "cursor",
-            "project",
-            &directory.join(".cursor/mcp.json"),
-            "mcpServers",
-        );
         add_toml_file(
             &mut connections,
             "codex",
             "project",
             &directory.join(".codex/config.toml"),
         );
-        for file in [
-            "opencode.json",
-            "opencode.jsonc",
-            ".opencode/opencode.json",
-            ".opencode/opencode.jsonc",
-        ] {
-            add_json_file(
-                &mut connections,
-                "opencode",
-                "project",
-                &directory.join(file),
-                "mcp",
-            );
-        }
         if directory.join(".git").exists() {
             break;
         }
@@ -581,26 +309,11 @@ fn add_json_servers(
     path: &Path,
     servers: Option<&Value>,
 ) {
-    // OpenCode 2.x nests the map under mcp.servers; older versions use mcp.
-    // A server can itself be named "servers", so inspect the nested shape.
-    let servers = servers.map(|value| {
-        if provider == "opencode" {
-            if let Some(nested) = value.get("servers").and_then(Value::as_object) {
-                if nested.values().all(Value::is_object) {
-                    return &value["servers"];
-                }
-            }
-        }
-        value
-    });
     let Some(servers) = servers.and_then(Value::as_object) else {
         return;
     };
     for (name, config) in servers {
         if !config.is_object() {
-            continue;
-        }
-        if provider == "opencode" && name == "timeout" && is_opencode_timeout_settings(config) {
             continue;
         }
         connections.push(McpConnection {
@@ -729,8 +442,16 @@ fn strip_jsonc(raw: &str) -> String {
 
 use std::time::Duration;
 fn resolve_mcp_binary(provider: &str, path: Option<&str>) -> Result<PathBuf, String> {
+    let kind = crate::provider::Kind::parse(provider)
+        .filter(|kind| {
+            matches!(
+                kind,
+                crate::provider::Kind::Claude | crate::provider::Kind::Codex
+            )
+        })
+        .ok_or("Unsupported MCP provider")?;
     path.map(PathBuf::from)
-        .or_else(|| crate::provider::resolve(crate::provider::Kind::from_id(provider)))
+        .or_else(|| crate::provider::resolve(kind))
         .ok_or_else(|| format!("{provider} CLI not installed"))
 }
 fn mcp_command(
@@ -752,27 +473,6 @@ pub(crate) fn add_mcp_via_cli(
     let (binary, args) = mcp_add_args(provider, scope, name, config, binary_path)?;
     mcp_command(binary, args, cwd.to_owned(), Duration::from_secs(30))?;
     Ok(())
-}
-
-pub(crate) fn opencode_major_version(cwd: &str, binary_path: Option<&str>) -> Result<u32, String> {
-    let binary = resolve_mcp_binary("opencode", binary_path)?;
-    let version = mcp_command(
-        binary,
-        vec!["--version".into()],
-        cwd.to_owned(),
-        Duration::from_secs(10),
-    )?;
-    version
-        .split_whitespace()
-        .find_map(|part| {
-            part.trim_start_matches('v')
-                .split('.')
-                .next()?
-                .parse::<u32>()
-                .ok()
-        })
-        .filter(|major| matches!(major, 1 | 2))
-        .ok_or_else(|| format!("Unsupported OpenCode version: {version}"))
 }
 
 fn mcp_add_args(
@@ -892,8 +592,7 @@ pub fn login(cwd: &str, provider: &str, name: &str) -> Result<(), String> {
         return Err("Invalid MCP server name".into());
     }
     let action = match provider {
-        "claude" | "codex" | "cursor" => "login",
-        "opencode" => "auth",
+        "claude" | "codex" => "login",
         _ => return Err("Unsupported MCP provider".into()),
     };
     mcp_command(
@@ -967,221 +666,10 @@ mod tests {
     }
 
     #[test]
-    fn accepts_opencode_names_and_command_arrays() {
-        let (name, server) = server_from_json(
-            "opencode",
-            "docs server",
-            r#"{"type":"local","command":["npx","-y","server"]}"#,
-        )
-        .unwrap();
-        assert_eq!(name, "docs server");
-        assert_eq!(server["command"], "npx");
-        assert_eq!(server["args"], serde_json::json!(["-y", "server"]));
-        assert!(server_from_json("claude", "docs server", r#"{"command":"npx"}"#).is_err());
-        assert!(server_from_json("opencode", "docs", r#"{"command":[]}"#).is_err());
-    }
-
-    #[test]
-    fn writes_opencode_one_config_with_environment() {
-        let root =
-            std::env::temp_dir().join(format!("vorkspace-opencode-one-{}", rand::random::<u128>()));
-        let path = root.join("opencode.jsonc");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(&path, "{\n // keep this setting\n \"theme\": \"dark\", \"mcp\": {\"existing\": {\"type\": \"remote\", \"url\": \"https://example.com\"},},\n}").unwrap();
-        let (_, server) = server_from_json(
-            "opencode",
-            "docs",
-            r#"{"type":"local","command":["npx","-y","docs"],"environment":{"TOKEN":"{env:DOCS_TOKEN}"},"enabled":true}"#,
-        ).unwrap();
-        write_opencode_server(&path, "docs", server, 1).unwrap();
-        let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(config["theme"], "dark");
-        assert_eq!(config["mcp"]["existing"]["url"], "https://example.com");
-        assert_eq!(
-            config["mcp"]["docs"]["command"],
-            serde_json::json!(["npx", "-y", "docs"])
-        );
-        assert_eq!(
-            config["mcp"]["docs"]["environment"]["TOKEN"],
-            "{env:DOCS_TOKEN}"
-        );
-        assert_eq!(config["mcp"]["docs"]["enabled"], true);
-        assert!(
-            write_opencode_server(&path, "docs", serde_json::json!({"command":"npx"}), 1).is_err()
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn writes_opencode_two_config_and_normalizes_standard_env() {
-        let root =
-            std::env::temp_dir().join(format!("vorkspace-opencode-two-{}", rand::random::<u128>()));
-        let path = root.join("opencode.json");
-        let (_, server) = server_from_json(
-            "opencode",
-            "docs",
-            r#"{"mcpServers":{"docs":{"command":"npx","args":["docs"],"env":{"TOKEN":"{env:DOCS_TOKEN}"},"enabled":false}}}"#,
-        ).unwrap();
-        write_opencode_server(&path, "docs", server, 2).unwrap();
-        let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(
-            config["mcp"]["servers"]["docs"]["command"],
-            serde_json::json!(["npx", "docs"])
-        );
-        assert_eq!(
-            config["mcp"]["servers"]["docs"]["environment"]["TOKEN"],
-            "{env:DOCS_TOKEN}"
-        );
-        assert_eq!(config["mcp"]["servers"]["docs"]["disabled"], true);
-        assert!(config["mcp"]["docs"].is_null());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn adds_opencode_two_server_without_changing_existing_timeouts_or_servers() {
-        let root = std::env::temp_dir().join(format!(
-            "vorkspace-opencode-timeout-{}",
-            rand::random::<u128>()
-        ));
-        let path = root.join("opencode.json");
-        std::fs::create_dir_all(&root).unwrap();
-        let original = serde_json::json!({
-            "mcp": {
-                "timeout": {"startup": 45000, "catalog": 30000, "execution": 600000},
-                "servers": {
-                    "existing": {"type": "local", "command": ["node", "server.js"]}
-                }
-            }
-        });
-        std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
-
-        let result = write_opencode_server(
-            &path,
-            "docs",
-            serde_json::json!({"url": "https://example.com/mcp"}),
-            2,
-        );
-        let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        std::fs::remove_dir_all(root).unwrap();
-
-        result.unwrap();
-        assert_eq!(config["mcp"]["timeout"], original["mcp"]["timeout"]);
-        assert_eq!(
-            config["mcp"]["servers"]["existing"],
-            original["mcp"]["servers"]["existing"]
-        );
-        assert_eq!(
-            config["mcp"]["servers"]["docs"],
-            serde_json::json!({"type": "remote", "url": "https://example.com/mcp"})
-        );
-    }
-
-    #[test]
-    fn rejects_legacy_server_named_timeout_without_changing_config() {
-        for server in [
-            serde_json::json!({"type": "remote", "url": "https://old.example/mcp"}),
-            serde_json::json!({"type": "local", "command": ["node", "server.js"]}),
-        ] {
-            let root = std::env::temp_dir().join(format!(
-                "vorkspace-opencode-legacy-timeout-{}",
-                rand::random::<u128>()
-            ));
-            let path = root.join("opencode.json");
-            std::fs::create_dir_all(&root).unwrap();
-            let original = serde_json::to_vec(&serde_json::json!({
-                "mcp": {"timeout": server}
-            }))
-            .unwrap();
-            std::fs::write(&path, &original).unwrap();
-
-            let result = write_opencode_server(
-                &path,
-                "timeout",
-                serde_json::json!({"url": "https://new.example/mcp"}),
-                2,
-            );
-            let contents = std::fs::read(&path).unwrap();
-            std::fs::remove_dir_all(root).unwrap();
-
-            assert_eq!(
-                result,
-                Err("Existing OpenCode config uses the 1.x MCP layout".into())
-            );
-            assert_eq!(contents, original);
-        }
-    }
-
-    #[test]
-    fn adds_opencode_two_server_with_timeouts_and_no_existing_servers_map() {
-        for timeout in [
-            serde_json::json!({"startup": 45000, "catalog": 30000, "execution": 600000}),
-            serde_json::json!({"catalog": 30000.0}),
-            serde_json::json!({}),
-        ] {
-            let root = std::env::temp_dir().join(format!(
-                "vorkspace-opencode-timeout-only-{}",
-                rand::random::<u128>()
-            ));
-            let path = root.join("opencode.json");
-            std::fs::create_dir_all(&root).unwrap();
-            std::fs::write(
-                &path,
-                serde_json::to_vec(&serde_json::json!({"mcp": {"timeout": timeout}})).unwrap(),
-            )
-            .unwrap();
-
-            let result = write_opencode_server(
-                &path,
-                "docs",
-                serde_json::json!({"url": "https://example.com/mcp"}),
-                2,
-            );
-            let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            std::fs::remove_dir_all(root).unwrap();
-
-            result.unwrap();
-            assert_eq!(config["mcp"]["timeout"], timeout);
-            assert_eq!(
-                config["mcp"]["servers"]["docs"],
-                serde_json::json!({"type": "remote", "url": "https://example.com/mcp"})
-            );
-        }
-    }
-
-    #[test]
-    fn chooses_existing_opencode_jsonc_and_custom_user_config() {
-        let root = std::env::temp_dir().join(format!(
-            "vorkspace-opencode-path-{}",
-            rand::random::<u128>()
-        ));
-        let home = root.join("home");
-        let project = root.join("project");
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(project.join("opencode.jsonc"), "{}").unwrap();
-        assert_eq!(
-            opencode_config_path(&home, &project, "project", None),
-            project.join("opencode.jsonc")
-        );
-        std::fs::remove_file(project.join("opencode.jsonc")).unwrap();
-        std::fs::create_dir_all(project.join(".opencode")).unwrap();
-        std::fs::write(project.join(".opencode/opencode.jsonc"), "{}").unwrap();
-        assert_eq!(
-            opencode_config_path(&home, &project, "project", None),
-            project.join(".opencode/opencode.jsonc")
-        );
-        let custom = root.join("custom.jsonc");
-        assert_eq!(
-            opencode_config_path(&home, &project, "user", Some(&custom)),
-            custom
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn concurrent_additions_keep_every_server() {
         let root =
             std::env::temp_dir().join(format!("vorkspace-mcp-lock-{}", rand::random::<u128>()));
-        let path = root.join(".cursor/mcp.json");
+        let path = root.join("claude_desktop_config.json");
         std::thread::scope(|scope| {
             for index in 0..8 {
                 let path = path.clone();
@@ -1223,7 +711,7 @@ mod tests {
     fn writes_server_without_discarding_other_configuration() {
         let root =
             std::env::temp_dir().join(format!("vorkspace-mcp-write-{}", rand::random::<u128>()));
-        let path = root.join(".cursor/mcp.json");
+        let path = root.join("claude_desktop_config.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
@@ -1240,10 +728,10 @@ mod tests {
     }
 
     #[test]
-    fn adds_to_existing_cursor_jsonc() {
+    fn adds_to_existing_desktop_jsonc() {
         let root =
             std::env::temp_dir().join(format!("vorkspace-mcp-jsonc-{}", rand::random::<u128>()));
-        let path = root.join(".cursor/mcp.json");
+        let path = root.join("claude_desktop_config.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
@@ -1298,7 +786,7 @@ mod tests {
         let codex_config: toml::Value = toml::from_str(&codex_raw).unwrap();
         assert!(codex_config.get("mcp_servers").is_some());
         std::fs::write(home.join(".config/opencode/opencode.jsonc"), "{\"mcp\": {\"servers\": {\"four\": {\"type\": \"remote\", \"url\": \"https://example.com\",},},}}").unwrap();
-        let found = discover(&home, &project, None, &desktop, None);
+        let found = discover(&home, &project, None, &desktop);
         let names: Vec<_> = found
             .iter()
             .map(|entry| (entry.provider.as_str(), entry.name.as_str()))
@@ -1308,80 +796,11 @@ mod tests {
             [
                 ("claude", "one"),
                 ("claude_desktop", "desktop"),
-                ("codex", "three"),
-                ("cursor", "two"),
-                ("opencode", "four")
+                ("codex", "three")
             ]
         );
         assert!(!serde_json::to_string(&found).unwrap().contains("secret"));
         std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn discovery_preserves_disabled_servers_across_opencode_versions() {
-        for servers in [
-            serde_json::json!({
-                "off": {"type":"local", "command":["node"], "enabled":false},
-                "on": {"type":"local", "command":["node"]}
-            }),
-            serde_json::json!({"servers": {
-                "off": {"type":"local", "command":["node"], "disabled":true},
-                "on": {"type":"local", "command":["node"], "disabled":false}
-            }}),
-        ] {
-            let mut found = Vec::new();
-            add_json_servers(
-                &mut found,
-                "opencode",
-                "project",
-                Path::new("opencode.json"),
-                Some(&servers),
-            );
-            assert_eq!(found.len(), 2);
-            assert!(
-                !found
-                    .iter()
-                    .find(|server| server.name == "off")
-                    .unwrap()
-                    .enabled
-            );
-            assert!(
-                found
-                    .iter()
-                    .find(|server| server.name == "on")
-                    .unwrap()
-                    .enabled
-            );
-        }
-    }
-
-    #[test]
-    fn discovery_does_not_treat_opencode_timeouts_as_servers() {
-        for timeouts in [
-            serde_json::json!({}),
-            serde_json::json!({"startup":45000}),
-            serde_json::json!({"startup":45000,"catalog":60000,"execution":60000}),
-        ] {
-            let mut found = Vec::new();
-            add_json_servers(
-                &mut found,
-                "opencode",
-                "project",
-                Path::new("opencode.json"),
-                Some(&serde_json::json!({"timeout":timeouts})),
-            );
-            assert!(found.is_empty());
-        }
-        let mut found = Vec::new();
-        add_json_servers(
-            &mut found,
-            "opencode",
-            "project",
-            Path::new("opencode.json"),
-            Some(&serde_json::json!({"timeout":{"type":"local","command":["node"]}})),
-        );
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].name, "timeout");
     }
 
     #[test]
@@ -1418,17 +837,41 @@ mod tests {
     fn does_not_duplicate_home_configs_or_hide_a_server_named_servers() {
         let root = std::env::temp_dir().join(format!("vorkspace-mcp-{}", rand::random::<u128>()));
         let project = root.join("work/notes");
-        std::fs::create_dir_all(root.join(".cursor")).unwrap();
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(
-            root.join(".cursor/mcp.json"),
+            root.join(".claude.json"),
             r#"{"mcpServers":{"servers":{"command":"npx"},"docs":{"command":"node"}}}"#,
         )
         .unwrap();
-        let found = discover(&root, &project, None, &root.join("desktop.json"), None);
+        let found = discover(&root, &project, None, &root.join("desktop.json"));
         assert_eq!(found.len(), 2);
         assert!(found.iter().all(|server| server.scope == "user"));
         assert!(found.iter().any(|server| server.name == "servers"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn retired_mcp_integrations_cannot_resolve_a_binary_or_accept_configuration() {
+        for provider in ["cursor", "opencode", "grok", "fx", "hermes", "devin"] {
+            assert!(
+                server_from_json(provider, "server", r#"{"command":"node"}"#)
+                    .unwrap_err()
+                    .contains("Unsupported MCP provider")
+            );
+            assert!(resolve_mcp_binary(provider, Some("/unused/custom-cli"))
+                .unwrap_err()
+                .contains("Unsupported MCP provider"));
+            assert!(login("/unused/project", provider, "server")
+                .unwrap_err()
+                .contains("Unsupported MCP provider"));
+            assert!(mcp_add(
+                "/unused/project".into(),
+                provider.into(),
+                "user".into(),
+                "server".into(),
+                r#"{"command":"node"}"#.into()
+            )
+            .unwrap_err()
+            .contains("Unsupported MCP provider"));
+        }
     }
 }

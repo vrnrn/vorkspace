@@ -296,7 +296,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if !matches!(
         input.trigger_kind.as_str(),
-        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops"
+        "time" | "github" | "gitlab" | "jira"
     ) {
         return Err("Invalid automation trigger.".into());
     }
@@ -333,10 +333,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
 }
 
 fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
-    if !matches!(
-        trigger.kind.as_str(),
-        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops"
-    ) {
+    if !matches!(trigger.kind.as_str(), "time" | "github" | "gitlab" | "jira") {
         return Err("Invalid automation trigger.".into());
     }
     if trigger.event.len() > 200
@@ -789,6 +786,24 @@ impl Service {
             let Some(mut automation) = get(&tx, &run.automation_id)? else {
                 continue;
             };
+            // Historical runs remain visible, but a retired connector's queued
+            // event must not be dispatched again after restart.
+            if run.status == "pending"
+                && run.trigger == "event"
+                && !run
+                    .event_kind
+                    .as_deref()
+                    .is_some_and(|kind| crate::inbox::PROVIDERS.contains(&kind))
+            {
+                run.status = "cancelled".into();
+                run.completed_at = Some(now);
+                run.error = Some("This Inbox connector is no longer supported.".into());
+                apply_run_summary(&mut automation, &run);
+                write_run(&tx, &run)?;
+                write_automation(&tx, &automation)?;
+                changed_automation_ids.push(run.automation_id.clone());
+                continue;
+            }
             if run.status == "running" {
                 run.status = "cancelled".into();
                 run.completed_at = Some(now);
@@ -908,10 +923,7 @@ impl Service {
     ) -> Result<Option<DueAutomationRun>, String> {
         validate_id(automation_id, "automation")?;
         validate_event_key(&claim.event_key)?;
-        if !matches!(
-            claim.event_kind.as_str(),
-            "github" | "linear" | "jira" | "gitlab" | "azuredevops"
-        ) {
+        if !matches!(claim.event_kind.as_str(), "github" | "gitlab" | "jira") {
             return Err("Invalid automation trigger.".into());
         }
         if claim.event.is_empty() || claim.event.len() > 200 {
@@ -1307,9 +1319,7 @@ pub fn claim_inbox_events_retry(
             ("github", "pr", false) => "pull_request_opened",
             ("github" | "gitlab", "issue", _) => "issue_opened",
             ("gitlab", "pr", _) => "merge_request_opened",
-            ("linear" | "jira", _, _) => "issue_created",
-            ("azuredevops", "pr", _) => "pull_request_appeared",
-            ("azuredevops", "issue", _) => "work_item_appeared",
+            ("jira", _, _) => "issue_created",
             _ => continue,
         };
         let identity = if crate::inbox::is_tracker(&item.provider) {
@@ -1486,6 +1496,53 @@ mod tests {
             created_at: "2026-09-19T10:00:00Z".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn retired_connectors_cannot_be_saved_claimed_or_recovered_for_dispatch() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut service = Service::open(&directory.path().join("sessions.sqlite")).unwrap();
+        let supported = save(
+            &mut service,
+            vec![AutomationTrigger::new("jira", "issue_created")],
+        );
+        let now = now_millis();
+        for provider in ["linear", "azuredevops"] {
+            let mut draft = AutomationUpsert::from_automation(&supported);
+            draft.triggers = Some(vec![AutomationTrigger::new(provider, "issue_created")]);
+            draft.sync_triggers(now);
+            assert_eq!(
+                service.upsert(draft).unwrap_err(),
+                "Invalid automation trigger."
+            );
+            let claim = AutomationEventClaim {
+                event_key: format!("{provider}:issue:42"),
+                event_kind: provider.into(),
+                event: "issue_created".into(),
+                scheduled_for: now,
+                prompt: "Historical issue prompt".into(),
+            };
+            assert_eq!(
+                service.claim_event(&supported.id, claim, now).unwrap_err(),
+                "Invalid automation trigger."
+            );
+            let old_run = new_event_run(
+                &supported.id,
+                &format!("{provider}:issue:42"),
+                provider,
+                "issue_created",
+                now,
+                now,
+                "Historical issue prompt",
+            );
+            write_run(&service.conn, &old_run).unwrap();
+        }
+        assert!(service.recover(now, now + 1).unwrap().is_empty());
+        let history = service.runs(&supported.id).unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(history.iter().all(|run| run.status == "cancelled"
+            && run.error.as_deref() == Some("This Inbox connector is no longer supported.")));
+        assert_eq!(service.list().unwrap().len(), 1);
     }
 
     #[test]

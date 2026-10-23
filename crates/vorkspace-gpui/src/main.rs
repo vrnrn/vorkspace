@@ -1,5 +1,6 @@
 mod accounts;
 mod activity;
+mod app_menu;
 mod assets;
 mod automations;
 mod bots;
@@ -380,6 +381,7 @@ fn main() {
             #[cfg(debug_assertions)]
             dev_reload::install(cx);
             updater::start(cx);
+            app_menu::init(cx);
             input::bind(cx);
             image_lightbox::bind(cx);
             composer_completion::bind(cx);
@@ -441,7 +443,13 @@ fn main() {
                             cx,
                         )
                     });
-                    shell.update(cx, |shell, cx| shell.focus_active(window, cx));
+                    shell.update(cx, |shell, cx| {
+                        window.set_ui_scale(
+                            shell.workspace.preferences.ui_scale.clamp(50, 200) as f32 / 100.,
+                            cx,
+                        );
+                        shell.focus_active(window, cx);
+                    });
                     #[cfg(target_os = "macos")]
                     {
                         traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT);

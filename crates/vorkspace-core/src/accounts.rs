@@ -22,7 +22,7 @@ use std::{
 };
 
 pub const DEFAULT: &str = "default";
-pub const PROVIDERS: [Kind; 3] = [Kind::Claude, Kind::Codex, Kind::Devin];
+pub const PROVIDERS: [Kind; 2] = [Kind::Claude, Kind::Codex];
 fn default_id() -> String {
     DEFAULT.into()
 }

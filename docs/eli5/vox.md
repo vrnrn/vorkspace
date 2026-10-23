@@ -2,6 +2,8 @@
 
 Vox is the optional voice face in the title bar. Turn it on in Settings, then click it to start a call. It starts disabled. Stop ends the call; silent mode shows replies without speaking them.
 
+Hiding the app or minimizing its window ends the call. Switching chats or projects, opening Settings, or using another app keeps it connected. You start the next call yourself when ready.
+
 You can select and copy a silent reply. Escape or clicking outside hides it until Vox finishes another reply. Very long replies show an ellipsis instead of filling memory with the full text; the full conversation stays with the provider.
 
 Vox uses your selected microphone and keeps its conversation and memories between calls. It can help with local sessions and Bots, while the native app checks and carries out its requests. Reset clears the conversation without letting an older reply bring it back.

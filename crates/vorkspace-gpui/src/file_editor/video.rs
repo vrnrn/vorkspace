@@ -96,9 +96,10 @@ impl Video {
                 if let Some(host) = host.as_ref() { host.clip.setHidden(true); }
                 return;
             }
-            let y = if parent.isFlipped() { f64::from(clipped.top()) } else { parent.bounds().size.height - f64::from(clipped.bottom()) };
-            let rect = NSRect::new(NSPoint::new(f64::from(clipped.left()), y), NSSize::new(f64::from(clipped.size.width), f64::from(clipped.size.height)));
-            let video_rect = NSRect::new(NSPoint::new(f64::from(bounds.left() - clipped.left()), f64::from(clipped.bottom() - bounds.bottom())), NSSize::new(f64::from(bounds.size.width), f64::from(bounds.size.height)));
+            let scale = f64::from(window.ui_scale());
+            let y = if parent.isFlipped() { f64::from(clipped.top()) * scale } else { parent.bounds().size.height - f64::from(clipped.bottom()) * scale };
+            let rect = NSRect::new(NSPoint::new(f64::from(clipped.left()) * scale, y), NSSize::new(f64::from(clipped.size.width) * scale, f64::from(clipped.size.height) * scale));
+            let video_rect = NSRect::new(NSPoint::new(f64::from(bounds.left() - clipped.left()) * scale, f64::from(clipped.bottom() - bounds.bottom()) * scale), NSSize::new(f64::from(bounds.size.width) * scale, f64::from(bounds.size.height) * scale));
             if host.is_none() {
                 let Some(mtm) = MainThreadMarker::new() else { return; };
                 unsafe {

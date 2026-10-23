@@ -35,7 +35,7 @@ fn transport_error(message: String, mutating: bool) -> RewindError {
 }
 
 pub fn supports_rewind(kind: Kind) -> bool {
-    matches!(kind, Kind::Codex | Kind::Pi | Kind::Omp | Kind::OpenCode)
+    matches!(kind, Kind::Codex | Kind::Pi | Kind::Omp)
 }
 
 /// Runs on a worker, after the caller has reserved its conversation. Returns the
@@ -47,9 +47,6 @@ pub fn rewind_last_turn(
 ) -> Result<String, RewindError> {
     if !supports_rewind(request.kind) || request.settings.text_only {
         return Err("This provider does not support editing the last turn".into());
-    }
-    if request.kind == Kind::OpenCode {
-        return super::opencode::rewind(&request, before_turn);
     }
     let session = request
         .provider_id
@@ -266,7 +263,7 @@ mod tests {
         for kind in Kind::ALL {
             assert_eq!(
                 supports_rewind(kind),
-                matches!(kind, Kind::Codex | Kind::Pi | Kind::Omp | Kind::OpenCode)
+                matches!(kind, Kind::Codex | Kind::Pi | Kind::Omp)
             );
         }
     }

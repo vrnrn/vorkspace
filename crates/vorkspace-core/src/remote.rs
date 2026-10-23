@@ -840,7 +840,7 @@ mod tests {
         assert!(requests[3].payload["params"]["supportedProviders"]
             .as_array()
             .unwrap()
-            .contains(&json!("devin")));
+            .contains(&json!("antigravity")));
     }
 
     #[test]
