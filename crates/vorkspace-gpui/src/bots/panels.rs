@@ -2196,21 +2196,38 @@ impl Bots {
         cx.notify();
     }
     fn pick_project(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let projects = self
+        let (projects, appearance) = self
             .owner
             .upgrade()
-            .map(|owner| owner.read(cx).workspace.projects.clone())
+            .map(|owner| {
+                let workspace = &owner.read(cx).workspace;
+                (
+                    workspace.projects.clone(),
+                    workspace.project_appearance.clone(),
+                )
+            })
             .unwrap_or_default();
         let bot = id.to_string();
         let paths = projects.clone();
         let mut items: Vec<MenuItem> = projects
             .into_iter()
             .enumerate()
-            .map(|(ix, path)| MenuAction::new(format!("project:{ix}"), path).into())
+            .map(|(ix, path)| {
+                let appearance = appearance.get(&path).cloned().unwrap_or_default();
+                MenuAction::new(format!("project:{ix}"), appearance.label(&path))
+                    .icon("folder")
+                    .icon_color(rgb(appearance.color(&path)).into())
+                    .description(path)
+                    .into()
+            })
             .collect();
         items.push(MenuItem::Separator);
         items.push(MenuAction::new("browse", "Open project…").into());
-        let menu = cx.new(|cx| Menu::new("Add project", items, window, cx).width(300.));
+        let menu = cx.new(|cx| {
+            Menu::new("Add project", items, window, cx)
+                .style(MenuStyle::Composer)
+                .width(300.)
+        });
         let picked = cx.subscribe(&menu, move |this, _, event: &MenuEvent, cx| {
             this.picker = None;
             if let MenuEvent::Picked(action, _) = event {

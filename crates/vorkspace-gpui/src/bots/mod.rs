@@ -1476,7 +1476,7 @@ impl gpui::Render for Bots {
                     .child(self.topbar(&bot, cx)),
             )
             .children(self.settings_modal(&bot, window, cx))
-            .children(self.picker_surface(cx))
+            .when(!self.creating(), |d| d.children(self.picker_surface(cx)))
             .children(self.options_surface(cx))
             .children(self.background_modal())
             .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, _| {
