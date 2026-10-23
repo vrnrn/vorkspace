@@ -86,6 +86,8 @@ test("a retry resumes only its own draft and advances the native attempt number"
     body: `Notes\nWorkflow: ${plan().workflow}\n`,
   });
   const retry = { ...env, GITHUB_RUN_ATTEMPT: "2" };
+  assert.equal(plan().reuseDraft, false);
+  assert.equal(plan([own], retry).reuseDraft, true);
   assert.equal(plan([release("1.0.8"), own], retry).version, "1.0.9");
   assert.equal(plan([own], retry).build, "42.2");
   assert.equal(
@@ -103,6 +105,7 @@ test("a retry resumes only its own draft and advances the native attempt number"
   );
   // An already published run is immutable, even when that run is retried.
   assert.equal(plan([{ ...own, draft: false }], retry).version, "1.0.10");
+  assert.equal(plan([{ ...own, draft: false }], retry).reuseDraft, false);
 });
 
 test("explicit tags retain their version and published-release protection", () => {
@@ -116,6 +119,7 @@ test("explicit tags retain their version and published-release protection", () =
     plan([release("1.0.8", { draft: true })], tag).version,
     "1.0.8",
   );
+  assert.equal(plan([release("1.0.8", { draft: true })], tag).reuseDraft, true);
   assert.throws(() => plan([release("1.0.8")], tag), /cannot be overwritten/);
   assert.throws(
     () =>
@@ -266,6 +270,7 @@ test("stamps all manifests and native build metadata without changing updater id
     const variables = readFileSync(ciEnv.GITHUB_ENV, "utf8");
     assert(variables.includes(`RELEASE_TAG=mac-v${expected}\n`));
     assert(variables.includes("RELEASE_BUILD_NUMBER=42.1\n"));
+    assert(variables.includes("RELEASE_HAS_DRAFT=0\n"));
     const notes = readFileSync(join(root, "macos-release-notes.md"), "utf8");
     assert(notes.includes("Restore release notes."));
     assert.equal(
