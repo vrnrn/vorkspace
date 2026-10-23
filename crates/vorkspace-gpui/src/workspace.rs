@@ -116,6 +116,7 @@ pub(crate) struct Workspace {
     pub recent_files: HashMap<String, Vec<String>>,
     pub collapsed: HashSet<String>,
     pub sidebar_visible: bool,
+    /// Retained desktop preference; both current sidebars use right_panel_width.
     pub sidebar_width: f32,
     pub project_rail_open: bool,
     pub project_rail_width: f32,
@@ -132,6 +133,7 @@ pub(crate) struct Workspace {
     /// The inset right panel: open state, tab, width and tab order.
     pub right_panel_open: bool,
     pub right_panel_tab: crate::right_panel::RightTab,
+    /// Shared width for project tools and Bot details, independent of visibility.
     pub right_panel_width: f32,
     pub right_panel_tabs: Vec<crate::right_panel::RightTab>,
     pub changes_view: crate::changes::ChangesView,

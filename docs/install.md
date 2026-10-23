@@ -8,4 +8,4 @@ Local builds are ad-hoc signed by default. Sparkle is enabled by supplying its f
 
 Release launches use existing desktop data. Development launches use isolated data. See [data continuity](data-storage.md) before choosing `--vorkspace-db` or overriding the development directory.
 
-The desktop uses the original 0.13 layout: a project rail, a sidebar with Sessions, Explorer, and Changes navigation, and the main workspace. Settings → Appearance controls its theme, translucency, and interface scale.
+The desktop keeps the familiar project rail on the left and the main workspace in the middle. Sessions, Explorer, and Changes share the right-hand sidebar with Bot details. Both use the same saved width, so resizing either keeps the size consistent when switching between sessions and Bots. Settings → Appearance controls theme, translucency, and interface scale.

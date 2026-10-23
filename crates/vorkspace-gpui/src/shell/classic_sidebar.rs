@@ -1,5 +1,5 @@
 //! The original workspace pane: project header, Sessions / Explorer / Changes,
-//! and a session filter. App navigation and projects belong to the adjacent rail.
+//! and a session filter. App navigation and projects remain in the left rail.
 use super::*;
 use crate::{right_panel::RightTab, workspace::SidebarTab};
 
@@ -130,7 +130,7 @@ impl Shell {
                     this.delete_sidebar_selection(window, cx)
                 },
             ))
-            .w(px(self.workspace.sidebar_width))
+            .w(px(self.workspace.right_panel_width))
             .h_full()
             .flex()
             .flex_col()
@@ -250,7 +250,7 @@ impl Shell {
         let id = preview.id;
         Some(
             popover("session-preview", Anchor::Slot(preview.anchor.clone()))
-                .side(Side::Right)
+                .side(Side::Left)
                 .gap(8.)
                 .width(260.)
                 .max_height(440.)

@@ -1,4 +1,4 @@
-// Original 0.13 composition: project rail, workspace tools, then conversations.
+// Project rail, conversation workspace, then project tools on the right.
 // Each column owns its header; subscriptions live above the rail settings.
 use super::{CORNER_BUTTONS_WIDTH, Shell};
 use crate::{
@@ -37,8 +37,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let card = self.workspace_content(false, right_width, full, window, cx);
-        // Project tools occupy the left workspace pane. Bot details retain their
-        // independent right-hand surface; the conversation itself is never moved.
+        // Project tools and Bot details occupy the same right-hand edge and
+        // share a saved width, while retaining their own visibility and content.
         let panel = self
             .right_panel
             .clone()
@@ -67,39 +67,6 @@ impl Shell {
                     ),
                 )
             })
-            .when(sidebar_width > 0., |d| {
-                d.child(
-                    div()
-                        .id("sidebar-frame")
-                        .debug_selector(|| "sidebar-frame".into())
-                        .relative()
-                        .w(px(sidebar_width))
-                        .h_full()
-                        .flex_shrink_0()
-                        .overflow_hidden()
-                        .border_r_1()
-                        .border_color(crate::right_panel::stroke())
-                        .child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .w(px(self.workspace.sidebar_width))
-                                .h_full()
-                                .flex()
-                                .flex_col()
-                                .opacity(self.sidebar_fraction)
-                                .child(
-                                    div()
-                                        .h(px(TITLE_BAR_HEIGHT))
-                                        .flex_shrink_0()
-                                        .pl(px((self.navigation_width() - rail_width).max(0.)))
-                                        .child(header),
-                                )
-                                .child(div().flex_1().min_h_0().child(self.sidebar_contents())),
-                        ),
-                )
-            })
             .child(
                 div()
                     .id("main-pane-frame")
@@ -113,6 +80,33 @@ impl Shell {
                     .child(tab_bar)
                     .child(card),
             )
+            .when(sidebar_width > 0., |d| {
+                d.child(
+                    div()
+                        .id("sidebar-frame")
+                        .debug_selector(|| "sidebar-frame".into())
+                        .relative()
+                        .w(px(sidebar_width))
+                        .h_full()
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .border_l_1()
+                        .border_color(crate::right_panel::stroke())
+                        .child(
+                            div()
+                                .absolute()
+                                .right_0()
+                                .top_0()
+                                .w(px(self.workspace.right_panel_width))
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                .opacity(self.sidebar_fraction)
+                                .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0().child(header))
+                                .child(div().flex_1().min_h_0().child(self.sidebar_contents())),
+                        ),
+                )
+            })
             .children(self.sidebar_resize(cx))
             .children(panel.map(|panel| div().h_full().bg(pane_fill()).child(panel)))
             .child(div().absolute().top_0().left_0().child(navigation))
@@ -120,13 +114,13 @@ impl Shell {
                 div()
                     .absolute()
                     .top_0()
-                    .right_0()
+                    .right(px(sidebar_width))
                     .h(px(TITLE_BAR_HEIGHT))
                     .children(corner),
             )
             .into_any_element()
     }
-    /// Bot details retain the window corner; ordinary project tools live left.
+    /// Bot details retain the window corner; project tools have their own header.
     pub(super) fn corner_room(&self, cx: &gpui::App) -> f32 {
         if self.bot_details_active(cx) {
             if self.workspace.right_panel_open && !self.app_view_open() {
@@ -169,7 +163,7 @@ impl Shell {
                 .clone()
                 .cached(
                     StyleRefinement::default()
-                        .w(px(self.workspace.sidebar_width))
+                        .w(px(self.workspace.right_panel_width))
                         .h_full(),
                 )
                 .into_any_element()
@@ -180,27 +174,20 @@ impl Shell {
             && self.sidebar_fraction > 0.
             && self.sidebar_slide.is_none())
         .then(|| {
-            // The classic sidebar owns its right rule; the inset workspace
-            // owns the rule just beyond the sidebar's edge.
-            let border = self.classic_rail_width()
-                + self.workspace.sidebar_width
-                + if self.workspace.classic_layout {
-                    -0.5
-                } else {
-                    0.5
-                };
+            // Drag the left separator of the shared right-hand sidebar.
+            let border = self.workspace.right_panel_width - 0.5;
             div()
                 .id("sidebar-resize")
                 .debug_selector(|| "sidebar-resize".into())
                 .absolute()
-                .left(px(border - 2.))
+                .right(px(border - 2.))
                 .w(px(4.))
                 .h_full()
                 .cursor(CursorStyle::ResizeLeftRight)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                        this.resize = Some((event.position.x, this.workspace.sidebar_width));
+                        this.resize = Some((event.position.x, this.workspace.right_panel_width));
                         cx.stop_propagation();
                     }),
                 )
@@ -419,7 +406,7 @@ mod tests {
         visual.run_until_parked();
         let sash = visual.debug_bounds("sidebar-resize").unwrap().center();
         let width = window
-            .update(visual, |shell, _, _| shell.workspace.sidebar_width)
+            .update(visual, |shell, _, _| shell.workspace.right_panel_width)
             .unwrap();
         let moved = sash + gpui::point(px(20.), px(0.));
         visual.simulate_mouse_down(sash, MouseButton::Left, Default::default());
@@ -428,7 +415,7 @@ mod tests {
         visual.run_until_parked();
         window
             .update(visual, |shell, _, _| {
-                assert_eq!(shell.workspace.sidebar_width, width + 20.)
+                assert_eq!(shell.workspace.right_panel_width, width - 20.)
             })
             .unwrap();
 
@@ -466,10 +453,10 @@ mod tests {
                 .update(visual, |shell, _, _| {
                     (
                         gpui::point(
-                            px(shell.classic_rail_width() + shell.workspace.sidebar_width - 0.5),
+                            px(shell.viewport_width - shell.workspace.right_panel_width + 0.5),
                             px(500.),
                         ),
-                        shell.workspace.sidebar_width,
+                        shell.workspace.right_panel_width,
                     )
                 })
                 .unwrap();
@@ -485,7 +472,7 @@ mod tests {
             visual.run_until_parked();
             window
                 .update(visual, |shell, _, _| {
-                    assert_eq!(shell.workspace.sidebar_width, before, "{surface}")
+                    assert_eq!(shell.workspace.right_panel_width, before, "{surface}")
                 })
                 .unwrap();
         }
@@ -501,7 +488,7 @@ mod tests {
         for width in [200., 260., 420., 560., 260.] {
             window
                 .update(visual, |shell, _, cx| {
-                    shell.workspace.sidebar_width = width;
+                    shell.workspace.right_panel_width = width;
                     shell.invalidate_chrome(cx);
                     cx.notify();
                 })
@@ -544,7 +531,7 @@ mod tests {
         }
     }
     #[gpui::test]
-    fn bot_details_width_and_visibility_stay_independent_of_left_project_tools(
+    fn bot_and_session_sidebars_share_width_while_retaining_their_own_visibility(
         cx: &mut TestAppContext,
     ) {
         use crate::workspace::SidebarTab;
@@ -598,6 +585,7 @@ mod tests {
         let width = window
             .update(visual, |shell, w, cx| {
                 assert!(shell.right_resize.is_none());
+                cx.set_reduce_motion(false);
                 let width = shell.workspace.right_panel_width;
                 shell.open(session, w, cx);
                 shell.select_classic_sidebar(SidebarTab::Files, w, cx);
@@ -609,16 +597,55 @@ mod tests {
         assert!(visual.debug_bounds("bot-overview-panel").is_none());
         let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
         let explorer = visual.debug_bounds("explorer-header").unwrap();
+        assert_eq!(sidebar.size.width, px(width));
+        assert_eq!(sidebar.right(), px(1600.));
         assert!(explorer.left() >= sidebar.left() && explorer.right() <= sidebar.right());
+        let handle = visual.debug_bounds("sidebar-resize").unwrap().center();
+        let end = handle - gpui::point(px(40.), px(0.));
+        visual.simulate_mouse_down(handle, MouseButton::Left, Default::default());
+        visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
+        visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
+        visual.run_until_parked();
+        let width = width + 40.;
+        let session_sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        assert_eq!(session_sidebar.size.width, px(width));
         window
             .update(visual, |_, w, cx| {
                 manager.update(cx, |manager, cx| manager.open(&bot, w, cx))
             })
             .unwrap();
         visual.run_until_parked();
+        for _ in 0..3 {
+            assert_eq!(
+                visual.debug_bounds("right-panel-frame").unwrap(),
+                session_sidebar
+            );
+            visual
+                .update_window(window.into(), |_, w, cx| w.simulate_next_frame(cx))
+                .unwrap();
+        }
+        visual.update(|_, cx| cx.set_reduce_motion(true));
+        // One sidebar fits at this size. Counting the hidden session sidebar
+        // alongside Bot details must not change its visibility preference.
+        visual.simulate_resize(gpui::size(px(1050.), px(1000.)));
+        window
+            .update(visual, |shell, w, cx| {
+                assert!(shell.workspace.sidebar_visible);
+                shell.open(session, w, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let session_sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        assert_eq!(session_sidebar.size.width, px(width));
+        window
+            .update(visual, |_, w, cx| {
+                manager.update(cx, |manager, cx| manager.open(&bot, w, cx));
+            })
+            .unwrap();
+        visual.run_until_parked();
         assert_eq!(
-            visual.debug_bounds("right-panel-frame").unwrap().size.width,
-            px(width)
+            visual.debug_bounds("right-panel-frame").unwrap(),
+            session_sidebar
         );
         let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
         visual.simulate_click(toggle.center(), Default::default());
@@ -638,6 +665,31 @@ mod tests {
                 assert!(!saved.right_panel_open);
             })
             .unwrap();
+    }
+    #[gpui::test]
+    fn session_sidebar_peeks_from_the_right_and_never_over_a_bot(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (window, manager, bot, session) = mixed_window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
+        window
+            .update(visual, |shell, window, cx| {
+                shell.open(session, window, cx);
+                shell.set_sidebar_visible(false, cx);
+                shell.set_peek(true, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let peek = visual.debug_bounds("sidebar-peek").unwrap();
+        assert_eq!(peek.right(), px(1594.));
+        assert_eq!(peek.size.width, px(crate::right_panel::WIDTH_DEFAULT));
+        window
+            .update(visual, |_, window, cx| {
+                manager.update(cx, |manager, cx| manager.open(&bot, window, cx));
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("sidebar-peek").is_none());
     }
     #[gpui::test]
     fn switching_bots_keeps_the_same_details_spring_and_clipped_contents(cx: &mut TestAppContext) {

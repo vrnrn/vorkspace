@@ -235,8 +235,11 @@ impl Shell {
             Rail::Agents(summary) => self.agents(id, summary, cx),
         };
         // The rail drops from under the row's mark.
-        let width =
-            px((self.workspace.sidebar_width - 16. - 10. - if nested { 30. } else { 0. }).max(0.));
+        let width = px((self.workspace.right_panel_width
+            - 16.
+            - 10.
+            - if nested { 30. } else { 0. })
+        .max(0.));
         let body = div().ml(px(10.)).child(body);
         div()
             .flex()

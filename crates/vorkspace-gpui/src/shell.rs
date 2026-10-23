@@ -2586,7 +2586,7 @@ impl Shell {
         // The card's inset and border.
         let mut main = self.viewport_width - self.classic_rail_width();
         if sidebar {
-            main -= self.workspace.sidebar_width;
+            main -= self.workspace.right_panel_width;
         }
         if self.right_panel_shown(cx) {
             main -= self.workspace.right_panel_width;
@@ -2631,6 +2631,15 @@ impl Shell {
     /// collapses the sidebar as it opens. A sidebar collapsed that way comes
     /// back once there is room again; one the user hid stays hidden.
     fn fit_sidebar(&mut self, cx: &mut Context<Self>) {
+        // These surfaces replace project tools rather than competing with them
+        // for space. Preserve the session sidebar's own visibility preference.
+        if self.bot_active(cx)
+            || self.app_view_open()
+            || self.app_search.is_some()
+            || self.settings.is_some()
+        {
+            return;
+        }
         if self.workspace.sidebar_visible {
             if self.narrowest_chat(true, cx) < MIN_CHAT_WIDTH {
                 self.set_sidebar_visible(false, cx);
@@ -3479,11 +3488,7 @@ impl Shell {
     fn resize_extent(&self, target: &ResizeTarget) -> Option<(f32, f32, f32, f32)> {
         Some(match target {
             ResizeTarget::ProjectRail => (self.workspace.project_rail_width, 180., 360., 1.),
-            ResizeTarget::Sidebar => {
-                let max = (self.viewport_width * 0.5).clamp(200., 560.);
-                (self.workspace.sidebar_width, 200., max, 1.)
-            }
-            ResizeTarget::RightPanel => {
+            ResizeTarget::Sidebar | ResizeTarget::RightPanel => {
                 let (min, max) = (crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX);
                 let max = max.min((self.viewport_width * 0.5).floor()).max(min);
                 (self.workspace.right_panel_width, min, max, 1.)
@@ -3507,8 +3512,9 @@ impl Shell {
     fn set_resize(&mut self, target: &ResizeTarget, value: f32) {
         match target {
             ResizeTarget::ProjectRail => self.workspace.project_rail_width = value,
-            ResizeTarget::Sidebar => self.workspace.sidebar_width = value,
-            ResizeTarget::RightPanel => self.workspace.right_panel_width = value,
+            ResizeTarget::Sidebar | ResizeTarget::RightPanel => {
+                self.workspace.right_panel_width = value
+            }
             ResizeTarget::Dock(project) => {
                 if let Some(dock) = self.workspace.docks.get_mut(project) {
                     dock.size = value;
@@ -3877,7 +3883,7 @@ impl Shell {
         } else {
             Some(match self.sidebar_slide.take() {
                 Some(slide) => slide.retarget(to, std::time::Instant::now()),
-                None => PaneSlide::new(1. - to, to, self.workspace.sidebar_width),
+                None => PaneSlide::new(1. - to, to, self.workspace.right_panel_width),
             })
         };
         self.resize = None;
@@ -4144,13 +4150,9 @@ impl Shell {
         let closed = self.traffic_lights() + 3. * 24.;
         self.classic_rail_width().max(closed)
     }
-    /// Classic: the strip's room before its tabs, wherever the navigation
-    /// overhangs the sidebar.
+    /// Room before the tabs where navigation overhangs the collapsed project rail.
     fn strip_lead(&self) -> f32 {
-        (self.navigation_width()
-            - self.classic_rail_width()
-            - self.workspace.sidebar_width * self.sidebar_fraction)
-            .max(0.)
+        (self.navigation_width() - self.classic_rail_width()).max(0.)
     }
     /// The traffic lights, sidebar toggle and visit arrows, spanning the
     /// open sidebar so the arrows sit at its edge.
@@ -4161,9 +4163,12 @@ impl Shell {
             .flex_shrink_0()
             .flex()
             .items_center()
-            // `pr-1.5` only beside the open sidebar; closed, the tab
-            // strip's own inset is gap enough after the arrows.
-            .pr(px(6. * self.sidebar_fraction))
+            // Keep history aligned with the project rail in both workspace modes.
+            .pr(px(if self.workspace.project_rail_open {
+                6.
+            } else {
+                0.
+            }))
             .child(
                 // Fixed, so the toggle holds still as the sidebar opens
                 // and closes.
@@ -6377,16 +6382,16 @@ impl Shell {
     /// panel toggle, `pl-1.5 pr-3` clear of the edge.
     fn tabs_width(&self, window: &Window, cx: &App) -> f32 {
         let trailing = if self.workspace.classic_layout {
-            self.right_drawn + self.strip_trail(cx)
+            self.workspace.right_panel_width * self.sidebar_fraction
+                + self.right_drawn
+                + self.strip_trail(cx)
         } else {
             self.toggle_room(cx)
         };
-        // The classic strip starts beside the sidebar, after whatever the
-        // navigation leaves uncovered.
+        // Tabs start beside the project rail; both right-hand sidebars consume
+        // trailing space without moving the tab strip's leading edge.
         let lead = if self.workspace.classic_layout {
-            self.classic_rail_width()
-                + self.workspace.sidebar_width * self.sidebar_fraction
-                + self.strip_lead()
+            self.classic_rail_width() + self.strip_lead()
         } else {
             self.navigation_width()
         };
@@ -7077,7 +7082,7 @@ impl Render for Shell {
         {
             self.sidebar_fraction = 0.;
         }
-        let sidebar_width = self.workspace.sidebar_width * self.sidebar_fraction;
+        let sidebar_width = self.workspace.right_panel_width * self.sidebar_fraction;
         if !self.window_observed {
             self.window_observed = true;
             crate::app_menu::remember(window, cx);
@@ -7550,7 +7555,7 @@ impl Render for Shell {
                 }
                 if let Some((start, width)) = this.resize {
                     if event.pressed_button == Some(MouseButton::Left) {
-                        let width = width + (event.position.x - start).as_f32();
+                        let width = width - (event.position.x - start).as_f32();
                         this.drag_resize(ResizeTarget::Sidebar, width, cx);
                     } else {
                         this.release_resizes(cx);
@@ -8990,7 +8995,7 @@ mod tests {
             let tool = visual.debug_bounds(header).unwrap();
             let review = visual.debug_bounds("review-tab-strip").unwrap();
             assert!(tool.right() <= sidebar.right());
-            assert!(review.left() >= sidebar.right());
+            assert!(review.right() <= sidebar.left());
             assert!(visual.debug_bounds("right-panel-frame").is_none());
             window
                 .update(visual, |shell, w, cx| {
@@ -9267,7 +9272,10 @@ mod tests {
             let rail = visual.debug_bounds("classic-project-rail").unwrap();
             let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
             assert_eq!(rail.size.width, px(48.));
-            assert_eq!(sidebar.left(), rail.right());
+            assert_eq!(
+                sidebar.left(),
+                visual.debug_bounds("main-pane-frame").unwrap().right()
+            );
             window
                 .update(visual, |shell, _, _| {
                     assert_eq!(shell.workspace.sidebar_tab(), expected);
@@ -9316,9 +9324,13 @@ mod tests {
         let tabs = visual.debug_bounds("title-tab-strip").unwrap();
         assert_eq!(rail.left(), px(0.));
         assert_eq!(rail.size.width, px(200.));
-        assert_eq!(sidebar.left(), rail.right());
-        assert_eq!(sidebar.size.width, px(260.));
-        assert_eq!(main.left(), sidebar.right());
+        assert_eq!(
+            sidebar.left(),
+            visual.debug_bounds("main-pane-frame").unwrap().right()
+        );
+        assert_eq!(sidebar.size.width, px(crate::right_panel::WIDTH_DEFAULT));
+        assert_eq!(main.left(), rail.right());
+        assert_eq!(sidebar.right(), px(1600.));
         assert_eq!(rail.top(), px(0.));
         assert_eq!(sidebar.top(), px(0.));
         assert_eq!(main.top(), px(0.));
@@ -9377,9 +9389,15 @@ mod tests {
             let rail = visual.debug_bounds("classic-project-rail").unwrap();
             let main = visual.debug_bounds("main-pane-frame").unwrap();
             assert_eq!(rail.size.width, px(200.));
+            assert_eq!(main.left(), rail.right());
             assert_eq!(
-                main.left(),
-                rail.right() + px(if visible { 260. } else { 0. })
+                main.right(),
+                px(1600.
+                    - if visible {
+                        crate::right_panel::WIDTH_DEFAULT
+                    } else {
+                        0.
+                    })
             );
             window
                 .update(visual, |shell, _, cx| {
@@ -9443,7 +9461,7 @@ mod tests {
             let main = visual.debug_bounds("main-pane-frame").unwrap();
             assert!(header.left() >= sidebar.left());
             assert!(header.right() <= sidebar.right());
-            assert_eq!(sidebar.right(), main.left());
+            assert_eq!(sidebar.left(), main.right());
             assert!(visual.debug_bounds("right-panel-frame").is_none());
             window
                 .update(visual, |shell, _, _| {
@@ -9534,9 +9552,9 @@ mod tests {
                         q.background == content(0.1).into()
                             && q.bounds.size.height.0 == 32. * w.scale_factor()
                             && q.bounds.size.width.0
-                                > shell.workspace.sidebar_width / 2. * w.scale_factor()
-                            && q.bounds.right().0
-                                < (shell.classic_rail_width() + shell.workspace.sidebar_width)
+                                > shell.workspace.right_panel_width / 2. * w.scale_factor()
+                            && q.bounds.left().0
+                                >= (shell.viewport_width - shell.workspace.right_panel_width)
                                     * w.scale_factor()
                     })
                     .expect("selected session has a painted background")
@@ -9577,9 +9595,8 @@ mod tests {
                     visual.debug_bounds("toggle-sidebar").unwrap().origin,
                     toggle.origin
                 );
-                let rail = visual.debug_bounds("classic-project-rail").unwrap();
-                assert_eq!(content.left(), rail.right());
-                assert!((clip.right() - main.left()).abs() < px(1.));
+                assert_eq!(content.right(), clip.right());
+                assert!((clip.left() - main.right()).abs() < px(1.));
                 window
                     .update(visual, |shell, w, _| {
                         let fraction = shell.sidebar_fraction;
@@ -9589,9 +9606,9 @@ mod tests {
                             fraction < previous
                         });
                         previous = fraction;
-                        assert_eq!(content.size.width, px(shell.workspace.sidebar_width));
+                        assert_eq!(content.size.width, px(shell.workspace.right_panel_width));
                         let quad = w.painted_quads().into_iter().find(|q| q.bounds == row);
-                        if clip.right().as_f32() * w.scale_factor() <= row.left().0 {
+                        if clip.left().as_f32() * w.scale_factor() >= row.right().0 {
                             assert!(quad.is_none(), "fully covered rows are culled");
                             return;
                         }
@@ -9601,11 +9618,11 @@ mod tests {
                             (alpha - 0.1 * fraction).abs() < 0.0001,
                             "painted alpha {alpha} follows {fraction}"
                         );
-                        // The sidebar owns the 1px separator beside the main
-                        // column; its contents clip at the separator's inner edge.
-                        let clip_edge = (clip.right() - px(1.)).as_f32() * w.scale_factor();
+                        // The sidebar owns the 1px separator to its left;
+                        // its contents clip at the separator's inner edge.
+                        let clip_edge = (clip.left() + px(1.)).as_f32() * w.scale_factor();
                         assert!(
-                            (quad.content_mask.bounds.right().0 - clip_edge).abs() < w.scale_factor(),
+                            (quad.content_mask.bounds.left().0 - clip_edge).abs() < w.scale_factor(),
                             "row mask {:?} follows the inner sidebar clip edge {clip_edge} before main {main:?}",
                             quad.content_mask.bounds
                         );

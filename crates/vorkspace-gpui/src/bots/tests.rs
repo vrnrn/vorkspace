@@ -1187,7 +1187,7 @@ fn chat_composer_keeps_attach_under_the_box_and_opens_the_model_list(cx: &mut Te
 }
 
 #[gpui::test]
-fn bot_details_share_the_original_titlebar_and_project_tools_stay_on_the_left(
+fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
     cx: &mut TestAppContext,
 ) {
     let s = setup(cx);
@@ -1240,7 +1240,14 @@ fn bot_details_share_the_original_titlebar_and_project_tools_stay_on_the_left(
     visual.run_until_parked();
     let rail = visual.debug_bounds("classic-project-rail").unwrap();
     let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
-    assert_eq!(sidebar.left(), rail.right());
+    assert_eq!(
+        sidebar.left(),
+        visual.debug_bounds("main-pane-frame").unwrap().right()
+    );
+    assert_eq!(
+        visual.debug_bounds("main-pane-frame").unwrap().left(),
+        rail.right()
+    );
     assert!(visual.debug_bounds("classic-workspace-tabs").is_some());
     assert!(visual.debug_bounds("right-panel-frame").is_none());
     assert!(visual.debug_bounds("toggle-right-panel").is_none());
@@ -1433,10 +1440,17 @@ fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original
     visual.run_until_parked();
     let rail = visual.debug_bounds("classic-project-rail").unwrap();
     let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
-    assert_eq!(sidebar.left(), rail.right());
+    assert_eq!(
+        sidebar.left(),
+        visual.debug_bounds("main-pane-frame").unwrap().right()
+    );
+    assert_eq!(
+        visual.debug_bounds("main-pane-frame").unwrap().left(),
+        rail.right()
+    );
     assert!(
         visual.debug_bounds("right-panel-frame").is_none(),
-        "ordinary sessions keep project tools in the left workspace pane"
+        "ordinary sessions use the shared right-hand sidebar"
     );
     s.window
         .update(visual, |shell, window, cx| {
