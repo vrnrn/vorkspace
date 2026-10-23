@@ -10298,10 +10298,12 @@ mod tests {
             .unwrap();
         a.has_messages = true;
         let ids = (a.id, b.id);
-        let mut state = Workspace::default();
         // These interaction fixtures exercise the opt-in inset UI. Defaults
         // and saved layout choices have separate coverage.
-        state.classic_layout = false;
+        let mut state = Workspace {
+            classic_layout: false,
+            ..Default::default()
+        };
         state.add_project("/work/another-project");
         state.add_project("/work/vorkspace");
         state.open(a.id);
