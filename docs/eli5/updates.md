@@ -8,4 +8,6 @@ Preparing updates uses private signing keys kept outside this repository. Apple'
 
 Publishing uses the manually started **Mac release** workflow and its two protected signing secrets. It keeps the existing public keys so installed users trust the downloads, chooses an unused version, and publishes after checks pass. Regular pushes and local tests never start that workflow.
 
+Published builds carry their own release notes. Local builds can fetch the matching published notes when you open **What's new**. The app remembers which version you last opened and shows an update notice once when that version changes. Opening a fresh installation does not show an update notice unless the older updater left a matching marker.
+
 See [release preparation](../updates.md).

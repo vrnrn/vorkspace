@@ -36,7 +36,7 @@ impl Shell {
                     id,
                     title: metadata.summary.title.clone(),
                     cwd: metadata.summary.cwd.clone(),
-                    busy: metadata.busy || live.is_some_and(|v| v.bot_external_pending()),
+                    busy: metadata.busy,
                     has_messages: metadata.summary.has_messages,
                     archived: metadata.summary.archived,
                     updated_at: metadata.summary.updated_at,
@@ -87,20 +87,5 @@ impl Shell {
     ) {
         self.groups.insert(project, groups);
         self.invalidate_chrome(cx);
-    }
-    pub(crate) fn bot_remove(
-        &mut self,
-        id: i64,
-        delete: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if delete {
-            self.delete_session(id, window, cx);
-        } else if self.session_summaries.contains_key(&id)
-            && !self.session_metadata(id, cx).summary.archived
-        {
-            self.toggle_archive(id, cx);
-        }
     }
 }

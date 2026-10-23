@@ -117,8 +117,12 @@ impl Conversation {
                 settings = store.agent_settings(summary.id)?.unwrap_or_default();
             }
             let changed = initial
-                || known.as_ref().map(|s| &s["revision"])
-                    != snapshot.as_ref().map(|s| &s["revision"]);
+                || match snapshot.as_ref() {
+                    Some(snapshot) => {
+                        crate::runtime::remote::snapshot_changed(known.as_ref(), snapshot)
+                    }
+                    None => known.is_some(),
+                };
             let history = if changed {
                 let qualified = snapshot.as_ref().map(|snapshot| {
                     let mut snapshot = snapshot.clone();

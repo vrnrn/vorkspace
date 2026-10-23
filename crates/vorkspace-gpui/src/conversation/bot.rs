@@ -7,7 +7,6 @@ pub(super) struct ChatState {
     pub(super) pending: Vec<Message>,
     pub(super) emoji: bool,
     pub(super) delivered: Option<String>,
-    pub(super) external: Option<(String, bool)>,
     pub(super) floating: std::collections::HashSet<gpui::WindowId>,
     /// ModelPicker with `hideSettings`: the model list opens on its own.
     pub(super) models: Option<(Entity<ModelList>, Vec<Subscription>)>,
@@ -41,43 +40,6 @@ impl Conversation {
             );
         });
         window.focus(&self.input.focus_handle(cx), cx);
-    }
-    pub(crate) fn bot_external_pending(&self) -> bool {
-        self.bot_ui.external.is_some()
-    }
-    pub(crate) fn bot_external_send(
-        &mut self,
-        prompt: String,
-        draft: bool,
-        cx: &mut Context<Self>,
-    ) -> Result<(), String> {
-        if self.busy
-            || self.stopping
-            || self.bot_ui.external.is_some()
-            || !self.input.read(cx).content.trim().is_empty()
-        {
-            return Err("Session is busy or has an unsent draft".into());
-        }
-        self.bot_ui.external = Some((prompt, draft));
-        if self.history_ready() {
-            self.bot_flush_external(cx);
-        } else {
-            self.load(cx);
-        }
-        cx.emit(SessionChanged);
-        Ok(())
-    }
-    pub(super) fn bot_flush_external(&mut self, cx: &mut Context<Self>) {
-        if !self.history_ready() || self.stopping {
-            return;
-        }
-        if let Some((prompt, draft)) = self.bot_ui.external.take() {
-            if draft {
-                self.input.update(cx, |i, cx| i.set_text(prompt, cx));
-            } else {
-                self.install_transfer(self.settings.clone(), Some(prompt), cx);
-            }
-        }
     }
     pub(crate) fn bot_attention(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         div()
@@ -214,6 +176,37 @@ impl Conversation {
     }
     pub(crate) fn bot_model_label(&self) -> SharedString {
         self.model_label()
+    }
+    #[cfg(test)]
+    pub(crate) fn app_hold_account_switch(&mut self) {
+        self.account_switching = true;
+    }
+    pub(crate) fn app_flush_draft(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        self.capture_composer(cx);
+        self.composer_draft.flush()
+    }
+    /// App management pauses even an idle queue. Publish the higher revision
+    /// before replying so older queued writes cannot restore automatic sending.
+    pub(crate) fn app_stop(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        if !self.loaded || self.loading {
+            return Err("Session is loading; its queue and draft were preserved. Try again after loading completes.".into());
+        }
+        self.stop_if_busy(cx);
+        self.follow_ups.resuming = false;
+        self.follow_ups.requested = None;
+        self.follow_ups.continuations.clear();
+        self.follow_ups.state.paused = true;
+        self.follow_ups.state.revision += 1;
+        let mut snapshot = self.follow_ups.state.clone();
+        let directory = locked(&self.store)?.data_dir().map(PathBuf::from);
+        snapshot.retain_attachments(self.summary.id, directory.as_deref())?;
+        locked(&self.store)?.accept_follow_ups(self.summary.id, &snapshot)?;
+        self.follow_ups.state = snapshot;
+        self.follow_ups.persisted = self.follow_ups.state.revision;
+        self.composer_draft.flush()?;
+        cx.emit(SessionChanged);
+        cx.notify();
+        Ok(())
     }
     pub(crate) fn bot_stop(&mut self, cx: &mut Context<Self>) {
         self.stop_if_busy(cx);

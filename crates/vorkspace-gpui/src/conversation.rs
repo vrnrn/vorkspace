@@ -17,6 +17,7 @@ pub(crate) mod remote_plans;
 mod response_menu;
 #[cfg(test)]
 mod submission_tests;
+mod ticket_context;
 mod title;
 use crate::{
     composer_motion::ComposerMotion,
@@ -137,6 +138,7 @@ pub(crate) struct Conversation {
     _command_removal: Subscription,
     _draft_observation: Subscription,
     composer_draft: composer_draft::State,
+    ticket_context: ticket_context::State,
     _draft_quit: Subscription,
     _input_focus: Option<[Subscription; 2]>,
     draft_has_value: bool,
@@ -462,6 +464,10 @@ impl Conversation {
         });
         let draft_observation = cx.observe(&input, |this, input, cx| {
             let content = input.read(cx).content.clone();
+            if this.ticket_context.edited(&content) && this.status == "Loading ticket context…" {
+                this.status = "Ready".into();
+                cx.notify();
+            }
             let folder = vorkspace_core::composer::consume_command(&content, "add-to-folder");
             if folder.is_none() {
                 this.folder_selected = false;
@@ -563,6 +569,7 @@ impl Conversation {
             _command_removal: command_removal,
             _draft_observation: draft_observation,
             composer_draft: draft_state,
+            ticket_context: Default::default(),
             _draft_quit: draft_quit,
             _input_focus: None,
             draft_has_value: false,
@@ -775,7 +782,6 @@ impl Conversation {
                     }
                     Err(e) => this.status = e,
                 }
-                this.bot_flush_external(cx);
                 cx.emit(SessionChanged);
                 cx.notify();
             });
@@ -875,6 +881,9 @@ impl Conversation {
             return;
         }
         if self.input.read(cx).is_composing() {
+            return;
+        }
+        if self.prepare_ticket_context(cx) {
             return;
         }
         let raw = self
@@ -1005,6 +1014,7 @@ impl Conversation {
         let store = self.store.clone();
         let cancel = self.cancel.clone();
         let mut settings = self.settings.clone();
+        settings.ticket_context = self.ticket_context.ready.take().map(Into::into);
         if let Some(model) = self.model_info() {
             for control in &model.controls {
                 settings
@@ -1155,7 +1165,11 @@ impl Conversation {
                         let incoming_notification_input = !stopping
                             && (!update.approvals.is_empty() || !update.questions.is_empty());
                         this.transcript.update(cx, |v, cx| {
-                            v.patch(update.start, update.rows, cx);
+                            if let Some(len) = update.source_len {
+                                v.patch_snapshot(update.start, update.rows, len, cx);
+                            } else {
+                                v.patch(update.start, update.rows, cx);
+                            }
                             if stopping {
                                 v.stop_streaming(cx);
                             }
@@ -1396,7 +1410,6 @@ impl Conversation {
                             this.save_settings(cx);
                             this.refresh_git(cx);
                             this.run_history_actions(cx);
-                            this.bot_flush_external(cx);
                             cx.emit(SessionChanged);
                         } else if incoming_notification_input
                             || needed_approval != this.needs_approval()
@@ -2625,11 +2638,17 @@ impl Conversation {
         if self.cancel_edit_last_turn(cx) {
             return;
         }
-        if self.busy {
+        if self.busy || self.ticket_context.pending() {
             self.stop(cx);
         }
     }
     fn stop(&mut self, cx: &mut Context<Self>) {
+        let ticket_pending = self.ticket_context.pending();
+        self.ticket_context.cancel();
+        if ticket_pending {
+            self.status = "Ready".into();
+            cx.notify();
+        }
         if !self.busy || self.stopping {
             return;
         }
@@ -3160,12 +3179,14 @@ impl Conversation {
 
     // ComposerAction: a solid submit, dimmed while empty; Stop while busy.
     fn action(&self, has_value: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let busy = self.responding() && !has_value;
+        let ticket_pending = self.ticket_context.pending();
+        let busy = ticket_pending || (self.responding() && !has_value);
         let draft = self.draft_active(cx);
-        let enabled = !self.attaching
-            && (!self.preparing_worktree || self.busy || self.stopping)
-            && (busy || (has_value && self.loaded))
-            && (busy || !draft || (!self.busy && self.follow_ups.state.draft.is_none()));
+        let enabled = ticket_pending
+            || (!self.attaching
+                && (!self.preparing_worktree || self.busy || self.stopping)
+                && (busy || (has_value && self.loaded))
+                && (busy || !draft || (!self.busy && self.follow_ups.state.draft.is_none())));
         div()
             .id("send-or-stop")
             .role(Role::Button)

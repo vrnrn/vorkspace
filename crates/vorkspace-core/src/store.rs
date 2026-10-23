@@ -1,7 +1,10 @@
 //! Session storage. Desktop launches use vorkspace's existing schema directly.
+mod app_commands;
+pub use app_commands::AppCommandAdmission;
 mod attachments;
 mod bots;
 mod composer_draft;
+mod follow_up;
 pub use composer_draft::{ComposerDraft, ComposerRecovery};
 mod local_submissions;
 pub use local_submissions::{
@@ -1016,14 +1019,31 @@ impl Store {
     }
     /// Deletes the conversation, its settings and reminder for good.
     pub fn delete(&mut self, id: i64) -> Result<(), String> {
+        self.delete_checked(id, None)
+    }
+    pub(super) fn delete_checked(
+        &mut self,
+        id: i64,
+        app: Option<(i64, &str)>,
+    ) -> Result<(), String> {
+        if let Some((caller, project)) = app {
+            self.check_app_target(caller, id, project)?;
+        }
         if self.remote_session(id)?.is_some() {
             return self.delete_remote_session(id);
         }
         if self.shared.is_some() {
-            return self.shared_delete(id);
+            return self.shared_delete_checked(id, app);
         }
 
-        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|e| e.to_string())?;
+        if let Some((caller, project)) = app {
+            self.check_app_target(caller, id, project)?;
+        }
         local_submissions::delete_if_present(&tx, &id.to_string())?;
         if tx
             .query_row(

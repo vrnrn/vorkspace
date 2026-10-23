@@ -38,6 +38,7 @@ const record = value => require('node:fs').appendFileSync(require('node:path').j
 if (!process.argv.includes('app-server')) record({claudeArgs: process.argv.slice(2)});
 readline.createInterface({input: process.stdin}).on('line', line => {
   const request = JSON.parse(line);
+  record({wire: request});
   if (request.jsonrpc === '2.0') {
     if (request.id == null) return;
     if (request.method === 'authenticate') record({authenticate: request.params});
@@ -141,6 +142,27 @@ describe("existing providers over headless process I/O", () => {
     expect(ompA).toEqual(ompB);
     expect(ompA[0]).toMatchObject({ id: "omp:openai/fixture-model" });
   });
+  it.each(["codex", "claude", "pi", "omp", "antigravity"])(
+    "delivers provider-only prepared text through the %s adapter",
+    async (harness) => {
+      const project = await engine.openProject(directory);
+      const { sessionId } = engine.command({
+        type: "create", commandId: `prepared-create-${harness}`, projectId: project.id,
+        harness, model: `${harness}:test`, runtimeMode: "supervised",
+      });
+      const marker = `resolved-ticket-context-${harness}`;
+      writeFileSync(join(directory, "calls.log"), "");
+      engine.command({
+        type: "send", commandId: `prepared-${harness}`, sessionId,
+        text: "hello #17", preparedText: `hello #17\n\n${marker}`,
+      });
+      await vi.waitFor(() => expect(store.session(sessionId).status).toBe("idle"), { timeout: 4_000 });
+      expect(readFileSync(join(directory, "calls.log"), "utf8")).toContain(marker);
+      const state = store.session(sessionId).session;
+      expect(state.blocks.find((block) => block.role === "user").text).toBe("hello #17");
+      expect(JSON.stringify(state)).not.toContain(marker);
+    },
+  );
   it.each(["codex", "claude"])(
     "completes and resumes %s with no React or Tauri process",
     async (harness) => {

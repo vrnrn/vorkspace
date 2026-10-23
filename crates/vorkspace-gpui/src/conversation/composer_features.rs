@@ -437,12 +437,15 @@ impl Conversation {
         )
     }
     pub(crate) fn ready_for_external(&self, cx: &gpui::App) -> bool {
-        self.history_ready()
+        self.composer_draft.ready_for_replacement()
+            && self.pending_attachments.is_empty()
+            && self.history_ready()
             && !self.editing_last_turn.pending()
             && !self.busy
             && !self.stopping
             && !self.preparing_worktree
             && !self.attaching
+            && !self.account_switching
             && self.input.read(cx).content.is_empty()
             && self.attachments.is_empty()
     }
@@ -457,7 +460,6 @@ impl Conversation {
             || self.loading
             || (!self.history_actions.is_empty() && self.history_ready())
             || self.editing_last_turn.pending()
-            || self.bot_external_pending()
     }
     /// An evicted history can be restored for a managed run; a user's draft
     /// or an already accepted message must keep ownership of this composer.
@@ -468,7 +470,6 @@ impl Conversation {
             && !self.attaching
             && !self.account_switching
             && !self.editing_last_turn.pending()
-            && !self.bot_external_pending()
             && self.input.read(cx).content.is_empty()
             && self.attachments.is_empty()
             && self.follow_ups.state.messages.is_empty()

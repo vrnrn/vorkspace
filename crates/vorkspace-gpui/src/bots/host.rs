@@ -7,7 +7,7 @@ use vorkspace_core::{session_groups::Groups, time::now_ms};
 enum Effect {
     Card(Value),
     None,
-    Start(Session, Box<Settings>, String, bool, bool),
+    Start(Box<crate::shell::AppStart>),
     Groups(String, Groups),
 }
 fn text(v: &Value, key: &str, max: usize) -> Result<String, String> {
@@ -31,36 +31,25 @@ fn fingerprint(call: &Call) -> String {
 }
 impl Bots {
     fn finish_call(&mut self, call: Call, result: Result<Value, String>, cx: &mut Context<Self>) {
-        let key = (call.session, call.request_id.clone());
-        self.app_pending.remove(&key);
-        if self.app_results.len() > 1024
-            && let Some(key) = self.app_results.keys().next().cloned()
-        {
-            self.app_results.remove(&key);
+        if bot::api::is_read_only(&call.action) {
+            let _ = call.reply.send(result);
+            return;
         }
-        self.app_results
-            .insert(key, (fingerprint(&call), result.clone()));
         let store = self.store.clone();
-        let receipt_key = format!(
-            "bot-app-receipt:{}:{}",
-            call.session,
-            files::content_hash(&call.request_id)
-        );
-        let receipt =
-            serde_json::to_string(&(fingerprint(&call), result.clone())).unwrap_or_default();
+        let roster = self.roster.clone();
+        let reply = call.reply.clone();
         let previous = self.writes.take();
-        self.writes = Some(cx.spawn(async move |_, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let work = cx
-                .background_executor()
-                .spawn(async move { locked(&store)?.save_setting(&receipt_key, &receipt) });
-            let reply = work
-                .await
-                .map(|_| ())
-                .map_err(|e| format!("Could not persist app result: {e}"));
-            let _ = call.reply.send(reply.and(result));
+        self.writes=Some(cx.spawn(async move|_,cx|{
+            if let Some(previous)=previous { previous.await; }
+            let work=cx.background_executor().spawn(async move{
+                let store=locked(&store)?;
+                // Acknowledgement follows durable owner publication. Any failed
+                // write leaves admission unconfirmed, never safe to replay.
+                roster.save(&store).map_err(|error|format!("App action may have executed but its state could not be saved; do not replay: {error}"))?;
+                store.finish_app_command(call.session,&call.request_id,&call.action,&call.input,&result)?;
+                Ok::<_,String>(result)
+            });
+            let _=reply.send(work.await.and_then(|result|result));
         }));
     }
     fn call_work(
@@ -75,6 +64,13 @@ impl Bots {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                let result = match result {
+                    Ok((value, Effect::Start(start))) => {
+                        this.publish_start(call, bot_id, value, *start, window, cx);
+                        return;
+                    }
+                    other => other,
+                };
                 let result = result.map(|(value, effect)| {
                     match effect {
                         Effect::None => (),
@@ -87,43 +83,7 @@ impl Bots {
                                 owner.bot_apply_groups(project, groups, cx)
                             });
                         }
-                        Effect::Start(summary, settings, prompt, draft, reveal) => {
-                            let id = summary.id;
-                            let caller = call.session;
-                            let origin = this
-                                .chats
-                                .values()
-                                .chain(this.running.values().map(|r| &r.view))
-                                .chain(this.channels.views.values())
-                                .find(|v| v.read(cx).summary.id == caller)
-                                .map(|v| v.read(cx).bot_turn)
-                                .unwrap_or(0);
-                            if let Some(bot) = this.roster.get_mut(&bot_id) {
-                                bot.launches.push(Launch {
-                                    session_id: id,
-                                    cwd: summary.cwd.clone(),
-                                    title: summary.title.clone(),
-                                    harness: summary.provider.clone(),
-                                    model: settings.model.clone(),
-                                    origin_turn: ((caller as u64) << 32) | origin,
-                                    notify_on_complete: flag(
-                                        &call.input,
-                                        "notifyOnComplete",
-                                        !draft,
-                                    ),
-                                    completed: false,
-                                    dismissed: false,
-                                });
-                            }
-                            let _ = this.owner.update(cx, |owner, cx| {
-                                owner.bot_install(summary, *settings, prompt, draft, cx)
-                            });
-                            this.save(cx);
-                            this.group_launch(&bot_id, id, cx);
-                            if reveal {
-                                this.open_workspace(id, window, cx);
-                            }
-                        }
+                        Effect::Start(_) => unreachable!(),
                     }
                     this.reload_files(&bot_id, cx);
                     this.changed(cx);
@@ -133,6 +93,63 @@ impl Bots {
             });
         })
         .detach();
+    }
+    fn publish_start(
+        &mut self,
+        call: Call,
+        bot_id: String,
+        value: Value,
+        start: crate::shell::AppStart,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let caller = call.session;
+        let origin = self
+            .chats
+            .values()
+            .chain(self.running.values().map(|run| &run.view))
+            .chain(self.channels.views.values())
+            .find(|view| view.read(cx).summary.id == caller)
+            .map(|view| view.read(cx).bot_turn)
+            .unwrap_or(0);
+        let launch = Launch {
+            session_id: start.summary.id,
+            cwd: start.summary.cwd.clone(),
+            title: start.summary.title.clone(),
+            harness: start.summary.provider.clone(),
+            model: start.settings.model.clone(),
+            origin_turn: ((caller as u64) << 32) | origin,
+            notify_on_complete: flag(&call.input, "notifyOnComplete", !start.draft),
+            completed: false,
+            dismissed: false,
+        };
+        let owner = self.owner.clone();
+        let manager = cx.entity().downgrade();
+        let handle = window.window_handle();
+        let app: &mut App = cx;
+        app.defer(move |cx| {
+            let result = handle
+                .update(cx, |_, window, cx| {
+                    owner.update(cx, |shell, cx| {
+                        shell.app_install_start(caller, start, window, cx)
+                    })
+                })
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.map_err(|e| e.to_string()))
+                .and_then(|r| r);
+            let _ = manager.update(cx, |this, cx| {
+                let result = result.map(|id| {
+                    if let Some(bot) = this.roster.get_mut(&bot_id) {
+                        bot.launches.push(launch);
+                    }
+                    this.group_launch(&bot_id, id, cx);
+                    this.reload_files(&bot_id, cx);
+                    this.changed(cx);
+                    value
+                });
+                this.finish_call(call, result, cx);
+            });
+        });
     }
     pub(super) fn app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
         let bot = self
@@ -171,41 +188,52 @@ impl Bots {
             let _ = call.reply.send(Err(error));
             return;
         }
-        let receipt_key = format!(
-            "bot-app-receipt:{}:{}",
-            call.session,
-            files::content_hash(&call.request_id)
-        );
-        let stored = locked(&self.store)
-            .ok()
-            .and_then(|db| db.setting(&receipt_key).ok().flatten())
-            .and_then(|s| serde_json::from_str::<(String, Result<Value, String>)>(&s).ok());
-        if let Some((hash, result)) = stored {
-            let _ = call.reply.send(if hash == fingerprint(&call) {
-                result
-            } else {
-                Err("Request ID was already used with different input".into())
-            });
-            return;
-        }
-        let key = (call.session, call.request_id.clone());
-        if let Some((hash, result)) = self.app_results.get(&key) {
-            let _ = call.reply.send(if hash == &fingerprint(&call) {
-                result.clone()
-            } else {
-                Err("Request ID was already used with different input".into())
-            });
-            return;
-        }
-        if !self.app_pending.insert(key) {
-            let _ = call.reply.send(Err(
-                "Request is still running; retry with the same request ID".into(),
-            ));
-            return;
-        }
-        if !call.input.is_object() {
-            self.finish_call(call, Err("Input must be a JSON object".into()), cx);
-            return;
+        let needs_admission = locked(&self.store)
+            .and_then(|store| store.app_command_known(call.session, &call.request_id))
+            .map(|known| known || !bot::api::is_read_only(&call.action));
+        let needs_admission = match needs_admission {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = call.reply.send(Err(error));
+                return;
+            }
+        };
+        if needs_admission {
+            let admission = (|| {
+                let store = locked(&self.store)?;
+                // Existing completed receipts remain read-through compatibility.
+                // A newer admitted receipt always wins over this older cache.
+                if !store.app_command_known(call.session, &call.request_id)? {
+                    let key = format!(
+                        "bot-app-receipt:{}:{}",
+                        call.session,
+                        files::content_hash(&call.request_id)
+                    );
+                    if let Some(raw) = store.setting(&key)? {
+                        let (saved,result):(String,Result<Value,String>)=serde_json::from_str(&raw).map_err(|e|format!("Cannot verify the prior command result; it was not replayed: {e}"))?;
+                        if saved != fingerprint(&call) {
+                            return Err(
+                                "Request ID was already used with different action or input".into(),
+                            );
+                        }
+                        return Ok(vorkspace_core::store::AppCommandAdmission::Completed(
+                            result,
+                        ));
+                    }
+                }
+                store.admit_app_command(call.session, &call.request_id, &call.action, &call.input)
+            })();
+            match admission {
+                Ok(vorkspace_core::store::AppCommandAdmission::Admitted) => (),
+                Ok(vorkspace_core::store::AppCommandAdmission::Completed(result)) => {
+                    let _ = call.reply.send(result);
+                    return;
+                }
+                Err(error) => {
+                    let _ = call.reply.send(Err(error));
+                    return;
+                }
+            }
         }
         if call.action.starts_with("channels.") {
             if call.action == "channels.post"
@@ -254,36 +282,63 @@ impl Bots {
         let result=match action.as_str(){
             "models.list"=>Ok(json!(Kind::ALL.into_iter().map(|kind|json!({"harness":kind.id(),"name":kind.label(),"models":self.chats.values().find(|v|{let v=v.read(cx);let profile=source.as_ref().filter(|s|s.read(cx).summary.provider==kind.id()).map(|s|s.read(cx).settings.account.clone()).unwrap_or_else(||crate::accounts::get(cx).map(|center|center.read(cx).selected(kind,&project)).unwrap_or_default());v.summary.provider==kind.id()&&v.settings.account.id==profile.id}).map(|v|v.read(cx).settings_models()).unwrap_or_default()})).collect::<Vec<_>>())),
             "sessions.start"=>{
-                let prompt=match text(&input,"prompt",65536){Ok(t)=>t,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
-                let provider=input.get("harness").and_then(Value::as_str).map(str::to_owned).or_else(||source.as_ref().map(|v|v.read(cx).summary.provider.clone())).unwrap_or_else(||"codex".into());
-                if Kind::parse(&provider).is_none(){self.finish_call(call,Err("Unknown provider".into()),cx);return;}
-                let same_provider=source.as_ref().is_some_and(|v| v.read(cx).summary.provider==provider);
-                let mut settings=source.map(|v|v.read(cx).settings.clone()).unwrap_or_default();settings.bot=None;settings.environment.clear();settings.internal_message=false;settings.turns.clear();settings.attachments.clear();settings.usage_limit=None;
-                if !same_provider { settings.account=crate::accounts::get(cx).map(|center|center.read(cx).selected(Kind::from_id(&provider),&project)).unwrap_or_default();settings.model=None;settings.effort=None;settings.model_settings.clear();settings.fast=false;settings.service_tier=None;settings.thinking=None; }
-                if let Some(model)=input.get("model").and_then(Value::as_str){settings.model=Some(model.into());}
-                if let Some(values)=input.get("modelSettings"){match serde_json::from_value(values.clone()){Ok(values)=>settings.model_settings=values,Err(_)=>{self.finish_call(call,Err("modelSettings must be an object of strings".into()),cx);return;}}}
-                if let Some(mode)=input.get("runtimeMode").and_then(Value::as_str){settings.access=AccessMode::from_id(mode);}
-                let draft=flag(&input,"draft",false);let reveal=flag(&input,"reveal",false);
+                let placement=match self.owner.upgrade().ok_or_else(||"Workspace is unavailable".to_string()).and_then(|owner|owner.read(cx).app_placement(call.session,&project,&input,cx)){Ok(placement)=>placement,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
+
+                let source_provider=source.as_ref().map(|v|v.read(cx).summary.provider.clone()).unwrap_or_else(||"codex".into());
+                let source_project=source.as_ref().map(|v|v.read(cx).summary.cwd.clone()).unwrap_or_else(||project.clone());
+                let settings=source.as_ref().map(|v|v.read(cx).settings.clone()).unwrap_or_default();
+                let mut launch=match bot::launch::Launch::parse(&input,&source_provider,&source_project,&project,settings,false){Ok(launch)=>launch,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
+                if launch.provider.id()!=source_provider { launch.settings.account=crate::accounts::get(cx).map(|center|center.read(cx).selected(launch.provider,&project)).unwrap_or_default(); }
                 self.call_work(call,target,move|store|{
-                    let db=locked(&store)?;let mut summary=db.create(&provider,&project)?;
-                    if let Some(cwd)=input.get("worktreeCwd").and_then(Value::as_str){let snapshot=vorkspace_core::git::snapshot(Path::new(&project))?;if !snapshot.worktrees.iter().any(|w|vorkspace_core::files::path_key(&w.path)==vorkspace_core::files::path_key(cwd)){return Err("Choose an existing worktree of the assigned project".into());}settings.worktree_cwd=Some(cwd.into());}
-                    else if input.get("workspaceMode").and_then(Value::as_str)==Some("worktree"){settings.worktree_cwd=Some(vorkspace_core::git::create_worktree(Path::new(&project),input.get("worktreeBase").and_then(Value::as_str).unwrap_or("HEAD"),summary.id)?.to_string_lossy().into());}
-                    summary.title=input.get("title").and_then(Value::as_str).unwrap_or(&prompt).chars().take(160).collect();db.title(summary.id,&summary.title)?;db.configure_agent(summary.id,&provider,&settings)?;
-                    Ok((json!({"sessionId":summary.id,"accepted":true,"project":project}),Effect::Start(summary,Box::new(settings),prompt,draft,reveal)))
+                    let mut store=locked(&store)?;
+                    let summary=launch.create(&mut store,&project)?;
+                    Ok((json!({"sessionId":summary.id,"accepted":true,"project":project}),Effect::Start(Box::new(crate::shell::AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
                 },cx);return;
             }
             "sessions.list"|"sessions.read"=>{
                 self.call_work(call,target,move|store|{let db=locked(&store)?;let all=db.sessions()?;let sessions:Vec<_>=all.iter().filter(|s|!hidden.contains(&s.id)&&vorkspace_core::files::path_key(&s.cwd)==vorkspace_core::files::path_key(&project)).collect();
                     let value=if action=="sessions.list"{json!(sessions.iter().map(|s|json!({"sessionId":s.id,"title":s.title,"harness":s.provider,"project":s.cwd,"archived":s.archived})).collect::<Vec<_>>())}else{let session=id(&input,"sessionId")?;if !sessions.iter().any(|s|s.id==session){return Err("Session is outside the assigned project".into());}let rows=db.load(session)?.rows;let end=input.get("before").and_then(Value::as_u64).unwrap_or(rows.len() as u64).min(rows.len() as u64) as usize;let limit=input.get("limit").and_then(Value::as_u64).unwrap_or(40).clamp(1,200) as usize;let start=end.saturating_sub(limit);let max=input.get("maxChars").and_then(Value::as_u64).unwrap_or(24000).clamp(100,200000) as usize;json!({"sessionId":session,"messages":rows[start..end].iter().map(|r|json!({"role":r.role,"text":vorkspace_core::response::limit(&r.text,max/limit.max(1))})).collect::<Vec<_>>(),"before":start,"hasMore":start>0})};Ok((value,Effect::None))},cx);return;
             }
-            "sessions.send"|"sessions.draft"|"sessions.stop"|"sessions.archive"|"sessions.delete"=>{
+            "sessions.stop"|"sessions.archive"|"sessions.delete"=>{
+                let session=match id(&input,"sessionId"){Ok(id)=>id,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
+                let owner=self.owner.clone();
+                let manager=cx.entity().downgrade();
+                let handle=window.window_handle();
+                let bot_id=bot.id.clone();
+                let app:&mut App=cx;
+                app.defer(move|cx|{
+                    // The Bot update has returned, so the Shell can inspect its
+                    // current live ownership without reborrowing this entity.
+                    let result=handle.update(cx,|_,window,cx|owner.update(cx,|shell,cx|shell.app_session_action(call.session,session,&project,&action,window,cx))).map_err(|e|e.to_string()).and_then(|r|r.map_err(|e|e.to_string())).and_then(|r|r);
+                    let _=manager.update(cx,|this,cx|{
+                        if result.is_ok() && let Some(bot)=this.roster.get_mut(&bot_id) {
+                            for launch in &mut bot.launches { if launch.session_id==session { launch.dismissed=true; } }
+                        }
+                        this.finish_call(call,result,cx);
+                    });
+                });
+                return;
+            }
+            "sessions.send"|"sessions.draft"=>{
                 let session=match id(&input,"sessionId"){Ok(id)=>id,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
-                let view=self.owner.upgrade().and_then(|owner|owner.update(cx, |owner, cx| owner.bot_ensure_session(session, cx))).filter(|v|vorkspace_core::files::path_key(&v.read(cx).summary.cwd)==vorkspace_core::files::path_key(&project));
-                let Some(view)=view else{self.finish_call(call,Err("Session is outside the assigned project".into()),cx);return;};
-                if action=="sessions.send"||action=="sessions.draft"{if view.read(cx).busy||view.read(cx).bot_external_pending()||!view.read(cx).input.read(cx).content.trim().is_empty(){self.finish_call(call,Err("Session is busy or has an unsent draft".into()),cx);return;}match text(&input,"prompt",65536){Ok(prompt)=>{let sent=view.update(cx,|v,cx|v.bot_external_send(prompt,action=="sessions.draft",cx));if let Err(e)=sent{self.finish_call(call,Err(e),cx);return;}
-if flag(&input,"notifyOnComplete",false){if let Some(m)=self.roster.get_mut(&bot.id){let origin=source.map(|v|v.read(cx).bot_turn).unwrap_or(0);if let Some(launch)=m.launches.iter_mut().find(|l|l.session_id==session){launch.completed=false;launch.dismissed=false;launch.notify_on_complete=true;launch.origin_turn=((call.session as u64)<<32)|origin;}else{let summary=&view.read(cx).summary;m.launches.push(Launch{session_id:session,cwd:summary.cwd.clone(),title:summary.title.clone(),harness:summary.provider.clone(),model:view.read(cx).bot_model(),origin_turn:((call.session as u64)<<32)|origin,notify_on_complete:true,completed:false,dismissed:false});}}self.save(cx);}Ok(json!({"accepted":true}))},Err(e)=>Err(e)}}else{
-                    for m in &mut self.roster.bots{for launch in &mut m.launches{if launch.session_id==session{launch.dismissed=true;}}}self.save(cx);
-                    if action=="sessions.stop"{view.update(cx,|v,cx|v.stop_if_busy(cx));}else{let delete=action=="sessions.delete";let owner=self.owner.clone();let handle=window.window_handle();let app:&mut App=cx;app.defer(move|cx|{let _=handle.update(cx,|_,window,cx|{let _=owner.update(cx,|owner,cx|owner.bot_remove(session,delete,window,cx));});});}Ok(json!({"accepted":true}))
+                if let Err(error)=locked(&self.store).and_then(|store|store.check_app_target(call.session,session,&project)) { self.finish_call(call,Err(error),cx);return; }
+                if self.protected_app_target(session,cx) { self.finish_call(call,Err("Protected sessions cannot receive app-directed input".into()),cx);return; }
+                let view=self.owner.upgrade().and_then(|owner|owner.update(cx,|owner,cx|owner.bot_ensure_session(session,cx)));
+                let Some(view)=view else {self.finish_call(call,Err("Session is unavailable".into()),cx);return;};
+                view.update(cx,|view,cx|view.load(cx));
+                if !view.read(cx).ready_for_external(cx) {self.finish_call(call,Err("Session is busy, loading, or has an unsent draft".into()),cx);return;}
+                match text(&input,"prompt",65536) {
+                    Ok(prompt)=>{
+                        let sent=view.update(cx,|view,cx|{if action=="sessions.draft" {view.input.update(cx,|input,cx|input.set_text(prompt,cx));view.app_flush_draft(cx)?;} else {view.app_send(prompt,cx)?;}Ok::<_,String>(())});
+                        if let Err(error)=sent {self.finish_call(call,Err(error),cx);return;}
+                        if flag(&input,"notifyOnComplete",false) && let Some(bot)=self.roster.get_mut(&bot.id) {
+                            let origin=source.map(|v|v.read(cx).bot_turn).unwrap_or(0);
+                            if let Some(launch)=bot.launches.iter_mut().find(|launch|launch.session_id==session) {launch.completed=false;launch.dismissed=false;launch.notify_on_complete=true;launch.origin_turn=((call.session as u64)<<32)|origin;}
+                            else {let summary=&view.read(cx).summary;bot.launches.push(Launch{session_id:session,cwd:summary.cwd.clone(),title:summary.title.clone(),harness:summary.provider.clone(),model:view.read(cx).bot_model(),origin_turn:((call.session as u64)<<32)|origin,notify_on_complete:true,completed:false,dismissed:false});}
+                        }
+                        Ok(json!({"accepted":true}))
+                    }
+                    Err(error)=>Err(error),
                 }
             }
             "folders.list"=>Ok(json!(self.owner.upgrade().map(|o|o.read(cx).bot_groups(&project)).unwrap_or_default().folders)),

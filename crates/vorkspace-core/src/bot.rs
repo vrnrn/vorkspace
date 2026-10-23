@@ -7,6 +7,7 @@ pub mod channels;
 mod desktop;
 pub mod files;
 pub mod habits;
+pub mod launch;
 pub mod memory;
 pub mod work;
 pub(crate) use desktop::codex_home;

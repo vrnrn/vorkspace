@@ -24,6 +24,8 @@ import { parseRemoteAttachments, resolveAttachments } from "./attachments.js";
 // Streamed output is written in batches. Anything a user may need to act on
 // (approvals, questions, errors, completion) is written immediately.
 const FLUSH_MS = 120;
+// Visible text remains small; resolved provider context has its own byte cap.
+export const MAX_PREPARED_TEXT_BYTES = 5 * 1024 * 1024;
 const BATCHED = new Set([
   "message.delta",
   "reasoning.delta",
@@ -64,6 +66,15 @@ export function parseCommand(input) {
     throw new Error("Invalid command");
   const v = input;
   const commandId = text(v.commandId, "command ID");
+  if (
+    v.preparedText !== undefined &&
+    (v.type !== "send" ||
+      typeof v.preparedText !== "string" ||
+      !v.preparedText.trim() ||
+      v.preparedText.includes("\0") ||
+      Buffer.byteLength(v.preparedText, "utf8") > MAX_PREPARED_TEXT_BYTES)
+  )
+    throw new Error("Invalid prepared prompt (5 MiB UTF-8 maximum)");
   if (v.type === "create") {
     if (!isRemoteProvider(v.harness) || !RUNTIME_MODES.includes(v.runtimeMode))
       throw new Error("Invalid provider or permission mode");
@@ -133,6 +144,7 @@ export function parseCommand(input) {
       commandId,
       sessionId,
       text: v.text,
+      ...(v.preparedText !== undefined ? { preparedText: v.preparedText } : {}),
       ...(attachments.length ? { attachments } : {}),
       ...(v.type === "send" && v.intent ? { intent: v.intent } : {}),
       ...(v.type === "send" && v.draftBlockId !== undefined
@@ -583,6 +595,7 @@ export class HostEngine {
               command.type === "compact" ? null : command.text,
               command.type === "send" ? command.intent : undefined,
               attachments,
+              command.preparedText,
             );
             if (firstTurn && command.type === "send") {
               this.generateFirstTurnNames(
@@ -729,7 +742,7 @@ export class HostEngine {
         );
     }
   }
-  run(value, prompt, intent, attachments = []) {
+  run(value, prompt, intent, attachments = [], preparedText) {
     const { session, runId } = value;
     const provider = this.provider(session.harness);
     const active = {
@@ -776,7 +789,10 @@ export class HostEngine {
               if (!this.closing && !active.cancelled) {
                 await provider.send({
                   ...input,
-                  text: prompt,
+                  // Resolved context is input data, appended by the desktop
+                  // after its composer transformations. It never replaces the
+                  // user's visible message, title source, or command identity.
+                  text: preparedText ?? prompt,
                   attachments: resolvedAttachments,
                 });
               }

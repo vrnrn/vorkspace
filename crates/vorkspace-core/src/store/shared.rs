@@ -974,7 +974,10 @@ impl Store {
     }
     fn shared_indexed_query(&self, original: &str) -> Result<Option<String>, String> {
         let query = if let Some(tables) = self.shared_bot_tables(original)? {
-            Some(format!("SELECT block_json,(SELECT count(*) FROM {table} WHERE session_id=?1) FROM {table} WHERE session_id=?1 ORDER BY seq",table=tables.blocks))
+            Some(format!(
+                "SELECT block_json,(SELECT count(*) FROM {table} WHERE session_id=?1) FROM {table} WHERE session_id=?1 ORDER BY seq",
+                table = tables.blocks
+            ))
         } else if self.shared_ordinary_indexed(original)? {
             Some(
                 "SELECT block_json,(SELECT count(*) FROM ordinary_blocks WHERE session_id=?1)
@@ -1523,10 +1526,20 @@ impl Store {
         sql(tx.commit())?;
         Ok(fired)
     }
-    pub(super) fn shared_delete(&self, id: i64) -> Result<(), String> {
+    pub(super) fn shared_delete_checked(
+        &self,
+        id: i64,
+        app: Option<(i64, &str)>,
+    ) -> Result<(), String> {
         self.shared_writable()?;
         let original = self.persisted_session_id(id)?;
-        let tx = sql(self.conn.unchecked_transaction())?;
+        let tx = sql(rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
+        if let Some((caller, project)) = app {
+            self.check_app_target(caller, id, project)?;
+        }
         self.delete_local_submissions(&original)?;
         if let Some(tables) = &self.shared.as_ref().unwrap().earlier_bot_tables {
             for table in [&tables.blocks, &tables.turns, &tables.transcripts] {
@@ -1722,16 +1735,37 @@ impl Store {
         id: i64,
         state: &crate::follow_up::State,
     ) -> Result<(), String> {
+        self.shared_write_follow_ups(id, state, false)
+    }
+    pub(crate) fn shared_accept_follow_ups(
+        &self,
+        id: i64,
+        state: &crate::follow_up::State,
+    ) -> Result<(), String> {
+        self.shared_write_follow_ups(id, state, true)
+    }
+    fn shared_write_follow_ups(
+        &self,
+        id: i64,
+        state: &crate::follow_up::State,
+        strict: bool,
+    ) -> Result<(), String> {
         self.shared_writable()?;
+        let tx = sql(rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
         let previous: crate::follow_up::State = self
             .shared_setting(&format!("follow-up:{id}"))?
             .map(|raw| parse(&raw))
             .transpose()?
             .unwrap_or_default();
+        if strict && previous.revision >= state.revision {
+            return Err("The message queue changed before this prompt could be saved. Reopen it before sending; saved messages were preserved.".into());
+        }
         if previous.revision > state.revision {
             return Ok(());
         }
-        let tx = sql(self.conn.unchecked_transaction())?;
         let fields = self.shared_field("queued_messages_json", "'[]'");
         let raw: String = sql(self.conn.query_row(
             &format!("SELECT {fields} FROM sessions WHERE id=?1"),

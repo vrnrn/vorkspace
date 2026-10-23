@@ -6,12 +6,232 @@ use vorkspace_core::{
     bot::bridge::{Call, Server},
 };
 
+pub(crate) struct AppStart {
+    pub summary: Session,
+    pub settings: Settings,
+    pub prompt: String,
+    pub draft: bool,
+    pub reveal: bool,
+    pub placement: Option<(i64, Edge)>,
+    pub cleanup: Option<vorkspace_core::bot::launch::CreatedWorktree>,
+}
 enum Effect {
     None,
-    Start(Box<(Session, Settings, String, bool, bool)>),
+    Start(Box<AppStart>),
     Groups(String, vorkspace_core::session_groups::Groups),
 }
 impl Shell {
+    fn app_caller_allowed(&self, caller: i64, project: &str, cx: &App) -> bool {
+        self.sessions.get(&caller).is_some_and(|view| {
+            let view = view.read(cx);
+            view.settings.operator
+                && !view.settings.plan
+                && view.settings.access != vorkspace_core::agent::AccessMode::ReadOnly
+                && vorkspace_core::files::path_key(&view.summary.cwd)
+                    == vorkspace_core::files::path_key(project)
+        }) || self
+            .bots
+            .as_ref()
+            .is_some_and(|bots| bots.read(cx).app_project_allowed(caller, project, cx))
+    }
+    fn check_app_placement(
+        &self,
+        placement: Option<(i64, Edge)>,
+        project: &str,
+        cx: &App,
+    ) -> Result<(), String> {
+        if let Some((target, _)) = placement {
+            if self.workspace.tab_of(target).is_none()
+                || !self.session_summaries.contains_key(&target)
+            {
+                return Err("Split target must be an open session pane".into());
+            }
+            if vorkspace_core::files::path_key(&self.session_metadata(target, cx).summary.cwd)
+                != vorkspace_core::files::path_key(project)
+            {
+                return Err("Split target is outside the selected project".into());
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn app_placement(
+        &self,
+        caller: i64,
+        project: &str,
+        input: &Value,
+        cx: &App,
+    ) -> Result<Option<(i64, Edge)>, String> {
+        let edge = match input
+            .get("placement")
+            .and_then(Value::as_str)
+            .unwrap_or("tab")
+        {
+            "tab" => return Ok(None),
+            "right" => Edge::Right,
+            "down" => Edge::Bottom,
+            _ => return Err("placement must be tab, right or down".into()),
+        };
+        let target = if let Some(target) = input.get("besideSessionId") {
+            session_id(&json!({"sessionId":target}), &self.store)?
+        } else {
+            caller
+        };
+        let placement = Some((target, edge));
+        self.check_app_placement(placement, project, cx)?;
+        Ok(placement)
+    }
+    /// Layout and launch share this owner. A target closed during preparation
+    /// fails before any provider is started; it never falls back to another tab.
+    pub(crate) fn app_install_start(
+        &mut self,
+        caller: i64,
+        start: AppStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<i64, String> {
+        let AppStart {
+            summary,
+            settings,
+            prompt,
+            draft,
+            reveal,
+            placement,
+            cleanup,
+        } = start;
+        let id = summary.id;
+        let valid = if !self.app_caller_allowed(caller, &summary.cwd, cx) {
+            Err("The caller no longer owns this project's app capability".into())
+        } else {
+            self.check_app_placement(placement, &summary.cwd, cx)
+        };
+        if let Err(error) = valid {
+            let worktree = cleanup
+                .map(vorkspace_core::bot::launch::CreatedWorktree::rollback)
+                .transpose()
+                .err();
+            let removed = locked(&self.store)?.delete(id).err();
+            return Err(format!(
+                "{error}{}{}",
+                worktree.map(|e| format!("; {e}")).unwrap_or_default(),
+                removed
+                    .map(|e| format!("; unused session {id} could not be removed: {e}"))
+                    .unwrap_or_default()
+            ));
+        }
+        self.add(summary, cx);
+        self.started_by.insert(id, caller);
+        let view = self
+            .sessions
+            .get(&id)
+            .cloned()
+            .ok_or("New session view is unavailable")?;
+        view.update(cx, |view, cx| {
+            view.install_transfer(settings, None, cx);
+            if draft {
+                view.input
+                    .update(cx, |input, cx| input.set_text(prompt, cx));
+                view.app_flush_draft(cx)?;
+            } else {
+                view.app_start_message(prompt, cx)?;
+            }
+            Ok::<_, String>(())
+        })?;
+        if let Some((target, edge)) = placement {
+            let before = self.active_leaves();
+            self.workspace.place(id, target, edge);
+            self.begin_pane_motion(before, cx);
+            self.fit_sidebar(cx);
+            self.activate_session(id, window, cx);
+        } else if reveal {
+            self.open(id, window, cx);
+        }
+        self.invalidate_chrome(cx);
+        cx.notify();
+        Ok(id)
+    }
+    fn check_live_app_target(&self, id: i64, cx: &App) -> Result<(), String> {
+        if self.orchestration_worker(id)
+            || self
+                .bots
+                .as_ref()
+                .is_some_and(|bots| bots.read(cx).protected_app_target(id, cx))
+        {
+            return Err("Bot, habit, channel, hidden and orchestration sessions are protected from app commands".into());
+        }
+        Ok(())
+    }
+    /// Both command dispatchers enter here after deferral. Validate the live
+    /// owner and the persisted classification immediately before any effect.
+    pub(crate) fn app_session_action(
+        &mut self,
+        caller: i64,
+        id: i64,
+        project: &str,
+        action: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Value, String> {
+        let authorized = self.app_caller_allowed(caller, project, cx);
+        if !authorized {
+            return Err("The caller no longer owns this project's app capability".into());
+        }
+        locked(&self.store)?.check_app_target(caller, id, project)?;
+        self.check_live_app_target(id, cx)?;
+        if self.archiving.contains(&id) || self.deleting.contains(&id) {
+            return Err("Session management is already in progress".into());
+        }
+        if action == "sessions.delete"
+            && self.workspace.review_owners.iter().any(|(pane, owner)| {
+                *owner == id
+                    && (self.workspace.tab_of(*pane).is_some()
+                        || self
+                            .reviews
+                            .get(pane)
+                            .is_some_and(|review| review.read(cx).unsaved_files(cx)))
+            })
+        {
+            return Err("Close this session's detached file panes before deleting it".into());
+        }
+        if let Some(view) = self.sessions.get(&id) {
+            view.update(cx, |view, cx| view.app_stop(cx))?;
+        } else {
+            let store = locked(&self.store)?;
+            let mut queue = store.follow_ups(id)?;
+            queue.paused = true;
+            queue.revision += 1;
+            store.accept_follow_ups(id, &queue)?;
+        }
+        if action == "sessions.stop" {
+            return Ok(json!({"stopping":true}));
+        }
+        if !matches!(action, "sessions.archive" | "sessions.delete") {
+            return Err("Unsupported session management action".into());
+        }
+        // There is no await between the live-owner check and this transaction.
+        // Store repeats the durable check under the mutation's write lock.
+        if action == "sessions.delete" {
+            locked(&self.store)?.delete_app_session(caller, id, project)?;
+        } else {
+            locked(&self.store)?.archive_app_session(caller, id, project)?;
+        }
+        if let Some(summary) = self.session_summaries.get_mut(&id) {
+            summary.archived = true;
+        }
+        if let Some(view) = self.sessions.get(&id) {
+            view.update(cx, |view, _| view.summary.archived = true);
+        }
+        if self.workspace.tab_of(id).is_some() {
+            self.close_pane(id, window, cx);
+        }
+        if action == "sessions.delete" {
+            self.forget_session(id, cx);
+        } else {
+            self.refresh_session_mark(id, cx);
+        }
+        self.invalidate_chrome(cx);
+        cx.notify();
+        Ok(json!({"accepted":true}))
+    }
     pub(super) fn init_app_bridge(&mut self, cx: &mut Context<Self>) {
         // GPUI's deterministic executor cannot be woken by an OS socket thread.
         // Command tests exercise the same dispatcher directly without a listener.
@@ -39,15 +259,20 @@ impl Shell {
         }
     }
     fn finish_app_call(&mut self, call: Call, result: Result<Value, String>) {
-        let key = (call.session, call.request_id.clone());
-        self.app_pending.remove(&key);
-        if self.app_results.len() >= 256
-            && let Some(key) = self.app_results.keys().next().cloned()
-        {
-            self.app_results.remove(&key);
-        }
-        self.app_results.insert(key, result.clone());
-        let _ = call.reply.send(result);
+        let saved = if vorkspace_core::bot::api::is_read_only(&call.action) {
+            Ok(())
+        } else {
+            locked(&self.store).and_then(|store| {
+                store.finish_app_command(
+                    call.session,
+                    &call.request_id,
+                    &call.action,
+                    &call.input,
+                    &result,
+                )
+            })
+        };
+        let _ = call.reply.send(saved.and(result));
     }
     fn app_background<F>(&mut self, call: Call, work: F, cx: &mut Context<Self>)
     where
@@ -59,38 +284,11 @@ impl Shell {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 let caller = call.session;
-                let result = result.map(|(result, effect)| {
+                let result = result.and_then(|(result, effect)| {
                     match effect {
                         Effect::None => (),
                         Effect::Start(start) => {
-                            let (summary, settings, prompt, draft, reveal) = *start;
-                            let id = summary.id;
-                            this.add(summary, cx);
-                            // The sidebar hangs it under the thread that started it.
-                            this.started_by.insert(id, caller);
-                            let store = this.store.clone();
-                            cx.background_executor()
-                                .spawn(async move {
-                                    let _ = locked(&store)
-                                        .and_then(|s| s.save_started_link(id, caller));
-                                })
-                                .detach();
-                            if let Some(view) = this.sessions.get(&id) {
-                                view.update(cx, |v, cx| {
-                                    v.install_transfer(
-                                        settings,
-                                        (!draft).then(|| prompt.clone()),
-                                        cx,
-                                    );
-                                    if draft {
-                                        v.input.update(cx, |i, cx| i.set_text(prompt, cx));
-                                    }
-                                });
-                            }
-                            if reveal {
-                                this.open(id, window, cx);
-                            }
-                            this.invalidate_chrome(cx);
+                            this.app_install_start(caller, *start, window, cx)?;
                         }
                         Effect::Groups(project, groups) => {
                             this.groups.insert(project, groups);
@@ -98,7 +296,7 @@ impl Shell {
                         }
                     }
                     cx.notify();
-                    result
+                    Ok(result)
                 });
                 this.finish_app_call(call, result);
             });
@@ -106,7 +304,6 @@ impl Shell {
         .detach();
     }
     fn handle_app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
-        let key = (call.session, call.request_id.clone());
         let caller = self.sessions.get(&call.session).map(|v| v.read(cx));
         let Some(caller) = caller.filter(|v| v.settings.operator) else {
             let _ = call
@@ -114,6 +311,10 @@ impl Shell {
                 .send(Err("Operator is not enabled for this thread.".into()));
             return;
         };
+        if let Err(error) = vorkspace_core::bot::api::validate(&call.action, &call.input) {
+            let _ = call.reply.send(Err(error));
+            return;
+        }
         let project = caller.summary.cwd.clone();
         if (caller.settings.plan
             || caller.settings.access == vorkspace_core::agent::AccessMode::ReadOnly)
@@ -154,15 +355,31 @@ impl Shell {
         inherited.handoff = None;
         inherited.turns.clear();
         let provider = caller.summary.provider.clone();
-        if let Some(result) = self.app_results.get(&key) {
-            let _ = call.reply.send(result.clone());
-            return;
-        }
-        if !self.app_pending.insert(key) {
-            let _ = call.reply.send(Err(
-                "Request is still running; retry with the same request ID.".into(),
-            ));
-            return;
+        let needs_admission = locked(&self.store)
+            .and_then(|store| store.app_command_known(call.session, &call.request_id))
+            .map(|known| known || !vorkspace_core::bot::api::is_read_only(&call.action));
+        let needs_admission = match needs_admission {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = call.reply.send(Err(error));
+                return;
+            }
+        };
+        if needs_admission {
+            let admission = locked(&self.store).and_then(|store| {
+                store.admit_app_command(call.session, &call.request_id, &call.action, &call.input)
+            });
+            match admission {
+                Ok(vorkspace_core::store::AppCommandAdmission::Admitted) => (),
+                Ok(vorkspace_core::store::AppCommandAdmission::Completed(result)) => {
+                    let _ = call.reply.send(result);
+                    return;
+                }
+                Err(error) => {
+                    let _ = call.reply.send(Err(error));
+                    return;
+                }
+            }
         }
         let input = call.input.clone();
         let action = call.action.clone();
@@ -170,57 +387,50 @@ impl Shell {
             "sessions.list" => Ok(json!(self.order.iter().map(|&id| self.session_metadata(id, cx).summary).filter(|s| s.cwd == project).map(|s| json!({"sessionId":s.id,"title":s.title,"harness":s.provider,"project":s.cwd,"archived":s.archived})).collect::<Vec<_>>())),
             "models.list" => Ok(json!(Kind::ALL.into_iter().map(|kind| json!({"harness":kind.id(),"name":kind.label(),"models":self.sessions.values().find(|v| { let v=v.read(cx); let profile=if kind.id()==provider { inherited.account.clone() } else { crate::accounts::get(cx).map(|center|center.read(cx).selected(kind,&project)).unwrap_or_default() }; v.summary.provider == kind.id() && v.settings.account.id==profile.id }).map(|v| v.read(cx).settings_models()).unwrap_or_default()})).collect::<Vec<_>>())),
             "folders.list" => Ok(json!(self.groups.get(&project).cloned().unwrap_or_default().folders)),
-            "sessions.send" | "sessions.draft" | "sessions.stop" => {
-                let id = session_id(&input, &self.store);
-                match id.and_then(|id| {
-                    if !self.session_summaries.contains_key(&id) || self.session_metadata(id, cx).summary.cwd != project { return Err("Session is outside this project.".into()); }
-                    self.ensure_session(id, cx).ok_or("Session is outside this project.".into())
-                }) {
-                    Ok(view) => {
-                        let ready = if action == "sessions.stop" { true } else {
-                            view.update(cx, |v, cx| v.load(cx));
-                            view.read(cx).ready_for_external(cx)
-                        };
-                        if action == "sessions.stop" { view.update(cx, |v, cx| v.stop_if_busy(cx)); Ok(json!({"stopping":true})) }
-                        else if !ready { Err("Session is busy, loading, or has an unsent draft. Its draft was preserved.".into()) }
-                        else { match text(&input, "prompt", 64 * 1024) { Ok(prompt) => { view.update(cx, |v, cx| {
-                            if action == "sessions.draft" { v.input.update(cx, |i, cx| i.set_text(prompt, cx)); }
-                            else { v.install_transfer(v.settings.clone(), Some(prompt), cx); }
-                        }); Ok(json!({"accepted":true})) }, Err(error) => Err(error) } }
-                    }
-                    Err(error) => Err(error),
-                }
+            "sessions.stop" | "sessions.archive" | "sessions.delete" => {
+                session_id(&input,&self.store).and_then(|id|self.app_session_action(call.session,id,&project,&action,window,cx))
+            }
+            "sessions.send" | "sessions.draft" => {
+                session_id(&input,&self.store).and_then(|id|{
+                    locked(&self.store)?.check_app_target(call.session,id,&project)?;
+                    self.check_live_app_target(id,cx)?;
+                    let view=self.ensure_session(id,cx).ok_or("Session is unavailable")?;
+                    view.update(cx,|view,cx|view.load(cx));
+                    if !view.read(cx).ready_for_external(cx) { return Err("Session is busy, loading, or has an unsent draft. Its draft was preserved.".into()); }
+                    let prompt=text(&input,"prompt",65536)?;
+                    view.update(cx,|view,cx|{
+                        if action=="sessions.draft" { view.input.update(cx,|input,cx|input.set_text(prompt,cx));view.app_flush_draft(cx)?; }
+                        else { view.app_send(prompt,cx)?; }
+                        Ok::<_,String>(())
+                    })?;
+                    Ok(json!({"accepted":true}))
+                })
             }
             "sessions.start" => {
-                let prompt = text(&input, "prompt", 64 * 1024);
-                let kind = input.get("harness").and_then(Value::as_str).unwrap_or(&provider).to_owned();
-                if Kind::parse(&kind).is_none() { self.finish_app_call(call, Err("Unknown harness.".into())); return; }
-                let prompt = match prompt { Ok(p) => p, Err(e) => { self.finish_app_call(call, Err(e)); return; } };
-                inherited.usage_limit = None;
-                if kind != provider {
-                    inherited.account = crate::accounts::get(cx).map(|center| center.read(cx).selected(Kind::from_id(&kind), &project)).unwrap_or_default();
-                    inherited.model = None; inherited.effort = None; inherited.model_settings.clear();
-                    inherited.fast = false; inherited.service_tier = None; inherited.thinking = None;
-                }
-                if let Some(model) = input.get("model").and_then(Value::as_str) { inherited.model = Some(model.into()); }
-                let title = input.get("title").and_then(Value::as_str).map(|s| s.chars().take(160).collect::<String>());
-                let draft = input.get("draft").and_then(Value::as_bool).unwrap_or(false);
-                let reveal = input.get("reveal").and_then(Value::as_bool).unwrap_or(true);
-                self.app_background(call, move |store| {
-                    let store = locked(&store)?; let mut summary = store.create(&kind, &project)?;
-                    if let Some(title) = title { store.title(summary.id, &title)?; summary.title = title; }
-                    store.save_agent_settings(summary.id, &inherited)?;
-                    Ok((json!({"sessionId":summary.id,"accepted":true}), Effect::Start(Box::new((summary, inherited, prompt, draft, reveal)))))
-                }, cx); return;
+                let placement=match self.app_placement(call.session,&project,&input,cx){Ok(placement)=>placement,Err(error)=>{self.finish_app_call(call,Err(error));return;}};
+                let mut launch=match vorkspace_core::bot::launch::Launch::parse(&input,&provider,&project,&project,inherited,true) {
+                    Ok(launch)=>launch,Err(error)=>{self.finish_app_call(call,Err(error));return;}
+                };
+                if launch.provider.id()!=provider { launch.settings.account=crate::accounts::get(cx).map(|center|center.read(cx).selected(launch.provider,&project)).unwrap_or_default(); }
+                let caller=call.session;
+                self.app_background(call,move|store|{
+                    let mut store=locked(&store)?;
+                    let summary=launch.create(&mut store,&project)?;
+                    store.save_started_link(summary.id,caller)?;
+                    Ok((json!({"sessionId":summary.id,"accepted":true}),Effect::Start(Box::new(AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
+                },cx);return;
             }
             "sessions.read" => {
                 let id = match session_id(&input, &self.store) { Ok(id) => id, Err(e) => { self.finish_app_call(call, Err(e)); return; } };
                 if !self.session_summaries.contains_key(&id) || self.session_metadata(id, cx).summary.cwd != project { self.finish_app_call(call, Err("Session is outside this project.".into())); return; }
-                let limit = input.get("limit").and_then(Value::as_u64).unwrap_or(40).min(200) as usize;
+                let limit = input.get("limit").and_then(Value::as_u64).unwrap_or(40).clamp(1,200) as usize;
                 self.app_background(call, move |store| {
                     let transcript = locked(&store)?.load(id)?;
-                    let rows: Vec<_> = transcript.rows.iter().rev().take(limit).rev().map(|r| json!({"role":r.role,"text":vorkspace_core::response::limit(&r.text, 16_000)})).collect();
-                    Ok((json!({"sessionId":id,"messages":rows}), Effect::None))
+                    let end=input.get("before").and_then(Value::as_u64).unwrap_or(transcript.rows.len() as u64).min(transcript.rows.len() as u64) as usize;
+                    let start=end.saturating_sub(limit);
+                    let max=input.get("maxChars").and_then(Value::as_u64).unwrap_or(24000).clamp(100,200000) as usize;
+                    let rows:Vec<_>=transcript.rows[start..end].iter().map(|row|json!({"role":row.role,"text":vorkspace_core::response::limit(&row.text,max/limit.max(1))})).collect();
+                    Ok((json!({"sessionId":id,"messages":rows,"before":start,"hasMore":start>0}),Effect::None))
                 }, cx); return;
             }
             "notes.list" | "notes.read" | "notes.write" => {
@@ -256,7 +466,14 @@ impl Shell {
             "worktrees.list" => {
                 self.app_background(call, move |_| { let snapshot = vorkspace_core::git::snapshot(std::path::Path::new(&project))?; Ok((json!(snapshot.worktrees.iter().map(|w| json!({"path":w.path,"branch":w.branch,"head":w.head,"main":w.main,"missing":w.missing})).collect::<Vec<_>>()), Effect::None)) }, cx); return;
             }
-            _ => Err("Unknown Operator action. Supported: models.list, sessions.list/read/start/send/draft/stop, folders.list/move, notes.list/read/write, worktrees.list.".into()),
+            "worktrees.create"=>{
+                self.app_background(call,move |_|{
+                    let branch=text(&input,"branch",240)?;
+                    let tree=vorkspace_core::git::create_project_worktree(std::path::Path::new(&project),&branch,input.get("base").and_then(Value::as_str),input.get("existing").and_then(Value::as_bool).unwrap_or(false))?;
+                    Ok((json!({"path":tree.path,"branch":tree.branch}),Effect::None))
+                },cx);return;
+            }
+            _ => Err("Unknown Operator action. Supported: models.list, sessions.list/read/start/send/draft/stop/archive/delete, folders.list/move, notes.list/read/write, worktrees.list/create.".into()),
         };
         self.finish_app_call(call, result);
         let _ = window;
@@ -287,6 +504,580 @@ fn session_id(input: &Value, store: &Database) -> Result<i64, String> {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+    fn command_window(
+        cx: &mut TestAppContext,
+    ) -> (gpui::WindowHandle<Shell>, i64, tempfile::TempDir) {
+        let root = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec![
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "initial",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(root.path())
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        let store = vorkspace_core::store::Store::open(&root.path().join("state.db")).unwrap();
+        let project = root.path().to_string_lossy().into_owned();
+        let summary = store.create("codex", &project).unwrap();
+        let caller = summary.id;
+        let store = Arc::new(Mutex::new(store));
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| Shell::new(store, vec![summary], project, None, cx))
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&caller].update(cx, |view, cx| {
+                    view.enable_mode("operator", cx);
+                })
+            })
+            .unwrap();
+        (window, caller, root)
+    }
+    fn command(
+        window: gpui::WindowHandle<Shell>,
+        caller: i64,
+        request: &str,
+        action: &str,
+        input: Value,
+        cx: &mut TestAppContext,
+    ) -> Result<Value, String> {
+        let (reply, rx) = std::sync::mpsc::channel();
+        window
+            .update(cx, |shell, window, cx| {
+                shell.handle_app_call(
+                    Call {
+                        session: caller,
+                        request_id: request.into(),
+                        action: action.into(),
+                        input,
+                        reply,
+                    },
+                    window,
+                    cx,
+                )
+            })
+            .unwrap();
+        cx.run_until_parked();
+        rx.try_recv().expect("command completed")
+    }
+    #[gpui::test]
+    fn operator_launch_honors_access_model_and_worktree_and_durable_retries(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, caller, root) = command_window(cx);
+        let tree = command(
+            window,
+            caller,
+            "tree",
+            "worktrees.create",
+            json!({"branch":"review-fixture"}),
+            cx,
+        )
+        .unwrap();
+        let path = tree["path"].as_str().unwrap();
+        assert!(std::path::Path::new(path).is_dir());
+        let input = json!({"prompt":"Review this checkout","draft":true,"reveal":false,"worktreeCwd":path,"runtimeMode":"read-only","model":"codex:gpt-fixture","modelSettings":{"effort":"high","custom":"retained"}});
+        let start = command(
+            window,
+            caller,
+            "launch",
+            "sessions.start",
+            input.clone(),
+            cx,
+        )
+        .unwrap();
+        let child = start["sessionId"].as_i64().unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                let view = shell.sessions[&child].read(cx);
+                assert_eq!(
+                    view.settings.access,
+                    vorkspace_core::agent::AccessMode::ReadOnly
+                );
+                assert_eq!(view.settings.model.as_deref(), Some("gpt-fixture"));
+                assert_eq!(view.settings.effort.as_deref(), Some("high"));
+                assert_eq!(view.settings.model_settings["custom"], "retained");
+                assert_eq!(view.settings.worktree_cwd.as_deref(), Some(path));
+                assert_eq!(view.input.read(cx).content, "Review this checkout");
+                assert!(!view.settings.operator && !view.busy);
+                let draft = locked(&shell.store)
+                    .unwrap()
+                    .composer_draft(child)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    draft.payload["text"], "Review this checkout",
+                    "acknowledgement follows durable first-frame draft publication"
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            start,
+            command(window, caller, "launch", "sessions.start", input, cx).unwrap()
+        );
+        assert!(
+            command(
+                window,
+                caller,
+                "launch",
+                "sessions.start",
+                json!({"prompt":"different","draft":true}),
+                cx
+            )
+            .unwrap_err()
+            .contains("different")
+        );
+        let before = window
+            .update(cx, |shell, _, _| {
+                locked(&shell.store).unwrap().sessions().unwrap().len()
+            })
+            .unwrap();
+        for (request, input) in [
+            ("bad-layout", json!({"prompt":"x","placement":"left"})),
+            (
+                "bad-settings",
+                json!({"prompt":"x","modelSettings":{"effort":3}}),
+            ),
+            (
+                "bad-path",
+                json!({"prompt":"x","worktreeCwd":root.path().parent().unwrap().to_string_lossy()}),
+            ),
+            ("bad-mode", json!({"prompt":"x","runtimeMode":"unsafe"})),
+        ] {
+            assert!(command(window, caller, request, "sessions.start", input, cx).is_err());
+        }
+        assert_eq!(
+            before,
+            window
+                .update(cx, |shell, _, _| locked(&shell.store)
+                    .unwrap()
+                    .sessions()
+                    .unwrap()
+                    .len())
+                .unwrap()
+        );
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(root.path())
+                .args(["worktree", "remove", "--force", path])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    #[gpui::test]
+    fn operator_management_preserves_worktrees_and_rejects_its_own_session(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, caller, root) = command_window(cx);
+        assert!(
+            command(
+                window,
+                caller,
+                "self",
+                "sessions.stop",
+                json!({"sessionId":caller}),
+                cx
+            )
+            .unwrap_err()
+            .contains("calling")
+        );
+        let start = command(
+            window,
+            caller,
+            "start",
+            "sessions.start",
+            json!({"prompt":"Save a draft","draft":true}),
+            cx,
+        )
+        .unwrap();
+        let child = start["sessionId"].as_i64().unwrap();
+        command(
+            window,
+            caller,
+            "stop",
+            "sessions.stop",
+            json!({"sessionId":child}),
+            cx,
+        )
+        .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(
+                    shell.sessions[&child].read(cx).input.read(cx).content,
+                    "Save a draft"
+                );
+                assert!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .follow_ups(child)
+                        .unwrap()
+                        .messages
+                        .is_empty()
+                );
+            })
+            .unwrap();
+        command(
+            window,
+            caller,
+            "archive",
+            "sessions.archive",
+            json!({"sessionId":child}),
+            cx,
+        )
+        .unwrap();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .bot_session(child)
+                        .unwrap()
+                        .unwrap()
+                        .archived
+                )
+            })
+            .unwrap();
+        command(
+            window,
+            caller,
+            "delete",
+            "sessions.delete",
+            json!({"sessionId":child}),
+            cx,
+        )
+        .unwrap();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .bot_session(child)
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .bot_session(caller)
+                        .unwrap()
+                        .is_some()
+                );
+            })
+            .unwrap();
+        assert!(root.path().join(".git").exists());
+    }
+    #[gpui::test]
+    fn operator_splits_reuse_the_existing_pane_owner_and_reject_stale_targets(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, caller, _root) = command_window(cx);
+        window
+            .update(cx, |shell, window, cx| shell.open(caller, window, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let first = command(
+            window,
+            caller,
+            "right",
+            "sessions.start",
+            json!({"prompt":"First","draft":true,"placement":"right","reveal":false}),
+            cx,
+        )
+        .unwrap()["sessionId"]
+            .as_i64()
+            .unwrap();
+        let second = command(
+            window,
+            caller,
+            "down",
+            "sessions.start",
+            json!({"prompt":"Second","draft":true,"placement":"down","besideSessionId":first}),
+            cx,
+        )
+        .unwrap()["sessionId"]
+            .as_i64()
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(
+                    shell.workspace.tab_of(caller),
+                    shell.workspace.tab_of(first)
+                );
+                assert_eq!(
+                    shell.workspace.tab_of(first),
+                    shell.workspace.tab_of(second)
+                );
+                let tab = shell.workspace.tab_of(caller).unwrap();
+                assert_eq!(shell.workspace.layout(tab).leaf_ids().len(), 3);
+                assert_eq!(
+                    shell.sessions[&first].read(cx).input.read(cx).content,
+                    "First"
+                );
+                assert_eq!(
+                    shell.sessions[&second].read(cx).input.read(cx).content,
+                    "Second"
+                );
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, window, cx| shell.close_pane(first, window, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let count = window
+            .update(cx, |shell, _, _| {
+                locked(&shell.store).unwrap().sessions().unwrap().len()
+            })
+            .unwrap();
+        assert!(command(window,caller,"closed","sessions.start",json!({"prompt":"Do not create","draft":true,"placement":"right","besideSessionId":first}),cx).unwrap_err().contains("open session"));
+        assert_eq!(
+            count,
+            window
+                .update(cx, |shell, _, _| locked(&shell.store)
+                    .unwrap()
+                    .sessions()
+                    .unwrap()
+                    .len())
+                .unwrap()
+        );
+        window
+            .update(cx, |shell, window, cx| {
+                let summary = locked(&shell.store)
+                    .unwrap()
+                    .create("codex", &shell.workspace.project)
+                    .unwrap();
+                let id = summary.id;
+                // Preparation was valid while first was open; publication sees it
+                // closed and must not fall back to the caller or another pane.
+                assert!(
+                    shell
+                        .app_install_start(
+                            caller,
+                            AppStart {
+                                summary,
+                                settings: Settings::default(),
+                                prompt: "Do not send".into(),
+                                draft: false,
+                                reveal: true,
+                                placement: Some((first, Edge::Right)),
+                                cleanup: None
+                            },
+                            window,
+                            cx
+                        )
+                        .unwrap_err()
+                        .contains("open session")
+                );
+                assert!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .bot_session(id)
+                        .unwrap()
+                        .is_none()
+                );
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn operator_follow_up_rejects_an_account_switch_before_consuming_text(cx: &mut TestAppContext) {
+        let (window, caller, _root) = command_window(cx);
+        let child = command(
+            window,
+            caller,
+            "child",
+            "sessions.start",
+            json!({"prompt":"temporary","draft":true}),
+            cx,
+        )
+        .unwrap()["sessionId"]
+            .as_i64()
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&child].update(cx, |view, cx| {
+                    view.input
+                        .update(cx, |input, cx| input.set_text(String::new(), cx));
+                    view.app_flush_draft(cx).unwrap();
+                    view.app_hold_account_switch();
+                })
+            })
+            .unwrap();
+        assert!(
+            command(
+                window,
+                caller,
+                "blocked",
+                "sessions.send",
+                json!({"sessionId":child,"prompt":"Do not lose this"}),
+                cx
+            )
+            .is_err()
+        );
+        window
+            .update(cx, |shell, _, cx| {
+                let view = shell.sessions[&child].read(cx);
+                assert!(!view.busy);
+                assert!(view.input.read(cx).content.is_empty());
+                assert!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .load(child)
+                        .unwrap()
+                        .rows
+                        .is_empty()
+                );
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn app_acceptance_keeps_the_prompt_durable_before_the_provider_worker_runs(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, caller, root) = command_window(cx);
+        let child = command(
+            window,
+            caller,
+            "child",
+            "sessions.start",
+            json!({"prompt":"temporary","draft":true}),
+            cx,
+        )
+        .unwrap()["sessionId"]
+            .as_i64()
+            .unwrap();
+        let (reply, rx) = std::sync::mpsc::channel();
+        let input = json!({"sessionId":child,"prompt":"/plan Inspect the complete durable prompt"});
+        let message = window
+            .update(cx, |shell, window, cx| {
+                shell.sessions[&child].update(cx, |view, cx| {
+                    view.input
+                        .update(cx, |input, cx| input.set_text(String::new(), cx));
+                    view.app_flush_draft(cx).unwrap();
+                });
+                // The deterministic executor cannot poll the provider worker until
+                // this UI callback returns. Acknowledgement already has its queue.
+                shell.handle_app_call(
+                    Call {
+                        session: caller,
+                        request_id: "durable-send".into(),
+                        action: "sessions.send".into(),
+                        input: input.clone(),
+                        reply,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(rx.try_recv().unwrap().is_ok());
+                let queue = locked(&shell.store).unwrap().follow_ups(child).unwrap();
+                assert_eq!(queue.messages.len(), 1);
+                let message = queue.messages[0].clone();
+                assert_eq!(message.text, "Inspect the complete durable prompt");
+                assert_eq!(message.mode.as_deref(), Some("plan"));
+                assert!(!message.id.is_empty());
+                shell.sessions[&child].update(cx, |view, cx| {
+                    view.input
+                        .update(cx, |input, cx| input.set_text("Newer user text".into(), cx));
+                    view.app_stop(cx).unwrap();
+                    assert_eq!(view.input.read(cx).content, "Newer user text");
+                });
+                message
+            })
+            .unwrap();
+        let reopened = vorkspace_core::store::Store::open(&root.path().join("state.db")).unwrap();
+        let queue = reopened.follow_ups(child).unwrap();
+        assert!(queue.paused);
+        assert_eq!(queue.messages, vec![message]);
+        assert!(matches!(
+            reopened
+                .admit_app_command(caller, "durable-send", "sessions.send", &input)
+                .unwrap(),
+            vorkspace_core::store::AppCommandAdmission::Completed(Ok(_))
+        ));
+        assert_eq!(reopened.follow_ups(child).unwrap().messages.len(), 1);
+        drop(reopened);
+        cx.run_until_parked();
+    }
+    #[gpui::test]
+    fn app_send_cannot_acknowledge_a_prompt_its_stale_queue_did_not_save(cx: &mut TestAppContext) {
+        let (window, caller, root) = command_window(cx);
+        let child = command(
+            window,
+            caller,
+            "child",
+            "sessions.start",
+            json!({"prompt":"temporary","draft":true}),
+            cx,
+        )
+        .unwrap()["sessionId"]
+            .as_i64()
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&child].update(cx, |view, cx| {
+                    view.input
+                        .update(cx, |input, cx| input.set_text(String::new(), cx));
+                    view.app_flush_draft(cx).unwrap();
+                })
+            })
+            .unwrap();
+        let second = vorkspace_core::store::Store::open(&root.path().join("state.db")).unwrap();
+        let mut newer = second.follow_ups(child).unwrap();
+        newer.revision = 100;
+        newer.messages.push(vorkspace_core::follow_up::Message {
+            id: "newer-owner-message".into(),
+            text: "Keep this durable queue".into(),
+            ..Default::default()
+        });
+        second.save_follow_ups(child, &newer).unwrap();
+        let input = json!({"sessionId":child,"prompt":"Must not be falsely accepted"});
+        assert!(
+            command(
+                window,
+                caller,
+                "stale-send",
+                "sessions.send",
+                input.clone(),
+                cx
+            )
+            .unwrap_err()
+            .contains("queue changed")
+        );
+        assert_eq!(second.follow_ups(child).unwrap().messages, newer.messages);
+        window
+            .update(cx, |shell, _, cx| {
+                let view = shell.sessions[&child].read(cx);
+                assert!(!view.busy);
+                assert!(view.input.read(cx).content.is_empty());
+                assert!(matches!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .admit_app_command(caller, "stale-send", "sessions.send", &input)
+                        .unwrap(),
+                    vorkspace_core::store::AppCommandAdmission::Completed(Err(_))
+                ));
+            })
+            .unwrap();
+    }
     #[gpui::test]
     fn operator_scopes_sessions_and_preserves_an_unsent_draft(cx: &mut TestAppContext) {
         let (window, other, active) = crate::shell::tests::window(cx);

@@ -31,6 +31,7 @@ impl Protocol {
         &mut self,
         message: Message,
         stdin: &mut impl Write,
+        cancel: &AtomicBool,
         mut admit: impl FnMut(&Message) -> Result<(), String>,
     ) -> Result<Vec<Event>, String> {
         if !self.request.kind.can_steer() || !self.ready() || self.done {
@@ -42,12 +43,20 @@ impl Protocol {
         }
         let mut request = self.request.clone();
         request.settings.attachments = message.attachments.clone();
+        request.settings.ticket_context = Some(crate::ticket_context::admit(
+            &message.text,
+            request.settings.ticket_context_data_dir.as_deref(),
+            &request.cwd,
+            cancel,
+            None,
+        )?);
         request.prompt = super::commands::prepare_prompt(
             request.kind,
             message.prepared_prompt.as_deref().unwrap_or(&message.text),
             &request.cwd.to_string_lossy(),
             &message.attachments,
         )?;
+        crate::ticket_context::prepare_request(&mut request, cancel)?;
         // A retained message can be retried after its acknowledgement deadline.
         // Never let a late reply from that attempt acknowledge the retry.
         let wire = format!(
@@ -196,6 +205,27 @@ mod tests {
         p
     }
     #[test]
+    fn derived_follow_up_source_cannot_start_a_new_ticket_lookup() {
+        for kind in [Kind::Claude, Kind::Pi] {
+            let mut protocol = protocol(kind);
+            let mut out = Vec::new();
+            let message = Message {
+                id:"source-only".into(),text:"Ordinary steer".into(),
+                prepared_prompt:Some("Ordinary steer\nQuoted source: vorkspace://context/github?url=https%3A%2F%2Fgithub.com%2Facme%2Fdemo%2Fissues%2F99".into()),
+                ..Default::default()
+            };
+            let mut admitted = 0;
+            protocol
+                .steer(message, &mut out, &AtomicBool::new(false), |_| {
+                    admitted += 1;
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(admitted, 1);
+            assert!(!out.is_empty());
+        }
+    }
+    #[test]
     fn codex_keeps_messages_until_ack_and_rejection_does_not_end_the_turn() {
         let mut p = protocol(Kind::Codex);
         let message = Message {
@@ -205,7 +235,9 @@ mod tests {
         };
         let mut out = Vec::new();
         assert!(p
-            .steer(message.clone(), &mut out, |_| Ok(()))
+            .steer(message.clone(), &mut out, &AtomicBool::new(false), |_| Ok(
+                ()
+            ))
             .unwrap()
             .is_empty());
         let wire: Value = serde_json::from_slice(&out).unwrap();
@@ -223,7 +255,10 @@ mod tests {
         );
         assert!(!p.done);
         out.clear();
-        p.steer(message.clone(), &mut out, |_| Ok(())).unwrap();
+        p.steer(message.clone(), &mut out, &AtomicBool::new(false), |_| {
+            Ok(())
+        })
+        .unwrap();
         let retry: Value = serde_json::from_slice(&out).unwrap();
         assert_ne!(retry["id"], wire["id"]);
         assert!(p
@@ -246,7 +281,11 @@ mod tests {
                 text: "follow up".into(),
                 ..Default::default()
             };
-            let events = p.steer(message.clone(), &mut out, |_| Ok(())).unwrap();
+            let events = p
+                .steer(message.clone(), &mut out, &AtomicBool::new(false), |_| {
+                    Ok(())
+                })
+                .unwrap();
             let wire: Value = serde_json::from_slice(&out).unwrap();
             if kind == Kind::Claude {
                 assert_eq!(wire["type"], "user");

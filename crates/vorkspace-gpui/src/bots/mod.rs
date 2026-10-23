@@ -146,8 +146,6 @@ pub(crate) struct Bots {
     card_refresh: HashMap<String, u64>,
     session_filters: filters::Filters,
     session_filter_anchor: AnchorSlot,
-    app_results: HashMap<(i64, String), (String, Result<serde_json::Value, String>)>,
-    app_pending: HashSet<(i64, String)>,
 }
 impl EventEmitter<Changed> for Bots {}
 impl EventEmitter<TabOpened> for Bots {}
@@ -402,8 +400,6 @@ impl Bots {
             card_refresh: HashMap::new(),
             session_filters,
             session_filter_anchor: AnchorSlot::default(),
-            app_results: HashMap::new(),
-            app_pending: HashSet::new(),
         };
         if let Some(rx) = rx {
             this._bridge_task = Some(cx.spawn(async move |this, cx| {
@@ -447,6 +443,32 @@ impl Bots {
                 .bots
                 .iter()
                 .any(|m| m.habit_sessions.contains(&id))
+    }
+    pub(crate) fn protected_app_target(&self, id: i64, cx: &App) -> bool {
+        self.hidden_session(id)
+            || self.running.contains_key(&id)
+            || self
+                .channels
+                .views
+                .values()
+                .any(|view| view.read(cx).summary.id == id)
+    }
+    pub(crate) fn app_project_allowed(&self, caller: i64, project: &str, cx: &App) -> bool {
+        self.roster
+            .of_session(caller)
+            .or_else(|| {
+                self.running
+                    .get(&caller)
+                    .and_then(|run| self.roster.get(&run.bot))
+            })
+            .or_else(|| {
+                self.channels
+                    .views
+                    .iter()
+                    .find(|(_, view)| view.read(cx).summary.id == caller)
+                    .and_then(|((_, bot), _)| self.roster.get(bot))
+            })
+            .is_some_and(|bot| bot.works_on(project))
     }
     pub(crate) fn hidden_session(&self, id: i64) -> bool {
         self.is_bot_session(id)

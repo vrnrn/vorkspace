@@ -12,6 +12,7 @@ enum Wire {
     Frame(frames::Frame),
     Ended(String),
     Admitted(Result<Option<String>, String>),
+    PreparedSteer(crate::follow_up::Message, Result<Box<Request>, String>),
     Steered(crate::follow_up::Message, Result<Option<String>, String>),
 }
 struct StreamStop {
@@ -406,6 +407,7 @@ pub(super) fn run(
         &request.cwd.to_string_lossy(),
         &request.settings.attachments,
     )?;
+    crate::ticket_context::prepare_request(&mut request, &cancel)?;
     let (client, mut server) = connect(&request, &cancel, v2)?;
     let session = client.session(&request)?;
     if request.provider_id.is_some() {
@@ -458,31 +460,30 @@ pub(super) fn run(
             }
             if connected && state.admitted && !steering {
                 if let Some(message) = queue.pop_front() {
-                    if let Err(error) = emit(vec![Event::FollowUpDispatch(message.clone())]) {
-                        emit(vec![Event::FollowUpFailed {
-                            id: message.id,
-                            error,
-                        }])?;
-                        continue;
-                    }
                     steering = true;
-                    let client = client.clone();
-                    let session = session.clone();
                     let mut request = request.clone();
                     let send = send.clone();
+                    let cancel = cancel.clone();
                     thread::spawn(move || {
                         request.settings.attachments = message.attachments.clone();
-                        let result = commands::prepare_prompt(
-                            Kind::OpenCode,
-                            message.prepared_prompt.as_deref().unwrap_or(&message.text),
-                            &request.cwd.to_string_lossy(),
-                            &message.attachments,
-                        )
-                        .and_then(|prompt| {
-                            request.prompt = prompt;
-                            client.prompt(&request, &session, true, false)
-                        });
-                        let _ = send.send(Wire::Steered(message, result));
+                        let result = (|| {
+                            request.settings.ticket_context = Some(crate::ticket_context::admit(
+                                &message.text,
+                                request.settings.ticket_context_data_dir.as_deref(),
+                                &request.cwd,
+                                &cancel,
+                                None,
+                            )?);
+                            request.prompt = commands::prepare_prompt(
+                                Kind::OpenCode,
+                                message.prepared_prompt.as_deref().unwrap_or(&message.text),
+                                &request.cwd.to_string_lossy(),
+                                &message.attachments,
+                            )?;
+                            crate::ticket_context::prepare_request(&mut request, &cancel)?;
+                            Ok(Box::new(request))
+                        })();
+                        let _ = send.send(Wire::PreparedSteer(message, result));
                     });
                 }
             }
@@ -516,6 +517,37 @@ pub(super) fn run(
                     if !compact {
                         emit(vec![Event::Ready])?;
                     }
+                }
+                Ok(Wire::PreparedSteer(message, result)) => {
+                    let prepared = match result {
+                        Ok(request) => request,
+                        Err(error) => {
+                            steering = false;
+                            emit(vec![Event::FollowUpFailed {
+                                id: message.id,
+                                error,
+                            }])?;
+                            continue;
+                        }
+                    };
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err("Stopped".into());
+                    }
+                    if let Err(error) = emit(vec![Event::FollowUpDispatch(message.clone())]) {
+                        steering = false;
+                        emit(vec![Event::FollowUpFailed {
+                            id: message.id,
+                            error,
+                        }])?;
+                        continue;
+                    }
+                    let client = client.clone();
+                    let session = session.clone();
+                    let send = send.clone();
+                    thread::spawn(move || {
+                        let result = client.prompt(&prepared, &session, true, false);
+                        let _ = send.send(Wire::Steered(message, result));
+                    });
                 }
                 Ok(Wire::Steered(message, result)) => {
                     steering = false;

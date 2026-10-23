@@ -812,7 +812,7 @@ fn read_gitlab_response(
             return Err("GitLab access token is invalid or lacks permission".into());
         }
         Err(ureq::Error::Status(status, response)) => {
-            let body = response.into_string().unwrap_or_default();
+            let body = super::bounded::body(response.into_reader())?;
             return Err(gitlab_http_error(status, &body));
         }
         Err(_) => return Err("Could not reach GitLab".into()),
@@ -822,9 +822,7 @@ fn read_gitlab_response(
         .header("X-Next-Page")
         .map(str::trim)
         .is_some_and(|value| !value.is_empty());
-    let body = response
-        .into_string()
-        .map_err(|_| "GitLab returned an unreadable response".to_string())?;
+    let body = super::bounded::body(response.into_reader())?;
     if !(200..300).contains(&status) {
         return Err(gitlab_http_error(status, &body));
     }

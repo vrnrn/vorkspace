@@ -1,4 +1,20 @@
 use super::*;
+use gpui::AppContext;
+#[test]
+fn ticket_context_requires_explicit_host_support() {
+    for descriptor in [
+        json!({}),
+        json!({"capabilities":[]}),
+        json!({"capabilities":["sessions.send"]}),
+    ] {
+        assert!(
+            require_ticket_context(&descriptor)
+                .unwrap_err()
+                .contains("Update the host")
+        );
+    }
+    assert!(require_ticket_context(&json!({"capabilities":["sessions.preparedText"]})).is_ok());
+}
 use std::{
     io::{BufRead, BufReader, Write},
     net::TcpListener,
@@ -153,6 +169,111 @@ fn receive(rx: &async_channel::Receiver<Update>) -> Update {
             "Remote worker did not publish an update"
         );
         thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn observe_snapshots(snapshots: Vec<Value>) -> Vec<Update> {
+    let dir = Directory::new();
+    let store = dir.store();
+    let mut binding = binding(&store);
+    binding.session_id = Some("host-session".into());
+    journal(&store, &binding).unwrap();
+    let mut snapshots = snapshots.into_iter();
+    let host = Host::new(move |request| {
+        assert_eq!(request["method"], "sessions.sync");
+        Some(json!({"kind":"snapshot","value":snapshots.next().expect("unexpected observation")}))
+    });
+    let (tx, rx) = async_channel::unbounded();
+    let (_controls_tx, controls) = std::sync::mpsc::channel();
+    let client = host.client.clone();
+    let worker = thread::spawn(move || {
+        run_with_client(
+            client,
+            binding.summary,
+            String::new(),
+            Settings {
+                remote_action: Some(json!({"type":"attach"})),
+                ..Default::default()
+            },
+            controls,
+            store,
+            Arc::new(AtomicBool::new(false)),
+            tx,
+        )
+    });
+    let mut updates = Vec::new();
+    loop {
+        let next = receive(&rx);
+        let finished = next.finished;
+        updates.push(next);
+        if finished {
+            break;
+        }
+    }
+    worker.join().unwrap();
+    assert_eq!(updates.last().unwrap().status, "Ready");
+    updates
+}
+
+#[test]
+fn unchanged_versioned_snapshots_skip_projection_and_empty_history_has_an_end() {
+    let first = snapshot("running", 1);
+    let mut empty = snapshot("ready", 2);
+    empty["session"]["blocks"] = json!([]);
+    let updates = observe_snapshots(vec![first.clone(), first, empty]);
+    assert_eq!(updates.len(), 3);
+    assert_eq!(updates[0].source_len, Some(updates[0].rows.len()));
+    assert!(!updates[0].rows.is_empty());
+    assert!(updates[1].rows.is_empty());
+    assert!(
+        updates[1].source_len.is_none(),
+        "an unchanged revision skips projection"
+    );
+    assert_eq!(updates[2].source_len, Some(0));
+    assert_eq!(updates[2].start, 0);
+}
+
+#[gpui::test]
+fn unversioned_snapshots_project_initial_and_changed_rows_then_remove_a_stale_tail(
+    cx: &mut gpui::TestAppContext,
+) {
+    let mut first = snapshot("running", 1);
+    first.as_object_mut().unwrap().remove("revision");
+    first["session"]["blocks"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"a","role":"assistant","text":"First answer"}));
+    let mut changed = first.clone();
+    changed["session"]["blocks"][1]["text"] = json!("Changed answer");
+    let mut prefix = changed.clone();
+    prefix["session"]["blocks"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    let mut empty = prefix.clone();
+    empty["status"] = json!("ready");
+    empty["session"]["blocks"] = json!([]);
+    let updates = observe_snapshots(vec![first, changed, prefix, empty]);
+    assert_eq!(updates.len(), 4);
+    assert!(updates[0].rows.iter().any(|r| r.text == "First answer"));
+    assert!(updates[1].rows.iter().any(|r| r.text == "Changed answer"));
+    assert!(updates.iter().all(|u| u.source_len.is_some()));
+    for bot in [false, true] {
+        let view = cx.new(|_| crate::transcript::TranscriptView::new());
+        view.update(cx, |view, cx| {
+            if bot {
+                view.bot_mode("bot", 0xffffff, "Bot");
+            }
+            for update in &updates {
+                let len = update.source_len.unwrap();
+                view.patch_snapshot(update.start, update.rows.clone(), len, cx);
+                assert_eq!(view.source_rows().len(), len);
+                if len == 1 {
+                    assert_eq!(view.source_rows()[0].text, "Original message");
+                }
+            }
+            assert!(view.source_rows().is_empty());
+        });
     }
 }
 

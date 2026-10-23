@@ -10,9 +10,24 @@ use vorkspace_core::{
     agent::{Decision, Question, QuestionItem, QuestionOption},
     store::{RemoteSession, RemoteUpload},
 };
+fn require_ticket_context(descriptor: &Value) -> Result<(), String> {
+    if descriptor["capabilities"]
+        .as_array()
+        .is_some_and(|capabilities| {
+            capabilities
+                .iter()
+                .any(|capability| capability == "sessions.preparedText")
+        })
+    {
+        Ok(())
+    } else {
+        Err("This remote host cannot accept ticket context yet. Update the host before sending this message; the ticket reference was not sent.".into())
+    }
+}
 
 fn update(status: impl Into<String>, finished: bool) -> Update {
     Update {
+        source_len: None,
         worktree_cwd: None,
         commands: None,
         provider_turn_id: None,
@@ -36,6 +51,17 @@ fn update(status: impl Into<String>, finished: bool) -> Update {
         handoff: None,
         status: status.into(),
         finished,
+    }
+}
+/// Only matching, present host revisions prove that projection is unchanged.
+/// Older hosts without revisions can change their blocks on every observation.
+pub(crate) fn snapshot_changed(known: Option<&Value>, snapshot: &Value) -> bool {
+    match (
+        known.and_then(|s| s["revision"].as_u64()),
+        snapshot["revision"].as_u64(),
+    ) {
+        (Some(before), Some(after)) => before != after,
+        _ => true,
     }
 }
 fn command(kind: &str, session_id: Option<&str>) -> Value {
@@ -561,6 +587,36 @@ pub(crate) fn run_with_client(
                     }
                 }
             }
+            let descriptor = client.request(&machine.id, "environment.describe", json!({}))?;
+            if !descriptor["providers"].as_array().is_some_and(|providers| {
+                providers
+                    .iter()
+                    .any(|provider| provider.as_str() == Some(&summary.provider))
+            }) {
+                return Err(format!(
+                    "{} is not installed on this machine",
+                    summary.provider
+                ));
+            }
+            if vorkspace_core::ticket_context::has_links(&prompt) {
+                require_ticket_context(&descriptor)?;
+            }
+            let ticket_context = if action["type"] == "send" || action["type"].is_null() {
+                let directory = locked(&store)?.data_dir().map(std::path::Path::to_path_buf);
+                Some(vorkspace_core::ticket_context::admit(
+                    &prompt,
+                    directory.as_deref(),
+                    std::path::Path::new(&summary.cwd),
+                    &cancel,
+                    settings.ticket_context.take(),
+                )?)
+                .filter(|admission| admission.has_context())
+            } else {
+                None
+            };
+            if ticket_context.is_some() {
+                require_ticket_context(&descriptor)?;
+            }
             if binding.session_id.is_none() {
                 let mut create = command("create", None);
                 create["projectId"] = json!(binding.project.project_id);
@@ -594,6 +650,16 @@ pub(crate) fn run_with_client(
             let mut send = command(operation, binding.session_id.as_deref());
             if matches!(operation, "send" | "draft") {
                 send["text"] = json!(prompt);
+                if let Some(context) = &ticket_context {
+                    let prepared = context.append(&prompt);
+                    if prepared.len() > 5 * 1024 * 1024 {
+                        return Err(
+                            "Remote ticket input exceeds 5 MiB. Send fewer ticket references."
+                                .into(),
+                        );
+                    }
+                    send["preparedText"] = json!(prepared);
+                }
                 let (references, uploads) = prepare_for_session(
                     &client,
                     &machine.id,
@@ -621,17 +687,6 @@ pub(crate) fn run_with_client(
             binding.summary.has_messages = true;
             binding.summary.updated_at = vorkspace_core::time::now_ms();
             journal(&store, &binding)?;
-            let descriptor = client.request(&machine.id, "environment.describe", json!({}))?;
-            if !descriptor["providers"].as_array().is_some_and(|providers| {
-                providers
-                    .iter()
-                    .any(|provider| provider.as_str() == Some(&summary.provider))
-            }) {
-                return Err(format!(
-                    "{} is not installed on this machine",
-                    summary.provider
-                ));
-            }
         }
         if !attaching {
             upload_pending(&client, &machine.id, &store, &mut binding)?;
@@ -645,7 +700,6 @@ pub(crate) fn run_with_client(
         let mut known = None;
         let mut seen_approvals = HashSet::new();
         let mut seen_questions = HashSet::new();
-        let mut last_revision = None;
         let mut control_commands = Vec::<Value>::new();
         let mut stopping_run = None::<String>;
         loop {
@@ -661,7 +715,7 @@ pub(crate) fn run_with_client(
             let current_question = question(&snapshot);
             let mut next = update(if running { "Working…" } else { "Ready" }, !running);
             next.start = latest_rows.len();
-            if revision != last_revision {
+            if snapshot_changed(known.as_ref(), &snapshot) {
                 let mut projected = snapshot.clone();
                 vorkspace_core::remote::attachments::qualify_snapshot(
                     &mut projected,
@@ -676,6 +730,7 @@ pub(crate) fn run_with_client(
                     .take_while(|(known, next)| known == next)
                     .count();
                 next.start = prefix;
+                next.source_len = Some(history.rows.len());
                 next.rows = history.rows[prefix..].to_vec();
                 latest_rows = history.rows;
             }
@@ -714,7 +769,6 @@ pub(crate) fn run_with_client(
                 .unwrap_or(binding.summary.updated_at);
             journal(&store, &binding)?;
             tx.send_blocking(next).map_err(|_| "Window closed")?;
-            last_revision = revision;
             if !running {
                 break;
             }

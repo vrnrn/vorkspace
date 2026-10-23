@@ -6,6 +6,10 @@ Local builds without Sparkle open the release page when **Check for updates** is
 
 The manual **Mac release** workflow is the separate publication path. Configure `MACOS_UPDATER_SIGNING_KEY` with the existing desktop signing key and `MACOS_SPARKLE_SIGNING_KEY` with the Sparkle seed matching `scripts/release/sparkle-public-key.txt`. The desktop public key is retained in `scripts/release/compat-public-key.txt`. The workflow creates protected temporary key files, removes them afterward, reserves an unused 1.x-or-newer version and numeric build number, and verifies both formats before publishing. Its tests use mocked release API responses and temporary keys; running tests does not publish a release.
 
+Release preparation writes version-matched notes to `build/release-notes.md`. The native build embeds the complete notes and rejects release-workflow builds with missing, mismatched or oversized notes. An ordinary local build without bundled notes loads the matching published release body when **What's new** opens, using a bounded request to the release endpoint.
+
+The desktop persists its last observed application version in the existing settings store. A version change produces one installed-update notice across windows and subsequent launches, including updates installed by Sparkle. A first launch without an earlier version or a matching installed-update marker stays quiet. Historical installed-update markers are consumed once; they are not required for subsequent native updates.
+
 ## Building an update-enabled app
 
 Download the pinned, checksum-checked [Sparkle 2.9.6 distribution](https://github.com/sparkle-project/Sparkle/releases/tag/2.9.6) for macOS 11 compatibility:

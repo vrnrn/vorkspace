@@ -21,7 +21,7 @@ Actions:
 models.list {}
 sessions.list {project?}
 sessions.read {sessionId,project?,before?,limit?,maxChars?}
-sessions.start {prompt,project?,harness?,model?,modelSettings?,runtimeMode?,title?,draft?,reveal?,workspaceMode?,worktreeBase?,worktreeCwd?,notifyOnComplete?}
+sessions.start {prompt,project?,harness?,model?,modelSettings?,runtimeMode?,title?,draft?,reveal?,workspaceMode?,worktreeBase?,worktreeCwd?,notifyOnComplete?,placement?,besideSessionId?}
 sessions.send {sessionId,prompt,project?,notifyOnComplete?}
 sessions.draft {sessionId,prompt,project?}
 sessions.stop / sessions.archive / sessions.delete {sessionId,project?}

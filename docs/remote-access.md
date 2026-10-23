@@ -104,6 +104,8 @@ Supported: persistent remote text conversations with all five local provider ada
 
 Remote history appears in the Sessions sidebar of each project on a machine. Host snapshots also populate the app's normal session state while the tab is open; they are not written to the local session store. Remote `/compact` uses the provider's context compaction, and `/plan` selects the host provider's plan mode. Queued follow-ups and editing the last message still need host commands. Other local slash commands and skill expansion are not yet available remotely. Worktree deletion, terminals, named provider accounts, `/operator`, automations, orchestration, LAN discovery, and account-based tunnels are not implemented yet. Other remote prompts are sent directly to the provider.
 
+Ticket references in a sent message are resolved on the desktop. Hosts advertise `sessions.preparedText` when they accept a separate provider prompt, bounded to 5 MiB of UTF-8. That prompt participates in the command's idempotency fingerprint while the visible message and user block ID remain unchanged. A desktop rejects context-bearing sends to older hosts before journaling the command or uploading attachments; update the host to enable them. Saved drafts retain their original text and references.
+
 The headless host runs the reused JavaScript adapters with a Node process backend. It proves the execution boundary without introducing the planned Rust daemon/worker IPC yet. Node is included in host release archives, separately from the desktop application.
 
 ## Verify

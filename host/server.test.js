@@ -15,7 +15,7 @@ import { HostStore } from "./store.js";
 import { createHostServer } from "./server.js";
 import { HostChildBackend } from "./child-backend.js";
 import { configureChildBackend } from "./runtime/protocol/child.js";
-import { WORKSPACE_EDITOR_SAVE_CAPABILITY } from "./runtime/models/connections/protocol.js";
+import { PREPARED_TEXT_CAPABILITY, WORKSPACE_EDITOR_SAVE_CAPABILITY } from "./runtime/models/connections/protocol.js";
 const modelProbe = vi.hoisted(() => vi.fn());
 vi.mock(
   "./runtime/providers/codex/codexCatalog.js",
@@ -117,6 +117,7 @@ describe("remote host API", () => {
     const s = await setup();
     const descriptor = (await s.call("environment.describe")).value.result;
     expect(descriptor.capabilities).toContain(WORKSPACE_EDITOR_SAVE_CAPABILITY);
+    expect(descriptor.capabilities).toContain(PREPARED_TEXT_CAPABILITY);
     const path = join(s.project.cwd, "editor.txt");
     writeFileSync(path, "before\r\n");
     const run = async (command, args) =>

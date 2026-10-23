@@ -5,6 +5,7 @@ import { realpath, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import {
   HOST_PROTOCOL_VERSION,
+  PREPARED_TEXT_CAPABILITY,
   WORKSPACE_EDITOR_SAVE_CAPABILITY,
 } from "./runtime/models/connections/protocol.js";
 import { writeAttachmentChunk, readAttachmentChunk } from "./attachments.js";
@@ -228,6 +229,7 @@ export function createHostServer(engine, providers, lifecycle) {
               ),
               capabilities: [
                 "sessions",
+                PREPARED_TEXT_CAPABILITY,
                 "projects.browse",
                 "models.list",
                 "approvals",

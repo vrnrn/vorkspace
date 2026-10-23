@@ -63,7 +63,7 @@ pub(super) struct HistoryPosition {
 impl TranscriptView {
     pub(crate) fn install_prepared_history(
         &mut self,
-        mut history: PreparedHistory,
+        history: PreparedHistory,
         cx: &mut Context<Self>,
     ) {
         if history.rows.len() < self.source.len() {
@@ -89,22 +89,7 @@ impl TranscriptView {
             } else {
                 common
             };
-            // Preserve an explicitly opened older page. Its existing parsers
-            // can follow the replacement without reparsing that page on the
-            // interactive thread or collapsing it back to the recent tail.
-            history.start = history.start.min(self.history_start);
-            for message in &mut self.messages {
-                if (history.start..history.rows.len()).contains(&message.start) {
-                    history.parsers.entry(message.start).or_insert_with(|| {
-                        std::mem::replace(&mut message.parser, MarkdownParser::new())
-                    });
-                }
-            }
-            let selection = std::mem::take(&mut self.selection);
-            self.replace_prepared_history(history, cx);
-            selection.retain_source_prefix(stable);
-            self.selection = selection;
-            self.restore_reading_position(position);
+            self.install_shorter_history(history, stable, position, cx);
             return;
         }
         self.prepared_parsers = history.parsers;
@@ -115,6 +100,91 @@ impl TranscriptView {
         } else {
             self.patch_with_page(0, history.rows, Some(history.start), cx);
         }
+    }
+
+    /// A projected snapshot owns its end as well as its changed suffix.
+    /// Ordinary provider patches remain append/replace operations.
+    pub(crate) fn patch_snapshot(
+        &mut self,
+        start: usize,
+        rows: Vec<Row>,
+        source_len: usize,
+        cx: &mut Context<Self>,
+    ) {
+        assert_eq!(
+            source_len,
+            start + rows.len(),
+            "snapshot tail must reach its authoritative end"
+        );
+        if source_len >= self.source.len() {
+            self.patch(start, rows, cx);
+            return;
+        }
+        assert!(
+            start <= self.source.len(),
+            "snapshot patches must be contiguous"
+        );
+        let offset = self.list.logical_scroll_top();
+        let position = HistoryPosition {
+            key: self.rows.get(offset.item_ix).map(|row| row.key),
+            offset,
+            following: self.list.is_following_tail(),
+        };
+        let common = start
+            + self.source[start..]
+                .iter()
+                .zip(&rows)
+                .take_while(|(before, after)| before == after)
+                .count();
+        let stable = if self.source.get(common).is_some_and(|row| !row.first) {
+            self.source[..common]
+                .iter()
+                .rposition(|row| row.first)
+                .unwrap_or(0)
+        } else {
+            common
+        };
+        // Move the surviving prefix and reuse its parsers. A compacted host
+        // history must not copy or parse all unchanged text on the UI thread.
+        let mut retained = std::mem::take(&mut self.source);
+        retained.truncate(start);
+        retained.extend(rows);
+        let start = if self.bot {
+            page_start(&retained, retained.len()).min(self.history_start)
+        } else {
+            0
+        };
+        let history = PreparedHistory {
+            rows: retained,
+            parsers: HashMap::new(),
+            start,
+        };
+        self.install_shorter_history(history, stable, position, cx);
+    }
+
+    fn install_shorter_history(
+        &mut self,
+        mut history: PreparedHistory,
+        stable: usize,
+        position: HistoryPosition,
+        cx: &mut Context<Self>,
+    ) {
+        // Preserve an explicitly opened older page. Its existing parsers
+        // can follow the replacement without reparsing that page on the
+        // interactive thread or collapsing it back to the recent tail.
+        history.start = history.start.min(self.history_start);
+        for message in &mut self.messages {
+            if (history.start..history.rows.len()).contains(&message.start) {
+                history.parsers.entry(message.start).or_insert_with(|| {
+                    std::mem::replace(&mut message.parser, MarkdownParser::new())
+                });
+            }
+        }
+        let selection = std::mem::take(&mut self.selection);
+        self.replace_prepared_history(history, cx);
+        selection.retain_source_prefix(stable);
+        self.selection = selection;
+        self.restore_reading_position(position);
     }
 
     pub(super) fn older_history_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -353,6 +423,29 @@ mod tests {
             Row { role: "user".into(), text: format!("Question {turn}"), first: true, sent_at: Some(turn as u64) },
             Row { role: "assistant".into(), text: format!("Answer **{turn}**.\n\nA second paragraph with [a link](https://example.com)."), first: true, sent_at: None },
         ]).collect()
+    }
+
+    #[gpui::test]
+    fn snapshot_tail_shorter_than_the_bot_page_reveals_the_retained_prefix(
+        cx: &mut TestAppContext,
+    ) {
+        let view = cx.new(|_| TranscriptView::new());
+        view.update(cx, |view, cx| {
+            view.bot_mode("bot", 0xffffff, "Bot");
+            let rows = long_bot(25);
+            view.install_prepared_history(PreparedHistory::new(rows.clone(), true), cx);
+            assert_eq!(view.history_start, 30);
+            view.patch_snapshot(2, vec![], 2, cx);
+            assert_eq!(view.source, rows[..2]);
+            assert_eq!(view.history_start, 0);
+            assert!(
+                view.rows
+                    .iter()
+                    .any(|row| matches!(&row.body, Body::Markdown(markdown)
+                if crate::markdown::selection_text(markdown).contains("Answer 0.")))
+            );
+            assert!(view.rows.iter().all(|row| row.key.0 < 2));
+        });
     }
 
     #[gpui::test]

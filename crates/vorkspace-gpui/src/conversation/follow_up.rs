@@ -27,6 +27,41 @@ impl Conversation {
         text: String,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        self.accept_external_message(text, None, cx)
+    }
+    pub(crate) fn app_send(&mut self, text: String, cx: &mut Context<Self>) -> Result<(), String> {
+        if !self.ready_for_external(cx) {
+            return Err(
+                "Session is busy, loading, or has an unsent draft; it was preserved".into(),
+            );
+        }
+        self.app_start_message(text, cx)
+    }
+    /// Only the creator of a fresh session calls this before its initial
+    /// composer read. Queue acceptance never takes or replaces composer input.
+    pub(crate) fn app_start_message(
+        &mut self,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let text = self.consume_mode_command(text, cx);
+        let mode = if self.settings.orchestrator {
+            Some("orchestrator")
+        } else if self.settings.plan {
+            Some("plan")
+        } else if self.settings.operator {
+            Some("operator")
+        } else {
+            None
+        };
+        self.accept_external_message(text, mode.map(str::to_owned), cx)
+    }
+    fn accept_external_message(
+        &mut self,
+        text: String,
+        mode: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
         if !self.history_ready()
             || self.stopping
             || self.account_switching
@@ -49,7 +84,7 @@ impl Conversation {
         if self.follow_ups.state.messages.len() >= 128 {
             return Err("The session's message queue is full".into());
         }
-        let mut message = self.message(text, Vec::new(), None, cx);
+        let mut message = self.message(text, Vec::new(), mode, cx);
         message.steer = cx
             .try_global::<crate::settings::Preferences>()
             .is_none_or(|p| p.follow_up == "steer")
@@ -58,9 +93,9 @@ impl Conversation {
         let mut next = self.follow_ups.state.clone();
         next.revision += 1;
         next.messages.push(message);
-        // Voice receives acceptance only after the existing queue owner has a
+        // External callers receive acceptance only after the queue owner has a
         // durable message. Never consume the user's draft or attachments.
-        locked(&self.store)?.save_follow_ups(self.summary.id, &next)?;
+        locked(&self.store)?.accept_follow_ups(self.summary.id, &next)?;
         self.follow_ups.state = next;
         self.follow_ups.persisted = self.follow_ups.state.revision;
         if self.follow_ups.state.paused {

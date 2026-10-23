@@ -1333,7 +1333,7 @@ fn run_process(
 }
 
 fn run_operation(
-    request: Request,
+    mut request: Request,
     cancel: Arc<AtomicBool>,
     controls: Option<mpsc::Receiver<Control>>,
     probe: bool,
@@ -1344,8 +1344,14 @@ fn run_operation(
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped".into());
     }
+    if !probe && !compact && !command_probe {
+        crate::ticket_context::admit_request(&mut request, &cancel)?;
+    }
     if request.kind == Kind::OpenCode {
         return opencode::run(request, cancel, controls, probe, compact, emit);
+    }
+    if !probe && !compact && !command_probe {
+        crate::ticket_context::prepare_request(&mut request, &cancel)?;
     }
     let claude_new_session = (request.kind == Kind::Claude
         && request.provider_id.is_none()
@@ -1589,7 +1595,7 @@ fn run_operation(
                     while let Ok(control) = controls.try_recv() {
                         if let Decision::Steer(message) = control.decision {
                             let id = message.id.clone();
-                            match protocol.steer(message, &mut stdin, |message| {
+                            match protocol.steer(message, &mut stdin, &cancel, |message| {
                                 emit(vec![Event::FollowUpDispatch(message.clone())])
                             }) {
                                 Ok(events) => pending.extend(events),

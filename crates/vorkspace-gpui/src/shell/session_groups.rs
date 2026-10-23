@@ -799,7 +799,7 @@ impl Shell {
             });
         }));
     }
-    fn forget_session(&mut self, id: i64, cx: &mut Context<Self>) {
+    pub(super) fn forget_session(&mut self, id: i64, cx: &mut Context<Self>) {
         // A tab opened on it while the store was deleting keeps it alive.
         if self.workspace.tab_of(id).is_some() {
             return;

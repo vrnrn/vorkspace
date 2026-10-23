@@ -791,6 +791,107 @@ fn app_actions_are_project_scoped_and_mutation_retries_are_idempotent(cx: &mut T
     });
 }
 #[gpui::test]
+fn app_commands_recheck_deferred_ownership_and_protect_cold_and_self_targets(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    for action in ["sessions.stop", "sessions.archive", "sessions.delete"] {
+        assert!(
+            call(&s, action, action, json!({"sessionId":s.session}), cx)
+                .try_recv()
+                .unwrap()
+                .unwrap_err()
+                .contains("calling")
+        );
+    }
+    let cold = locked(&s.store)
+        .unwrap()
+        .create("codex", &s.project)
+        .unwrap()
+        .id;
+    s.manager.update(cx, |manager, _| {
+        manager.roster.hidden_sessions.push(cold);
+        manager.roster.save(&locked(&s.store).unwrap()).unwrap();
+    });
+    assert!(
+        call(
+            &s,
+            "cold-delete",
+            "sessions.delete",
+            json!({"sessionId":cold}),
+            cx
+        )
+        .try_recv()
+        .unwrap()
+        .is_err()
+    );
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .bot_session(cold)
+            .unwrap()
+            .is_some()
+    );
+    let target = locked(&s.store)
+        .unwrap()
+        .create("codex", &s.project)
+        .unwrap()
+        .id;
+    let (reply, rx) = mpsc::channel();
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |manager, cx| {
+                manager.app_call(
+                    bot::bridge::Call {
+                        session: s.session,
+                        request_id: "deferred-delete".into(),
+                        action: "sessions.delete".into(),
+                        input: json!({"sessionId":target}),
+                        reply,
+                    },
+                    window,
+                    cx,
+                );
+                // Ownership changes after admission but before the deferred effect.
+                manager.roster.hidden_sessions.push(target);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(rx.try_recv().unwrap().unwrap_err().contains("protected"));
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .bot_session(target)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .bot_session(s.session)
+            .unwrap()
+            .is_some()
+    );
+}
+#[gpui::test]
+fn app_command_unknown_admission_does_not_repeat_a_mutation(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let input = json!({"name":"Only once","instructions":"Read status","schedule":{"kind":"daily","time":"09:00"}});
+    locked(&s.store)
+        .unwrap()
+        .admit_app_command(s.session, "unknown", "habits.add", &input)
+        .unwrap();
+    assert!(
+        call(&s, "unknown", "habits.add", input, cx)
+            .try_recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("unconfirmed")
+    );
+    assert!(habits::load(&s.root, &s.id).unwrap().is_empty());
+}
+#[gpui::test]
 fn queued_messages_are_saved_before_dispatch_and_do_not_run_while_blocked(cx: &mut TestAppContext) {
     let s = setup(cx);
     let message = bot::new_id();

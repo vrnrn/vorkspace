@@ -1,6 +1,7 @@
 //! Native Inbox services. Provider adapters preserve the Tauri API's requests,
 //! validation, response parsers and credential file formats.
 mod avatar;
+mod bounded;
 mod media;
 pub use media::png as media_png;
 pub mod azure_devops;
@@ -981,8 +982,12 @@ fn run_command(
         .env("GH_PAGER", "cat")
         .env("GIT_PAGER", "cat");
     crate::scm::shell::apply_gui_env(&mut command);
-    crate::process::configure_child(&mut command);
-    let output = command.output().map_err(|e| e.to_string())?;
+    let output = if program == "gh" {
+        bounded::output(&mut command)?
+    } else {
+        crate::process::configure_child(&mut command);
+        command.output().map_err(|e| e.to_string())?
+    };
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();

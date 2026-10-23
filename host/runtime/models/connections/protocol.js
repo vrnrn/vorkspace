@@ -1,4 +1,6 @@
 export const HOST_PROTOCOL_VERSION = 1;
+/** Provider-only text has separate byte admission and participates in receipts. */
+export const PREPARED_TEXT_CAPABILITY = "sessions.preparedText";
 /** The host understands exact-byte editor baselines and checked save receipts. */
 export const WORKSPACE_EDITOR_SAVE_CAPABILITY =
   "workspace.editorSavePrecondition";

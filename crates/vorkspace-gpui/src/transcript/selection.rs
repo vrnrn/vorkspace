@@ -829,6 +829,88 @@ impl TranscriptView {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+    #[gpui::test]
+    fn authoritative_snapshot_tails_keep_valid_prefix_selection_and_reading_anchor(
+        cx: &mut TestAppContext,
+    ) {
+        for bot in [false, true] {
+            let view = cx.new(|_| TranscriptView::new());
+            view.update(cx, |view, cx| {
+                if bot {
+                    view.bot_mode("bot", 0xffffff, "Bot");
+                }
+                let rows: Vec<_> = ["First answer", "Second answer", "Last answer"]
+                    .into_iter()
+                    .map(|text| Row {
+                        role: "assistant".into(),
+                        text: text.into(),
+                        first: true,
+                        sent_at: None,
+                    })
+                    .collect();
+                view.install_prepared_history(PreparedHistory::new(rows.clone(), bot), cx);
+                let item_ix = view
+                    .rows
+                    .iter()
+                    .position(|row| matches!(row.body, Body::Markdown(_)))
+                    .unwrap();
+                let key = view.rows[item_ix].key;
+                view.list.pause_following_tail();
+                view.list.scroll_to(ListOffset {
+                    item_ix,
+                    offset_in_item: px(7.),
+                });
+                {
+                    let mut selection = view.selection.0.borrow_mut();
+                    selection.response = 0;
+                    selection.anchor = Some(Position { row: key, byte: 0 });
+                    selection.head = Some(Position { row: key, byte: 5 });
+                }
+                view.patch_snapshot(1, vec![], 1, cx);
+                assert_eq!(view.source, rows[..1]);
+                assert_eq!(view.selected_text().as_deref(), Some("First"));
+                assert!(view.rows.iter().all(|row| row.key.0 == 0));
+                assert!(
+                    view.motions.is_empty(),
+                    "removed rows do not linger for an exit animation"
+                );
+                let restored = view.list.logical_scroll_top();
+                assert_eq!(view.rows[restored.item_ix].key, key);
+                assert_eq!(restored.offset_in_item, px(7.));
+                assert!(!view.list.is_following_tail());
+                view.patch(1, rows[1..].to_vec(), cx);
+                view.patch_snapshot(
+                    0,
+                    vec![Row {
+                        text: "Rewritten answer".into(),
+                        ..rows[0].clone()
+                    }],
+                    1,
+                    cx,
+                );
+                assert!(
+                    view.rows
+                        .iter()
+                        .any(|row| matches!(&row.body, Body::Markdown(markdown)
+                    if crate::markdown::selection_text(markdown) == "Rewritten answer")),
+                    "a shorter changed tail resets the reused Markdown parser"
+                );
+                assert!(
+                    view.selected_text().is_none(),
+                    "selection in rewritten text is stale"
+                );
+                assert_eq!(view.source.len(), 1);
+                assert!(view.motions.is_empty());
+                view.patch_snapshot(0, vec![], 0, cx);
+                assert!(view.selected_text().is_none());
+                assert!(view.source.is_empty() && view.rows.is_empty() && view.messages.is_empty());
+                assert_eq!(view.source_bytes, 0);
+                assert_eq!(view.list.item_count(), 1);
+                assert_eq!(view.list.logical_scroll_top().item_ix, 0);
+            });
+        }
+    }
+
     struct ReaderFixture {
         transcript: gpui::Entity<TranscriptView>,
         show: bool,

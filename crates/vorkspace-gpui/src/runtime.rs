@@ -15,6 +15,8 @@ mod handoff;
 mod persistence;
 pub(crate) mod remote;
 mod submissions;
+#[cfg(test)]
+mod ticket_context_tests;
 mod visual_discovery;
 #[cfg(all(test, unix))]
 mod visual_tests;
@@ -26,6 +28,8 @@ struct TurnInput {
     settings: Settings,
 }
 pub(crate) struct Update {
+    /// Present only when rows describe the complete authoritative snapshot tail.
+    pub(crate) source_len: Option<usize>,
     pub(crate) worktree_cwd: Option<String>,
     pub(crate) commands: Option<Vec<provider::NativeCommand>>,
     pub(crate) provider_turn_id: Option<String>,
@@ -164,6 +168,15 @@ fn run_turn_using(
         transcript = locked(&store)?.load(summary.id)?;
         history_loaded = true;
         turn_start = transcript.rows.len();
+        settings.ticket_context_data_dir =
+            locked(&store)?.data_dir().map(std::path::Path::to_path_buf);
+        settings.ticket_context = Some(vorkspace_core::ticket_context::admit(
+            &prompt,
+            settings.ticket_context_data_dir.as_deref(),
+            std::path::Path::new(settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd)),
+            &cancel,
+            settings.ticket_context.take(),
+        )?);
         submissions.reserve_initial(&prompt, &settings)?;
         let mut persisted = settings.clone();
         persisted.handoff = None;
@@ -226,6 +239,7 @@ fn run_turn_using(
             &tx,
             &cancel,
             Update {
+                source_len: None,
                 worktree_cwd: None,
                 commands: None,
                 provider_turn_id: None,
@@ -279,6 +293,7 @@ fn run_turn_using(
                 &tx,
                 &cancel,
                 Update {
+                    source_len: None,
                     worktree_cwd: Some(cwd),
                     commands: None,
                     provider_turn_id: None,
@@ -331,6 +346,7 @@ fn run_turn_using(
                 &tx,
                 &cancel,
                 Update {
+                    source_len: None,
                     worktree_cwd: None,
                     commands: None,
                     provider_turn_id: None,
@@ -793,6 +809,7 @@ fn run_turn_using(
                         &tx,
                         &cancel,
                         Update {
+                            source_len: None,
                             worktree_cwd: None,
                             commands,
                             provider_turn_id,
@@ -985,6 +1002,7 @@ fn run_turn_using(
     // Final status must still arrive after cancellation. Dropping a window closes
     // the receiver, so the worker never keeps a closed viewport alive.
     let _ = tx.send_blocking(Update {
+        source_len: None,
         // A stop can make the UI skip intermediate updates. Keep the created
         // checkout in the final receipt so the next Send cannot create it twice.
         worktree_cwd: created_worktree,

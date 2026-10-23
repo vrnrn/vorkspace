@@ -40,3 +40,5 @@ Checking whether a remote chat changed reads its small summary instead of reopen
 Temporary downloads share a size budget. If it is busy, retry after another download finishes; active downloads are kept intact. A chat that exceeds the download size limit gets a clear error and stays saved on the host. Download limits do not delete conversation data.
 
 A slow reply from the host cannot undo newer status or settings. Partial chat lists can be filled in by a matching complete reply without treating missing fields as deleted.
+
+When a message includes a ticket reference, the app can give its details to the remote agent while your chat still shows what you typed. The remote computer needs an updated host for this. Older hosts give a clear upgrade message before the app sends that request or its attachments. Saved drafts keep your original wording.

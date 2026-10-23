@@ -66,7 +66,9 @@ impl Store {
         if finalized {
             return Ok(root);
         }
-        Ok(format!("{root} AND (EXISTS(SELECT 1 FROM bot_blocks WHERE session_id={session}) OR EXISTS(SELECT 1 FROM bot_turns WHERE session_id={session}))"))
+        Ok(format!(
+            "{root} AND (EXISTS(SELECT 1 FROM bot_blocks WHERE session_id={session}) OR EXISTS(SELECT 1 FROM bot_turns WHERE session_id={session}))"
+        ))
     }
     fn current_bot_owner(&self, original: &str) -> Result<bool, String> {
         let predicate = self.current_bot_owner_predicate("?1")?;

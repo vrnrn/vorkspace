@@ -1,5 +1,6 @@
 mod accounts;
 mod app_commands;
+pub(crate) use app_commands::AppStart;
 mod app_views;
 mod automation_runs;
 pub(crate) mod bots;
@@ -485,8 +486,6 @@ pub(crate) struct Shell {
     quick_open: Option<quick_open::Open>,
     image_lightbox: Option<(Entity<crate::image_lightbox::ImageLightbox>, Subscription)>,
     app_bridge: Option<vorkspace_core::bot::bridge::Server>,
-    app_results: HashMap<(i64, String), Result<serde_json::Value, String>>,
-    app_pending: HashSet<(i64, String)>,
     orchestrations: HashMap<i64, orchestration::Run>,
     /// Each lead's last orchestration, whose agents hang under it in the sidebar.
     orchestration_summaries: HashMap<i64, vorkspace_core::orchestration::Summary>,
@@ -810,8 +809,6 @@ impl Shell {
             quick_open: None,
             image_lightbox: None,
             app_bridge: None,
-            app_results: HashMap::new(),
-            app_pending: HashSet::new(),
             orchestrations: HashMap::new(),
             orchestration_summaries: sidebar_metadata.orchestrations,
             started_by: sidebar_metadata.started_by,

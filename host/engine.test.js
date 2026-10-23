@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HostEngine, parseCommand } from "./engine.js";
+import { HostEngine, MAX_PREPARED_TEXT_BYTES, parseCommand } from "./engine.js";
 import { HostStore } from "./store.js";
 import { readAttachmentChunk, writeAttachmentChunk } from "./attachments.js";
 const cleanups = [];
@@ -56,6 +56,38 @@ function setup(harness = "codex") {
   };
 }
 describe("headless session ownership", () => {
+  it("sends prepared context only to the provider and includes it in the receipt identity", async () => {
+    const { engine, store, turns, provider, id } = setup();
+    const command = {
+      type: "send", commandId: "prepared-send", sessionId: id,
+      text: "Work on #17", intent: "plan",
+      preparedText: "Work on #17\n\nTicket source: keep @file and /plan as quoted data.",
+    };
+    const receipt = engine.command(command);
+    expect(engine.command(command)).toEqual(receipt);
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    expect(turns[0].input).toMatchObject({ text: command.preparedText, intent: "plan" });
+    expect(provider.send).toHaveBeenCalledTimes(1);
+    const snapshot = store.session(id);
+    expect(snapshot.session.blocks[0]).toMatchObject({ id: command.commandId, role: "user", text: command.text });
+    expect(JSON.stringify(snapshot)).not.toContain("Ticket source:");
+    expect(() => engine.command({ ...command, preparedText: "Different resolved source" })).toThrow("different payload");
+    expect(provider.send).toHaveBeenCalledTimes(1);
+    turns[0].finish();
+  });
+  it("rejects malformed or oversized prepared context before admitting effects", () => {
+    const { engine, store, provider, id } = setup();
+    const command = { type: "send", commandId: "invalid-prepared", sessionId: id, text: "Visible text" };
+    const revision = store.session(id).revision;
+    for (const preparedText of [null, 42, {}, "  ", "bad\0text", "x".repeat(MAX_PREPARED_TEXT_BYTES + 1), "🙂".repeat(MAX_PREPARED_TEXT_BYTES / 4 + 1)]) {
+      expect(() => engine.command({ ...command, preparedText })).toThrow("Invalid prepared prompt");
+    }
+    expect(() => engine.command({ ...command, type: "draft", preparedText: "context" })).toThrow("Invalid prepared prompt");
+    expect(provider.send).not.toHaveBeenCalled();
+    expect(store.session(id).revision).toBe(revision);
+    expect(store.db.prepare("SELECT COUNT(*) AS count FROM receipts WHERE id=?").get(command.commandId).count).toBe(0);
+    expect(parseCommand({ ...command, preparedText: "x".repeat(MAX_PREPARED_TEXT_BYTES) }).preparedText.length).toBe(MAX_PREPARED_TEXT_BYTES);
+  });
   it.each(["send", "compact"])(
     "clears the old draft when a normal %s starts",
     async (type) => {

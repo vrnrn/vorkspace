@@ -100,6 +100,11 @@ pub struct Settings {
     /// message remains the transcript and queue label.
     #[serde(skip)]
     pub prepared_prompt: Option<String>,
+    /// One admitted ticket lookup, carried separately from visible user text.
+    #[serde(skip)]
+    pub ticket_context: Option<crate::ticket_context::Admission>,
+    #[serde(skip)]
+    pub ticket_context_data_dir: Option<std::path::PathBuf>,
     /// Immutable identity captured for this newly submitted turn.
     #[serde(skip)]
     pub turn_model: Option<TurnInfo>,

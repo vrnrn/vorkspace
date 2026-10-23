@@ -130,7 +130,11 @@ impl Store {
         {
             if let Some(tables) = &self.shared.as_ref().unwrap().earlier_bot_tables {
                 let current = self.current_bot_owner_predicate("sessions.id")?;
-                return Ok(format!("CASE WHEN EXISTS(SELECT 1 FROM {roots} WHERE session_id=sessions.id) AND NOT({current}) THEN EXISTS(SELECT 1 FROM {blocks} WHERE session_id=sessions.id AND is_user=1) ELSE has_user_message END",roots=tables.transcripts,blocks=tables.blocks));
+                return Ok(format!(
+                    "CASE WHEN EXISTS(SELECT 1 FROM {roots} WHERE session_id=sessions.id) AND NOT({current}) THEN EXISTS(SELECT 1 FROM {blocks} WHERE session_id=sessions.id AND is_user=1) ELSE has_user_message END",
+                    roots = tables.transcripts,
+                    blocks = tables.blocks
+                ));
             }
             return Ok("has_user_message".into());
         }
@@ -187,9 +191,21 @@ impl Store {
              END;"
         ))?;
         let mut guarded = vec![
-            ("ordinary_blocks".to_owned(), "session_id", "OLD.block_json IS NOT NEW.block_json OR OLD.position IS NOT NEW.position OR OLD.block_id IS NOT NEW.block_id"),
-            ("ordinary_transcripts".to_owned(), "session_id", "OLD.normalized IS NOT NEW.normalized"),
-            ("bot_blocks".to_owned(), "session_id", "OLD.block_json IS NOT NEW.block_json OR OLD.seq IS NOT NEW.seq OR OLD.block_id IS NOT NEW.block_id"),
+            (
+                "ordinary_blocks".to_owned(),
+                "session_id",
+                "OLD.block_json IS NOT NEW.block_json OR OLD.position IS NOT NEW.position OR OLD.block_id IS NOT NEW.block_id",
+            ),
+            (
+                "ordinary_transcripts".to_owned(),
+                "session_id",
+                "OLD.normalized IS NOT NEW.normalized",
+            ),
+            (
+                "bot_blocks".to_owned(),
+                "session_id",
+                "OLD.block_json IS NOT NEW.block_json OR OLD.seq IS NOT NEW.seq OR OLD.block_id IS NOT NEW.block_id",
+            ),
             ("bot_transcripts".to_owned(), "session_id", "1"),
         ];
         if let Some(tables) = &self.shared.as_ref().unwrap().earlier_bot_tables {
