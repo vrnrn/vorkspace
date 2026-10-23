@@ -16,6 +16,9 @@ async function fixture(t) {
   await mkdir(join(root, "src"));
   await writeFile(join(root, "src/lib.rs"), "");
   await copyFile(buildScript, join(root, "build.rs"));
+  // The copied build script also validates notes in a release CI environment.
+  await mkdir(join(root, "build"));
+  await writeFile(join(root, "build/release-notes.md"), "## [0.0.0]\n\nDependency guard fixture.\n");
   const manifest = `[package]
 name = "dependency-guard-fixture"
 version = "0.0.0"
