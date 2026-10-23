@@ -4,6 +4,7 @@ mod attachment_drop;
 mod bot;
 mod btw;
 mod commands;
+mod composer_draft;
 pub(crate) mod composer_features;
 mod composer_shelf;
 mod edit_last_turn;
@@ -132,6 +133,8 @@ pub(crate) struct Conversation {
     _completion_event: Subscription,
     _command_removal: Subscription,
     _draft_observation: Subscription,
+    composer_draft: composer_draft::State,
+    _draft_quit: Subscription,
     _input_focus: Option<[Subscription; 2]>,
     draft_has_value: bool,
     folder_selected: bool,
@@ -209,6 +212,7 @@ pub(crate) struct Conversation {
 }
 impl Drop for Conversation {
     fn drop(&mut self) {
+        let _ = self.composer_draft.flush();
         if !self.summary.cwd.starts_with("remote://") {
             self.cancel.store(true, Ordering::Relaxed);
         }
@@ -474,6 +478,7 @@ impl Conversation {
                 cx.notify();
             }
             this.open_typed_btw(cx);
+            this.persist_composer(cx);
         });
         let submission = cx.subscribe(&input, |this, _, _: &input::Submitted, cx| this.send(cx));
         let review =
@@ -529,7 +534,15 @@ impl Conversation {
                 }
             })
         });
-        Self {
+        let draft_state = composer_draft::State::new(store.clone(), summary.id);
+        let draft_quit = cx.on_app_quit(|this, cx| {
+            this.capture_composer(cx);
+            let writer = this.composer_draft.writer.clone();
+            cx.background_executor().spawn(async move {
+                let _ = composer_draft::flush(&writer);
+            })
+        });
+        let mut conversation = Self {
             editing_last_turn: Default::default(),
             btw: None,
             store,
@@ -545,6 +558,8 @@ impl Conversation {
             _completion_event: completion_event,
             _command_removal: command_removal,
             _draft_observation: draft_observation,
+            composer_draft: draft_state,
+            _draft_quit: draft_quit,
             _input_focus: None,
             draft_has_value: false,
             folder_selected: false,
@@ -622,7 +637,9 @@ impl Conversation {
             summary,
             remote_state: remote::State::default(),
             remote_plans: remote_plans::State::default(),
-        }
+        };
+        conversation.load_composer(cx);
+        conversation
     }
     pub(crate) fn reveal_search(&mut self, row: usize, query: String, cx: &mut Context<Self>) {
         if !self.loaded || self.history_unloaded {
@@ -778,6 +795,11 @@ impl Conversation {
         self.send(cx);
     }
     fn send(&mut self, cx: &mut Context<Self>) {
+        if let Some(error) = &self.composer_draft.error {
+            self.status = error.clone();
+            cx.notify();
+            return;
+        }
         if self.is_remote() && self.remote_send_guard(cx) {
             return;
         }
@@ -2731,6 +2753,7 @@ impl Conversation {
                         .left_0()
                         .size_full(),
                     )
+                    .children(self.composer_recovery_banner(cx))
                     .children(self.attachment_chips(cx))
                     .child(
                         div()

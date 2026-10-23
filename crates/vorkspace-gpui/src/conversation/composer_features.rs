@@ -290,6 +290,7 @@ impl Conversation {
         }
         let pending = std::mem::take(&mut self.pending_attachments);
         self.add_attachments(pending, cx);
+        self.persist_composer(cx);
         cx.notify();
     }
     pub(super) fn attachment_chips(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -344,6 +345,7 @@ impl Conversation {
                             cx.stop_propagation();
                             if ix < this.attachments.len() {
                                 this.attachments.remove(ix);
+                                this.persist_composer(cx);
                                 cx.notify();
                             }
                         }));

@@ -1,5 +1,7 @@
 //! Session storage. Desktop launches use vorkspace's existing schema directly.
 mod bots;
+mod composer_draft;
+pub use composer_draft::{ComposerDraft, ComposerRecovery};
 mod managed_sessions;
 mod notes;
 mod remote;
@@ -1016,12 +1018,26 @@ impl Store {
         }
 
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        if tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='composer_draft_recoveries')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(|e| e.to_string())?
+        {
+            tx.execute(
+                "DELETE FROM composer_draft_recoveries WHERE session_id=?1",
+                [id.to_string()],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         tx.execute("DELETE FROM native_rows WHERE session_id=?1", [id])
             .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM native_reminders WHERE session_id=?1", [id])
             .map_err(|e| e.to_string())?;
         tx.execute(
-            "DELETE FROM native_settings WHERE key IN (?1,?2,?3,?5,?6,?7,?8) OR key LIKE ?4",
+            "DELETE FROM native_settings WHERE key IN (?1,?2,?3,?5,?6,?7,?8,?9) OR key LIKE ?4",
             params![
                 format!("agent:{id}"),
                 format!("context:{id}"),
@@ -1030,7 +1046,8 @@ impl Store {
                 format!("started-by:{id}"),
                 format!("orchestration:{id}"),
                 format!("inbox-ask:{id}"),
-                format!("automation:{id}")
+                format!("automation:{id}"),
+                format!("composer:{id}")
             ],
         )
         .map_err(|e| e.to_string())?;

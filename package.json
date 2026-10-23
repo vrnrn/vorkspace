@@ -1,6 +1,6 @@
 {
   "name": "vorkspace",
-  "version": "0.13.8",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,7 +12,7 @@
     "check": "npm run test:tooling && npm run test:voice && npm run test:host && cargo fmt --all --check && cargo clippy --locked --workspace --all-targets --profile native-dev -- -D warnings && npm run test:rust",
     "test": "npm run test:tooling && npm run test:voice && npm run test:host && npm run test:rust",
     "test:rust": "cargo test --locked -p vorkspace-core --profile native-dev && cargo test --locked -p vorkspace-gpui --profile native-dev -- --test-threads=1",
-    "test:tooling": "node --test scripts/desktop/*.test.mjs scripts/checks/*.test.mjs && python3 scripts/desktop/native-bundle-plist.test.py",
+    "test:tooling": "node --test scripts/desktop/*.test.mjs scripts/checks/*.test.mjs && python3 scripts/desktop/native-bundle-plist.test.py && python3 scripts/release/package-native-update.test.py",
     "test:voice": "vitest run --config embedded/vox/vitest.config.js",
     "host:build": "node host/build.mjs",
     "host:package": "npm run host:build && node host/package.mjs",

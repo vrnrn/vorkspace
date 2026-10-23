@@ -744,6 +744,7 @@ impl Conversation {
             )
             .child(self.composer_anchor.probe())
             .children(runner)
+            .children(self.composer_recovery_banner(cx))
             .children(self.attachment_chips(cx))
             .child(
                 // Even padding centres send beside one line, and keeps it at

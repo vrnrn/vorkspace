@@ -1516,6 +1516,7 @@ impl Store {
             ("ordinary_transcripts", "session_id"),
             ("ordinary_detached_leads", "session_id"),
             ("composer_drafts", "session_id"),
+            ("composer_draft_recoveries", "session_id"),
             ("in_flight_sessions", "session_id"),
             ("orchestration_workers", "session_id"),
             ("orchestration_sidebar", "lead_id"),

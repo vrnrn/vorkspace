@@ -227,6 +227,38 @@ impl Completion {
         self.rank();
         cx.notify();
     }
+    pub(crate) fn draft_mcp_tags(&self) -> serde_json::Value {
+        serde_json::json!(
+            self.selected_mcp
+                .iter()
+                .map(|(token, server)| serde_json::json!({"token":token,"server":server}))
+                .collect::<Vec<_>>()
+        )
+    }
+    pub(crate) fn restore_mcp_tags(&mut self, values: &serde_json::Value, cx: &mut Context<Self>) {
+        self.selected_mcp = values
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|value| {
+                let server = &value["server"];
+                Some((
+                    value["token"].as_str()?.to_owned(),
+                    vorkspace_core::mcp::McpConnection {
+                        provider: server["provider"].as_str()?.into(),
+                        name: server["name"].as_str()?.into(),
+                        scope: server["scope"].as_str()?.into(),
+                        config_path: server["configPath"].as_str()?.into(),
+                        transport: server["transport"].as_str()?.into(),
+                        enabled: server["enabled"].as_bool().unwrap_or(true),
+                    },
+                ))
+            })
+            .collect();
+        self.known
+            .extend(self.selected_mcp.iter().map(|(token, _)| token.clone()));
+        self.highlight(cx);
+    }
     pub(crate) fn prepare_prompt(&self, text: &str) -> String {
         if self.cwd.starts_with("remote://") {
             return text.to_owned();

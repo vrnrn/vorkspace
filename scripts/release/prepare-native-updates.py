@@ -6,8 +6,9 @@ import sys
 import tempfile
 import urllib.request
 
-VERSION = "2.10.0"
-DIGEST = "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c"
+# Keep the supported macOS 11 floor: Sparkle 2.10 requires macOS 12.
+VERSION = "2.9.6"
+DIGEST = "52bf9e88cdd972fc0c81501377a880e90d47031bd8ca5462488f843e2609e192"
 output = Path(sys.argv[1] if len(sys.argv) > 1 else "target/sparkle")
 output.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="vorkspace-sparkle-") as directory:

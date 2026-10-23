@@ -499,6 +499,19 @@ impl Input {
         self.content[..self.selection.start].encode_utf16().count()
             ..self.content[..self.selection.end].encode_utf16().count()
     }
+    pub(crate) fn select_utf16(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        let offset = |position: usize| {
+            let mut units = 0;
+            for (byte, character) in self.content.char_indices() {
+                if units >= position {
+                    return byte;
+                }
+                units += character.len_utf16();
+            }
+            self.content.len()
+        };
+        self.select_range(offset(range.start)..offset(range.end.max(range.start)), cx);
+    }
     pub(crate) fn selection_dragging(&self) -> bool {
         self.selecting
     }

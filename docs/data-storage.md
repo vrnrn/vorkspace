@@ -12,9 +12,13 @@ npm run dev -- --vorkspace-db /absolute/path/to/store.db
 
 The default production location is `com.vorkspace.desktop/vorkspace.db` under macOS Application Support, Linux's XDG data directory, or Windows `%APPDATA%`. If it is absent, the core recognizes the earlier application's directory and database by their exact persisted identity fingerprints. It opens that database in place; it does not copy files, rename the user's data, or invent replacement sessions.
 
-The desktop schema remains readable without the former UI. Historical preferences are read from the matching WebKit store on macOS and normalized into current app keys. Native sidecar reads translate earlier Bot roster and viewport field names. Canonical keys take precedence when both versions exist. Transcript text, arbitrary document JSON, paths, and provider IDs remain untouched. Saving uses the current metadata names and atomic sidecar replacement.
+The desktop schema remains readable without the former UI. Historical preferences are read from the matching WebKit store on macOS and normalized into current app keys. Native sidecar reads translate earlier Bot roster and viewport field names. Canonical keys take precedence when both versions exist. Existing Vox enabled, silent, and microphone preferences participate in the same read-time reconciliation, preserving later native choices. Transcript text, arbitrary document JSON, paths, and provider IDs remain untouched. Saving uses the current metadata names and atomic sidecar replacement.
 
 Bot memory and habit files remain under `bots/` in the selected data directory. Remote host databases remain on their host.
+
+## Unsent composer state
+
+Normal session drafts use the existing `composer_drafts` table. Text, UTF-16 selection, attachment order and metadata, and MCP tags are restored when the session opens. Native edits save through a coalesced writer, with a final flush on disposal or quit. Reads and unchanged restores do not rewrite the row. Revision checks reject conflicting writers; clearing leaves a revision tombstone so an older writer cannot recreate a deleted draft. A failed compare-and-save preserves the pending variant in per-writer SQLite recovery rows. Reopening shows a preview and explicit restore or keep-saved choices. Restoring compares the current revision and removes only the selected recovery row after the chosen draft is durable; other windows’ variants remain available. Missing attachment references or malformed saved state remain recoverable in storage and block sending until resolved. Bot workspace drafts retain their separate workspace owner.
 
 ## Incremental history writes
 

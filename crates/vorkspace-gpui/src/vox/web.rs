@@ -2,7 +2,7 @@
 //! Generated documents use a completely separate opaque WebKit configuration.
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
-    runtime::ProtocolObject,
+    runtime::ProtocolObject, sel,
 };
 use objc2_app_kit::NSView;
 use objc2_foundation::{
@@ -113,8 +113,15 @@ impl Web {
 impl Drop for Web {
     fn drop(&mut self) {
         unsafe {
-            self.web
-                .setMicrophoneCaptureState_completionHandler(WKMediaCaptureState::None, None);
+            // Capture-state control arrived in macOS 12. Older WebKit still
+            // releases the page and its capture through the ordinary teardown.
+            if self
+                .web
+                .respondsToSelector(sel!(setMicrophoneCaptureState:completionHandler:))
+            {
+                self.web
+                    .setMicrophoneCaptureState_completionHandler(WKMediaCaptureState::None, None);
+            }
             self.web.stopLoading();
         }
         self.web.removeFromSuperview();

@@ -1,7 +1,9 @@
 # Installing vorkspace
 
-Build the app with `npm run build`, then copy `target/release/vorkspace.app` to `~/Applications/` when you are ready. Quit the running app before replacing it.
+Existing users update with their usual update button once a release is published. Their saved data stays in place.
 
-A release copy opens your saved desktop data. `npm run dev` opens separate development data. [Data storage](data-storage.md) explains how to keep those separate when choosing a custom location.
+To build your own copy, run `npm run build`, then copy `target/release/vorkspace.app` to `~/Applications/` when ready. Quit the running app before replacing it.
 
-Building the app does not publish it or turn on automatic updates. [Updates](updates.md) explains how those are configured separately.
+A release copy opens saved desktop data. `npm run dev` opens separate development data. [Data storage](data-storage.md) explains those locations.
+
+Building does not publish the app. [Updates](updates.md) explains how to include the open-source updater and prepare signed downloads; paid Apple services are optional.

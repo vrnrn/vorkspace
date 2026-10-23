@@ -32,6 +32,8 @@ impl DesktopPreferences {
             ("bots", "botsEnabled", true),
             ("rail_bots_pinned", "railBotsPinned", false),
             ("bot_menu_bar_icon", "botMenuBarIcon", true),
+            ("vox_enabled", "vox.enabled", false),
+            ("vox_silent", "vox.silent", false),
         ] {
             reconcile_preference(
                 target,
@@ -41,6 +43,13 @@ impl DesktopPreferences {
                 json!(self.flag(key).unwrap_or(default)),
             );
         }
+        let microphone = self
+            .json("vorkspace.vox.microphone.v1")
+            .filter(|value| {
+                value["id"].as_str().is_some_and(|id| !id.is_empty()) && value["label"].is_string()
+            })
+            .unwrap_or_else(|| json!({"id":"builtin","label":"built-in microphone"}));
+        reconcile_preference(target, baseline, next, "vox_microphone", microphone);
         for (field, key, allowed, default) in [
             (
                 "theme",
@@ -614,6 +623,38 @@ mod tests {
                 .map(|(key, value)| ((*key).into(), (*value).into()))
                 .collect(),
         }
+    }
+
+    #[test]
+    fn voice_controls_read_existing_settings_and_preserve_later_native_choices() {
+        let preferences = source(&[
+            ("vorkspace.vox.enabled", "1"),
+            ("vorkspace.vox.silent", "true"),
+            (
+                "vorkspace.vox.microphone.v1",
+                r#"{"id":"saved-device","label":"USB microphone"}"#,
+            ),
+        ]);
+        let mut workspace = json!({});
+        preferences.apply_workspace(&mut workspace);
+        assert_eq!(workspace["preferences"]["vox_enabled"], true);
+        assert_eq!(workspace["preferences"]["vox_silent"], true);
+        assert_eq!(
+            workspace["preferences"]["vox_microphone"]["id"],
+            "saved-device"
+        );
+        workspace["preferences"]["vox_enabled"] = json!(false);
+        workspace["preferences"]["vox_microphone"] =
+            json!({"id":"builtin","label":"built-in microphone"});
+        preferences.apply_workspace(&mut workspace);
+        assert_eq!(workspace["preferences"]["vox_enabled"], false);
+        assert_eq!(workspace["preferences"]["vox_microphone"]["id"], "builtin");
+
+        let mut empty = json!({});
+        source(&[("vorkspace.vox.microphone.v1", r#"{"id":"","label":7}"#)])
+            .apply_workspace(&mut empty);
+        assert_eq!(empty["preferences"]["vox_enabled"], false);
+        assert_eq!(empty["preferences"]["vox_microphone"]["id"], "builtin");
     }
 
     #[test]

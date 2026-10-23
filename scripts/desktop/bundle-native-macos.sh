@@ -68,6 +68,9 @@ PLIST
 python3 scripts/desktop/native-bundle-plist.py "$native_bundle/Contents/Info.plist"
 if [ -n "${VORKSPACE_SPARKLE_FRAMEWORK:-}" ]; then
   mkdir -p "$native_bundle/Contents/Frameworks"
+  # Framework resources can change between files and directories across SDKs.
+  # Replace the generated copy instead of overlaying incompatible layouts.
+  rm -rf "$native_bundle/Contents/Frameworks/Sparkle.framework"
   ditto "$VORKSPACE_SPARKLE_FRAMEWORK" "$native_bundle/Contents/Frameworks/Sparkle.framework"
   cp "$(dirname "$VORKSPACE_SPARKLE_FRAMEWORK")/LICENSE" "$native_licenses/Sparkle-LICENSE"
 else
