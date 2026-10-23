@@ -3676,6 +3676,11 @@ impl Shell {
     }
     pub(crate) fn focus_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.keep_visible_idle_agents(cx);
+        if let Some(bots) = self.bots.clone()
+            && bots.update(cx, |bots, cx| bots.focus_creation(window, cx))
+        {
+            return;
+        }
         if let Some(search) = &self.app_search {
             window.focus(&search.view.focus_handle(cx), cx);
             return;
@@ -7602,6 +7607,11 @@ impl Render for Shell {
             }))
             .children(self.drag_ghost(cx))
             .children(self.background_modal(window, cx))
+            .children(
+                self.bots
+                    .clone()
+                    .and_then(|bots| bots.read(cx).creation_surface(window)),
+            )
             .children(self.link_modal(window, cx))
             .children(self.resource_modal(window, cx))
             .children(self.quick_open_modal(window, cx))
@@ -8878,7 +8888,7 @@ mod tests {
             .update(cx, |shell, window, cx| {
                 let manager = shell.bot_manager();
                 manager.update(cx, |manager, cx| {
-                    manager.create(Vec::new(), window, cx);
+                    manager.create_named(Vec::new(), window, cx);
                     manager.dismiss_settings(window, cx);
                 });
             })
@@ -9007,7 +9017,7 @@ mod tests {
         let bot = window
             .update(cx, |shell, w, cx| {
                 let manager = shell.bot_manager();
-                manager.update(cx, |m, cx| m.create(Vec::new(), w, cx));
+                manager.update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
                 manager.read(cx).active.clone().unwrap()
             })
             .unwrap();
@@ -10120,7 +10130,7 @@ mod tests {
                 shell.open(id, w, cx);
                 let manager = shell.bot_manager();
                 manager.update(cx, |manager, cx| {
-                    manager.create(Vec::new(), w, cx);
+                    manager.create_named(Vec::new(), w, cx);
                     manager.dismiss_settings(w, cx);
                 });
                 shell.toggle_right_panel(w, cx);

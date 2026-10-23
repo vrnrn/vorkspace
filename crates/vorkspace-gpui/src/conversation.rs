@@ -2,6 +2,7 @@ mod accounts;
 mod approvals;
 mod attachment_drop;
 mod bot;
+pub(crate) mod bot_settings;
 mod btw;
 mod commands;
 mod composer_draft;

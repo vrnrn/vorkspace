@@ -373,7 +373,7 @@ mod tests {
             .update(cx, |shell, w, cx| {
                 shell
                     .bot_manager()
-                    .update(cx, |m, cx| m.create(Vec::new(), w, cx));
+                    .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
             })
             .unwrap();
         cx.run_until_parked();
@@ -692,9 +692,9 @@ mod interaction_tests {
                         view.summary.has_messages = true;
                     });
                 }
-                shell
-                    .bot_manager()
-                    .update(cx, |m, cx| m.create(vec!["/work/vorkspace".into()], w, cx));
+                shell.bot_manager().update(cx, |m, cx| {
+                    m.create_named(vec!["/work/vorkspace".into()], w, cx)
+                });
             })
             .unwrap();
         cx.run_until_parked();
@@ -824,7 +824,7 @@ mod interaction_tests {
             .update(cx, |shell, w, cx| {
                 shell
                     .bot_manager()
-                    .update(cx, |m, cx| m.create(Vec::new(), w, cx));
+                    .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
             })
             .unwrap();
         cx.run_until_parked();
@@ -863,7 +863,7 @@ mod interaction_tests {
             .update(cx, |shell, w, cx| {
                 shell
                     .bot_manager()
-                    .update(cx, |m, cx| m.create(Vec::new(), w, cx));
+                    .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
             })
             .unwrap();
         cx.run_until_parked();

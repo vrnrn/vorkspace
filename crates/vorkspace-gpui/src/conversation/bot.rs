@@ -245,35 +245,11 @@ impl Conversation {
         Ok(())
     }
     pub(crate) fn bot_access_options(&self) -> Vec<MenuItem> {
-        let provider = Kind::from_id(&self.summary.provider);
-        let mut items = vec![
-            MenuAction::new("access:read-only", "Read-only")
-                .icon("square-lock")
-                .description("Inspect without changing files.")
-                .checked(self.settings.access == AccessMode::ReadOnly)
-                .into(),
-        ];
-        items.extend(ACCESS_MODES.iter().map(|(id, label, hint, glyph)| {
-            let hint = match (provider, *id) {
-                (Kind::Pi | Kind::Omp, _) => {
-                    "Tool confirmations follow this provider's configured extensions."
-                }
-                _ => *hint,
-            };
-            let action = MenuAction::new(format!("access:{id}"), *label)
-                .icon(glyph)
-                .description(hint)
-                .checked(self.settings.access.id() == *id);
-            MenuItem::from(if *id == "full-access" {
-                action.icon_color(tint(AMBER_400, 0.9))
-            } else {
-                action
-            })
-        }));
-        if self.busy {
-            items.push(MenuItem::Note("Changes apply to the next turn.".into()));
-        }
-        items
+        super::bot_settings::access_options(
+            Kind::from_id(&self.summary.provider),
+            self.settings.access,
+            self.busy,
+        )
     }
     pub(crate) fn bot_access(
         &mut self,
@@ -289,108 +265,11 @@ impl Conversation {
         self.bot_ui.delivered.as_deref()
     }
     pub(crate) fn bot_model_options(&self) -> Vec<MenuItem> {
-        let mut items: Vec<MenuAction> = Vec::new();
-        if self.model_info().is_some_and(|m| !m.efforts.is_empty()) {
-            items.push(
-                MenuAction::new("reasoning", self.effort_setting_label())
-                    .value(self.effort_label())
-                    .submenu(self.effort_items()),
-            );
-        }
-        if self.model_info().is_some_and(|m| m.fast) {
-            items.push(MenuAction::new("fast", "Fast").toggle(self.settings.fast));
-        }
-        if let Some(model) = self.model_info().filter(|m| !m.tiers.is_empty()) {
-            let mut tiers =
-                vec![MenuAction::new("tier:", "Standard").checked(self.selected_tier().is_none())];
-            tiers.extend(model.tiers.iter().map(|(id, name)| {
-                MenuAction::new(format!("tier:{id}"), name.clone())
-                    .checked(self.selected_tier() == Some(id.as_str()))
-            }));
-            items.push(
-                MenuAction::new("service-tier", "Service Tier")
-                    .value(
-                        self.selected_tier()
-                            .and_then(|id| model.tiers.iter().find(|(key, _)| key == id))
-                            .map(|(_, label)| label.as_str())
-                            .unwrap_or_else(|| self.selected_tier().unwrap_or("Standard"))
-                            .to_owned(),
-                    )
-                    .submenu(tiers),
-            );
-        }
-        if self.model_info().is_some_and(|m| m.thinking) {
-            items.push(
-                MenuAction::new("thinking", "Thinking")
-                    .toggle(self.settings.thinking.unwrap_or(false)),
-            );
-        }
-        if let Some(model) = self.model_info() {
-            for control in &model.controls {
-                let selected = self
-                    .settings
-                    .model_settings
-                    .get(&control.id)
-                    .unwrap_or(&control.current);
-                let label = match control.id.as_str() {
-                    "effort" | "reasoning" => "Effort",
-                    _ => &control.name,
-                };
-                if model_control_toggle(control) {
-                    items.push(
-                        MenuAction::new(format!("model-toggle:{}", control.id), label.to_owned())
-                            .toggle(selected == "true"),
-                    );
-                    continue;
-                }
-                let choices = control
-                    .choices
-                    .iter()
-                    .map(|(value, name)| {
-                        let key =
-                            serde_json::to_string(&(control.id.clone(), value.clone())).unwrap();
-                        MenuAction::new(format!("model-setting:{key}"), name.clone())
-                            .checked(selected == value)
-                    })
-                    .collect();
-                items.push(
-                    MenuAction::new(format!("model-control:{}", control.id), label.to_owned())
-                        .value(
-                            control
-                                .choices
-                                .iter()
-                                .find(|(value, _)| value == selected)
-                                .map(|(_, name)| name)
-                                .unwrap_or(selected)
-                                .clone(),
-                        )
-                        .submenu(choices),
-                );
-            }
-        }
-        items.sort_by_key(|action| {
-            let key = action
-                .id
-                .strip_prefix("model-control:")
-                .or_else(|| action.id.strip_prefix("model-toggle:"))
-                .unwrap_or(&action.id);
-            match key {
-                "fast" => 0,
-                "lead" => 1,
-                "effort" => 2,
-                "sidekick" => 3,
-                "reasoning" if Kind::from_id(&self.summary.provider) == Kind::Codex => 5,
-                "reasoning" => 4,
-                "reasoningEffort" | "reasoning_effort" => 5,
-                "service-tier" | "serviceTier" => 6,
-                "thinking" => 7,
-                "variant" => 8,
-                "agent" => 9,
-                "context" => 10,
-                _ => 99,
-            }
-        });
-        items.into_iter().map(MenuItem::from).collect()
+        super::bot_settings::model_options(
+            Kind::from_id(&self.summary.provider),
+            self.model_info(),
+            &self.settings,
+        )
     }
     pub(crate) fn bot_pick_model_option(
         &mut self,

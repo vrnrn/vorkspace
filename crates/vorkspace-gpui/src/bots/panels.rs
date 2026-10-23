@@ -99,6 +99,8 @@ fn setting(label: &str, description: Option<&str>, control: AnyElement) -> Div {
         .child(
             div()
                 .w(px(224.))
+                .max_w(gpui::relative(0.6))
+                .min_w_0()
                 .flex_shrink_0()
                 .flex()
                 .items_center()
@@ -636,7 +638,7 @@ impl LookEditor {
 }
 impl Bots {
     fn open_settings_look(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(bot) = self.roster.get(id).cloned() else {
+        let Some(bot) = self.settings_bot(id).cloned() else {
             return;
         };
         let editor = cx.new(|cx| {
@@ -646,12 +648,14 @@ impl Bots {
         });
         let focus = editor.read(cx).focus.clone();
         let changed = cx.subscribe(&editor, |this, _, event: &LookChanged, cx| {
-            if let Some(bot) = this.roster.get_mut(&event.bot.id) {
-                bot.mascot = event.bot.mascot.clone();
-                bot.color = event.bot.color;
-            }
-            this.configure_chat(&event.bot.id, cx);
-            this.save(cx);
+            this.edit_settings_bot(
+                &event.bot.id,
+                |bot| {
+                    bot.mascot = event.bot.mascot.clone();
+                    bot.color = event.bot.color;
+                },
+                cx,
+            );
         });
         let menu = cx.new(|cx| {
             Menu::new(
@@ -702,12 +706,22 @@ impl Bots {
                 13.
             });
             f.set_placeholder(label, cx);
+            if key == "bot-name" {
+                f.set_max_chars(40);
+            }
             f.set_text(text, cx);
             f
         });
         let key_owned = key.to_string();
         self.observations.push(
             cx.subscribe(&field, move |this, input, _: &input::Changed, cx| {
+                if this
+                    .fields
+                    .get(&key_owned)
+                    .is_none_or(|current| current.entity_id() != input.entity_id())
+                {
+                    return;
+                }
                 if key_owned.starts_with("channel-draft:")
                     && let Err(error) = locked(&this.store)
                         .and_then(|db| db.save_setting(&key_owned, &input.read(cx).content))
@@ -716,12 +730,13 @@ impl Bots {
                 }
                 if key_owned == "bot-name" {
                     let name = input.read(cx).content.trim().chars().take(40).collect();
-                    if let Some(id) = this.active.clone() {
-                        if let Some(bot) = this.roster.get_mut(&id) {
-                            bot.name = name;
-                        }
-                        this.configure_chat(&id, cx);
-                        this.save(cx);
+                    if let Some(id) = this
+                        .creation
+                        .as_ref()
+                        .map(|draft| draft.bot.id.clone())
+                        .or(this.active.clone())
+                    {
+                        this.edit_settings_bot(&id, |bot| bot.name = name, cx);
                     }
                 }
                 cx.notify();
@@ -755,6 +770,10 @@ impl Bots {
                 icon_button("bot-settings", "Bot settings", "settings")
                     .debug_selector(|| "bot-settings".into())
                     .on_click(cx.listener(move |this, _, window, cx| {
+                        if this.creating() {
+                            this.create(Vec::new(), window, cx);
+                            return;
+                        }
                         this.settings = Some(SettingsSection::General);
                         window.focus(&this.settings_focus, cx);
                         this.reload_files(&id, cx);
@@ -1302,9 +1321,18 @@ impl Bots {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let section = self.settings?;
+        let creating = self
+            .creation
+            .as_ref()
+            .is_some_and(|draft| draft.bot.id == bot.id);
+        let section = if creating {
+            SettingsSection::General
+        } else {
+            self.settings?
+        };
         let size = window.viewport_size();
         let width = 880f32.min(size.width.as_f32() - 24.);
+        let navigation_width = if width < 660. { 140. } else { 192. };
         let height = 680f32.min(size.height.as_f32() - 32.);
         let body = match section {
             SettingsSection::General => self.general_settings(bot, window, cx),
@@ -1346,8 +1374,12 @@ impl Bots {
                     .width(width)
                     .height(height)
                     .gap(0.)
-                    .on_dismiss(move |_, cx| {
+                    .on_dismiss(move |window, cx| {
                         let _ = weak.update(cx, |this, cx| {
+                            if creating {
+                                this.cancel_creation(window, cx);
+                                return;
+                            }
                             this.save_open_file(cx);
                             this.settings = None;
                             this.picker = None;
@@ -1360,7 +1392,11 @@ impl Bots {
                             .debug_selector(|| "bot-settings-dialog".into())
                             .role(Role::Dialog)
                             .track_focus(&self.settings_focus)
-                            .aria_label(format!("{} settings", bot.label()))
+                            .aria_label(if creating {
+                                "New Bot".into()
+                            } else {
+                                format!("{} settings", bot.label())
+                            })
                             .h_full()
                             .w_full()
                             .flex()
@@ -1371,7 +1407,7 @@ impl Bots {
                                     .debug_selector(|| "bot-settings-navigation".into())
                                     .role(Role::Navigation)
                                     .aria_label("Settings sections")
-                                    .w(px(192.))
+                                    .w(px(navigation_width))
                                     .flex_shrink_0()
                                     .h_full()
                                     .border_r_1()
@@ -1387,7 +1423,7 @@ impl Bots {
                                             .pb_2()
                                             .text_size(px(11.))
                                             .text_color(content(0.45))
-                                            .child("Settings"),
+                                            .child(if creating { "New Bot" } else { "Settings" }),
                                     )
                                     .children(
                                         [
@@ -1396,6 +1432,9 @@ impl Bots {
                                             (SettingsSection::Memory, "Memory", "sticky-note"),
                                         ]
                                         .into_iter()
+                                        .filter(|(tab, _, _)| {
+                                            !creating || *tab == SettingsSection::General
+                                        })
                                         .map(
                                             |(tab, label, glyph)| {
                                                 let row_id = format!("bot-settings-{label}");
@@ -1479,7 +1518,10 @@ impl Bots {
                                     .h_full()
                                     .flex()
                                     .flex_col()
-                                    .child(body),
+                                    .child(body)
+                                    .when(section == SettingsSection::General, |d| {
+                                        d.child(self.settings_footer(bot, creating, cx))
+                                    }),
                             )
                             .child(
                                 div().absolute().right_3().top_1p5().child(
@@ -1490,7 +1532,11 @@ impl Bots {
                                     )
                                     .size(px(28.))
                                     .on_click(cx.listener(
-                                        |this, _, _, cx| {
+                                        move |this, _, window, cx| {
+                                            if creating {
+                                                this.cancel_creation(window, cx);
+                                                return;
+                                            }
                                             this.save_open_file(cx);
                                             this.settings = None;
                                             cx.notify();
@@ -1503,39 +1549,142 @@ impl Bots {
                 .into_any_element(),
         )
     }
+    fn settings_footer(&self, bot: &Bot, creating: bool, cx: &mut Context<Self>) -> AnyElement {
+        let enabled = !bot.name.trim().is_empty();
+        let reset = bot.id.clone();
+        div()
+            .id("bot-settings-footer")
+            .debug_selector(|| "bot-settings-footer".into())
+            .flex_shrink_0()
+            .min_h(px(56.))
+            .px_6()
+            .py_3()
+            .border_t_1()
+            .border_color(content(0.08))
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap_2()
+            .when(creating, |d| {
+                d.child(
+                    button("bot-create-cancel", "Cancel").on_click(
+                        cx.listener(|this, _, window, cx| this.cancel_creation(window, cx)),
+                    ),
+                )
+                .child(
+                    div()
+                        .id("bot-create")
+                        .debug_selector(|| "bot-create".into())
+                        .role(Role::Button)
+                        .aria_label("Create")
+                        .aria_description(if enabled {
+                            "Create this named Bot"
+                        } else {
+                            "Enter a Bot name to enable Create"
+                        })
+                        .h(px(30.))
+                        .min_w(px(76.))
+                        .px_4()
+                        .rounded_md()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .bg(rgb(0x0a84ff).opacity(if enabled { 1. } else { 0.28 }))
+                        .text_color(if enabled { black(1.) } else { content(0.45) })
+                        .when(enabled, |d| d.hover(|d| d.bg(rgb(0x409cff))))
+                        .child("Create")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if enabled {
+                                this.confirm_creation(window, cx);
+                            }
+                        })),
+                )
+            })
+            .when(!creating, |d| {
+                d.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(12.))
+                        .text_color(content(0.55))
+                        .child("Reset messages; keep soul, memory and habits."),
+                )
+                .child(
+                    button("bot-reset", "Reset")
+                        .debug_selector(|| "bot-reset".into())
+                        .text_color(rgb(0xff6467))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.reset_conversation(&reset, window, cx)
+                        })),
+                )
+            })
+            .into_any_element()
+    }
     fn general_settings(
         &mut self,
         bot: &Bot,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let name = self.field("bot-name", "Name", bot.name.clone(), false, cx);
+        let creating = self
+            .creation
+            .as_ref()
+            .is_some_and(|draft| draft.bot.id == bot.id);
+        let narrow = window.viewport_size().width < px(780.);
+        let name = self.field("bot-name", "Bot name", bot.name.clone(), false, cx);
         name.update(cx, |f, cx| {
             f.set_font_size(15.);
             f.set_line_height(20.);
             f.set_centered(true);
-            f.set_placeholder(bot.label(), cx);
+            f.set_placeholder(
+                if creating {
+                    "Name your bot".into()
+                } else {
+                    bot.label()
+                },
+                cx,
+            );
         });
         let look = bot.id.clone();
         let add = bot.id.clone();
-        let reset = bot.id.clone();
         let chat = self.chat();
-        let model = chat
-            .as_ref()
-            .map(|v| v.read(cx).bot_model_label())
-            .unwrap_or_else(|| "Loading…".into());
-        let provider = chat
-            .as_ref()
-            .map(|v| v.read(cx).summary.provider.clone())
-            .unwrap_or_else(|| "codex".into());
-        let mode = chat
-            .as_ref()
-            .map(|v| v.read(cx).settings.access)
-            .unwrap_or(AccessMode::Auto);
-        let model_options = chat
-            .as_ref()
-            .map(|v| v.read(cx).bot_model_options())
-            .unwrap_or_default();
+        let (model, provider, mode, model_options) = if let Some(draft) = &self.creation {
+            let model = draft
+                .model()
+                .map(|model| {
+                    crate::pickers::model_display_name(draft.provider, &model.id, &model.name)
+                })
+                .unwrap_or_else(|| {
+                    crate::pickers::model_name(draft.provider, draft.settings.model.as_deref())
+                });
+            (
+                model,
+                draft.provider.id().to_owned(),
+                draft.settings.access,
+                crate::conversation::bot_settings::model_options(
+                    draft.provider,
+                    draft.model(),
+                    &draft.settings,
+                ),
+            )
+        } else {
+            (
+                chat.as_ref()
+                    .map(|view| view.read(cx).bot_model_label())
+                    .unwrap_or_else(|| "Loading…".into()),
+                chat.as_ref()
+                    .map(|view| view.read(cx).summary.provider.clone())
+                    .unwrap_or_else(|| "codex".into()),
+                chat.as_ref()
+                    .map(|view| view.read(cx).settings.access)
+                    .unwrap_or(AccessMode::Auto),
+                chat.as_ref()
+                    .map(|view| view.read(cx).bot_model_options())
+                    .unwrap_or_default(),
+            )
+        };
         let access_icon = match mode {
             AccessMode::FullAccess => "shield-alert",
             AccessMode::Auto => "sparkles",
@@ -1559,53 +1708,167 @@ impl Bots {
                 .hover(|s| s.bg(content(0.06)))
                 .child(label)
         };
-        div().id("bot-general-settings").debug_selector(||"bot-general-settings".into())
-            .flex_1().min_h_0().overflow_y_scroll().px_8().pt_6().pb_8()
-            .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).child("General"))
-            .child(div().flex().flex_col().items_center().pt_4().pb_6()
-                .child(div().id("bot-look").debug_selector(||"bot-look".into()).role(Role::Button)
-                    .aria_label("Change mascot and color").relative().size(px(80.)).flex_shrink_0()
-                    .flex().items_center().justify_center().rounded_2xl().border_1().border_color(content(0.04))
-                    .bg(content(0.04)).hover(|s|s.bg(content(0.08)))
+        let identity = div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .w(px(160.))
+            .flex_shrink_0()
+            .child(
+                div()
+                    .id("bot-look")
+                    .debug_selector(|| "bot-look".into())
+                    .role(Role::Button)
+                    .aria_label("Change mascot and color")
+                    .relative()
+                    .size(px(80.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_2xl()
+                    .border_1()
+                    .border_color(content(0.04))
+                    .bg(content(0.04))
+                    .hover(|s| s.bg(content(0.08)))
                     .child(self.settings_anchor.probe())
                     .child(avatar::avatar(&bot.mascot, bot.color, "idle", 48., false))
-                    .on_click(cx.listener(move |this, _, w, cx|this.open_settings_look(&look,w,cx))))
-                .child(div().id("bot-name-field").debug_selector(||"bot-name-field".into()).mt_3().h(px(32.)).w(px(256.)).max_w_full().px_2().py_1p5()
-                    .rounded_md().font_weight(FontWeight::MEDIUM).hover(|s|s.bg(content(0.05))).child(name)))
-            .child(heading("Model", None))
-            .child(card()
-                .child(setting("Model",Some("What it thinks and replies with."),
-                    div().id("bot-settings-model").role(Role::Button).aria_label(format!("Choose model, {model}"))
-                        .h(px(28.)).px_1p5().mx(px(-6.)).rounded_md().flex().items_center().gap_2()
-                        .text_size(px(12.)).text_color(content(0.85)).hover(|s|s.bg(content(0.06)))
-                        .child(self.model_anchor.probe()).child(provider_icon(&provider,14.)).child(model)
-                        .on_click(cx.listener(|this,_,w,cx|this.open_model_picker(w,cx))).into_any_element()))
-                .children(model_options.into_iter().filter_map(|item| {
-                    let MenuItem::Action(option)=item else { return None; };
-                    let label=option.label.clone();
-                    let value=option.value.clone().unwrap_or_else(||if option.checked {"On"}else{"Off"}.into());
-                    let anchor=AnchorSlot::default(); let probe=anchor.probe();
-                    Some(setting(&label,None,
-                        plain(SharedString::from(format!("bot-option-{}",option.id)),value).child(probe)
-                            .on_click(cx.listener(move |this,_,w,cx| {
-                                if option.submenu.is_empty() {
-                                    if let Some(chat)=this.chat() && let Err(e)=chat.update(cx,|v,cx|v.bot_pick_model_option(&option.id,cx)) { this.error=Some(e); }
-                                    this.changed(cx);
-                                } else { this.open_model_option(option.label.clone(),option.submenu.clone(),anchor.clone(),w,cx); }
-                            })).into_any_element()).border_t_1().border_color(content(0.04)))
-                }))
-                .child(setting("Permissions",Some("What it may do without asking."),
-                    div().id("bot-settings-access").role(Role::Button).aria_label(format!("Permissions, {}",mode.label()))
-                        .h(px(28.)).max_w(px(208.)).px_1p5().mx(px(-6.)).rounded_md().flex().items_center().gap_2()
-                        .text_size(px(12.)).text_color(content(0.85)).hover(|s|s.bg(content(0.06)))
-                        .child(self.access_anchor.probe()).child(icon(access_icon,14.).when(mode==AccessMode::FullAccess,|i|i.text_color(rgb(0xffb900))))
-                        .child(mode.label()).child(icon("chevron-down",12.))
-                        .on_click(cx.listener(|this,_,w,cx|this.open_access_picker(w,cx))).into_any_element())
-                    .border_t_1().border_color(content(0.04))))
+                    .on_click(
+                        cx.listener(move |this, _, w, cx| this.open_settings_look(&look, w, cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .id("bot-name-field")
+                    .debug_selector(|| "bot-name-field".into())
+                    .mt_3()
+                    .h(px(32.))
+                    .w(px(160.))
+                    .max_w_full()
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .font_weight(FontWeight::MEDIUM)
+                    .hover(|s| s.bg(content(0.05)))
+                    .child(name),
+            );
+        let model_controls = card()
+            .id("bot-model-settings")
+            .debug_selector(|| "bot-model-settings".into())
+            .flex_1()
+            .min_w_0()
+            .child(setting(
+                "Model",
+                Some("What it thinks and replies with."),
+                div()
+                    .id("bot-settings-model")
+                    .role(Role::Button)
+                    .aria_label(format!("Choose model, {model}"))
+                    .h(px(28.))
+                    .px_1p5()
+                    .mx(px(-6.))
+                    .rounded_md()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(12.))
+                    .text_color(content(0.85))
+                    .hover(|s| s.bg(content(0.06)))
+                    .child(self.model_anchor.probe())
+                    .child(provider_icon(&provider, 14.))
+                    .child(div().min_w_0().truncate().child(model))
+                    .on_click(cx.listener(|this, _, w, cx| this.open_model_picker(w, cx)))
+                    .into_any_element(),
+            ))
+            .children(model_options.into_iter().filter_map(|item| {
+                let MenuItem::Action(option) = item else {
+                    return None;
+                };
+                let label = option.label.clone();
+                let value = option
+                    .value
+                    .clone()
+                    .unwrap_or_else(|| if option.checked { "On" } else { "Off" }.into());
+                let anchor = AnchorSlot::default();
+                let probe = anchor.probe();
+                Some(
+                    setting(
+                        &label,
+                        None,
+                        plain(
+                            SharedString::from(format!("bot-option-{}", option.id)),
+                            value,
+                        )
+                        .child(probe)
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            if option.submenu.is_empty() {
+                                if this.creating() {
+                                    this.choose_creation_option(&option.id, cx);
+                                } else if let Some(chat) = this.chat()
+                                    && let Err(e) = chat
+                                        .update(cx, |v, cx| v.bot_pick_model_option(&option.id, cx))
+                                {
+                                    this.error = Some(e);
+                                }
+                                this.changed(cx);
+                            } else {
+                                this.open_model_option(
+                                    option.label.clone(),
+                                    option.submenu.clone(),
+                                    anchor.clone(),
+                                    w,
+                                    cx,
+                                );
+                            }
+                        }))
+                        .into_any_element(),
+                    )
+                    .border_t_1()
+                    .border_color(content(0.04)),
+                )
+            }))
+            .child(
+                setting(
+                    "Permissions",
+                    Some("What it may do without asking."),
+                    div()
+                        .id("bot-settings-access")
+                        .role(Role::Button)
+                        .aria_label(format!("Permissions, {}", mode.label()))
+                        .h(px(28.))
+                        .max_w(px(208.))
+                        .px_1p5()
+                        .mx(px(-6.))
+                        .rounded_md()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_size(px(12.))
+                        .text_color(content(0.85))
+                        .hover(|s| s.bg(content(0.06)))
+                        .child(self.access_anchor.probe())
+                        .child(
+                            icon(access_icon, 14.).when(mode == AccessMode::FullAccess, |i| {
+                                i.text_color(rgb(0xffb900))
+                            }),
+                        )
+                        .child(mode.label())
+                        .child(icon("chevron-down", 12.))
+                        .on_click(cx.listener(|this, _, w, cx| this.open_access_picker(w, cx)))
+                        .into_any_element(),
+                )
+                .border_t_1()
+                .border_color(content(0.04)),
+            );
+        div().id("bot-general-settings").debug_selector(|| "bot-general-settings".into())
+            .flex_1().min_h_0().overflow_y_scroll().when(narrow, |d| d.px_4()).when(!narrow, |d| d.px_8()).pt_6().pb_6()
+            .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).child("General"))
+            .child(div().id("bot-settings-header").debug_selector(|| "bot-settings-header".into()).mt_4().flex().gap_6()
+                .when(narrow, |d| d.flex_col()).child(identity).child(model_controls))
             .child(heading("Projects",Some("It can see every session, note and folder in these.")))
             .child(card()
                 .children(bot.projects.iter().enumerate().map(|(ix,project)| {
-                    let remove=project.clone();
+                    let remove=project.clone(); let owner=bot.id.clone();
                     let appearance=self.owner.upgrade().and_then(|o|o.read(cx).workspace.project_appearance.get(project).cloned()).unwrap_or_default();
                     let label=appearance.label(project);
                     let pretty=std::env::var("HOME").ok().and_then(|home|project.strip_prefix(&home).map(|rest|format!("~{rest}"))).unwrap_or_else(||project.clone());
@@ -1618,10 +1881,7 @@ impl Bots {
                             .child(div().text_size(px(13.)).line_height(px(20.)).text_color(content(0.9)).truncate().child(label))
                             .child(div().text_size(px(11.)).line_height(px(16.)).text_color(content(0.4)).truncate().child(pretty)))
                         .child(icon_button("bot-remove-project","Remove project","close").opacity(0.).group_hover(group,|s|s.opacity(1.))
-                            .on_click(cx.listener(move |this,_,_,cx| { if let Some(id)=this.active.clone() {
-                                if let Some(m)=this.roster.get_mut(&id) {m.projects.retain(|p|p!=&remove);}
-                                this.configure_chat(&id,cx);this.save(cx);
-                            }})))
+                            .on_click(cx.listener(move |this,_,_,cx| { this.edit_settings_bot(&owner, |bot| bot.projects.retain(|path| path != &remove), cx);})))
                 }))
                 .child(div().id("bot-add-project").role(Role::Button).aria_label("Add project").h(px(44.)).px_3().flex().items_center().gap_3()
                     .text_size(px(13.)).text_color(content(0.55)).hover(|s|s.bg(content(0.04)).text_color(content(1.)))
@@ -1633,13 +1893,9 @@ impl Bots {
             .child(card()
                 .child(switch_setting("Show sessions in sidebar","Sessions it starts appear in your project sidebar. Hidden ones stay saved and open from its overview.",false,
                     self.switch("bot-show-started",bot.show_started_sessions_in_sidebar,false,|m,on|m.show_started_sessions_in_sidebar=on,cx)))
-                .child(switch_setting("Group in a folder",&format!("Sessions it starts go in a “{}” folder in your project sidebar.",bot.label()),!bot.show_started_sessions_in_sidebar,
+                .child(switch_setting("Group in a folder",&if creating && bot.name.is_empty() { "Sessions it starts go in a folder named after this Bot.".into() } else { format!("Sessions it starts go in a “{}” folder in your project sidebar.",bot.label()) },!bot.show_started_sessions_in_sidebar,
                     self.switch("bot-group-started",bot.show_started_sessions_in_sidebar&&bot.use_sidebar_folders,!bot.show_started_sessions_in_sidebar,|m,on|m.use_sidebar_folders=on,cx))
                     .border_t_1().border_color(content(0.04))))
-            .child(heading("Conversation",None))
-            .child(card().child(setting("Reset conversation",Some("Clear all messages and start fresh. Its soul, memory and habits stay."),
-                div().id("bot-reset").role(Role::Button).aria_label("Reset").flex().items_center().px_3().py_1p5().rounded_md().text_size(px(12.)).border_1().border_color(content(0.04)).text_color(rgb(0xff6467)).hover(|s|s.bg(rgb(0xfb2c36).opacity(0.1))).child("Reset")
-                    .on_click(cx.listener(move |this,_,w,cx|this.reset_conversation(&reset,w,cx))).into_any_element())))
             .into_any_element()
     }
     fn switch(
@@ -1672,12 +1928,13 @@ impl Bots {
                 if disabled {
                     return;
                 }
-                if let Some(id) = this.active.clone() {
-                    if let Some(m) = this.roster.get_mut(&id) {
-                        change(m, !on);
-                    }
-                    this.configure_chat(&id, cx);
-                    this.save(cx);
+                if let Some(id) = this
+                    .creation
+                    .as_ref()
+                    .map(|draft| draft.bot.id.clone())
+                    .or(this.active.clone())
+                {
+                    this.edit_settings_bot(&id, |bot| change(bot, !on), cx);
                 }
             }))
             .into_any_element()
@@ -1774,18 +2031,46 @@ impl Bots {
         })
     }
     fn open_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(chat) = self.chat() else {
+        let target = self.creation.as_ref().map(|draft| draft.bot.id.clone());
+        let (provider, model, project, account) = if let Some(draft) = &self.creation {
+            (
+                draft.provider,
+                draft.settings.model.clone(),
+                self.root.to_string_lossy().to_string(),
+                draft.settings.account.clone(),
+            )
+        } else if let Some(chat) = self.chat() {
+            let view = chat.read(cx);
+            (
+                Kind::from_id(&view.summary.provider),
+                view.bot_model(),
+                view.summary.cwd.clone(),
+                view.settings.account.clone(),
+            )
+        } else {
             return;
         };
-        let view = chat.read(cx);
-        let provider = Kind::from_id(&view.summary.provider);
-        let model = view.bot_model();
-        let project = view.summary.cwd.clone();
-        let account = view.settings.account.clone();
         let list = cx.new(|cx| ModelList::new_for(provider, model, &project, account, cx));
         let focus = list.read(cx).search_focus(cx);
-        let picked = cx.subscribe(&list, |this, _, picked: &ModelPicked, cx| {
-            if let Some(view) = this.chat()
+        let picked = cx.subscribe(&list, move |this, _, picked: &ModelPicked, cx| {
+            if let Some(target) = &target {
+                let Some(draft) = this
+                    .creation
+                    .as_mut()
+                    .filter(|draft| draft.bot.id == *target)
+                else {
+                    return;
+                };
+                draft.provider = picked.0;
+                draft.settings.model = picked.1.clone();
+                draft.settings.effort = crate::conversation::preferred_effort(picked.0.id(), cx);
+                draft.settings.fast = false;
+                draft.settings.thinking = None;
+                draft.settings.service_tier = None;
+                draft.settings.model_settings.clear();
+                draft.catalog.clear();
+                this.load_creation_catalog(cx);
+            } else if let Some(view) = this.chat()
                 && let Err(e) = view.update(cx, |v, cx| {
                     v.bot_config(picked.0, picked.1.clone(), HashMap::new(), cx)
                 })
@@ -1825,6 +2110,7 @@ impl Bots {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let target = self.settings_identity();
         let menu = cx.new(|cx| {
             Menu::new(
                 label,
@@ -1833,12 +2119,18 @@ impl Bots {
                 cx,
             )
         });
-        let picked = cx.subscribe(&menu, |this, _, event: &MenuEvent, cx| {
-            if let MenuEvent::Picked(id, _) = event
-                && let Some(chat) = this.chat()
-                && let Err(e) = chat.update(cx, |v, cx| v.bot_pick_model_option(id, cx))
-            {
-                this.error = Some(e);
+        let picked = cx.subscribe(&menu, move |this, _, event: &MenuEvent, cx| {
+            if this.settings_identity() != target {
+                return;
+            }
+            if let MenuEvent::Picked(id, _) = event {
+                if this.creating() {
+                    this.choose_creation_option(id, cx);
+                } else if let Some(chat) = this.chat()
+                    && let Err(e) = chat.update(cx, |v, cx| v.bot_pick_model_option(id, cx))
+                {
+                    this.error = Some(e);
+                }
             }
             this.picker = None;
             this.changed(cx);
@@ -1853,25 +2145,35 @@ impl Bots {
         cx.notify();
     }
     fn open_access_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.settings_identity();
         let options = self
-            .chat()
-            .map(|chat| chat.read(cx).bot_access_options())
+            .creation
+            .as_ref()
+            .map(|draft| {
+                crate::conversation::bot_settings::access_options(
+                    draft.provider,
+                    draft.settings.access,
+                    false,
+                )
+            })
+            .or_else(|| self.chat().map(|chat| chat.read(cx).bot_access_options()))
             .unwrap_or_default();
         let menu = cx.new(|cx| {
             Menu::new("Permissions", options, window, cx)
                 .style(MenuStyle::Access)
                 .width(288.)
         });
-        let picked = cx.subscribe(&menu, |this, _, event: &MenuEvent, cx| {
-            if let MenuEvent::Picked(id, _) = event
-                && let Some(view) = this.chat()
-            {
-                view.update(cx, |v, cx| {
-                    v.bot_access(
-                        AccessMode::from_id(id.strip_prefix("access:").unwrap_or(id)),
-                        cx,
-                    )
-                });
+        let picked = cx.subscribe(&menu, move |this, _, event: &MenuEvent, cx| {
+            if this.settings_identity() != target {
+                return;
+            }
+            if let MenuEvent::Picked(id, _) = event {
+                let mode = AccessMode::from_id(id.strip_prefix("access:").unwrap_or(id));
+                if let Some(draft) = &mut this.creation {
+                    draft.settings.access = mode;
+                } else if let Some(view) = this.chat() {
+                    view.update(cx, |v, cx| v.bot_access(mode, cx));
+                }
             }
             this.picker = None;
             cx.notify();
@@ -1926,12 +2228,7 @@ impl Bots {
         cx.notify();
     }
     fn add_project(&mut self, id: &str, path: String, cx: &mut Context<Self>) {
-        if let Some(m) = self.roster.get_mut(id) {
-            m.projects.push(path);
-            m.normalize();
-        }
-        self.configure_chat(id, cx);
-        self.save(cx);
+        self.edit_settings_bot(id, |bot| bot.projects.push(path), cx);
     }
     fn browse_project(&mut self, id: &str, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions {

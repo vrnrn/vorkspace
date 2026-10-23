@@ -460,7 +460,7 @@ fn setup(cx: &mut TestAppContext) -> Setup {
     let handle: gpui::AnyWindowHandle = window.into();
     handle
         .update(cx, |_, w, cx| {
-            manager.update(cx, |m, cx| m.create(vec![project.clone()], w, cx))
+            manager.update(cx, |m, cx| m.create_named(vec![project.clone()], w, cx))
         })
         .unwrap();
     cx.run_until_parked();
@@ -547,7 +547,7 @@ fn settings_match_react_dialog_and_left_navigation_geometry(cx: &mut TestAppCont
     );
     assert_eq!(
         visual.debug_bounds("bot-name-field").unwrap().size,
-        gpui::size(px(256.), px(32.))
+        gpui::size(px(160.), px(32.))
     );
 }
 
@@ -725,7 +725,7 @@ fn identity_and_context_editors_survive_switches_and_save_to_their_own_files(
     handle
         .update(cx, |_, w, cx| {
             s.manager
-                .update(cx, |m, cx| m.create(vec![s.project.clone()], w, cx))
+                .update(cx, |m, cx| m.create_named(vec![s.project.clone()], w, cx))
         })
         .unwrap();
     cx.run_until_parked();
@@ -1952,4 +1952,187 @@ fn sidebar_right_click_opens_bot_menu_outside_the_bot_and_edits_its_look(cx: &mu
         })
         .unwrap();
     assert!(visual.debug_bounds("bot-mascot-0").is_none());
+}
+
+#[gpui::test]
+fn new_bot_setup_focuses_name_and_cancel_keeps_storage_and_current_bot_unchanged(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let before = locked(&s.store).unwrap().setting("bot-roster").unwrap();
+    let sessions = locked(&s.store).unwrap().sessions().unwrap().len();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager.update(cx, |manager, cx| {
+                manager.settings = None;
+                manager.create(vec![s.project.clone()], window, cx);
+                assert_eq!(manager.active.as_deref(), Some(s.id.as_str()));
+                assert_eq!(manager.roster.bots.len(), 1);
+                assert!(
+                    manager.fields["bot-name"]
+                        .focus_handle(cx)
+                        .is_focused(window)
+                );
+                manager.confirm_creation(window, cx);
+                assert!(manager.creating());
+            })
+        })
+        .unwrap();
+    visual.run_until_parked();
+    s.window
+        .update(visual, |shell, window, cx| {
+            shell.focus_active(window, cx);
+            assert!(
+                s.manager.read(cx).fields["bot-name"]
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+        })
+        .unwrap();
+    assert!(visual.debug_bounds("bot-create").is_some());
+    assert!(visual.debug_bounds("bot-reset").is_none());
+    visual.simulate_input("   ");
+    visual.run_until_parked();
+    let create = visual.debug_bounds("bot-create").unwrap();
+    visual.simulate_click(create.center(), Default::default());
+    visual.run_until_parked();
+    let draft_id = s.manager.read_with(visual, |manager, _| {
+        assert_eq!(manager.roster.bots.len(), 1);
+        manager.creation.as_ref().unwrap().bot.id.clone()
+    });
+    assert_eq!(
+        before,
+        locked(&s.store).unwrap().setting("bot-roster").unwrap()
+    );
+    assert_eq!(
+        sessions,
+        locked(&s.store).unwrap().sessions().unwrap().len()
+    );
+    assert!(!s.root.join(&draft_id).exists());
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    s.manager.read_with(visual, |manager, _| {
+        assert!(!manager.creating());
+        assert_eq!(manager.active.as_deref(), Some(s.id.as_str()));
+        assert_eq!(manager.roster.bots.len(), 1);
+    });
+    assert_eq!(
+        before,
+        locked(&s.store).unwrap().setting("bot-roster").unwrap()
+    );
+    assert_eq!(
+        sessions,
+        locked(&s.store).unwrap().sessions().unwrap().len()
+    );
+}
+
+#[gpui::test]
+fn create_named_bot_commits_once_with_draft_choices_and_existing_settings_show_reset(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    cx.update(input::bind);
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager
+                .update(cx, |manager, cx| manager.create(Vec::new(), window, cx))
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.simulate_input("  Ada 🧭  ");
+    visual.run_until_parked();
+    s.manager.update(visual, |manager, cx| {
+        let id = manager.creation.as_ref().unwrap().bot.id.clone();
+        manager.edit_settings_bot(
+            &id,
+            |bot| {
+                bot.mascot = "cat".into();
+                bot.projects.push(s.project.clone());
+                bot.show_started_sessions_in_sidebar = true;
+            },
+            cx,
+        );
+        let draft = manager.creation.as_mut().unwrap();
+        draft.provider = Kind::Claude;
+        draft.settings.model = Some("chosen-model".into());
+        draft.settings.effort = Some("high".into());
+        draft.settings.access = AccessMode::ReadOnly;
+        draft.settings.fast = true;
+        assert_eq!(draft.bot.name, "Ada 🧭");
+    });
+    visual.run_until_parked();
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    let (id, session) = s.manager.read_with(visual, |manager, cx| {
+        assert!(!manager.creating());
+        assert_eq!(manager.roster.bots.len(), 2);
+        let bot = manager.current().unwrap();
+        assert_eq!(bot.name, "Ada 🧭");
+        assert_eq!(bot.mascot, "cat");
+        assert_eq!(bot.projects, vec![s.project.clone()]);
+        assert!(bot.show_started_sessions_in_sidebar);
+        assert!(bot.initial_configuration.is_none());
+        let view = manager.chat().unwrap();
+        assert_eq!(view.read(cx).summary.provider, "claude");
+        (bot.id.clone(), bot.session_id.unwrap())
+    });
+    let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+    assert_eq!(saved.get(&id).unwrap().name, "Ada 🧭");
+    let settings = locked(&s.store)
+        .unwrap()
+        .agent_settings(session)
+        .unwrap()
+        .unwrap();
+    assert_eq!(settings.model.as_deref(), Some("chosen-model"));
+    assert_eq!(settings.effort.as_deref(), Some("high"));
+    assert_eq!(settings.access, AccessMode::ReadOnly);
+    assert!(settings.fast);
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager.update(cx, |manager, cx| {
+                manager.confirm_creation(window, cx);
+                assert_eq!(manager.roster.bots.len(), 2);
+                manager.settings = Some(SettingsSection::General);
+                cx.notify();
+            })
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-reset").is_some());
+    assert!(visual.debug_bounds("bot-create").is_none());
+}
+
+#[gpui::test]
+fn new_bot_footer_remains_visible_at_narrow_window_sizes(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager
+                .update(cx, |manager, cx| manager.create(Vec::new(), window, cx))
+        })
+        .unwrap();
+    for size in [
+        gpui::size(px(1100.), px(800.)),
+        gpui::size(px(640.), px(500.)),
+    ] {
+        visual.simulate_resize(size);
+        visual.run_until_parked();
+        let dialog = visual.debug_bounds("bot-settings-dialog").unwrap();
+        let footer = visual.debug_bounds("bot-settings-footer").unwrap();
+        let create = visual.debug_bounds("bot-create").unwrap();
+        assert!(create.bottom() <= dialog.bottom());
+        assert!(create.top() >= footer.top());
+        assert!(create.right() <= dialog.right());
+        let look = visual.debug_bounds("bot-look").unwrap();
+        let name = visual.debug_bounds("bot-name-field").unwrap();
+        assert!(name.top() >= look.bottom());
+        if size.width >= px(780.) {
+            let model = visual.debug_bounds("bot-model-settings").unwrap();
+            assert!(model.left() > name.right());
+            assert!(model.top() <= name.top());
+        }
+    }
 }

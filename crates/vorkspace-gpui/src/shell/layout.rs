@@ -409,7 +409,7 @@ mod tests {
             .update(cx, |shell, w, cx| {
                 let manager = shell.bot_manager();
                 manager.update(cx, |m, cx| {
-                    m.create(Vec::new(), w, cx);
+                    m.create_named(Vec::new(), w, cx);
                     m.dismiss_settings(w, cx);
                 });
                 let id = manager.read(cx).active.clone().unwrap();
@@ -700,7 +700,7 @@ mod tests {
         let other = window
             .update(cx, |_, window, cx| {
                 manager.update(cx, |manager, cx| {
-                    manager.create(Vec::new(), window, cx);
+                    manager.create_named(Vec::new(), window, cx);
                     manager.dismiss_settings(window, cx);
                     manager.active.clone().unwrap()
                 })
