@@ -1959,8 +1959,10 @@ fn new_bot_setup_focuses_name_and_cancel_keeps_storage_and_current_bot_unchanged
     cx: &mut TestAppContext,
 ) {
     let s = setup(cx);
+    cx.update(input::bind);
     let before = locked(&s.store).unwrap().setting("bot-roster").unwrap();
     let sessions = locked(&s.store).unwrap().sessions().unwrap().len();
+    let original_files = bot::files::load(&s.root, &s.id, None).unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     s.window
         .update(visual, |_, window, cx| {
@@ -2001,6 +2003,26 @@ fn new_bot_setup_focuses_name_and_cancel_keeps_storage_and_current_bot_unchanged
         assert_eq!(manager.roster.bots.len(), 1);
         manager.creation.as_ref().unwrap().bot.id.clone()
     });
+    let soul = visual.debug_bounds("bot-settings-Soul").unwrap();
+    visual.simulate_click(soul.center(), Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-soul-page").is_some());
+    assert!(visual.debug_bounds("bot-create").is_some());
+    s.manager.update(visual, |manager, cx| {
+        manager.fields[&format!("file:{draft_id}:SOUL.md")].update(cx, |field, cx| {
+            field.set_text("Unsaved setup soul".into(), cx)
+        });
+    });
+    assert!(visual.debug_bounds("bot-settings-Memory").is_none());
+    let general = visual.debug_bounds("bot-settings-General").unwrap();
+    visual.simulate_click(general.center(), Default::default());
+    visual.run_until_parked();
+    s.manager.read_with(visual, |manager, _| {
+        assert_eq!(
+            manager.creation.as_ref().unwrap().soul,
+            "Unsaved setup soul"
+        );
+    });
     assert_eq!(
         before,
         locked(&s.store).unwrap().setting("bot-roster").unwrap()
@@ -2010,6 +2032,9 @@ fn new_bot_setup_focuses_name_and_cancel_keeps_storage_and_current_bot_unchanged
         locked(&s.store).unwrap().sessions().unwrap().len()
     );
     assert!(!s.root.join(&draft_id).exists());
+    let general = visual.debug_bounds("bot-settings-General").unwrap();
+    visual.simulate_click(general.center(), Default::default());
+    visual.run_until_parked();
     visual.simulate_keystrokes("escape");
     visual.run_until_parked();
     s.manager.read_with(visual, |manager, _| {
@@ -2025,6 +2050,10 @@ fn new_bot_setup_focuses_name_and_cancel_keeps_storage_and_current_bot_unchanged
         sessions,
         locked(&s.store).unwrap().sessions().unwrap().len()
     );
+    let files = bot::files::load(&s.root, &s.id, None).unwrap();
+    assert_eq!(files.soul, original_files.soul);
+    assert_eq!(files.memory, original_files.memory);
+    assert!(!s.root.join(&draft_id).exists());
 }
 
 #[gpui::test]
@@ -2043,6 +2072,19 @@ fn create_named_bot_commits_once_with_draft_choices_and_existing_settings_show_r
     visual.run_until_parked();
     visual.simulate_input("  Ada 🧭  ");
     visual.run_until_parked();
+    let draft_id = s.manager.read_with(visual, |manager, _| {
+        manager.creation.as_ref().unwrap().bot.id.clone()
+    });
+    let soul = visual.debug_bounds("bot-settings-Soul").unwrap();
+    visual.simulate_click(soul.center(), Default::default());
+    visual.run_until_parked();
+    s.manager.update(visual, |manager, cx| {
+        manager.fields[&format!("file:{draft_id}:SOUL.md")].update(cx, |field, cx| {
+            field.set_text("# Soul\nKeep replies concise.\n".into(), cx)
+        });
+    });
+    assert!(visual.debug_bounds("bot-create").is_some());
+    assert!(!s.root.join(&draft_id).exists());
     s.manager.update(visual, |manager, cx| {
         let id = manager.creation.as_ref().unwrap().bot.id.clone();
         manager.edit_settings_bot(
@@ -2063,7 +2105,8 @@ fn create_named_bot_commits_once_with_draft_choices_and_existing_settings_show_r
         assert_eq!(draft.bot.name, "Ada 🧭");
     });
     visual.run_until_parked();
-    visual.simulate_keystrokes("enter");
+    let create = visual.debug_bounds("bot-create").unwrap();
+    visual.simulate_click(create.center(), Default::default());
     visual.run_until_parked();
     let (id, session) = s.manager.read_with(visual, |manager, cx| {
         assert!(!manager.creating());
@@ -2089,6 +2132,11 @@ fn create_named_bot_commits_once_with_draft_choices_and_existing_settings_show_r
     assert_eq!(settings.effort.as_deref(), Some("high"));
     assert_eq!(settings.access, AccessMode::ReadOnly);
     assert!(settings.fast);
+    let files = bot::files::load(&s.root, &id, None).unwrap();
+    assert_eq!(
+        files.soul.as_deref(),
+        Some("# Soul\nKeep replies concise.\n")
+    );
     s.window
         .update(visual, |_, window, cx| {
             s.manager.update(cx, |manager, cx| {
@@ -2102,6 +2150,23 @@ fn create_named_bot_commits_once_with_draft_choices_and_existing_settings_show_r
     visual.run_until_parked();
     assert!(visual.debug_bounds("bot-reset").is_some());
     assert!(visual.debug_bounds("bot-create").is_none());
+    let soul = visual.debug_bounds("bot-settings-Soul").unwrap();
+    visual.simulate_click(soul.center(), Default::default());
+    visual.run_until_parked();
+    s.manager.update(visual, |manager, cx| {
+        manager.fields[&format!("file:{id}:SOUL.md")].update(cx, |field, cx| {
+            field.set_text("Updated after creation".into(), cx)
+        });
+        manager.save_open_file(cx);
+    });
+    visual.run_until_parked();
+    assert_eq!(
+        bot::files::load(&s.root, &id, None)
+            .unwrap()
+            .soul
+            .as_deref(),
+        Some("Updated after creation")
+    );
 }
 
 #[gpui::test]
@@ -2132,7 +2197,8 @@ fn new_bot_footer_remains_visible_at_narrow_window_sizes(cx: &mut TestAppContext
         if size.width >= px(780.) {
             let model = visual.debug_bounds("bot-model-settings").unwrap();
             assert!(model.left() > name.right());
-            assert!(model.top() <= name.top());
+            let identity_center = (look.top() + name.bottom()) / 2.;
+            assert!((identity_center - model.center().y).abs() <= px(1.));
         }
     }
 }

@@ -1321,12 +1321,19 @@ impl Bots {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if self
+            .creation
+            .as_ref()
+            .is_some_and(|draft| draft.bot.id != bot.id)
+        {
+            return None;
+        }
         let creating = self
             .creation
             .as_ref()
             .is_some_and(|draft| draft.bot.id == bot.id);
         let section = if creating {
-            SettingsSection::General
+            self.settings.unwrap_or(SettingsSection::General)
         } else {
             self.settings?
         };
@@ -1433,7 +1440,7 @@ impl Bots {
                                         ]
                                         .into_iter()
                                         .filter(|(tab, _, _)| {
-                                            !creating || *tab == SettingsSection::General
+                                            !creating || *tab != SettingsSection::Memory
                                         })
                                         .map(
                                             |(tab, label, glyph)| {
@@ -1519,7 +1526,7 @@ impl Bots {
                                     .flex()
                                     .flex_col()
                                     .child(body)
-                                    .when(section == SettingsSection::General, |d| {
+                                    .when(creating || section == SettingsSection::General, |d| {
                                         d.child(self.settings_footer(bot, creating, cx))
                                     }),
                             )
@@ -1712,6 +1719,7 @@ impl Bots {
             .flex()
             .flex_col()
             .items_center()
+            .justify_center()
             .w(px(160.))
             .flex_shrink_0()
             .child(
@@ -1759,7 +1767,7 @@ impl Bots {
             .min_w_0()
             .child(setting(
                 "Model",
-                Some("What it thinks and replies with."),
+                None,
                 div()
                     .id("bot-settings-model")
                     .role(Role::Button)
@@ -1830,7 +1838,7 @@ impl Bots {
             .child(
                 setting(
                     "Permissions",
-                    Some("What it may do without asking."),
+                    None,
                     div()
                         .id("bot-settings-access")
                         .role(Role::Button)
@@ -1864,7 +1872,7 @@ impl Bots {
             .flex_1().min_h_0().overflow_y_scroll().when(narrow, |d| d.px_4()).when(!narrow, |d| d.px_8()).pt_6().pb_6()
             .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).child("General"))
             .child(div().id("bot-settings-header").debug_selector(|| "bot-settings-header".into()).mt_4().flex().gap_6()
-                .when(narrow, |d| d.flex_col()).child(identity).child(model_controls))
+                .when(narrow, |d| d.flex_col()).when(!narrow, |d| d.items_center()).child(identity).child(model_controls))
             .child(heading("Projects",Some("It can see every session, note and folder in these.")))
             .child(card()
                 .children(bot.projects.iter().enumerate().map(|(ix,project)| {

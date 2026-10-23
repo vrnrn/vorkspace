@@ -640,6 +640,7 @@ impl Bots {
         let store = self.store.clone();
         let prefs = self.prefs.clone();
         let id = id.to_string();
+        let root = self.root.clone();
         let work = cx.background_executor().spawn(async move {
             let db = locked(&store)?;
             if let Some(missing) = &bot.unavailable_session {
@@ -668,6 +669,9 @@ impl Bots {
                 Some(config) => Kind::parse(&config.provider).ok_or("This Bot's configured provider is unavailable.")?,
                 None => prefs.default_provider.as_deref().and_then(Kind::parse).unwrap_or(Kind::Codex),
             };
+            if bot.initial_configuration.is_some() {
+                bot::load_files(&root, &bot)?;
+            }
             let mut summary = db.create(provider.id(), &home)?;
             summary.title = bot.label();
             db.title(summary.id, &summary.title)?;

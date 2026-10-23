@@ -16,7 +16,7 @@ The desktop schema remains readable without the former UI. Historical preference
 
 Bot memory and habit files use their existing owner directory in the selected data directory. New owners use `bots/`; earlier named or project-indexed owners stay where they are, including their provider homes. Older transcript tables remain the write authority for their sessions until an existing completed conversion or a populated current owner establishes the current identity. Empty placeholder directories and transcript roots do not hide saved owners. No files or rows are moved when reading these aliases. Remote host databases remain on their host.
 
-New Bot setup stays in memory until the user supplies a name and confirms Create. Cancelling setup creates no roster entry, backing session or Bot files. Confirmation saves the named identity with its selected provider configuration before creating its backing session. Those setup choices remain in the roster until the session's saved settings and published session ID take ownership, so reopening during setup completion retains the selected configuration. Existing Bot names and conversations remain unchanged.
+New Bot setup stays in memory until the user supplies a name and confirms Create. Cancelling setup creates no roster entry, backing session or Bot files. Confirmation saves the named identity with its selected provider configuration and soul before creating its backing session. Those setup choices remain in the roster until its files and session settings are saved and its session ID is published, so reopening during setup completion retains the selected configuration. Existing Bot names and conversations remain unchanged.
 
 ## Unsent composer state
 

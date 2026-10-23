@@ -9,6 +9,7 @@ pub(super) struct Creation {
     pub bot: Bot,
     pub provider: Kind,
     pub settings: Settings,
+    pub soul: String,
     pub catalog: Vec<Model>,
     pub generation: u64,
     pub window: gpui::AnyWindowHandle,
@@ -68,6 +69,7 @@ impl Bots {
         }
         if self.picker.is_none()
             && self.menu.is_none()
+            && matches!(self.settings, None | Some(SettingsSection::General))
             && let Some(name) = self.fields.get("bot-name")
         {
             window.focus(&name.focus_handle(cx), cx);
@@ -126,6 +128,7 @@ impl Bots {
             bot: self.roster.draft(projects),
             provider,
             settings,
+            soul: bot::DEFAULT_SOUL.into(),
             catalog: Vec::new(),
             generation: 0,
             window: window.window_handle(),
@@ -164,10 +167,15 @@ impl Bots {
         {
             return;
         }
+        self.save_open_file(cx);
+        let Some(draft) = self.creation.as_ref() else {
+            return;
+        };
         let mut bot = draft.bot.clone();
         bot.initial_configuration = Some(Box::new(InitialConfiguration {
             provider: draft.provider.id().into(),
             settings: draft.settings.clone(),
+            soul: Some(draft.soul.clone()),
         }));
         let id = match self.roster.create(bot) {
             Ok(bot) => bot.id.clone(),
@@ -178,7 +186,11 @@ impl Bots {
             }
         };
         self.creation = None;
+        self.settings = None;
         self.fields.remove("bot-name");
+        let soul = format!("{id}:SOUL.md");
+        self.fields.remove(&format!("file:{soul}"));
+        self.file_versions.remove(&soul);
         self.awaiting_creation.insert(id.clone());
         // Persist the named identity and its configuration before any backing
         // session becomes authoritative; ensure_chat publishes its ID last.
@@ -193,6 +205,9 @@ impl Bots {
             self.picker = None;
             self.menu = None;
             self.fields.remove("bot-name");
+            self.fields.retain(|key, _| !key.contains(&draft.bot.id));
+            self.file_versions
+                .retain(|key, _| !key.starts_with(&draft.bot.id));
             if let Some(focus) = draft.previous_focus {
                 window.focus(&focus, cx);
             }

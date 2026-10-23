@@ -95,6 +95,8 @@ impl Default for Bot {
 pub struct InitialConfiguration {
     pub provider: String,
     pub settings: crate::agent::Settings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soul: Option<String>,
 }
 impl Bot {
     pub fn label(&self) -> String {
@@ -313,7 +315,11 @@ pub fn root(store: &Store) -> PathBuf {
 pub fn load_files(root: &Path, bot: &Bot) -> Result<files::AgentFiles, String> {
     let mut files = files::load(root, &bot.id, None)?;
     if files.soul.is_none() {
-        let soul = DEFAULT_SOUL;
+        let soul = bot
+            .initial_configuration
+            .as_ref()
+            .and_then(|config| config.soul.as_deref())
+            .unwrap_or(DEFAULT_SOUL);
         match files::save(root, &bot.id, None, "SOUL.md", soul, Some(&files.soul_hash)) {
             Ok(hash) => {
                 files.soul = Some(soul.into());

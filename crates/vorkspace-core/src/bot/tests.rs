@@ -211,6 +211,7 @@ fn confirmed_setup_configuration_survives_reopen_until_a_session_takes_ownership
             access: crate::agent::AccessMode::ReadOnly,
             ..Default::default()
         },
+        soul: Some("# Soul\nKeep replies concise.\n".into()),
     }));
     let id = bot.id.clone();
     roster.create(bot).unwrap();
@@ -226,4 +227,28 @@ fn confirmed_setup_configuration_survives_reopen_until_a_session_takes_ownership
     assert_eq!(config.settings.model.as_deref(), Some("selected-model"));
     assert_eq!(config.settings.effort.as_deref(), Some("high"));
     assert_eq!(config.settings.access, crate::agent::AccessMode::ReadOnly);
+    let files = load_files(directory.path(), bot).unwrap();
+    assert_eq!(files.soul.as_deref(), config.soul.as_deref());
+    // Reopening while setup is pending preserves already-published file edits.
+    files::save(
+        directory.path(),
+        &id,
+        None,
+        "SOUL.md",
+        "Newer soul",
+        Some(&files.soul_hash),
+    )
+    .unwrap();
+    files::save(
+        directory.path(),
+        &id,
+        None,
+        "MEMORY.md",
+        "Newer memory",
+        Some(&files.memory_hash),
+    )
+    .unwrap();
+    let files = load_files(directory.path(), bot).unwrap();
+    assert_eq!(files.soul.as_deref(), Some("Newer soul"));
+    assert_eq!(files.memory, "Newer memory");
 }
