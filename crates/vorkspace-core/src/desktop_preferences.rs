@@ -129,14 +129,10 @@ impl DesktopPreferences {
         for row in rows {
             let (key, value) = row.map_err(|e| e.to_string())?;
             if let Some(value) = value {
-                let canonical = crate::compatibility::key(&key);
-                if (canonical.starts_with("vorkspace.") || canonical.starts_with("vorkspace:"))
-                    && (canonical == key || !values.contains_key(&canonical))
-                {
-                    values.insert(canonical, value);
-                }
+                values.insert(key, value);
             }
         }
+        let values = crate::compatibility::desktop_preferences(values);
         Ok(Self {
             values,
             available: true,
@@ -672,6 +668,104 @@ mod tests {
         assert!(desktop_origin(&origin("https", "tauri.localhost")));
         assert!(!desktop_origin(b"tauri localhost"));
         assert_eq!(decode_webkit_value(&[0]), None);
+    }
+
+    #[test]
+    fn earlier_feature_keys_restore_in_place_and_keep_native_edits_after_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("sessions.db");
+        let store = crate::store::Store::open_vorkspace(&database).unwrap();
+        let session = store.create("codex", "/project").unwrap();
+        let original = store.persisted_session_id(session.id).unwrap();
+        drop(store);
+        let app = String::from_utf8(vec![109, 111, 110, 111, 99, 111, 100, 101]).unwrap();
+        let singular = String::from_utf8(vec![109, 111, 110, 111]).unwrap();
+        let plural = format!("{singular}s");
+        let storage = directory.path().join("webkit.sqlite3");
+        let conn = Connection::open(&storage).unwrap();
+        conn.execute_batch("CREATE TABLE ItemTable(key TEXT,value BLOB)")
+            .unwrap();
+        let mut channel = json!({"id":"channel","name":"team","topic":"saved","memberSessions":{"stable-bot":original},"future":{"keep":true}});
+        channel[format!("{singular}Ids")] = json!(["stable-bot"]);
+        let mut author = json!({"kind":singular,"future":7});
+        author[format!("{singular}Id")] = json!("stable-bot");
+        let mut reaction = json!({"emoji":"yes","future":8});
+        reaction[format!("{singular}Id")] = json!("stable-bot");
+        let values = [
+            (format!("{app}:{singular}-roster"),json!([{"id":"stable-bot","name":"Before","sessionId":original,"projects":["/project"]}]).to_string()),
+            (format!("{app}.{plural}Enabled"),"0".into()),
+            (format!("{app}.rail{}{}Pinned",singular[..1].to_uppercase(),&plural[1..]),"1".into()),
+            (format!("{app}.{singular}MenuBarIcon"),"0".into()),
+            (format!("{app}:{singular}-channels"),json!([channel]).to_string()),
+            (format!("{app}:{singular}-channel-messages:channel"),json!([{"id":"message","text":singular,"from":author,"reactions":[reaction],"future":9}]).to_string()),
+            (format!("{app}:project-chat-backgrounds"),json!({format!("{singular}:stable-bot"):{"path":"/private/background.png","future":true}}).to_string()),
+            (format!("{app}.keybindingOverrides"),json!({format!("App: Toggle {}{}",singular[..1].to_uppercase(),&singular[1..]):{"shortcut":"Command+KeyB"},"Future command":{"shortcut":"Command+KeyJ","future":true}}).to_string()),
+            (format!("{app}.settingsSection"),plural.clone()),
+        ];
+        for (key, raw) in &values {
+            let bytes: Vec<_> = raw.encode_utf16().flat_map(u16::to_le_bytes).collect();
+            conn.execute(
+                "INSERT INTO ItemTable VALUES(?1,?2)",
+                rusqlite::params![key, bytes],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let before = std::fs::read(&storage).unwrap();
+        let preferences = std::sync::Arc::new(DesktopPreferences::read_database(&storage).unwrap());
+        let mut workspace = json!({});
+        preferences.apply_workspace(&mut workspace);
+        assert_eq!(workspace["preferences"]["bots"], false);
+        assert_eq!(workspace["preferences"]["rail_bots_pinned"], true);
+        assert_eq!(workspace["preferences"]["bot_menu_bar_icon"], false);
+        assert_eq!(
+            workspace["preferences"]["keybindings"]["App: Toggle Bot"],
+            "cmd-b"
+        );
+        assert_eq!(preferences.get("vorkspace.settingsSection"), Some("bots"));
+        let store = crate::store::Store::open_vorkspace_with_preferences_for_test(
+            &database,
+            preferences.clone(),
+        )
+        .unwrap();
+        let mut roster = crate::bot::Roster::load(&store).unwrap();
+        assert_eq!(roster.bots[0].session_id, Some(session.id));
+        assert_eq!(
+            roster.bots[0].background.as_ref().unwrap().path,
+            "/private/background.png"
+        );
+        roster.bots[0].name = "After".into();
+        roster.save(&store).unwrap();
+        let channels = crate::bot::channels::Channels::load(&store).unwrap();
+        assert_eq!(channels.channels[0].member_ids, ["stable-bot"]);
+        assert_eq!(
+            channels.channels[0].messages[0]["from"]["botId"],
+            "stable-bot"
+        );
+        assert_eq!(channels.channels[0].messages[0]["from"]["kind"], "bot");
+        assert_eq!(channels.channels[0].messages[0]["text"], singular);
+        assert_eq!(
+            channels.channels[0].messages[0]["reactions"][0]["future"],
+            8
+        );
+        assert_eq!(channels.channels[0].extra["future"]["keep"], true);
+        channels.save(&store).unwrap();
+        drop(store);
+        let reopened =
+            crate::store::Store::open_vorkspace_with_preferences_for_test(&database, preferences)
+                .unwrap();
+        assert_eq!(
+            crate::bot::Roster::load(&reopened).unwrap().bots[0].name,
+            "After"
+        );
+        assert_eq!(
+            crate::bot::channels::Channels::load(&reopened)
+                .unwrap()
+                .channels[0]
+                .messages[0]["future"],
+            9
+        );
+        assert_eq!(std::fs::read(&storage).unwrap(), before);
     }
 
     #[test]

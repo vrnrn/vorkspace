@@ -3,6 +3,8 @@ use serde_json::{json, Value};
 #[derive(Default)]
 pub(super) struct Display {
     pub text: String,
+    truncated: bool,
+    serial: u64,
     thinking: bool,
     speaking: Option<String>,
     at: i64,
@@ -10,7 +12,7 @@ pub(super) struct Display {
 }
 impl Display {
     pub fn snapshot(&self) -> Value {
-        json!({"activity":if self.speaking.is_some(){"replying"}else if self.thinking{"thinking"}else{"listening"},"mood":self.mood,"lines":if self.text.is_empty(){vec![]}else{vec![json!({"text":self.text})]}})
+        json!({"activity":if self.speaking.is_some(){"replying"}else if self.thinking{"thinking"}else{"listening"},"mood":self.mood,"lines":if self.text.is_empty(){vec![]}else{vec![json!({"id":format!("reply-{}",self.serial),"text":self.text,"truncated":self.truncated})]}})
     }
     pub fn realtime(&mut self, event: &Value) -> bool {
         let before = self.snapshot();
@@ -67,7 +69,18 @@ impl Display {
             "turn/completed" => self.thinking = false,
             "thread/realtime/transcript/done" if value["role"] == "assistant" => {
                 if let Some(text) = value["text"].as_str().filter(|s| !s.trim().is_empty()) {
-                    self.text = text.chars().take(4000).collect()
+                    let mut units = 0;
+                    let mut end = 0;
+                    for (offset, character) in text.char_indices() {
+                        if units + character.len_utf16() > 4000 {
+                            break;
+                        }
+                        units += character.len_utf16();
+                        end = offset + character.len_utf8();
+                    }
+                    self.text = text[..end].into();
+                    self.truncated = end < text.len();
+                    self.serial = self.serial.wrapping_add(1);
                 }
             }
             "thread/realtime/transcript/done" if value["role"] == "user" => self.mood.clear(),
@@ -104,12 +117,15 @@ pub(super) fn recent_context(value: &Value) -> Value {
         }
     }
     let text = parts.join("\n\n");
-    let start = text
-        .char_indices()
-        .rev()
-        .nth(2999)
-        .map(|(i, _)| i)
-        .unwrap_or(0);
+    let mut start = text.len();
+    let mut units = 0;
+    for (offset, character) in text.char_indices().rev() {
+        if units + character.len_utf16() > 3000 {
+            break;
+        }
+        units += character.len_utf16();
+        start = offset;
+    }
     let text = &text[start..];
     if text.is_empty() {
         json!([])

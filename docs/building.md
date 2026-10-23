@@ -13,6 +13,10 @@ Development uses the `native-dev` Cargo profile and isolated data. Type `r` then
 
 `CARGO_TARGET_DIR` and `CARGO_BUILD_TARGET` override output placement. `CARGO_BUILD_JOBS` controls build concurrency. Build scripts do not install or launch the release bundle.
 
+The manual **Mac release** workflow runs from `main`. It selects an unused stable version at or above the checked-in version, stamps package and Cargo manifests in the runner only, and assigns the native build number from the workflow run and attempt. Draft retries retain their own reserved version; published releases are immutable. The workflow generates versioned notes before compilation, runs checks, prepares signed update formats and a disk image, verifies metadata, and then publishes. Starting this workflow is an explicit release action; ordinary pushes and pull requests do not trigger it.
+
+Release preparation writes ignored `build/release-notes.md` and `build/native-release.json` artifacts. `VORKSPACE_RELEASE_BUILD=1` requires notes matching the Cargo package version; normal local builds include matching generated notes when available. The app reads these bundled notes offline and records version observations so an installed update notice appears once per version change. Opening What's new for an unbundled version loads its matching published GitHub notes in the background, with a 10-second timeout and 256 KiB response limit. See [update signing](updates.md) for release secrets.
+
 ## Generated assets and tests
 
 ```sh
@@ -21,7 +25,7 @@ npm run assets
 npm run check
 ```
 
-The editor, formatter, and arcade bundles are committed under `crates/vorkspace-gpui/assets/`; the Vox audio bundle lives under `crates/vorkspace-core/assets/`. Their maintained sources live in `embedded/editor`, `embedded/arcade`, and `embedded/vox`. These files are embedded, so Cargo can compile without installing JavaScript dependencies. `npm run assets` installs the separate editor generator dependencies and rebuilds these bundles. Root npm dependencies are build/test tools only.
+The editor and formatter bundles are committed under `crates/vorkspace-gpui/assets/`; the Vox audio bundle lives under `crates/vorkspace-core/assets/`. Their maintained sources live in `embedded/editor` and `embedded/vox`. These files are embedded, so Cargo can compile without installing JavaScript dependencies. `npm run assets` installs the separate editor generator dependencies and rebuilds these bundles. Root npm dependencies are build/test tools only.
 
 `npm run check` runs tooling, voice, host, formatting, Clippy, and workspace tests. `npm run test:rust` runs core tests before the serial GPUI suite. `npm run host:package` creates a self-contained remote host archive including Node.
 

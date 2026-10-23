@@ -215,19 +215,11 @@ impl Conversation {
             {
                 return Err("Attach up to 20 files totalling 20 MB.".to_owned());
             }
-            let root = locked(&store)?
-                .data_dir()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(std::env::temp_dir)
-                .join("attachments");
-            std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
             for image in images {
-                let path = root.join(format!(
-                    "pasted-{}.{}",
-                    vorkspace_core::bot::new_id(),
-                    image.format().extension()
-                ));
-                std::fs::write(&path, image.bytes()).map_err(|e| e.to_string())?;
+                let path = locked(&store)?.cache_attachment(
+                    &format!("pasted.{}", image.format().extension()),
+                    image.bytes(),
+                )?;
                 all.push(path);
             }
             vorkspace_core::composer::validate_attachments(&all)?;

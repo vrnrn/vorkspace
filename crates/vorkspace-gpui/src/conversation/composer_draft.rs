@@ -51,6 +51,9 @@ impl State {
     pub(super) fn flush(&self) -> Result<(), String> {
         flush(&self.writer)
     }
+    pub(super) fn ready_for_replacement(&self) -> bool {
+        !self.hydrating && self.error.is_none() && !self.resolving
+    }
 }
 pub(super) fn flush(writer: &Arc<Mutex<Writer>>) -> Result<(), String> {
     let (pending, loaded) = {
@@ -312,6 +315,7 @@ impl Conversation {
             let _ = this.update(cx, |this, cx| match result {
                 Ok(saved) => {
                     this.composer_draft.hydrating = false;
+                    cx.notify();
                     if !this.composer_draft.touched
                         && let Some(saved) = saved
                         && !saved.deleted

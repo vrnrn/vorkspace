@@ -55,8 +55,6 @@ pub(crate) struct Preferences {
     pub format_on_save: bool,
     pub autosave: bool,
     pub diff_view: String,
-    pub composer_mascot: bool,
-    pub empty_session_games: bool,
     // Providers
     pub show_remaining_usage: bool,
     pub mask_emails: bool,
@@ -136,8 +134,6 @@ impl Default for Preferences {
             format_on_save: true,
             autosave: false,
             diff_view: "editor".into(),
-            composer_mascot: true,
-            empty_session_games: true,
             show_remaining_usage: false,
             mask_emails: true,
             idle_agents: 3,

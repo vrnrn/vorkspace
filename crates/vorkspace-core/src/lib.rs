@@ -48,3 +48,5 @@ pub mod voice;
 mod compatibility;
 
 mod local_http;
+
+pub mod release_notes;

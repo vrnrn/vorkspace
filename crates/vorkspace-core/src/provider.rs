@@ -77,6 +77,8 @@ pub struct Request {
 pub enum Event {
     Ready,
     Commands(Vec<NativeCommand>),
+    /// Synchronous admission before a follow-up can reach provider input.
+    FollowUpDispatch(crate::follow_up::Message),
     FollowUp(crate::follow_up::Message),
     FollowUpFailed {
         id: String,
@@ -1587,7 +1589,9 @@ fn run_operation(
                     while let Ok(control) = controls.try_recv() {
                         if let Decision::Steer(message) = control.decision {
                             let id = message.id.clone();
-                            match protocol.steer(message, &mut stdin) {
+                            match protocol.steer(message, &mut stdin, |message| {
+                                emit(vec![Event::FollowUpDispatch(message.clone())])
+                            }) {
                                 Ok(events) => pending.extend(events),
                                 Err(error) => pending.push(Event::FollowUpFailed { id, error }),
                             }

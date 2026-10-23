@@ -88,6 +88,7 @@ impl Web {
         let parent = unsafe { &*handle.ns_view.as_ptr().cast::<NSView>() };
         unsafe {
             let config = WKWebViewConfiguration::new(mtm);
+            crate::webkit::name_process(&config);
             config.setWebsiteDataStore(&WKWebsiteDataStore::nonPersistentDataStore(mtm));
             let _: () = msg_send![&config,setMediaTypesRequiringUserActionForPlayback:0usize];
             let allocated = Guard::alloc(mtm).set_ivars(Permission {

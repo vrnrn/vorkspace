@@ -115,6 +115,14 @@ for line in sys.stdin:
             assert!(prompt < update.rows.len() - 1);
             let store = locked(&store).unwrap();
             assert!(store.follow_ups(session).unwrap().messages.is_empty());
+            let receipts = store.local_submissions(session).unwrap();
+            assert_eq!(receipts.len(), 2);
+            let steer = receipts
+                .iter()
+                .find(|r| r.user_turn_id == message.id)
+                .unwrap();
+            assert_eq!(steer.outcome.as_deref(), Some("completed"));
+            assert!(receipts.iter().any(|r| r.phase == "dispatching"));
             let saved = store.load(session).unwrap();
             assert_eq!(saved.rows.last().unwrap(), response);
             let turn = saved.rows.len() - 1;
@@ -132,8 +140,75 @@ for line in sys.stdin:
     worker.join().unwrap();
     assert_eq!(final_status, "Ready");
     assert!(receipt_seen);
+    assert!(
+        locked(&store)
+            .unwrap()
+            .local_submissions(session)
+            .unwrap()
+            .iter()
+            .all(|r| r.outcome.as_deref() == Some("completed"))
+    );
     let saved = locked(&store).unwrap().load(session).unwrap();
     let after = saved.rows.iter().find(|row| row.text == "After").unwrap();
     assert_eq!(after.role, "assistant");
     assert_eq!(saved.rows.last(), Some(after));
+}
+
+#[test]
+fn provider_disconnect_keeps_an_uncertain_receipt_and_blocks_queue_replay_before_spawn() {
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("disconnect-provider");
+    std::fs::write(&binary,r#"#!/usr/bin/env python3
+import json,sys
+for line in sys.stdin:
+    value=json.loads(line)
+    if value.get('method')=='initialize':
+        print(json.dumps({'id':value['id'],'result':{}}),flush=True)
+    elif value.get('method')=='thread/start':
+        print(json.dumps({'id':value['id'],'result':{'thread':{'id':'disconnect-thread'}}}),flush=True)
+    elif value.get('method')=='turn/start':
+        open('provider-received','w').write('accepted input')
+        break
+"#).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let store = Store::open_vorkspace(&directory.path().join("sessions.db")).unwrap();
+    let summary = store
+        .create("codex", directory.path().to_str().unwrap())
+        .unwrap();
+    let id = summary.id;
+    let db = Arc::new(Mutex::new(store));
+    for retry in [false, true] {
+        let (tx, rx) = async_channel::bounded(64);
+        let (_controls, control_rx) = std::sync::mpsc::channel();
+        let binary = binary.clone();
+        run_turn_using(
+            TurnInput {
+                summary: summary.clone(),
+                prompt: "Saved request".into(),
+                settings: Settings {
+                    bot_message_id: Some("stable-queued-message".into()),
+                    text_only: true,
+                    ..Default::default()
+                },
+            },
+            control_rx,
+            db.clone(),
+            Arc::new(AtomicBool::new(false)),
+            tx,
+            |_| Some(binary),
+        );
+        let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(updates.last().unwrap().finished);
+        if retry {
+            assert!(updates.last().unwrap().status.contains("not replayed"));
+            assert!(!directory.path().join("provider-received").exists());
+        } else {
+            assert!(directory.path().join("provider-received").exists());
+            std::fs::remove_file(directory.path().join("provider-received")).unwrap();
+        }
+        let store = locked(&db).unwrap();
+        let receipt = store.latest_unconfirmed_submission(id).unwrap().unwrap();
+        assert_eq!(receipt.user_turn.unwrap()["text"], "Saved request");
+        assert_eq!(store.local_submissions(id).unwrap().len(), 1);
+    }
 }

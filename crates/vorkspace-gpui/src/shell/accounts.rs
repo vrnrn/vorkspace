@@ -163,7 +163,7 @@ mod tests {
     fn limit_switch(cx: &mut gpui::TestAppContext, carry: bool, cold: bool) {
         use vorkspace_core::{accounts::Profile, transcript::Row};
         let (window, _, id) = crate::shell::tests::window(cx);
-        let (target, destination, original_count, active, tab_count) = window
+        let (source_id, target, destination, original_count, active, tab_count) = window
             .update(cx, |shell, _, cx| {
                 let center = crate::accounts::get(cx).unwrap();
                 let (source, target) = center.update(cx, |center, _| {
@@ -174,6 +174,7 @@ mod tests {
                 });
                 let root = center.read(cx).root.clone();
                 let source = Profile::new(&source.id, &root);
+                let source_id = source.id.clone();
                 let destination = Profile::new(&target.id, &root)
                     .home(Kind::Claude)
                     .unwrap()
@@ -220,6 +221,12 @@ mod tests {
                     // Block provider launch at preflight: these tests exercise the
                     // account transfer and routing without making a live request.
                     settings.worktree_removed = true;
+                    // A restored conversation already has an authoritative saved
+                    // account; transfer failure must preserve that same record.
+                    locked(&shell.store)
+                        .unwrap()
+                        .save_agent_settings(id, &settings)
+                        .unwrap();
                     view.install_transfer(settings, None, cx);
                     view.summary.has_messages = true;
                     view.summary.provider_id = Some("saved-thread".into());
@@ -235,6 +242,7 @@ mod tests {
                     }
                 });
                 let state = (
+                    source_id,
                     target.id.clone(),
                     destination,
                     shell.sessions.len(),
@@ -265,7 +273,6 @@ mod tests {
                 assert_eq!(shell.workspace.tabs.len(), tab_count);
                 let view = shell.sessions[&id].read(cx);
                 assert_eq!(view.summary.id, id);
-                assert_eq!(view.settings.account.id, target);
                 assert!(
                     view.transcript
                         .read(cx)
@@ -274,6 +281,7 @@ mod tests {
                         .any(|row| row.text == "The integration is partly implemented")
                 );
                 if carry {
+                    assert_eq!(view.settings.account.id, target);
                     assert_eq!(view.summary.provider_id.as_deref(), Some("saved-thread"));
                     assert!(view.settings.pending_provider_switch.is_none());
                     assert!(view.settings.handoff.is_none());
@@ -282,11 +290,28 @@ mod tests {
                         "{\"conversation\":\"original\"}\n"
                     );
                 } else {
-                    assert!(view.summary.provider_id.is_none());
-                    let pending = view.settings.pending_provider_switch.as_ref().unwrap();
-                    assert!(pending.skip_outgoing_recap);
-                    assert_eq!(pending.provider_id.as_deref(), Some("saved-thread"));
-                    assert_ne!(pending.account.id, target);
+                    assert_eq!(view.settings.account.id, source_id);
+                    assert_eq!(view.summary.provider_id.as_deref(), Some("saved-thread"));
+                    assert!(view.settings.pending_provider_switch.is_none());
+                    assert!(view.settings.handoff.is_none());
+                    assert!(view.account_recovery_limit(cx).is_some());
+                    let store = locked(&shell.store).unwrap();
+                    assert_eq!(
+                        store.agent_settings(id).unwrap().unwrap().account.id,
+                        source_id
+                    );
+                    assert_eq!(
+                        store
+                            .sessions()
+                            .unwrap()
+                            .into_iter()
+                            .find(|s| s.id == id)
+                            .unwrap()
+                            .provider_id
+                            .as_deref(),
+                        Some("saved-thread")
+                    );
+                    assert!(!destination.exists());
                 }
             })
             .unwrap();
@@ -305,7 +330,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn footer_account_switch_keeps_the_local_session_when_native_history_is_missing(
+    fn footer_account_switch_preserves_original_resume_when_native_history_is_missing(
         cx: &mut gpui::TestAppContext,
     ) {
         limit_switch(cx, false, false);

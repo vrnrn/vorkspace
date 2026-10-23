@@ -2,6 +2,8 @@
 
 Vox is an optional voice conversation in the title bar. Enable it in Settings → Vox; it starts disabled. Clicking its face begins a call. Stop releases microphone capture immediately, ends the call, and denies late app actions. Silent mode keeps the reply bubble while suppressing spoken playback.
 
+The silent reply is selectable and scrollable. Escape, clicking outside, or Dismiss hides that completed reply until a new reply arrives; activity changes do not reopen it. Display retains at most 4,000 UTF-16 units and shows an ellipsis when truncated. Resume context is limited to four recent turns and 3,000 UTF-16 units, without changing the provider's stored history.
+
 Microphone capture uses the selected device exactly, or a uniquely matching label after WebKit rotates device IDs. The initial default prefers the built-in MacBook microphone. Capture never silently switches to another device when a selection disappears.
 
 Vox can inspect and control supported local sessions and Bots through native handlers. It inherits the chosen provider account and model when creating a session. Ambiguous project names require a full path. Composer updates check revisions and preserve attachments and unsent user input; follow-ups use the durable queue.

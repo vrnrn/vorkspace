@@ -2,7 +2,7 @@
 
 The desktop app window is drawn by GPUI. Rust keeps track of conversations, files, Bots, and running agents in the same desktop process. Saved history lives in SQLite, with extra window settings beside it.
 
-Rust controls Vox calls and translates desktop Copilot requests. Small JavaScript helpers handle editor language tools, voice audio, and remote machines. A remote machine keeps its own agents running and history saved even when your desktop disconnects. Voice and HTML previews use a limited browser surface inside the native app.
+Rust controls Vox calls and translates desktop Copilot requests. Small JavaScript helpers handle editor language tools, voice audio, and remote machines. Empty conversations show the composer, and session titles stay still. A remote machine keeps its own agents running and history saved even when your desktop disconnects. Voice and HTML previews use a limited browser surface inside the native app.
 
 The [repository map](repository.md) shows where each part lives. Embedded helper code has its own folder; the scripts folder contains developer tools.
 

@@ -309,7 +309,19 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "sidebar-opacity",
         Section::Appearance,
         "Sidebar opacity",
-        "glass translucent transparency vibrancy",
+        "window opacity glass translucent transparency vibrancy",
+    ),
+    (
+        "blur",
+        Section::Appearance,
+        "Blur radius",
+        "window sidebar glass translucent transparency background radius",
+    ),
+    (
+        "inset-glass",
+        Section::Appearance,
+        "Transparent window",
+        "glass inset translucent transparency opaque desktop layout",
     ),
     (
         "main-pane-glass",
@@ -384,12 +396,6 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "spelling spell check autocorrect typo macos composer",
     ),
     (
-        "composer-mascot",
-        Section::Chat,
-        "Composer mascot",
-        "runner animation coin fun",
-    ),
-    (
         "format-on-save",
         Section::Chat,
         "Format on save",
@@ -400,12 +406,6 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::Chat,
         "Diff view",
         "unified editor review changes working tree",
-    ),
-    (
-        "empty-session-games",
-        Section::Chat,
-        "Empty session games",
-        "pacman snake arcade grid fun",
     ),
     (
         "agent-clis",

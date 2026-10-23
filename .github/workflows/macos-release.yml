@@ -1,0 +1,118 @@
+name: Mac release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'vrnrn/vorkspace'
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: '2'
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin
+      - name: Prepare unused version, build number, and release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/release/prepare-macos-release.mjs
+      - run: npm ci
+      - run: npm run assets
+      - run: npm run check
+      - name: Prepare the pinned open-source updater tools
+        run: |
+          python3 scripts/release/prepare-native-updates.py
+          brew install minisign
+      - name: Materialize protected update signing files
+        env:
+          COMPAT_KEY: ${{ secrets.MACOS_UPDATER_SIGNING_KEY }}
+          SPARKLE_KEY: ${{ secrets.MACOS_SPARKLE_SIGNING_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, tempfile
+          directory = pathlib.Path(tempfile.mkdtemp(prefix="vorkspace-release-keys-", dir=os.environ["RUNNER_TEMP"]))
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              for source, variable in (("COMPAT_KEY", "VORKSPACE_COMPAT_SIGNING_KEY"), ("SPARKLE_KEY", "VORKSPACE_SPARKLE_SIGNING_KEY")):
+                  value = os.environ[source]
+                  if not value:
+                      raise RuntimeError(f"Missing {source} signing secret")
+                  path = directory / source.lower()
+                  descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                  with os.fdopen(descriptor, "w") as handle:
+                      handle.write(value)
+                  output.write(f"{variable}={path}\n")
+          PY
+      - name: Build the native desktop and signed update formats
+        env:
+          VORKSPACE_SPARKLE_FRAMEWORK: ${{ github.workspace }}/target/sparkle/Sparkle.framework
+          CARGO_BUILD_TARGET: aarch64-apple-darwin
+        run: |
+          npm run build
+          python3 scripts/release/package-native-update.py target/aarch64-apple-darwin/release/vorkspace.app build/native-updates \
+            --ed-key-file "$VORKSPACE_SPARKLE_SIGNING_KEY" \
+            --compat-signing-key "$VORKSPACE_COMPAT_SIGNING_KEY" \
+            --compat-public-key scripts/release/compat-public-key.txt \
+            --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
+          mkdir -p build/dmg-root
+          ditto target/aarch64-apple-darwin/release/vorkspace.app build/dmg-root/vorkspace.app
+          ln -s /Applications build/dmg-root/Applications
+          hdiutil create -volname vorkspace -srcfolder build/dmg-root -format UDZO build/native-updates/vorkspace_aarch64.dmg
+          rm -rf build/dmg-root
+      - name: Package Apple Silicon and Intel remote hosts
+        run: |
+          npm run host:build
+          node host/package.mjs --target darwin-arm64
+          node host/package.mjs --target darwin-x64
+      - name: Verify release metadata before creating a draft
+        run: |
+          APP=target/aarch64-apple-darwin/release/vorkspace.app
+          codesign --verify --deep --strict "$APP"
+          test "$(lipo -archs "$APP/Contents/MacOS/vorkspace-gpui")" = arm64
+          test "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" = "$RELEASE_VERSION"
+          test "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" = "$RELEASE_BUILD_NUMBER"
+          cmp crates/vorkspace-gpui/assets/icon.icns "$APP/Contents/Resources/vorkspace.icns"
+          test -s build/release-notes.md
+          test -s build/native-updates/appcast.xml
+          test -s build/native-updates/latest.json
+      - name: Create or resume this run's draft and upload verified artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-state.json"; then
+            node scripts/release/verify-release-draft.mjs "$RUNNER_TEMP/release-state.json"
+            gh release edit "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/macos-release-notes.md"
+          else
+            gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" --title "vorkspace $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/macos-release-notes.md"
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-state.json"
+          node scripts/release/verify-release-draft.mjs "$RUNNER_TEMP/release-state.json"
+          gh release upload "$RELEASE_TAG" --clobber build/native-updates/* \
+            build/host-packages/vorkspace-host-darwin-{arm64,x64}.tar.gz \
+            build/host-packages/vorkspace-host-darwin-{arm64,x64}.tar.gz.sha256 LICENSE
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-state.json"
+          node scripts/release/verify-release-draft.mjs "$RUNNER_TEMP/release-state.json"
+          gh release edit "$RELEASE_TAG" --draft=false --latest --notes-file "$RUNNER_TEMP/macos-release-notes.md"
+      - name: Remove signing files
+        if: always()
+        run: |
+          if [ -n "${VORKSPACE_COMPAT_SIGNING_KEY:-}" ]; then rm -f "$VORKSPACE_COMPAT_SIGNING_KEY"; fi
+          if [ -n "${VORKSPACE_SPARKLE_SIGNING_KEY:-}" ]; then rm -f "$VORKSPACE_SPARKLE_SIGNING_KEY"; fi

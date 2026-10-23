@@ -263,8 +263,6 @@ impl SettingsView {
                     | "paced-reveal"
                     | "composer-autocorrect"
                     | "format-on-save"
-                    | "composer-mascot"
-                    | "empty-session-games"
                     | "show-remaining-usage"
                     | "mask-emails"
                     | "claude-hooks"

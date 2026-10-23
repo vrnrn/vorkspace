@@ -844,7 +844,7 @@ impl Shell {
     }
 
     pub(super) fn open_whats_new(&mut self, version: String, cx: &mut Context<Self>) {
-        let view = cx.new(|_| WhatsNew::new(version));
+        let view = cx.new(|cx| WhatsNew::new(version, cx));
         let events = cx.subscribe(&view, |this, _, _: &WhatsNewEvent, cx| {
             this.notification_state.whats_new = None;
             cx.notify();

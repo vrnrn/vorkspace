@@ -12,14 +12,14 @@
     "check": "npm run test:tooling && npm run test:voice && npm run test:host && cargo fmt --all --check && cargo clippy --locked --workspace --all-targets --profile native-dev -- -D warnings && npm run test:rust",
     "test": "npm run test:tooling && npm run test:voice && npm run test:host && npm run test:rust",
     "test:rust": "cargo test --locked -p vorkspace-core --profile native-dev && cargo test --locked -p vorkspace-gpui --profile native-dev -- --test-threads=1",
-    "test:tooling": "node --test scripts/desktop/*.test.mjs scripts/checks/*.test.mjs && python3 scripts/desktop/native-bundle-plist.test.py && python3 scripts/release/package-native-update.test.py",
+    "test:tooling": "node --test scripts/desktop/*.test.mjs scripts/checks/*.test.mjs scripts/release/*.test.mjs && python3 scripts/desktop/native-bundle-plist.test.py && python3 scripts/release/package-native-update.test.py",
     "test:voice": "vitest run --config embedded/vox/vitest.config.js",
     "host:build": "node host/build.mjs",
     "host:package": "npm run host:build && node host/package.mjs",
     "host": "node build/host/vorkspace-host.mjs",
     "pretest:host": "npm run host:build",
     "test:host": "vitest run --config host/vitest.config.js",
-    "assets": "npm ci --prefix embedded/editor && node embedded/editor/build.mjs && node embedded/arcade/build.mjs && node embedded/vox/build.mjs",
+    "assets": "npm ci --prefix embedded/editor && node embedded/editor/build.mjs && node embedded/vox/build.mjs",
     "set-version": "node scripts/release/bump-version.mjs"
   },
   "devDependencies": {

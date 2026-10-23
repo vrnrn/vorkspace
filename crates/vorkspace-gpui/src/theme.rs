@@ -48,10 +48,14 @@ struct Tokens {
     diff_strong: bool,
 }
 thread_local! { static TOKENS: std::cell::RefCell<Option<Tokens>> = const { std::cell::RefCell::new(None) }; }
-pub(crate) fn configure(p: &crate::settings::Preferences, system_light: bool) -> bool {
+pub(crate) fn configure(
+    p: &crate::settings::Preferences,
+    system_light: bool,
+    classic: bool,
+) -> bool {
     let light = p.theme == "light" || (p.theme == "system" && system_light);
     let palette = crate::settings::palette(&p.workspace_theme, light);
-    let glass = window_glass(p, system_light);
+    let glass = window_glass(p, system_light, classic);
     // Both layouts derive their surface roles from the same saved settings.
     let shell = gpui::hsla(
         p.theme_hue.min(360) as f32 / 360.,
@@ -98,8 +102,15 @@ pub(crate) fn configure(p: &crate::settings::Preferences, system_light: bool) ->
     })
 }
 
-pub(crate) fn window_glass(p: &crate::settings::Preferences, system_light: bool) -> bool {
-    cfg!(target_os = "macos") && p.theme != "light" && !(p.theme == "system" && system_light)
+pub(crate) fn window_glass(
+    p: &crate::settings::Preferences,
+    system_light: bool,
+    classic: bool,
+) -> bool {
+    cfg!(target_os = "macos")
+        && (classic || p.inset_glass)
+        && p.theme != "light"
+        && !(p.theme == "system" && system_light)
 }
 pub(crate) fn accent_color() -> Hsla {
     TOKENS.with(|t| {
@@ -390,6 +401,37 @@ mod composer_tests {
     use super::*;
 
     #[test]
+    fn both_layouts_share_opacity_and_keep_dark_glass_preferences_when_disabled() {
+        let before = TOKENS.with(|tokens| *tokens.borrow());
+        let mut preferences = crate::settings::Preferences {
+            theme: "dark".into(),
+            sidebar_opacity: 43,
+            sidebar_blur: 57,
+            ..Default::default()
+        };
+        for classic in [true, false] {
+            configure(&preferences, false, classic);
+            let alpha = TOKENS.with(|tokens| tokens.borrow().unwrap().shell.a);
+            assert_eq!(alpha, if cfg!(target_os = "macos") { 0.43 } else { 1. });
+        }
+        preferences.inset_glass = false;
+        assert!(!window_glass(&preferences, false, false));
+        assert_eq!(
+            window_glass(&preferences, false, true),
+            cfg!(target_os = "macos")
+        );
+        configure(&preferences, false, false);
+        assert_eq!(TOKENS.with(|tokens| tokens.borrow().unwrap().shell.a), 1.);
+        preferences.theme = "light".into();
+        for classic in [true, false] {
+            assert!(!window_glass(&preferences, false, classic));
+        }
+        assert_eq!(preferences.sidebar_opacity, 43);
+        assert_eq!(preferences.sidebar_blur, 57);
+        TOKENS.with(|tokens| *tokens.borrow_mut() = before);
+    }
+
+    #[test]
     fn composer_surface_matches_react_dark_ink_and_solid_light_background() {
         struct Restore(Option<Tokens>);
         impl Drop for Restore {
@@ -399,7 +441,7 @@ mod composer_tests {
         }
         let _restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
         let mut preferences = crate::settings::Preferences::default();
-        configure(&preferences, false);
+        configure(&preferences, false, true);
         assert_eq!(composer_fill(), content(0.03));
         assert_eq!(composer_blur(), 24.);
         assert_eq!(composer_border(false), content(0.1));
@@ -408,7 +450,7 @@ mod composer_tests {
         preferences.theme = "light".into();
         preferences.theme_hue = 180;
         preferences.theme_saturation = 20;
-        configure(&preferences, false);
+        configure(&preferences, false, true);
         assert_eq!(composer_fill(), gpui::hsla(0.5, 0.2, 0.97, 1.));
         assert_eq!(composer_blur(), 0.);
         assert_eq!(composer_border(false), content(0.1));

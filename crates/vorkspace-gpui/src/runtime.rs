@@ -14,6 +14,7 @@ mod follow_up_tests;
 mod handoff;
 mod persistence;
 pub(crate) mod remote;
+mod submissions;
 mod visual_discovery;
 #[cfg(all(test, unix))]
 mod visual_tests;
@@ -125,6 +126,7 @@ fn run_turn_using(
         .map(|s| s.uses_vorkspace_schema())
         .unwrap_or(false);
     let mut pending = PendingSave::new(shared, std::time::Instant::now());
+    let mut submissions = submissions::Submissions::new(store.clone(), summary.id);
     pending.own_context(&summary.provider, &source_account);
     let mut initial_delivery = None;
     let mut accepted_messages = Vec::new();
@@ -162,6 +164,7 @@ fn run_turn_using(
         transcript = locked(&store)?.load(summary.id)?;
         history_loaded = true;
         turn_start = transcript.rows.len();
+        submissions.reserve_initial(&prompt, &settings)?;
         let mut persisted = settings.clone();
         persisted.handoff = None;
         // These modes belong to this turn, not the next composer draft.
@@ -511,6 +514,10 @@ fn run_turn_using(
             settings,
         };
         let mut tool_rows = std::collections::HashMap::new();
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Stopped".into());
+        }
+        submissions.dispatch_initial()?;
         // The running-work list attributes the provider and its tools to this session.
         let result = vorkspace_core::process::owned_by(summary.id, || {
             provider::run_with_controls(request, cancel.clone(), Some(controls), |events| {
@@ -567,6 +574,9 @@ fn run_turn_using(
                                 store.save_agent_settings(summary.id, &persisted)?;
                             }
                         }
+                        Event::FollowUpDispatch(message) => {
+                            submissions.dispatch_follow_up(&message)?;
+                        }
                         Event::FollowUp(message) => {
                             let at = transcript.begin("user");
                             start = start.min(at);
@@ -583,6 +593,10 @@ fn run_turn_using(
                                 &message.id,
                                 std::time::Instant::now(),
                             )?;
+                            // The durable queue/transcript handoff owns acceptance.
+                            // Keep its ID even if a later metadata write fails.
+                            accepted_messages.push(message.id.clone());
+                            submissions.accept_follow_up(&message.id)?;
                             if let Some((_, root)) = &turn_receipt {
                                 // A steer keeps its send time and model identity,
                                 // while timing/metrics belong to the original run.
@@ -595,10 +609,12 @@ fn run_turn_using(
                                 };
                                 persistence::save_turn_receipt(&store, summary.id, turn, steer)?;
                             }
-                            accepted_messages.push(message.id.clone());
                             follow_up_delivered.push(message.id);
                         }
-                        Event::FollowUpFailed { id, error } => follow_up_errors.push((id, error)),
+                        Event::FollowUpFailed { id, error } => {
+                            submissions.fail_follow_up(&id, &error)?;
+                            follow_up_errors.push((id, error));
+                        }
                         Event::BeginAssistant => {
                             if transcript
                                 .rows
@@ -830,6 +846,8 @@ fn run_turn_using(
         }
         result
     })();
+    let submission_save = submissions.finish(&result);
+    drop(submissions);
     let cancelled =
         cancel.load(Ordering::Relaxed) || result.as_ref().is_err_and(|error| error == "Stopped");
     let handoff = prepared_handoff.map(|mut ready| {
@@ -957,6 +975,9 @@ fn run_turn_using(
         if let Err(error) = persistence::save_turn_receipt(&store, summary.id, turn, info) {
             status = format!("{status} · Saving turn metadata failed: {error}");
         }
+    }
+    if let Err(error) = submission_save {
+        status = format!("{status} · Saving local send receipt failed: {error}");
     }
     if let Err(error) = handoff_save {
         status = format!("{status} · Saving handoff failed: {error}");

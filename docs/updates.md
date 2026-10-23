@@ -4,6 +4,8 @@ The release packager prepares two standard, signed update formats: the installed
 
 Local builds without Sparkle open the release page when **Check for updates** is selected. Development-data bundles cannot use a release feed. Packaging never uploads files or publishes a release.
 
+The manual **Mac release** workflow is the separate publication path. Configure `MACOS_UPDATER_SIGNING_KEY` with the existing desktop signing key and `MACOS_SPARKLE_SIGNING_KEY` with the Sparkle seed matching `scripts/release/sparkle-public-key.txt`. The desktop public key is retained in `scripts/release/compat-public-key.txt`. The workflow creates protected temporary key files, removes them afterward, reserves an unused 1.x-or-newer version and numeric build number, and verifies both formats before publishing. Its tests use mocked release API responses and temporary keys; running tests does not publish a release.
+
 ## Building an update-enabled app
 
 Download the pinned, checksum-checked [Sparkle 2.9.6 distribution](https://github.com/sparkle-project/Sparkle/releases/tag/2.9.6) for macOS 11 compatibility:

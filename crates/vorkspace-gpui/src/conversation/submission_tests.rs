@@ -3,6 +3,198 @@ use gpui::{TestAppContext, WindowHandle};
 use std::sync::Mutex;
 use vorkspace_core::{store::Store, transcript::attachments};
 
+#[gpui::test]
+fn dropped_sender_releases_the_current_ui_and_pauses_queue_without_replay(cx: &mut TestAppContext) {
+    for stop_before_close in [false, true] {
+        let window = conversation(cx);
+        cx.run_until_parked();
+        let (tx, rx) = async_channel::bounded(1);
+        let (generation, owner, attempt, rows) = window
+            .update(cx, |view, _, cx| {
+                let attempt = format!("dropped-sender-{stop_before_close}");
+                let owner = {
+                    let store = locked(&view.store).unwrap();
+                    store
+                        .reserve_local_submission(
+                            view.summary.id,
+                            vorkspace_core::store::SubmissionInput {
+                                attempt_id: attempt.clone(),
+                                user_turn_id: "sent-turn".into(),
+                                session_id: String::new(),
+                                payload_json: "{\"text\":\"Sent message\"}".into(),
+                                user_turn: Some(
+                                    serde_json::json!({"id":"sent-turn","role":"user","text":"Sent message","attachments":[]}),
+                                ),
+                            },
+                        )
+                        .unwrap();
+                    assert!(store.dispatch_local_submission(&attempt).unwrap().claimed);
+                    store.local_submission_owner()
+                };
+                view.begin_turn(cx);
+                view.preparing_worktree = true;
+                view.planning_orchestration = true;
+                let rows = vec![
+                    vorkspace_core::transcript::Row {
+                        role: "user".into(),
+                        text: "Sent message".into(),
+                        first: true,
+                        sent_at: Some(1),
+                    },
+                    vorkspace_core::transcript::Row {
+                        role: "assistant".into(),
+                        text: "Partial response".into(),
+                        first: true,
+                        sent_at: Some(2),
+                    },
+                ];
+                view.transcript
+                    .update(cx, |view, cx| view.patch(0, rows.clone(), cx));
+                view.input
+                    .update(cx, |input, cx| input.set_text("Unsent draft".into(), cx));
+                view.follow_ups
+                    .state
+                    .messages
+                    .push(vorkspace_core::follow_up::Message {
+                        id: "queued".into(),
+                        text: "Keep this queued".into(),
+                        ..Default::default()
+                    });
+                view.follow_ups.sending = Some("queued".into());
+                view.follow_ups.requested = Some("queued".into());
+                view.follow_ups.continuations.push_back("queued".into());
+                view.follow_ups.ready = true;
+                view.follow_ups.resuming = true;
+                let (controls, _) = std::sync::mpsc::channel();
+                view.controls = Some(controls);
+                view.approvals.push_back(Approval {
+                    id: "approval".into(),
+                    title: "Approve".into(),
+                    detail: String::new(),
+                    can_remember: false,
+                });
+                let question = cx.new(|cx| {
+                    crate::questions::QuestionCard::new(
+                        vorkspace_core::agent::Question {
+                            id: "question".into(),
+                            title: "Question".into(),
+                            items: vec![],
+                            auto_resolve_at: None,
+                        },
+                        cx,
+                    )
+                });
+                view.questions.push_back((question, vec![]));
+                let generation = view.submission_generation;
+                view.receive_turn_updates(
+                    rx,
+                    generation,
+                    view.summary.provider.clone(),
+                    view.settings.account.id.clone(),
+                    None,
+                    cx,
+                );
+                if stop_before_close {
+                    view.stop(cx);
+                }
+                (generation, owner, attempt, rows)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        // Match the worker RAII ordering: release acceptance ownership before
+        // the last sender disappears. Recovery must never infer non-delivery.
+        owner.release(&attempt);
+        drop(tx);
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert!(!view.busy && !view.stopping && !view.preparing_worktree);
+                assert!(!view.planning_orchestration);
+                assert!(
+                    view.controls.is_none()
+                        && view.approvals.is_empty()
+                        && view.questions.is_empty()
+                );
+                assert_eq!(view.status, UNCONFIRMED_TURN);
+                assert_eq!(
+                    view.submission_generation, generation,
+                    "no queue replay starts a new turn"
+                );
+                assert!(view.follow_ups.state.paused);
+                assert!(!view.follow_ups.ready && !view.follow_ups.resuming);
+                assert!(view.follow_ups.sending.is_none() && view.follow_ups.requested.is_none());
+                assert!(view.follow_ups.continuations.is_empty());
+                assert_eq!(view.follow_ups.state.messages.len(), 1);
+                assert_eq!(view.follow_ups.state.messages[0].text, "Keep this queued");
+                assert_eq!(
+                    view.follow_ups.state.messages[0].error.as_deref(),
+                    Some(UNCONFIRMED_TURN)
+                );
+                assert_eq!(view.input.read(cx).content.as_ref(), "Unsent draft");
+                assert_eq!(view.transcript.read(cx).source_rows(), rows);
+                assert!(
+                    view.transcript.read(cx).turns[&1].completed_at.is_some(),
+                    "streaming was ended"
+                );
+                let receipt = view
+                    .unconfirmed_submission
+                    .as_ref()
+                    .expect("ordinary recovery refresh ran");
+                assert_eq!(receipt.attempt_id, attempt);
+                assert_eq!(receipt.phase, "uncertain");
+                assert!(receipt.outcome.is_none());
+                let saved = locked(&view.store)
+                    .unwrap()
+                    .follow_ups(view.summary.id)
+                    .unwrap();
+                assert!(saved.paused);
+                assert_eq!(saved.messages, view.follow_ups.state.messages);
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
+fn an_old_dropped_sender_cannot_release_a_successor_turn(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    cx.run_until_parked();
+    let (tx, rx) = async_channel::bounded(1);
+    let (generation, epoch) = window
+        .update(cx, |view, _, cx| {
+            view.begin_turn(cx);
+            view.receive_turn_updates(
+                rx,
+                view.submission_generation,
+                view.summary.provider.clone(),
+                view.settings.account.id.clone(),
+                None,
+                cx,
+            );
+            view.begin_turn(cx);
+            view.cancel = Arc::new(AtomicBool::new(false));
+            view.status = "Successor turn is working".into();
+            let (controls, _) = std::sync::mpsc::channel();
+            view.controls = Some(controls);
+            view.follow_ups.ready = true;
+            (view.submission_generation, view.submission_recovery_epoch)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    drop(tx);
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.submission_generation, generation);
+            assert!(view.busy && !view.stopping);
+            assert!(view.controls.is_some() && view.follow_ups.ready);
+            assert!(!view.follow_ups.state.paused);
+            assert!(!view.cancel.load(Ordering::Relaxed));
+            assert_eq!(view.submission_recovery_epoch, epoch);
+            assert_eq!(view.status, "Successor turn is working");
+        })
+        .unwrap();
+}
+
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     let store = Store::open(Path::new(":memory:")).unwrap();
     // Fail after saving the turn, without ever launching a real provider.
@@ -81,6 +273,10 @@ fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &m
         window
             .update(cx, |view, _, cx| {
                 assert!(!view.busy);
+                assert_ne!(
+                    view.status, UNCONFIRMED_TURN,
+                    "a final update confirms normal termination"
+                );
                 let rows = view.transcript.read(cx).source_rows();
                 assert_eq!(
                     rows.iter()

@@ -404,6 +404,7 @@ impl FileEditor {
             return;
         }
         self.loading = true;
+        let requested_from = self.input.read(cx).content.clone();
         let path = PathBuf::from(&self.path);
         let work = cx
             .background_executor()
@@ -412,6 +413,9 @@ impl FileEditor {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
+                // Confirmation discarded the draft present when reload began.
+                // Typing after that request still belongs to the user.
+                let discard = force && this.input.read(cx).content == requested_from;
                 match result {
                     Ok(Document::Text(doc)) => {
                         if !force
@@ -422,7 +426,7 @@ impl FileEditor {
                         {
                             return;
                         }
-                        if this.dirty && !force {
+                        if this.dirty && !discard {
                             this.disk_changed = true;
                             cx.notify();
                             return;
@@ -436,7 +440,7 @@ impl FileEditor {
                         let text = doc.text.clone();
                         this.document = Some(doc);
                         this.input.update(cx, |input, cx| {
-                            input.reload_file(text, !first && !force, cx);
+                            input.reload_file(text, !first && !discard, cx);
                         });
                         this.dirty = false;
                         if first && !this.show_diff && (this.is_markdown() || this.is_svg()) {
@@ -456,7 +460,7 @@ impl FileEditor {
                         height,
                         original_size,
                     }) => {
-                        if this.dirty && !force {
+                        if this.dirty && !discard {
                             this.disk_changed = true;
                             cx.notify();
                             return;
@@ -503,7 +507,7 @@ impl FileEditor {
                         modified,
                         source,
                     }) => {
-                        if this.dirty && !force {
+                        if this.dirty && !discard {
                             this.disk_changed = true;
                             cx.notify();
                             return;
@@ -539,7 +543,7 @@ impl FileEditor {
                         cx.emit(FileEvent::Dirty);
                     }
                     Ok(Document::Unsupported(reason)) => {
-                        if this.dirty && !force {
+                        if this.dirty && !discard {
                             this.disk_changed = true;
                             cx.notify();
                             return;
@@ -794,6 +798,7 @@ impl FileEditor {
                         cx.emit(FileEvent::Saved);
                     }
                     Err(error) => {
+                        this.disk_changed |= error.contains("changed on disk");
                         this.error = Some(error);
                         cx.emit(FileEvent::SaveFailed);
                     }
@@ -822,6 +827,38 @@ impl FileEditor {
             }
         })
         .detach();
+    }
+    fn save_my_changes(&mut self, cx: &mut Context<Self>) {
+        if self.saving || self.loading || self.document.is_none() {
+            return;
+        }
+        self.saving = true;
+        let path = PathBuf::from(&self.path);
+        let work = cx.background_executor().spawn(async move {
+            match document::read_document(&path)? {
+                Document::Text(document) => Ok(document),
+                _ => Err("The file is no longer a text document. Your edits were kept.".into()),
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let latest = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.saving = false;
+                match latest {
+                    Ok(document) => {
+                        // Consent applies to this observed disk revision only.
+                        // The normal save still checks for subsequent changes.
+                        this.document = Some(document);
+                        this.disk_changed = false;
+                        this.save(cx);
+                    }
+                    Err(error) => this.error = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
     fn is_svg(&self) -> bool {
         PathBuf::from(&self.path)
@@ -1239,7 +1276,32 @@ impl gpui::Render for FileEditor {
                             .py_2()
                             .text_size(px(12.))
                             .text_color(rgb(0xfbbf24))
-                            .child(error),
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(div().flex_1().child(error))
+                            .when(self.disk_changed, |d| {
+                                d.child(
+                                    div()
+                                        .id("file-conflict-reload")
+                                        .role(Role::Button)
+                                        .aria_label("Reload from disk")
+                                        .cursor_pointer()
+                                        .child("Reload from disk")
+                                        .on_click(cx.listener(|this, _, w, cx| this.reload(w, cx))),
+                                )
+                                .child(
+                                    div()
+                                        .id("file-conflict-save-mine")
+                                        .role(Role::Button)
+                                        .aria_label("Save my changes")
+                                        .cursor_pointer()
+                                        .child("Save my changes")
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.save_my_changes(cx)),
+                                        ),
+                                )
+                            }),
                     )
                 },
             )
@@ -1535,6 +1597,23 @@ mod tests {
             .update(cx, |e, _, _| {
                 assert!(e.dirty);
                 assert!(e.error.as_ref().unwrap().contains("changed on disk"));
+            })
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "external\n");
+        window
+            .update(cx, |e, w, cx| {
+                e.load(true, cx);
+                e.input.update(cx, |input, cx| {
+                    input.replace_text_in_range(None, " typed while reloading", w, cx)
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |e, _, cx| {
+                assert!(e.dirty);
+                assert!(e.disk_changed);
+                assert!(e.input.read(cx).content.contains("typed while reloading"));
             })
             .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "external\n");

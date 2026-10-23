@@ -33,6 +33,14 @@ struct State {
     drag: Option<Drag>,
     menu: Option<Point<Pixels>>,
     layouts: HashMap<((usize, usize), usize, usize), Fragment>,
+    reader: Option<ReaderAnchor>,
+}
+#[derive(Clone)]
+struct ReaderAnchor {
+    position: Position,
+    text: SharedString,
+    top: Pixels,
+    scroll: ListOffset,
 }
 struct Fragment {
     row: (usize, usize),
@@ -71,13 +79,17 @@ impl Selection {
         let state = self.0.borrow();
         state.drag.is_some() || state.menu.is_some() || state.anchor != state.head
     }
-    pub(super) fn clear(&self) {
+    pub(super) fn hide(&self) {
         let mut state = self.0.borrow_mut();
         state.anchor = None;
         state.head = None;
         state.drag = None;
         state.menu = None;
         state.layouts.clear();
+    }
+    pub(super) fn clear(&self) {
+        self.hide();
+        self.forget_reader();
     }
     pub(super) fn retain_source_prefix(&self, end: usize) {
         let stable = {
@@ -96,6 +108,26 @@ impl Selection {
     }
     pub(super) fn begin_frame(&self) {
         self.0.borrow_mut().layouts.clear();
+    }
+    pub(super) fn forget_reader(&self) {
+        self.0.borrow_mut().reader = None;
+    }
+    pub(super) fn remember_reader(&self, viewport: Bounds<Pixels>, list: &ListState) {
+        let mut state = self.0.borrow_mut();
+        state.reader = if list.is_following_tail() {
+            None
+        } else if let Some(anchor) = state.reader.as_ref()
+            && anchor_y(&state, anchor)
+                .is_some_and(|y| (y - viewport.top() - anchor.top).abs() <= px(1.))
+        {
+            // Keep the same glyph throughout a divider drag. Choosing a new
+            // word after each width step would slowly drift by wrapped lines.
+            let mut anchor = anchor.clone();
+            anchor.scroll = list.logical_scroll_top();
+            Some(anchor)
+        } else {
+            reading_anchor(&state, viewport, list.logical_scroll_top())
+        };
     }
     fn range(
         &self,
@@ -126,6 +158,129 @@ impl Selection {
             len
         };
         start.min(end)..end
+    }
+}
+
+fn anchor_y(state: &State, anchor: &ReaderAnchor) -> Option<Pixels> {
+    let byte = anchor.position.byte;
+    let end = byte + anchor.text.get(byte..)?.chars().next()?.len_utf8();
+    state.layouts.values().find_map(|fragment| {
+        (fragment.row == anchor.position.row
+            && fragment.offset <= byte
+            && byte < fragment.offset + fragment.text.len()
+            && ((fragment.row_text.len() == anchor.text.len()
+                && fragment.row_text.as_ptr() == anchor.text.as_ptr())
+                || fragment.row_text.get(..end) == anchor.text.get(..end)))
+        .then(|| {
+            fragment
+                .layout
+                .position_for_index(byte - fragment.offset)
+                .map(|p| p.y)
+        })
+        .flatten()
+    })
+}
+
+fn reading_anchor(
+    state: &State,
+    viewport: Bounds<Pixels>,
+    scroll: ListOffset,
+) -> Option<ReaderAnchor> {
+    for y in [32., 48., 64.] {
+        for x in [0.25, 0.5, 0.75] {
+            let point = viewport.origin + gpui::point(viewport.size.width * x, px(y));
+            for fragment in state.layouts.values() {
+                if !fragment.layout.bounds().contains(&point) {
+                    continue;
+                }
+                let byte = snap(
+                    &fragment.text,
+                    fragment
+                        .layout
+                        .index_for_position(point)
+                        .unwrap_or_else(|ix| ix),
+                );
+                if fragment.text[byte..]
+                    .chars()
+                    .next()
+                    .is_none_or(char::is_whitespace)
+                {
+                    continue;
+                }
+                let top = fragment.layout.position_for_index(byte)?.y - viewport.top();
+                return Some(ReaderAnchor {
+                    position: Position {
+                        row: fragment.row,
+                        byte: fragment.offset + byte,
+                    },
+                    text: fragment.row_text.clone(),
+                    top,
+                    scroll,
+                });
+            }
+        }
+    }
+    None
+}
+
+impl TranscriptView {
+    /// Rebase a paused reader before the visible list prepaints at a new width.
+    /// Only the bookmarked text row is probed; GPUI discards its hitboxes and
+    /// event handlers so the correction cannot expose an intermediate frame.
+    pub(super) fn restore_reading_glyph(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.list.is_following_tail() || self.list.is_scrollbar_dragging() {
+            return;
+        }
+        let Some(anchor) = self.selection.0.borrow().reader.clone() else {
+            return;
+        };
+        let scroll = self.list.logical_scroll_top();
+        if scroll.item_ix != anchor.scroll.item_ix
+            || scroll.offset_in_item != anchor.scroll.offset_in_item
+        {
+            return;
+        }
+        let Some(ix) = self.rows.iter().position(|r| r.key == anchor.position.row) else {
+            return;
+        };
+        if !matches!(self.rows[ix].body, Body::Plain(_) | Body::Markdown(_))
+            || self.rows[ix].in_phase()
+            || self.motions.contains_key(&anchor.position.row)
+            || !self.messages[self.rows[ix].message].attachments.is_empty()
+        {
+            return;
+        }
+        let mut row = self.row(ix, window, cx);
+        row.layout_as_root(
+            size(
+                AvailableSpace::Definite(self.viewport.size.width),
+                AvailableSpace::MinContent,
+            ),
+            window,
+            cx,
+        );
+        let probe: Result<(), Option<Pixels>> = window.transact(|window| {
+            row.prepaint_at(gpui::point(px(0.), px(0.)), window, cx);
+            let state = self.selection.0.borrow();
+            let y = anchor_y(&state, &anchor);
+            Err(y)
+        });
+        self.selection.begin_frame();
+        if let Err(Some(y)) = probe {
+            let mut item_ix = ix;
+            let mut offset_in_item = y + px(TOP_INSET) - anchor.top;
+            while offset_in_item < px(0.) && item_ix > 0 {
+                item_ix -= 1;
+                offset_in_item += self.measure_row_height(item_ix, window, cx);
+            }
+            self.list.scroll_to(ListOffset {
+                item_ix,
+                offset_in_item: offset_in_item.max(px(0.)),
+            });
+            // The byte anchor supplies the final position; animating the old
+            // row coordinate would move that glyph away again after painting.
+            self.reflow = Default::default();
+        }
     }
 }
 const MENU_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
@@ -674,6 +829,205 @@ impl TranscriptView {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+    struct ReaderFixture {
+        transcript: gpui::Entity<TranscriptView>,
+        show: bool,
+    }
+    impl Render for ReaderFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .when(self.show, |d| d.child(self.transcript.clone()))
+        }
+    }
+
+    #[gpui::test]
+    fn resizing_a_long_paragraph_keeps_the_reading_glyph_at_the_same_height(
+        cx: &mut TestAppContext,
+    ) {
+        let window = cx.update(|cx| {
+            cx.open_window(
+                gpui::WindowOptions {
+                    window_bounds: Some(gpui::WindowBounds::Windowed(Bounds::new(
+                        gpui::point(px(0.), px(0.)),
+                        size(px(900.), px(600.)),
+                    ))),
+                    ..Default::default()
+                },
+                |_, cx| {
+                    let transcript = cx.new(|_| TranscriptView::new());
+                    cx.new(|_| ReaderFixture {
+                        transcript,
+                        show: true,
+                    })
+                },
+            )
+            .unwrap()
+        });
+        let view = window
+            .update(cx, |fixture, _, _| fixture.transcript.clone())
+            .unwrap();
+        view.update(cx, |view, cx| {
+            let text = (0..1500)
+                .map(|i| format!("word{i} café "))
+                .collect::<String>();
+            view.patch(
+                0,
+                vec![Row {
+                    role: "assistant".into(),
+                    text,
+                    first: true,
+                    sent_at: None,
+                }],
+                cx,
+            );
+            for reveal in view.reveals.values_mut() {
+                reveal.settle(Instant::now());
+            }
+            view.prompt_rise = None;
+            view.motions.clear();
+            view.rebuild(0, cx);
+            view.list.pause_following_tail();
+            let item_ix = view
+                .rows
+                .iter()
+                .position(|row| matches!(row.body, Body::Markdown(_)))
+                .unwrap();
+            view.list.scroll_to(ListOffset {
+                item_ix,
+                offset_in_item: px(400.),
+            });
+            cx.notify();
+        });
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        let anchor = view.read_with(cx, |view, _| {
+            view.selection
+                .0
+                .borrow()
+                .reader
+                .clone()
+                .expect("a painted reading glyph")
+        });
+        for (width, hidden) in [
+            (500., false),
+            (650., false),
+            (420., false),
+            (880., true),
+            (500., false),
+        ] {
+            if hidden {
+                view.update(cx, |view, cx| view.visible(false, cx));
+                window
+                    .update(cx, |fixture, _, cx| {
+                        fixture.show = false;
+                        cx.notify();
+                    })
+                    .unwrap();
+                cx.refresh().unwrap();
+                cx.run_until_parked();
+            }
+            cx.simulate_window_resize(window.into(), size(px(width), px(600.)));
+            if hidden {
+                view.update(cx, |view, cx| view.visible(true, cx));
+                window
+                    .update(cx, |fixture, _, cx| {
+                        fixture.show = true;
+                        cx.notify();
+                    })
+                    .unwrap();
+                cx.refresh().unwrap();
+            }
+            cx.run_until_parked();
+            view.read_with(cx, |view, _| {
+                let state = view.selection.0.borrow();
+                let new_y = anchor_y(&state, &anchor).unwrap() - view.viewport.top();
+                assert!(
+                    (new_y - anchor.top).abs() <= px(1.),
+                    "reading glyph moved from {:?} to {new_y:?} at width {width}",
+                    anchor.top
+                );
+                assert_eq!(
+                    state.reader.as_ref().unwrap().position,
+                    anchor.position,
+                    "a divider drag retains one glyph"
+                );
+            });
+        }
+        window
+            .update(cx, |_, window, cx| {
+                window.dispatch_event(
+                    gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                        position: gpui::point(px(250.), px(180.)),
+                        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-160.))),
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let new_reader = view.read_with(cx, |view, _| view.selection.0.borrow().reader.clone());
+        assert!(
+            new_reader
+                .as_ref()
+                .is_none_or(|a| a.position != anchor.position),
+            "manual scroll supersedes the old bookmark"
+        );
+    }
+
+    #[gpui::test]
+    fn resizing_a_transcript_keeps_the_selected_text_identity(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|_| TranscriptView::new())
+            })
+            .unwrap()
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.patch(
+                    0,
+                    vec![Row {
+                        role: "assistant".into(),
+                        text: "Keep café selected while this paragraph wraps at another width."
+                            .into(),
+                        first: true,
+                        sent_at: None,
+                    }],
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                let key = view
+                    .rows
+                    .iter()
+                    .find(|row| matches!(&row.body, Body::Markdown(_)))
+                    .unwrap()
+                    .key;
+                let mut state = view.selection.0.borrow_mut();
+                state.response = 0;
+                state.anchor = Some(Position { row: key, byte: 5 });
+                state.head = Some(Position { row: key, byte: 10 });
+                drop(state);
+                assert_eq!(view.selected_text().as_deref(), Some("café"));
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_window_resize(window.into(), gpui::size(px(300.), px(450.)));
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                assert_eq!(view.selected_text().as_deref(), Some("café"))
+            })
+            .unwrap();
+    }
+
     #[gpui::test]
     fn snapshot_truncation_preserves_surviving_selection_and_clears_deleted_selection(
         cx: &mut TestAppContext,

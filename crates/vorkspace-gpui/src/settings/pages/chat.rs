@@ -121,42 +121,11 @@ impl SettingsView {
                 |this, v, cx| this.update(cx, |p| p.diff_view = v.into()),
             )],
         )];
-        let extras = vec![
-            self.row(
-                Some("composer-mascot"),
-                true,
-                "Composer mascot",
-                Some("Show the project mascot while an agent works.".into()),
-                vec![self.toggle(
-                    "composer-mascot",
-                    "Composer mascot",
-                    p.composer_mascot,
-                    false,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.composer_mascot = on),
-                )],
-            ),
-            self.row(
-                Some("empty-session-games"),
-                false,
-                "Empty session games",
-                Some("Show playable games in empty sessions.".into()),
-                vec![self.toggle(
-                    "empty-session-games",
-                    "Empty session games",
-                    p.empty_session_games,
-                    false,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.empty_session_games = on),
-                )],
-            ),
-        ];
         vec![
             self.group(None, true, "Transcript", None, None, transcript),
             self.group(None, false, "Composer", None, None, composer),
             self.group(None, false, "Editor", None, None, editor),
             self.group(None, false, "Code review", None, None, review),
-            self.group(None, false, "Extras", None, None, extras),
         ]
     }
 }

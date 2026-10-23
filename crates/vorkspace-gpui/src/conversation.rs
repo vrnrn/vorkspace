@@ -10,6 +10,7 @@ mod composer_shelf;
 mod edit_last_turn;
 mod follow_up;
 mod history;
+mod local_submissions;
 mod notifications;
 mod remote;
 pub(crate) mod remote_plans;
@@ -56,6 +57,8 @@ use vorkspace_core::{provider::Kind, store::Session};
 // Keep empty and docked composers aligned with the transcript column. Below
 // this width the empty session drops its title.
 const COMPOSER_COLUMN: f32 = COLUMN;
+const UNCONFIRMED_TURN: &str =
+    "Provider connection ended before completion was confirmed. This turn was not replayed.";
 // RUNTIME_MODE_LABEL and RUNTIME_MODE_HINT from the React session model,
 // with AccessPicker's icons; Full access is amber.
 const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
@@ -144,6 +147,9 @@ pub(crate) struct Conversation {
     attaching: bool,
     file_drag: bool,
     attachment_error: Option<String>,
+    unconfirmed_submission: Option<vorkspace_core::store::SubmissionReceipt>,
+    reviewing_submission: bool,
+    submission_recovery_epoch: u64,
     app_environment: std::collections::HashMap<String, String>,
     planning_orchestration: bool,
     pub(crate) orchestration_plan: Option<vorkspace_core::orchestration::Plan>,
@@ -201,8 +207,6 @@ pub(crate) struct Conversation {
     // A split or review pane sits beside this chat; only then does a narrow
     // pane rest the composer where it docks.
     beside_pane: bool,
-    arcade: Option<Entity<crate::arcade::Arcade>>,
-    runner: Option<Entity<crate::composer_runner::Runner>>,
     cancel: Arc<AtomicBool>,
     title_cancel: Option<Arc<AtomicBool>>,
     _submission: Subscription,
@@ -569,6 +573,9 @@ impl Conversation {
             attaching: false,
             file_drag: false,
             attachment_error: None,
+            unconfirmed_submission: None,
+            reviewing_submission: false,
+            submission_recovery_epoch: 0,
             app_environment: Default::default(),
             planning_orchestration: false,
             orchestration_plan: None,
@@ -626,8 +633,6 @@ impl Conversation {
             composer_motion: ComposerMotion::default(),
             narrow: false,
             beside_pane: false,
-            arcade: None,
-            runner: None,
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
             _submission: submission,
@@ -668,6 +673,7 @@ impl Conversation {
         let id = self.summary.id;
         let cwd = self.summary.cwd.clone();
         let bot = self.settings.bot.is_some();
+        let recovery_epoch = self.submission_recovery_epoch;
         let work = cx.background_executor().spawn(async move {
             let settings = locked(&store).and_then(|s| s.agent_settings(id));
             let execution_cwd = settings
@@ -685,15 +691,28 @@ impl Conversation {
                 settings,
                 locked(&store).and_then(|s| s.context_usage(id)),
                 locked(&store).and_then(|s| s.follow_ups(id)),
+                locked(&store).and_then(|s| {
+                    s.recover_local_submissions()?;
+                    s.latest_unconfirmed_submission(id)
+                }),
             )
         });
         cx.spawn(async move |this, cx| {
-            let (result, git, settings, context, follow_ups) = work.await;
+            let (result, git, settings, context, follow_ups, unconfirmed) = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
                 this.branch = git.as_ref().and_then(|s| s.current.clone());
                 this.git = git;
                 this.context = context.ok().flatten();
+                if this.submission_recovery_epoch == recovery_epoch {
+                    match unconfirmed {
+                        Ok(receipt) => this.unconfirmed_submission = receipt,
+                        Err(error) => {
+                            this.status = error;
+                            return;
+                        }
+                    }
+                }
                 match follow_ups {
                     Ok(state) => {
                         this.follow_ups.persisted = state.revision;
@@ -1059,7 +1078,7 @@ impl Conversation {
         self.approvals.clear();
         self.questions.clear();
         let (tx, rx) = async_channel::bounded(8);
-        let mut turn_model_id = settings
+        let turn_model_id = settings
             .turn_model
             .as_ref()
             .and_then(|turn| turn.model_id.clone())
@@ -1079,9 +1098,31 @@ impl Conversation {
                 }
             })
             .detach();
+        self.receive_turn_updates(
+            rx,
+            generation,
+            source_provider,
+            source_account,
+            turn_model_id,
+            cx,
+        );
+        cx.emit(SessionChanged);
+        cx.notify();
+    }
+    fn receive_turn_updates(
+        &mut self,
+        rx: async_channel::Receiver<crate::runtime::Update>,
+        generation: u64,
+        source_provider: String,
+        source_account: String,
+        mut turn_model_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn(async move |this, cx| {
+            let mut completed = false;
             while let Ok(update) = rx.recv().await {
                 let finished = update.finished;
+                completed |= finished;
                 if this
                     .update(cx, |this, cx| {
                         if this.submission_generation != generation {
@@ -1335,6 +1376,7 @@ impl Conversation {
                             this.approvals.clear();
                             this.questions.clear();
                             this.controls = None;
+                            this.refresh_submission_recovery(cx);
                             this.transcript.update(cx, |v, cx| v.streaming(false, cx));
                             let model_id = turn_model_id.clone();
                             this.transcript.update(cx, |view, _| {
@@ -1369,8 +1411,58 @@ impl Conversation {
                     break;
                 }
             }
+            if !completed {
+                let _ = this.update(cx, |this, cx| this.turn_updates_closed(generation, cx));
+            }
         })
         .detach();
+    }
+    fn turn_updates_closed(&mut self, generation: u64, cx: &mut Context<Self>) {
+        // The sender can disappear while unwinding, without a final Update.
+        // A superseded worker must never release the replacement turn's UI.
+        if self.submission_generation != generation || (!self.busy && !self.stopping) {
+            return;
+        }
+        self.cancel.store(true, Ordering::Relaxed);
+        self.busy = false;
+        self.stopping = false;
+        self.preparing_worktree = false;
+        self.planning_orchestration = false;
+        self.orchestration_progress = None;
+        self.review
+            .update(cx, |review, cx| review.set_busy(false, cx));
+        self.follow_ups.ready = false;
+        self.follow_ups.resuming = false;
+        self.follow_ups.requested = None;
+        self.follow_ups.continuations.clear();
+        if let Some(id) = self.follow_ups.sending.take()
+            && let Some(message) = self
+                .follow_ups
+                .state
+                .messages
+                .iter_mut()
+                .find(|m| m.id == id)
+        {
+            message.error = Some(UNCONFIRMED_TURN.into());
+        }
+        // Persistence callbacks pump the queue too. Publish the paused state
+        // and clear explicit-send markers before scheduling any of those reads.
+        self.follow_ups.state.paused = true;
+        self.save_follow_ups(cx);
+        self.approvals.clear();
+        self.questions.clear();
+        self.controls = None;
+        self.status = UNCONFIRMED_TURN.into();
+        self.transcript
+            .update(cx, |view, cx| view.streaming(false, cx));
+        self.settings.turns = self.transcript.read(cx).turns.clone();
+        self.save_settings(cx);
+        self.refresh_submission_recovery(cx);
+        if self.is_remote() {
+            self.settings.remote_action = None;
+            self.remote_state.refreshing = false;
+            self.refresh_remote_snapshot(cx);
+        }
         cx.emit(SessionChanged);
         cx.notify();
     }
@@ -2566,27 +2658,6 @@ impl Conversation {
     }
     // Composer.tsx in the inset layout: a frosted, rounded box holding the
     // field and its toolbar, with the workspace bar sitting under it.
-    fn composer_runner(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Option<Entity<crate::composer_runner::Runner>> {
-        if cx
-            .try_global::<crate::settings::Preferences>()
-            .is_some_and(|p| !p.composer_mascot)
-        {
-            return None;
-        }
-        if self.busy && self.runner.is_none() {
-            let transcript = self.transcript.clone();
-            self.runner = Some(cx.new(|cx| crate::composer_runner::Runner::new(transcript, cx)));
-        }
-        let runner = self.runner.clone()?;
-        let name = vorkspace_core::project_appearance::MASCOTS
-            [self.project_appearance.mascot(&self.summary.cwd)];
-        let color = self.project_appearance.color(&self.summary.cwd);
-        runner.update(cx, |r, cx| r.configure(self.busy, name, color, cx));
-        Some(runner)
-    }
     fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let radius = 12.;
         let blur = composer_blur();
@@ -2604,7 +2675,6 @@ impl Conversation {
         };
         self.input
             .update(cx, |input, cx| input.selected_command(command, cx));
-        let runner = self.composer_runner(cx);
         let beside = cx
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| p.model_controls == "beside");
@@ -2754,6 +2824,7 @@ impl Conversation {
                         .size_full(),
                     )
                     .children(self.composer_recovery_banner(cx))
+                    .children(self.local_submission_banner(cx))
                     .children(self.attachment_chips(cx))
                     .child(
                         div()
@@ -2879,7 +2950,6 @@ impl Conversation {
                     )
                     .children(self.attachment_drop_overlay(12.)),
             )
-            .children(runner)
             .children(self.remote_notice(cx))
             .child(self.workspace_bar(cx))
             .into_any_element()
@@ -3138,21 +3208,6 @@ impl Conversation {
     // where it will dock once a neighbouring pane squeezes it narrower than
     // the column. A narrow window alone keeps it centred.
     fn empty(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let games = cx
-            .try_global::<crate::settings::Preferences>()
-            .is_none_or(|p| p.empty_session_games)
-            && cx
-                .try_global::<crate::settings::Preferences>()
-                .is_none_or(|p| p.chat_background.is_none());
-        let arcade = if games {
-            Some(
-                self.arcade
-                    .get_or_insert_with(|| cx.new(crate::arcade::Arcade::new))
-                    .clone(),
-            )
-        } else {
-            None
-        };
         let this = cx.entity().downgrade();
         let narrow = self.narrow;
         let docked = narrow && self.beside_pane;
@@ -3161,7 +3216,6 @@ impl Conversation {
             .size_full()
             .flex()
             .justify_center()
-            .children(arcade)
             .child(
                 canvas(
                     move |bounds, _, cx| {
@@ -3331,7 +3385,7 @@ mod composer_motion_tests {
         cx: &mut TestAppContext,
     ) {
         let preferences = crate::settings::Preferences::default();
-        crate::theme::configure(&preferences, false);
+        crate::theme::configure(&preferences, false, true);
         cx.update(|cx| {
             cx.set_global(preferences);
             cx.set_reduce_motion(true);

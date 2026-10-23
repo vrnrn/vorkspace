@@ -19,7 +19,7 @@ impl Store {
             "SELECT block_json FROM ordinary_blocks WHERE session_id=?1 ORDER BY position",
         ))?;
         let blocks = sql(query.query_map([original], |row| row.get::<_, String>(0)))?
-            .map(|raw| parse(&sql(raw)?))
+            .map(|raw| parse_block(&sql(raw)?))
             .collect();
         blocks
     }

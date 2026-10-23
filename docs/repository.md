@@ -8,7 +8,6 @@ The desktop has two Rust crates and one process. The remote host is a separate N
 | `crates/vorkspace-gpui/` | Windows, native input/rendering, conversation views, editor/terminal surfaces, and platform integrations |
 | `host/` | Remote host service, authentication, SQLite store, session engine, SSH deployment package, and tests |
 | `embedded/editor/` | Editor parsing, diagnostics, completion, search, formatting, and syntax palettes for bounded QuickJS workers |
-| `embedded/arcade/` | Decorative animation and game state for native rendering |
 | `embedded/vox/` | Microphone and WebRTC audio page; Rust admits actions and owns the call |
 | `scripts/desktop/` | Development runner, build, bundle, signing, and bundle configuration |
 | `scripts/release/` | Version stamping and signed update archive tools |

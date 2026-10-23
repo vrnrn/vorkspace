@@ -34,3 +34,26 @@ test("native sources and host have complete local imports and no frontend depend
     }
   }
 });
+
+// These user-visible removals also cover the embedded payload and renderer work.
+test("desktop stays free of games and decorative title/composer effects", async () => {
+  for (const name of [
+    "embedded/arcade",
+    "crates/vorkspace-gpui/assets/settings-arcade.js",
+    "crates/vorkspace-gpui/src/arcade.rs",
+    "crates/vorkspace-gpui/src/composer_runner.rs",
+    "crates/vorkspace-gpui/src/particle_text.rs",
+  ]) {
+    await assert.rejects(access(join(root, name)), { code: "ENOENT" });
+  }
+  for (const name of [
+    "crates/vorkspace-gpui/src/main.rs",
+    "crates/vorkspace-gpui/src/conversation.rs",
+    "crates/vorkspace-gpui/src/settings/model.rs",
+    "crates/vorkspace-gpui/src/settings/preferences.rs",
+    "vendor/gpui-pre-apple/src/metal_renderer.rs",
+  ]) {
+    const source = await readFile(join(root, name), "utf8");
+    assert.doesNotMatch(source, /composer[_-](?:mascot|runner)|empty[_-]session[_-]games|particle_text|text_reveal_pipeline/);
+  }
+});

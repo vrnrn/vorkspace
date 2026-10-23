@@ -32,6 +32,10 @@ pub(crate) struct Vox {
     state: String,
     error: Option<String>,
     reply: String,
+    reply_id: String,
+    dismissed: Option<String>,
+    reply_input: Option<gpui::Entity<crate::input::Input>>,
+    reply_truncated: bool,
     face: String,
     receipts: HashMap<String, (String, Result<Value, String>)>,
     pub(crate) devices: Vec<(String, String)>,
@@ -102,6 +106,10 @@ impl Vox {
             state: "idle".into(),
             error: None,
             reply: String::new(),
+            reply_id: String::new(),
+            dismissed: None,
+            reply_input: None,
+            reply_truncated: false,
             face: "vox".into(),
             receipts: HashMap::new(),
             devices: Vec::new(),
@@ -169,6 +177,10 @@ impl Vox {
         self.active = Arc::new(AtomicBool::new(true));
         self.error = None;
         self.reply.clear();
+        self.reply_id.clear();
+        self.dismissed = None;
+        self.reply_input = None;
+        self.reply_truncated = false;
         self.receipts.clear();
         self.state = "connecting".into();
         self.face = "-_-".into();
@@ -312,6 +324,16 @@ impl Vox {
                     .and_then(|v| v["text"].as_str())
                 {
                     self.reply = text.chars().take(4000).collect();
+                    self.reply_id = input["display"]["lines"]
+                        .as_array()
+                        .and_then(|lines| lines.last())
+                        .and_then(|line| line["id"].as_str())
+                        .unwrap_or_default()
+                        .to_owned();
+                    self.reply_truncated = input["display"]["lines"]
+                        .as_array()
+                        .and_then(|lines| lines.last())
+                        .is_some_and(|line| line["truncated"] == true);
                 }
                 cx.notify();
                 Ok(Value::Null)
@@ -393,10 +415,42 @@ impl Vox {
             });
         }
     }
+    fn bubble_message(&self) -> Option<(String, String)> {
+        if !self.enabled {
+            return None;
+        }
+        let message = if let Some(error) = &self.error {
+            (format!("error:{error}"), error.clone())
+        } else if self.silent && self.active.load(Ordering::Relaxed) && !self.reply.is_empty() {
+            (
+                format!("reply:{}", self.reply_id),
+                format!(
+                    "{}{}",
+                    self.reply,
+                    if self.reply_truncated { "…" } else { "" }
+                ),
+            )
+        } else {
+            return None;
+        };
+        (self.dismissed.as_ref() != Some(&message.0)).then_some(message)
+    }
+    pub(crate) fn dismiss_reply(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((identity, _)) = self.bubble_message() else {
+            return false;
+        };
+        self.dismissed = Some(identity);
+        self.reply_input = None;
+        cx.notify();
+        true
+    }
 }
 impl gpui::Render for Vox {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut root = div().relative().flex().items_center();
+        if !self.enabled {
+            return root;
+        }
         if self.enabled {
             root = root.child(
                 div()
@@ -422,11 +476,20 @@ impl gpui::Render for Vox {
                     })),
             );
         }
-        if let Some(text) = self
-            .error
-            .clone()
-            .or_else(|| (self.silent && !self.reply.is_empty()).then(|| self.reply.clone()))
-        {
+        if let Some((_, text)) = self.bubble_message() {
+            let reply = self
+                .reply_input
+                .get_or_insert_with(|| {
+                    cx.new(|cx| {
+                        let mut input = crate::input::Input::memory_fact("Vox reply", cx);
+                        input.set_read_only(true);
+                        input
+                    })
+                })
+                .clone();
+            if reply.read(cx).content.as_str() != text {
+                reply.update(cx, |input, cx| input.set_text(text, cx));
+            }
             root = root.child(
                 div()
                     .id("vox-reply")
@@ -441,20 +504,79 @@ impl gpui::Render for Vox {
                     .bg(pane_fill())
                     .text_size(px(13.))
                     .text_color(content(0.9))
-                    .child(text)
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.dismiss_reply(cx);
+                    }))
+                    .child(reply)
                     .child(
                         div()
                             .id("dismiss-vox-reply")
                             .role(gpui::Role::Button)
                             .child("dismiss")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.error = None;
-                                this.reply.clear();
-                                cx.notify();
+                                this.dismiss_reply(cx);
                             })),
                     ),
             );
         }
         root
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Focusable, TestAppContext, VisualTestContext};
+    #[gpui::test]
+    fn silent_reply_can_be_selected_and_copied_but_not_edited(cx: &mut TestAppContext) {
+        let store = Arc::new(std::sync::Mutex::new(
+            vorkspace_core::store::Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let window = cx.update(|cx| {
+            crate::input::bind(cx);
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|_| {
+                    let prefs = crate::settings::Preferences {
+                        vox_enabled: true,
+                        vox_silent: true,
+                        ..Default::default()
+                    };
+                    let mut voice =
+                        Vox::new(WeakEntity::new_invalid(), store, &prefs, "/project".into());
+                    voice.active.store(true, Ordering::Relaxed);
+                    voice.reply = "Completed reply 🙂".into();
+                    voice
+                })
+            })
+            .unwrap()
+        });
+        cx.refresh().unwrap();
+        window
+            .update(cx, |voice, window, cx| {
+                let reply = voice.reply_input.as_ref().unwrap();
+                window.focus(&reply.focus_handle(cx), cx);
+            })
+            .unwrap();
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_keystrokes("cmd-a cmd-c");
+        visual.simulate_input("must not replace the reply");
+        window
+            .update(visual, |voice, _, cx| {
+                assert_eq!(
+                    voice.reply_input.as_ref().unwrap().read(cx).content,
+                    "Completed reply 🙂"
+                );
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().as_deref(),
+                    Some("Completed reply 🙂")
+                );
+                assert!(voice.dismiss_reply(cx));
+                assert!(voice.reply_input.is_none());
+                assert!(voice.active.load(Ordering::Relaxed));
+                assert!(voice.bubble_message().is_none());
+                voice.reply_id = "reply-2".into();
+                assert!(voice.bubble_message().is_some());
+            })
+            .unwrap();
     }
 }

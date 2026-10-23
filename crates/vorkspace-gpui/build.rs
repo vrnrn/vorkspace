@@ -19,4 +19,20 @@ fn main() {
          Restore the GPUI patches that remove it, or replace it with a dependency whose \
          license has been reviewed. Do not suppress this check based on its MIT metadata."
     );
+    let notes = lockfile.parent().unwrap().join("build/release-notes.md");
+    println!("cargo:rerun-if-changed={}", notes.display());
+    println!("cargo:rerun-if-env-changed=VORKSPACE_RELEASE_BUILD");
+    let contents = fs::read_to_string(&notes).unwrap_or_default();
+    let heading = format!("## [{}]", env::var("CARGO_PKG_VERSION").unwrap());
+    let matching =
+        contents.lines().next() == Some(heading.as_str()) && contents.len() <= 1024 * 1024;
+    if env::var("VORKSPACE_RELEASE_BUILD").as_deref() == Ok("1") {
+        assert!(
+            matching,
+            "Release builds require version-matched generated release notes"
+        );
+    }
+    let destination = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("release-notes.md");
+    fs::write(destination, if matching { contents.as_str() } else { "" })
+        .expect("Cannot embed release notes");
 }

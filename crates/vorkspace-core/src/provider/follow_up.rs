@@ -31,6 +31,7 @@ impl Protocol {
         &mut self,
         message: Message,
         stdin: &mut impl Write,
+        mut admit: impl FnMut(&Message) -> Result<(), String>,
     ) -> Result<Vec<Event>, String> {
         if !self.request.kind.can_steer() || !self.ready() || self.done {
             return Ok(vec![Event::FollowUpFailed {
@@ -54,6 +55,8 @@ impl Protocol {
             message.id,
             STEER_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         );
+        // Persist local acceptance before the first byte can leave this owner.
+        admit(&message)?;
         match request.kind {
             Kind::Codex => write_json(
                 stdin,
@@ -201,7 +204,10 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        assert!(p.steer(message.clone(), &mut out).unwrap().is_empty());
+        assert!(p
+            .steer(message.clone(), &mut out, |_| Ok(()))
+            .unwrap()
+            .is_empty());
         let wire: Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(wire["method"], "turn/steer");
         assert_eq!(wire["params"]["expectedTurnId"], "turn");
@@ -217,7 +223,7 @@ mod tests {
         );
         assert!(!p.done);
         out.clear();
-        p.steer(message.clone(), &mut out).unwrap();
+        p.steer(message.clone(), &mut out, |_| Ok(())).unwrap();
         let retry: Value = serde_json::from_slice(&out).unwrap();
         assert_ne!(retry["id"], wire["id"]);
         assert!(p
@@ -240,7 +246,7 @@ mod tests {
                 text: "follow up".into(),
                 ..Default::default()
             };
-            let events = p.steer(message.clone(), &mut out).unwrap();
+            let events = p.steer(message.clone(), &mut out, |_| Ok(())).unwrap();
             let wire: Value = serde_json::from_slice(&out).unwrap();
             if kind == Kind::Claude {
                 assert_eq!(wire["type"], "user");

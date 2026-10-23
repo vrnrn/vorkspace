@@ -304,16 +304,9 @@ pub fn save_document(path: &Path, document: &TextDocument, text: &str) -> Result
         return Err("Text exceeds the editor size limit.".into());
     }
     if super::remote::is_remote(path) {
-        if read_remote_bytes(path)? != document.disk {
-            return Err("The file changed on disk. Reload it before saving your edits.".into());
-        }
-        let bytes = document.encode(text);
-        let content = std::str::from_utf8(&bytes).map_err(|_| "File is not valid UTF-8.")?;
-        super::remote::command::<()>(
-            "write_text_file",
-            serde_json::json!({"path":path,"content":content}),
-        )?;
-        return Ok(bytes);
+        return save_remote_document(path, document, text, |args| {
+            super::remote::run_remote_command("write_editor_text_file", args)
+        });
     }
     let destination = std::fs::canonicalize(expand_home(path)).map_err(|e| e.to_string())?;
     if !matches_disk(&destination, &document.disk)? {
@@ -360,6 +353,27 @@ pub fn save_document(path: &Path, document: &TextDocument, text: &str) -> Result
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+fn save_remote_document(
+    path: &Path,
+    document: &TextDocument,
+    text: &str,
+    write: impl FnOnce(serde_json::Value) -> Result<serde_json::Value, String>,
+) -> Result<Vec<u8>, String> {
+    use sha2::{Digest, Sha256};
+    let bytes = document.encode(text);
+    let content = std::str::from_utf8(&bytes).map_err(|_| "File is not valid UTF-8.")?;
+    let expected = format!("{:x}", Sha256::digest(&document.disk));
+    let result = write(serde_json::json!({"path":path,"content":content,"expectedHash":expected}))?;
+    if result["status"] == "conflict" {
+        return Err("The file changed on disk. Reload it before saving your edits.".into());
+    }
+    let saved = format!("{:x}", Sha256::digest(&bytes));
+    if result["status"] != "saved" || result["hash"].as_str() != Some(saved.as_str()) {
+        return Err("Invalid remote editor save response; reload the file before retrying.".into());
+    }
+    Ok(bytes)
 }
 
 fn matches_disk(path: &Path, expected: &[u8]) -> Result<bool, String> {
@@ -440,6 +454,41 @@ mod tests {
             .contains("changed on disk"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "external");
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn remote_saves_send_the_original_byte_hash_and_keep_conflicts_or_uncertainty_explicit() {
+        use sha2::{Digest, Sha256};
+        let path = Path::new("remote://machine/project/a.txt");
+        let Document::Text(document) =
+            document_from_bytes(path, b"\xef\xbb\xbfOld\r\n".to_vec(), 1024 * 1024).unwrap()
+        else {
+            panic!()
+        };
+        let saved=save_remote_document(path,&document,"New\n",|args|{
+            assert_eq!(args["expectedHash"],format!("{:x}",Sha256::digest(b"\xef\xbb\xbfOld\r\n")));
+            assert_eq!(args["content"],"\u{feff}New\r\n");
+            Ok(serde_json::json!({"status":"saved","hash":format!("{:x}",Sha256::digest("\u{feff}New\r\n".as_bytes()))}))
+        }).unwrap();
+        assert_eq!(saved, "\u{feff}New\r\n".as_bytes());
+        assert!(save_remote_document(path, &document, "Draft", |_| Ok(
+            serde_json::json!({"status":"conflict","hash":"external"})
+        ))
+        .unwrap_err()
+        .contains("changed on disk"));
+        assert!(save_remote_document(
+            path,
+            &document,
+            "Draft",
+            |_| Err("Host disconnected".into())
+        )
+        .unwrap_err()
+        .contains("Host disconnected"));
+        assert!(save_remote_document(path, &document, "Draft", |_| Ok(
+            serde_json::json!({"status":"saved","hash":"wrong"})
+        ))
+        .unwrap_err()
+        .contains("reload"));
+        assert_eq!(document.disk, b"\xef\xbb\xbfOld\r\n");
     }
     #[test]
     fn editor_saves_keep_each_line_ending_convention() {

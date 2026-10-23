@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/vorkspace-banner.png" alt="vorkspace" width="760" />
+</p>
+
 # vorkspace
 
 A native GPUI workspace for working with coding agents, projects, conversations, files, terminals, Bots, and Channels.

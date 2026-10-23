@@ -2414,7 +2414,7 @@ impl TranscriptView {
         if self.visible == visible {
             return;
         }
-        self.selection.clear();
+        self.selection.hide();
         let now = Instant::now();
         // Settled tabs retain their parsed rows, measured heights and scroll
         // anchor. Only undisplayed text or outgoing animation rows need a
@@ -4967,9 +4967,6 @@ impl TranscriptView {
             cx.notify();
         }
     }
-    pub(crate) fn jump_bounds(&self) -> Option<gpui::Bounds<gpui::Pixels>> {
-        self.show_jump.then(|| self.jump_anchor.get()).flatten()
-    }
     fn jump_to_bottom(&mut self, cx: &mut Context<Self>) {
         self.follow = Follow::default();
         self.list.set_follow_mode(FollowMode::Tail);
@@ -5094,8 +5091,14 @@ impl Render for TranscriptView {
             .child(canvas(move |bounds, window, cx| {
                 let _ = view.update(cx, |this, cx| {
                     if this.viewport != bounds {
-                        this.selection.clear();
+                        let reflow = this.viewport.size.width != bounds.size.width;
+                        // Byte anchors remain valid when the same text rewraps;
+                        // only the floating menu and drag geometry are stale.
+                        this.selection.hide_menu();
                         this.viewport = bounds;
+                        if reflow {
+                            this.restore_reading_glyph(window, cx);
+                        }
                         this.list.remeasure_items(this.footer_ix()..this.footer_ix() + 1);
                     }
                     let resized = this.update_follow_viewport(bounds, window);
@@ -5120,6 +5123,7 @@ impl Render for TranscriptView {
             )
             .child(canvas(move |_, _, cx| {
                 let _ = after.update(cx, |this, cx| {
+                    this.selection.remember_reader(this.viewport, &this.list);
                     this.update_jump(cx);
                     this.update_outline(cx);
                 });

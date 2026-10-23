@@ -143,7 +143,6 @@ pub struct MetalRenderer {
     /// while a popover keeps its size.
     backdrop_scratch: Option<(metal::Texture, metal::Texture)>,
     edge_fade_pipeline_state: metal::RenderPipelineState,
-    text_reveal_pipeline_state: metal::RenderPipelineState,
     edge_fade_scratch: Vec<(metal::Texture, metal::Texture)>,
     background_pipeline_state: metal::RenderPipelineState,
     background_blurs: Vec<(metal::Texture, metal::Texture)>,
@@ -398,14 +397,6 @@ impl MetalRenderer {
             "edge_fade_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
-        let text_reveal_pipeline_state = build_backdrop_pipeline_state(
-            &device,
-            &library,
-            "text_reveal",
-            "backdrop_composite_vertex",
-            "text_reveal_fragment",
-            MTLPixelFormat::BGRA8Unorm,
-        );
         let background_pipeline_state = build_backdrop_pipeline_state(
             &device,
             &library,
@@ -458,7 +449,6 @@ impl MetalRenderer {
             backdrop_kernels: Vec::new(),
             backdrop_scratch: None,
             edge_fade_pipeline_state,
-            text_reveal_pipeline_state,
             edge_fade_scratch: Vec::new(),
             background_pipeline_state,
             background_blurs: Vec::new(),
@@ -1144,7 +1134,6 @@ impl MetalRenderer {
     ) {
         let (before, after) = &self.edge_fade_scratch[depth];
         copy_fade_region(command, target, after, region);
-        let text_reveal = quad.border_color.h == TEXT_REVEAL_END;
         let corner_clip = quad.border_color.h == CORNER_CLIP_END;
         let params = BackdropCompositeParams {
             origin: [region.left().0, region.top().0],
@@ -1157,8 +1146,6 @@ impl MetalRenderer {
             ],
             corner_radius: if corner_clip {
                 quad.bounds.size.width.0.min(quad.bounds.size.height.0)
-            } else if text_reveal {
-                (quad.border_color.s * 2. - 1.) * EDGE_FADE_MAX
             } else {
                 quad.border_color.s * EDGE_FADE_MAX
             },
@@ -1168,8 +1155,6 @@ impl MetalRenderer {
                 // Below the horizontal ramp range: a circular corner mask,
                 // followed by its clockwise corner index from the top left.
                 -2. * EDGE_FADE_MAX - (quad.border_color.s * 4.).round()
-            } else if text_reveal {
-                (quad.border_color.l * 2. - 1.) * EDGE_FADE_MAX
             } else if quad.border_color.h == HORIZONTAL_FADE_END {
                 -(quad.border_color.l * EDGE_FADE_MAX).max(1e-3)
             } else {
@@ -1177,11 +1162,7 @@ impl MetalRenderer {
             },
         };
         let encoder = new_command_encoder_for_texture(command, target, viewport, None);
-        encoder.set_render_pipeline_state(if text_reveal {
-            &self.text_reveal_pipeline_state
-        } else {
-            &self.edge_fade_pipeline_state
-        });
+        encoder.set_render_pipeline_state(&self.edge_fade_pipeline_state);
         let ptr = &params as *const BackdropCompositeParams as *const c_void;
         let len = mem::size_of_val(&params) as u64;
         encoder.set_vertex_bytes(0, len, ptr);
@@ -1930,8 +1911,6 @@ const EDGE_FADE_BEGIN: f32 = 0.271828;
 const EDGE_FADE_END: f32 = 0.314159;
 const HORIZONTAL_FADE_BEGIN: f32 = 0.161803;
 const HORIZONTAL_FADE_END: f32 = 0.141421;
-const TEXT_REVEAL_BEGIN: f32 = 0.173205;
-const TEXT_REVEAL_END: f32 = 0.264575;
 const BACKGROUND_BEGIN: f32 = 0.223607;
 const BACKGROUND_END: f32 = 0.244949;
 const CORNER_CLIP_BEGIN: f32 = 0.316228;
@@ -1989,20 +1968,6 @@ pub fn side_fade_marker(begin: bool, left: f32, right: f32) -> Hsla {
         a: 0.,
     }
 }
-/// CSS linear alpha mask: opaque at `start`, transparent at `end`. Stops
-/// are signed device-pixel offsets from the label's left edge, in either order.
-pub fn text_reveal_marker(begin: bool, start: f32, end: f32) -> Hsla {
-    Hsla {
-        h: if begin {
-            TEXT_REVEAL_BEGIN
-        } else {
-            TEXT_REVEAL_END
-        },
-        s: (start / EDGE_FADE_MAX + 1.) / 2.,
-        l: (end / EDGE_FADE_MAX + 1.) / 2.,
-        a: 0.,
-    }
-}
 /// A source-image layer with a view-local fade, four rounded corners and
 /// optional Haze. Give the marker a 1px left border to carry the display scale.
 pub fn background_mask_marker(
@@ -2041,13 +2006,10 @@ fn edge_fade_kind(quad: &Quad) -> Option<bool> {
         return None;
     }
     match c.h {
-        EDGE_FADE_BEGIN
-        | HORIZONTAL_FADE_BEGIN
-        | TEXT_REVEAL_BEGIN
-        | BACKGROUND_BEGIN
-        | CORNER_CLIP_BEGIN => Some(true),
-        EDGE_FADE_END | HORIZONTAL_FADE_END | TEXT_REVEAL_END | BACKGROUND_END
-        | CORNER_CLIP_END => Some(false),
+        EDGE_FADE_BEGIN | HORIZONTAL_FADE_BEGIN | BACKGROUND_BEGIN | CORNER_CLIP_BEGIN => {
+            Some(true)
+        }
+        EDGE_FADE_END | HORIZONTAL_FADE_END | BACKGROUND_END | CORNER_CLIP_END => Some(false),
         _ => None,
     }
 }

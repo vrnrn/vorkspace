@@ -60,9 +60,11 @@ fn host_arguments(command: &str, args: Value) -> Result<(String, Value), String>
         "list_dir"
             | "list_project_files"
             | "read_text_file"
+            | "read_editor_text_file"
             | "read_binary_file"
             | "read_file_preview"
             | "write_text_file"
+            | "write_editor_text_file"
             | "stat_files"
             | "create_path"
             | "rename_path"
@@ -168,6 +170,11 @@ fn client_result(command: &str, environment: &str, args: &Value, mut result: Val
     };
     match command {
         "create_path" | "rename_path" | "copy_path" | "move_path" => prefix(&mut result),
+        "read_editor_text_file" | "write_editor_text_file" => {
+            if let Some(path) = result.get_mut("path") {
+                prefix(path);
+            }
+        }
         "list_dir" | "list_project_files" | "stat_files" => {
             if let Some(entries) = result.as_array_mut() {
                 for entry in entries {
@@ -253,6 +260,30 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, OUTDATED);
+    }
+    #[test]
+    fn editor_cas_routes_only_paths_and_requires_a_capable_host() {
+        let result = run_with(
+            "write_editor_text_file",
+            json!({"path":"remote://env/code/a","content":"Draft","expectedHash":"baseline"}),
+            |environment, params| {
+                assert_eq!(environment, "env");
+                assert_eq!(params["args"]["path"], "/code/a");
+                assert_eq!(params["args"]["expectedHash"], "baseline");
+                Ok(json!({"status":"conflict","path":"/code/a","hash":"newer"}))
+            },
+        )
+        .unwrap();
+        assert_eq!(result["path"], "remote://env/code/a");
+        assert_eq!(
+            run_with(
+                "write_editor_text_file",
+                json!({"path":"remote://env/code/a"}),
+                |_, _| Err("Unsupported workspace command".into())
+            )
+            .unwrap_err(),
+            OUTDATED
+        );
     }
 
     #[test]

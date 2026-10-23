@@ -6,4 +6,6 @@ A native release includes the open-source Sparkle updater. The pinned version ke
 
 Preparing updates uses private signing keys kept outside this repository. Apple's paid signing and notarization services are optional. Preparing files does not publish them. Test a real old-to-new update and another native update with disposable data before publishing, including rejection of damaged downloads and recovery of settings and unfinished messages.
 
+Publishing uses the manually started **Mac release** workflow and its two protected signing secrets. It keeps the existing public keys so installed users trust the downloads, chooses an unused version, and publishes after checks pass. Regular pushes and local tests never start that workflow.
+
 See [release preparation](../updates.md).

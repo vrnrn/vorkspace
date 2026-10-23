@@ -1360,18 +1360,6 @@ fragment float4 edge_fade_fragment(BackdropVertexOutput input [[stage_in]],
   return mix(before.read(pixel), after.read(pixel), min(top, bottom));
 }
 
-// ParticleText's two opposed CSS gradients. The stop positions may lie beyond
-// the label bounds, so the first/last frames stay completely hidden/visible.
-fragment float4 text_reveal_fragment(BackdropVertexOutput input [[stage_in]],
-                                    texture2d<float> before [[texture(0)]],
-                                    texture2d<float> after [[texture(1)]],
-                                    constant BackdropCompositeParams *params [[buffer(0)]]) {
-  uint2 pixel = uint2(input.position.xy - params->origin);
-  float x = input.position.x - params->region_origin.x;
-  float alpha = saturate((params->padding - x) / (params->padding - params->corner_radius));
-  return mix(before.read(pixel), after.read(pixel), alpha);
-}
-
 struct BackgroundCompositeParams {
   float2 origin;
   float2 size;

@@ -252,13 +252,14 @@ impl Conversation {
         let to = profile.clone();
         self.account_switching = true;
         let work = cx.background_executor().spawn(async move {
-            thread
-                .as_ref()
-                .is_some_and(|id| can_transfer && from.transfer(&to, kind, id).is_ok())
+            match thread.as_ref().filter(|_| can_transfer) {
+                Some(id) => from.transfer(&to, kind, id).map(|_| true),
+                None => Ok(false),
+            }
         });
         let old = self.settings.account.id.clone();
         cx.spawn(async move |this, cx| {
-            let carried = work.await;
+            let transfer = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.account_switching = false;
                 if this.busy
@@ -270,6 +271,14 @@ impl Conversation {
                 {
                     return;
                 }
+                let carried = match transfer {
+                    Ok(carried) => carried,
+                    Err(error) => {
+                        this.status = format!("Could not switch accounts: {error}");
+                        cx.notify();
+                        return;
+                    }
+                };
                 if !carried {
                     if this.settings.pending_provider_switch.is_none() {
                         this.settings.pending_provider_switch =
@@ -797,6 +806,62 @@ mod tests {
             window
                 .update(visual, |v, _, _| v.settings.usage_limit.is_none())
                 .unwrap()
+        );
+    }
+
+    #[gpui::test]
+    fn failed_account_transfer_preserves_the_original_account_and_resume_binding(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(std::sync::Mutex::new(
+            vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        ));
+        let mut summary = locked(&store).unwrap().create("codex", "/fixture").unwrap();
+        locked(&store)
+            .unwrap()
+            .provider_id(summary.id, "missing-source-thread")
+            .unwrap();
+        summary.provider_id = Some("missing-source-thread".into());
+        let id = summary.id;
+        let source = Profile {
+            id: "source".into(),
+            root: Some(directory.path().into()),
+        };
+        let target = Profile {
+            id: "target".into(),
+            root: Some(directory.path().into()),
+        };
+        let view = cx.new(|cx| Conversation::new(summary, store.clone(), cx));
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            view.settings.account = source.clone();
+            view.status = "Usage limit reached: fixture".into();
+            view.switch_usage_account(target, cx);
+            assert!(view.account_switching);
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(!view.account_switching);
+            assert_eq!(view.settings.account, source);
+            assert_eq!(
+                view.summary.provider_id.as_deref(),
+                Some("missing-source-thread")
+            );
+            assert!(view.settings.pending_provider_switch.is_none());
+            assert!(view.settings.usage_limit.is_some());
+            assert!(view.status.starts_with("Could not switch accounts:"));
+            assert!(!view.busy);
+        });
+        let summaries = locked(&store).unwrap().sessions().unwrap();
+        assert_eq!(
+            summaries
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap()
+                .provider_id
+                .as_deref(),
+            Some("missing-source-thread")
         );
     }
 

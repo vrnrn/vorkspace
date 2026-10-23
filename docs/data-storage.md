@@ -14,7 +14,7 @@ The default production location is `com.vorkspace.desktop/vorkspace.db` under ma
 
 The desktop schema remains readable without the former UI. Historical preferences are read from the matching WebKit store on macOS and normalized into current app keys. Native sidecar reads translate earlier Bot roster and viewport field names. Canonical keys take precedence when both versions exist. Existing Vox enabled, silent, and microphone preferences participate in the same read-time reconciliation, preserving later native choices. Transcript text, arbitrary document JSON, paths, and provider IDs remain untouched. Saving uses the current metadata names and atomic sidecar replacement.
 
-Bot memory and habit files remain under `bots/` in the selected data directory. Remote host databases remain on their host.
+Bot memory and habit files use their existing owner directory in the selected data directory. New owners use `bots/`; earlier named or project-indexed owners stay where they are, including their provider homes. Older transcript tables remain the write authority for their sessions until an existing completed conversion or a populated current owner establishes the current identity. Empty placeholder directories and transcript roots do not hide saved owners. No files or rows are moved when reading these aliases. Remote host databases remain on their host.
 
 ## Unsent composer state
 
@@ -29,3 +29,13 @@ Changed blocks are merged with their complete durable source before publication,
 The remote host similarly stores ordered blocks separately from session metadata. Its saved block values are immutable; a changed block receives a new value and sync revision. Metadata, block changes, event records, and command receipts share one SQLite transaction. A full history is reconstructed when requested, while unchanged polling reads only revision metadata.
 
 The host reads both complete JSON snapshots and normalized block storage, converting a legacy session on its next successful save. Host programs that require all blocks inside `sessions.snapshot` cannot read a converted session; do not downgrade a converted database to those programs. Desktop disconnection and reconnection do not change the host's storage owner.
+
+## Local submission receipts
+
+Local sends reserve their stable message identity before provider admission. The durable receipt advances before provider input, then records completion or an uncertain outcome. Startup reconciles receipts whose process owner has exited; it never automatically replays a send whose external effects are unknown. An unconfirmed send remains visible for review. Restoring its text to an empty composer requires an explicit action, and dismissing the notice retains its no-replay identity. Session deletion retains receipt tombstones so delayed send work cannot recreate deleted state.
+
+## Private composer attachments
+
+Pasted images are cached under `composer-attachments/` in the selected data directory. Publication follows exclusive file creation, file flush and directory flush; Unix directories and files use owner-only permissions. Drafts, queued messages, history and receipts retain references to those files.
+
+A cold-start worker may collect old, unreferenced cache files. It scans durable references outside the interactive path, uses a publication grace period and bounded scan, and defers collection when another live process owns the cache or writes invalidate its snapshot. Unknown files, symlinks, incomplete scans and malformed storage preserve files. Opening with `--check-data` neither registers this owner nor starts collection.

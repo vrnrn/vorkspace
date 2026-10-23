@@ -19,6 +19,7 @@ fn only_final_assistant_speech_is_retained_and_bounded() {
         &json!({"role":"assistant","text":"界".repeat(10000)})
     ));
     assert_eq!(display.text.chars().count(), 4000);
+    assert_eq!(display.snapshot()["lines"][0]["truncated"], true);
     assert!(!display.notification(
         "thread/realtime/transcript/done",
         &json!({"role":"assistant","text":" "})
@@ -29,7 +30,7 @@ fn only_final_assistant_speech_is_retained_and_bounded() {
     ));
     assert_eq!(
         display.snapshot()["lines"],
-        json!([{"text":"Latest reply"}])
+        json!([{"id":"reply-2","text":"Latest reply","truncated":false}])
     );
 }
 
@@ -73,9 +74,22 @@ fn context_bounds_unicode_without_mutating_history() {
     let original = page.clone();
     let context = recent_context(&page);
     let text = context[0]["text"].as_str().unwrap();
-    assert!(text.chars().count() < 3200);
+    let excerpt = text.split_once("\n\n").unwrap().1;
+    assert!(excerpt.encode_utf16().count() <= 3000);
     assert!(text.ends_with("recent end"));
     assert_eq!(page, original);
     assert_eq!(recent_context(&Value::Null), json!([]));
     assert_eq!(recent_context(&json!({"data":[]})), json!([]));
+}
+
+#[test]
+fn reply_budget_counts_utf16_and_exposes_truncation_without_broken_unicode() {
+    let mut display = Display::default();
+    display.notification(
+        "thread/realtime/transcript/done",
+        &json!({"role":"assistant","text":"🙂".repeat(3000)}),
+    );
+    assert_eq!(display.text.encode_utf16().count(), 4000);
+    assert_eq!(display.text.chars().count(), 2000);
+    assert_eq!(display.snapshot()["lines"][0]["truncated"], true);
 }

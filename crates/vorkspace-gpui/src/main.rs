@@ -1,13 +1,11 @@
 mod accounts;
 mod activity;
-mod arcade;
 mod assets;
 mod automations;
 mod bots;
 mod changes;
 mod composer_completion;
 mod composer_motion;
-mod composer_runner;
 mod context_meter;
 mod conversation;
 #[cfg(debug_assertions)]
@@ -37,7 +35,6 @@ mod notes;
 mod notifications;
 mod pane_layout;
 mod pane_motion;
-mod particle_text;
 mod pickers;
 mod popover;
 mod project_background;
@@ -72,6 +69,9 @@ mod updater;
 mod usage_footer;
 mod visuals;
 mod vox;
+#[cfg(target_os = "macos")]
+mod webkit;
+mod window_appearance;
 mod workspace;
 mod worktree_switcher;
 
@@ -136,6 +136,20 @@ fn plist_data_mode(plist: &str) -> Option<bool> {
         _ => None,
     }
 }
+/// Use the final frame before the launch window is shown. AppKit's zoom path
+/// animates after creation, which exposes a small window before maximization.
+fn launch_bounds(cx: &App) -> WindowBounds {
+    let restore = Bounds::centered(None, size(px(1180.), px(800.)), cx);
+    #[cfg(target_os = "macos")]
+    return WindowBounds::Windowed(
+        cx.primary_display()
+            .map(|display| display.visible_bounds())
+            .unwrap_or(restore),
+    );
+    #[cfg(not(target_os = "macos"))]
+    WindowBounds::Maximized(restore)
+}
+
 fn main() {
     if let Some(code) = vorkspace_core::remote::ssh_askpass::maybe_run() {
         std::process::exit(code);
@@ -271,6 +285,14 @@ fn main() {
         }
         return;
     }
+    db.start_attachment_cache().unwrap_or_else(|error| {
+        eprintln!("Cannot prepare attachment storage: {error}");
+        std::process::exit(1);
+    });
+    db.recover_local_submissions().unwrap_or_else(|error| {
+        eprintln!("Cannot recover pending submissions: {error}");
+        std::process::exit(1);
+    });
     vorkspace_core::checkpoint::init(
         database
             .parent()
@@ -352,13 +374,11 @@ fn main() {
     let sidebar_metadata = db.session_sidebar_metadata(&projects);
     let db = Arc::new(Mutex::new(db));
     let platform = gpui_platform::current_platform(false);
-    let title_raster = particle_text::GlyphRaster(platform.text_system());
     gpui::Application::with_platform(platform)
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             #[cfg(debug_assertions)]
             dev_reload::install(cx);
-            cx.set_global(title_raster);
             updater::start(cx);
             input::bind(cx);
             image_lightbox::bind(cx);
@@ -383,10 +403,11 @@ fn main() {
                 }
             })
             .detach();
-            let bounds = Bounds::centered(None, size(px(1180.), px(800.)), cx);
+            let bounds = launch_bounds(cx);
             cx.open_window(
                 WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_bounds: Some(bounds),
+                    show: false,
                     window_min_size: Some(size(px(820.), px(520.))),
                     window_background: if cfg!(target_os = "macos") {
                         WindowBackgroundAppearance::Blurred
@@ -471,6 +492,19 @@ mod native_tests {
                         .cached(StyleRefinement::default().w_full().h(px(76.))),
                 )
         }
+    }
+    #[gpui::test]
+    fn launch_uses_the_visible_display_frame_without_a_deferred_zoom(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let bounds = launch_bounds(cx);
+            #[cfg(target_os = "macos")]
+            assert_eq!(
+                bounds,
+                WindowBounds::Windowed(cx.primary_display().unwrap().visible_bounds())
+            );
+            #[cfg(not(target_os = "macos"))]
+            assert!(matches!(bounds, WindowBounds::Maximized(_)));
+        });
     }
     #[test]
     fn bundle_plist_selects_the_data_mode() {

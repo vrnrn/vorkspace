@@ -720,7 +720,6 @@ impl Conversation {
     /// The form's box: the field and send, as `BotComposer` lays them out
     /// when it has controls.
     fn bot_composer_box(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let runner = self.composer_runner(cx);
         let focused = self.input.focus_handle(cx).contains_focused(window, cx);
         let ready = self.loaded
             && !self.attaching
@@ -743,7 +742,6 @@ impl Conversation {
                 cx.listener(|this, _, window, cx| window.focus(&this.input.focus_handle(cx), cx)),
             )
             .child(self.composer_anchor.probe())
-            .children(runner)
             .children(self.composer_recovery_banner(cx))
             .children(self.attachment_chips(cx))
             .child(

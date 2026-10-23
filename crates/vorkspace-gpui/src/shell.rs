@@ -584,6 +584,7 @@ pub(crate) struct Shell {
     shortcuts: Option<shortcuts::Shortcuts>,
     window_active: bool,
     window_glass: Option<bool>,
+    window_blur: Option<u32>,
     quit_prompted: bool,
     pub(crate) menu: Option<ShellMenu>,
     background_dialog: Option<project_settings::OpenBackground>,
@@ -895,6 +896,7 @@ impl Shell {
             shortcuts: None,
             window_active: false,
             window_glass: None,
+            window_blur: None,
             quit_prompted: false,
             menu: None,
             background_dialog: None,
@@ -5326,7 +5328,7 @@ impl Shell {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(content(1.))
             })
-            .child(crate::particle_text::particle_text(session.display_title()));
+            .child(session.display_title());
         let badges = div()
             .flex()
             .items_center()
@@ -7358,17 +7360,15 @@ impl Render for Shell {
             cx.window_appearance(),
             gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
         );
-        if configure(p, system_light) {
+        if configure(p, system_light, self.workspace.classic_layout) {
             cx.refresh_windows();
         }
-        let glass = window_glass(p, system_light);
-        if self.window_glass != Some(glass) {
+        let glass = window_glass(p, system_light, self.workspace.classic_layout);
+        let blur = if glass { p.sidebar_blur.min(100) } else { 0 };
+        if self.window_glass != Some(glass) || self.window_blur != Some(blur) {
             self.window_glass = Some(glass);
-            window.set_background_appearance(if glass {
-                gpui::WindowBackgroundAppearance::Blurred
-            } else {
-                gpui::WindowBackgroundAppearance::Opaque
-            });
+            self.window_blur = Some(blur);
+            crate::window_appearance::apply(window, glass, blur);
         }
         self.sync_settings(cx);
         self.sidebar_fraction = match &self.sidebar_slide {
@@ -7691,6 +7691,13 @@ impl Render for Shell {
                 }
             }))
             .on_action(cx.listener(|this, _: &DismissMenu, window, cx| {
+                if this
+                    .vox
+                    .as_ref()
+                    .is_some_and(|voice| voice.update(cx, |voice, cx| voice.dismiss_reply(cx)))
+                {
+                    return;
+                }
                 if this.remote_project_picker.is_some() {
                     this.close_remote_project(window, cx);
                     return;
@@ -9577,7 +9584,7 @@ mod tests {
     }
     #[gpui::test]
     fn classic_layout_runs_the_sidebar_and_workspace_full_height(cx: &mut TestAppContext) {
-        crate::theme::configure(&crate::settings::Preferences::default(), false);
+        crate::theme::configure(&crate::settings::Preferences::default(), false, true);
         let (window, _, _) = window(cx);
         let frames = |cx: &mut TestAppContext| {
             cx.update_window(window.into(), |_, w, cx| {
@@ -11407,7 +11414,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[gpui::test]
-    fn title_particle_frames_only_invalidate_the_sidebar(cx: &mut TestAppContext) {
+    fn settled_title_does_not_schedule_decorative_redraws(cx: &mut TestAppContext) {
         let (window, _, id) = window(cx);
         cx.update(|cx| cx.set_reduce_motion(false));
         // Blank tabs deliberately have no sidebar card. Mount a conversation
@@ -11425,14 +11432,13 @@ mod tests {
         window
             .update(cx, |shell, _, cx| {
                 shell.sessions[&id].update(cx, |session, cx| {
-                    session.rename("Matching the generated title effect".into(), cx);
+                    session.rename("Updated session title".into(), cx);
                 });
             })
             .unwrap();
         cx.run_until_parked();
         cx.refresh().unwrap();
-        // Deliver the title-change frame's deferred layout/hover work before
-        // measuring the subsequent decorative animation frames in isolation.
+        // Settle the title-change layout before measuring idle redraw work.
         cx.update_window(window.into(), |_, window, cx| {
             window.simulate_next_frame(cx);
             window.draw(cx).clear(cx);
@@ -11455,16 +11461,13 @@ mod tests {
         );
         for _ in 0..3 {
             cx.update_window(window.into(), |_, window, cx| {
-                assert!(
-                    window.simulate_next_frame(cx) > 0,
-                    "title requested its next frame"
-                );
+                window.simulate_next_frame(cx);
                 window.draw(cx).clear(cx);
             })
             .unwrap();
             cx.run_until_parked();
         }
-        assert!(sidebar.read_with(cx, |view, _| view.renders) > before.0);
+        assert_eq!(sidebar.read_with(cx, |view, _| view.renders), before.0);
         assert_eq!(tabs.read_with(cx, |view, _| view.renders), before.1);
         assert_eq!(
             transcript.read_with(cx, |view, _| view.render_passes),

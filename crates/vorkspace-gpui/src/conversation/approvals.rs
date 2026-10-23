@@ -153,7 +153,6 @@ mod tests {
         cx.update(|cx| {
             input::bind(cx);
             cx.set_global(crate::settings::Preferences {
-                composer_mascot: false,
                 follow_up: "queue".into(),
                 ..Default::default()
             });

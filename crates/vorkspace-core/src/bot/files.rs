@@ -14,8 +14,7 @@
 //! ```
 //!
 //! A Bot is not tied to a project, so its folder is named by its own id. One
-//! that was a project's Bot passes that project along until its old folder
-//! has moved under its id.
+//! that was a project's Bot can still use its indexed project owner in place.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -23,7 +22,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Where Bots lived before they had their name; moved on first use.
+/// Original project-to-owner identities remain authoritative in place.
 const INDEX_FILE: &str = "index.json";
 const SOUL_FILE: &str = "SOUL.md";
 const MEMORY_FILE: &str = "MEMORY.md";
@@ -34,12 +33,6 @@ const HABITS_FILE: &str = "habits.json";
 const FILE_MAX: usize = 256 * 1024;
 pub const CONFLICT: &str = "conflict";
 
-/// Serializes index updates, so two Bots opening at once cannot both read
-/// the old index and drop each other's entry.
-static INDEX_LOCK: Mutex<()> = Mutex::new(());
-
-/// All windows share this store. Keep initialization and hash-checked writes
-/// serialized so only one caller can save over a version of a file.
 static FILES_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -132,9 +125,9 @@ pub fn content_hash(text: &str) -> String {
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     use std::io::Write;
 
-    let temp = path.with_extension("md.tmp");
+    let temp = path.with_extension(format!("{}.tmp", crate::bot::new_id()));
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -143,17 +136,19 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     let mut file = options
         .open(&temp)
         .map_err(|e| format!("{}: {e}", temp.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // A temporary file left by an older version may have wider permissions.
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("{}: {e}", temp.display()))?;
+    let result = (|| {
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp, path)?;
+        #[cfg(unix)]
+        std::fs::File::open(path.parent().unwrap_or(Path::new(".")))?.sync_all()?;
+        Ok::<_, std::io::Error>(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
     }
-    file.write_all(text.as_bytes())
-        .map_err(|e| format!("{}: {e}", temp.display()))?;
-    drop(file);
-    std::fs::rename(&temp, path).map_err(|e| format!("{}: {e}", path.display()))
+    result.map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn read_optional(path: &Path) -> Result<Option<String>, String> {
@@ -164,11 +159,13 @@ fn read_optional(path: &Path) -> Result<Option<String>, String> {
     }
 }
 
-fn read_index(root: &Path) -> AgentIndex {
-    std::fs::read_to_string(root.join(INDEX_FILE))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+fn read_index(root: &Path) -> Result<AgentIndex, String> {
+    match std::fs::read_to_string(root.join(INDEX_FILE)) {
+        Ok(text) => serde_json::from_str(&text)
+            .map_err(|e| format!("Cannot read existing Bot owner index: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AgentIndex::default()),
+        Err(e) => Err(format!("Cannot read existing Bot owner index: {e}")),
+    }
 }
 
 fn valid_id(id: &str) -> bool {
@@ -179,15 +176,28 @@ fn valid_id(id: &str) -> bool {
 }
 
 /// The Bot's folder, created with an empty memory on first use. A Bot that
-/// was a project's own takes over that project's folder the first time.
+/// was a project's own keeps that project's indexed folder as its owner.
 fn agent_dir(root: &Path, bot: &str, legacy_project: Option<&str>) -> Result<PathBuf, String> {
     if !valid_id(bot) {
         return Err("Not a Bot id".into());
     }
-    std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
-    let dir = root.join(bot);
-    if let Some(project) = legacy_project.filter(|project| !project.trim().is_empty()) {
-        adopt_legacy_folder(root, &dir, project)?;
+    let mut dir = crate::compatibility::bot_owner(root, bot, false);
+    if !crate::compatibility::has_owner_records(&dir, 4) {
+        if let Some(project) = legacy_project.filter(|project| !project.trim().is_empty()) {
+            for family in crate::compatibility::bot_families(root, false) {
+                if let Some(owner) = read_index(&family)?.agents.iter().find(|entry| {
+                    valid_id(&entry.id) && entry.projects.iter().any(|key| key == project)
+                }) {
+                    let indexed = family.join(&owner.id);
+                    if std::fs::symlink_metadata(&indexed)
+                        .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+                    {
+                        dir = indexed;
+                        break;
+                    }
+                }
+            }
+        }
     }
     std::fs::create_dir_all(dir.join(MEMORY_DIR)).map_err(|e| format!("{}: {e}", dir.display()))?;
     let memory = dir.join(MEMORY_FILE);
@@ -195,30 +205,6 @@ fn agent_dir(root: &Path, bot: &str, legacy_project: Option<&str>) -> Result<Pat
         write_atomic(&memory, "")?;
     }
     Ok(dir)
-}
-
-/// Moves the folder the project's Bot had to `dir`, once, and drops it from
-/// the index so no other Bot can take it too.
-fn adopt_legacy_folder(root: &Path, dir: &Path, project: &str) -> Result<(), String> {
-    let _guard = INDEX_LOCK.lock().map_err(|e| e.to_string())?;
-    let mut index = read_index(root);
-    let Some(position) = index
-        .agents
-        .iter()
-        .position(|entry| valid_id(&entry.id) && entry.projects.iter().any(|key| key == project))
-    else {
-        return Ok(());
-    };
-    let entry = index.agents.remove(position);
-    let legacy = root.join(&entry.id);
-    if !dir.exists() && legacy.is_dir() && legacy != dir {
-        std::fs::rename(&legacy, dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    }
-    let text = serde_json::to_string_pretty(&index).map_err(|e| e.to_string())?;
-    let path = root.join(INDEX_FILE);
-    let temp = root.join("index.json.tmp");
-    std::fs::write(&temp, text).map_err(|e| format!("{}: {e}", temp.display()))?;
-    std::fs::rename(&temp, &path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 pub fn load(root: &Path, bot: &str, legacy_project: Option<&str>) -> Result<AgentFiles, String> {
@@ -307,21 +293,38 @@ mod tests {
     }
 
     #[test]
-    fn takes_over_the_folder_its_project_had_once() {
+    fn indexed_project_owner_survives_load_edit_save_and_reopen_without_moving() {
         let root = temp_root();
         let old = root.join("old-id");
         std::fs::create_dir_all(old.join("memory")).unwrap();
         std::fs::write(old.join(MEMORY_FILE), "- kept").unwrap();
-        std::fs::write(
-            root.join(INDEX_FILE),
-            r#"{"agents":[{"id":"old-id","projects":["/code/app"]}]}"#,
+        let index = r#"{"agents":[{"id":"old-id","projects":["/code/app"],"opaque":true}],"future":{"keep":true}}"#;
+        std::fs::write(root.join(INDEX_FILE), index).unwrap();
+        let before = load(&root, "bot-a", Some("/code/app")).unwrap();
+        assert_eq!(before.memory, "- kept");
+        save(
+            &root,
+            "bot-a",
+            Some("/code/app"),
+            MEMORY_FILE,
+            "- edited",
+            Some(&before.memory_hash),
         )
         .unwrap();
-        let adopted = load(&root, "bot-a", Some("/code/app")).unwrap();
-        assert_eq!(adopted.memory, "- kept");
-        assert!(!old.exists());
-        // Another Bot naming the same project starts fresh.
-        let other = load(&root, "bot-b", Some("/code/app")).unwrap();
+        assert_eq!(
+            load(&root, "bot-a", Some("/code/app")).unwrap().memory,
+            "- edited"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(INDEX_FILE)).unwrap(),
+            index
+        );
+        assert_eq!(
+            std::fs::read_to_string(old.join(MEMORY_FILE)).unwrap(),
+            "- edited"
+        );
+        assert!(!root.join("bot-a").exists());
+        let other = load(&root, "bot-b", None).unwrap();
         assert_eq!(other.memory, "");
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -360,7 +363,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn writes_private_files_even_with_a_leftover_public_temp_file() {
+    fn writes_private_files_without_reusing_a_leftover_public_temp_file() {
         use std::os::unix::fs::PermissionsExt;
 
         let root = temp_root();
@@ -383,7 +386,11 @@ mod tests {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert!(!temp.exists());
+        assert_eq!(std::fs::read_to_string(&temp).unwrap(), "leftover");
+        assert_eq!(
+            std::fs::metadata(&temp).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -445,6 +452,44 @@ mod tests {
         ] {
             assert!(save(&root, "m", None, path, "x", None).is_err(), "{path}");
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn atomic_memory_write_never_follows_an_old_temporary_symlink() {
+        let root = temp_root();
+        let path = root.join(MEMORY_FILE);
+        let sentinel = root.join("unrelated-private-file");
+        std::fs::write(&sentinel, "keep untouched").unwrap();
+        let old_temp = path.with_extension("md.tmp");
+        std::os::unix::fs::symlink(&sentinel, &old_temp).unwrap();
+        write_atomic(&path, "new memory").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&sentinel).unwrap(),
+            "keep untouched"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new memory");
+        assert_eq!(std::fs::read_link(&old_temp).unwrap(), sentinel);
+        assert!(!std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_atomic_memory_publication_cleans_only_its_private_temporary_file() {
+        let root = temp_root();
+        let path = root.join(MEMORY_FILE);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("keep"), "saved data").unwrap();
+        assert!(write_atomic(&path, "cannot replace a directory").is_err());
+        assert_eq!(
+            std::fs::read_to_string(path.join("keep")).unwrap(),
+            "saved data"
+        );
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        write_atomic(&root.join(SOUL_FILE), "a subsequent save works").unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -89,64 +89,6 @@ fn rounded_children_restore_each_translucent_corner_without_touching_the_footer(
 
 #[test]
 #[ignore = "Requires a Metal device; run explicitly on macOS"]
-fn title_particle_reveal_matches_opposed_css_masks_over_a_translucent_backdrop() {
-    use gpui::{Hsla, black, white};
-    use gpui_apple::metal_renderer::text_reveal_marker;
-    let mut renderer = MetalRenderer::new_headless(Arc::new(parking_lot::Mutex::new(
-        InstanceBufferPool::default(),
-    )));
-    renderer.update_transparency(true);
-    let full = Bounds::new(
-        point(ScaledPixels(0.), ScaledPixels(0.)),
-        size(ScaledPixels(120.), ScaledPixels(40.)),
-    );
-    let quad = |bounds, color: Hsla, marker: Hsla| Quad {
-        order: 0,
-        border_style: Default::default(),
-        bounds,
-        content_mask: ContentMask { bounds: full },
-        background: color.into(),
-        border_color: marker,
-        corner_radii: Default::default(),
-        border_widths: Default::default(),
-    };
-    for (start, end) in [(-36., -18.), (32., 50.), (59., 41.), (100., 118.)] {
-        let label = Bounds::new(
-            point(ScaledPixels(10.), ScaledPixels(5.)),
-            size(ScaledPixels(100.), ScaledPixels(30.)),
-        );
-        let mut scene = Scene::default();
-        scene.insert_primitive(quad(
-            full,
-            gpui::rgba(0x20408080).into(),
-            Default::default(),
-        ));
-        scene.insert_primitive(quad(label, black(), text_reveal_marker(true, start, end)));
-        scene.insert_primitive(quad(label, white(), Default::default()));
-        scene.insert_primitive(quad(label, black(), text_reveal_marker(false, start, end)));
-        scene.finish();
-        let image = renderer
-            .render_scene_to_image(&scene, size(DevicePixels(120), DevicePixels(40)))
-            .unwrap();
-        assert_eq!(
-            image.get_pixel(4, 20)[3],
-            128,
-            "mask leaves the backdrop outside the label alone"
-        );
-        for x in 10..110 {
-            let alpha = ((end - (x as f32 + 0.5 - 10.)) / (end - start)).clamp(0., 1.);
-            let expected = 128. + 127. * alpha;
-            assert!(
-                (f32::from(image.get_pixel(x, 20)[3]) - expected).abs() < 2.,
-                "CSS mask at {x}, stops {start}..{end}"
-            );
-        }
-        assert_eq!(image.get_pixel(50, 0)[3], 128);
-    }
-}
-
-#[test]
-#[ignore = "Requires a Metal device; run explicitly on macOS"]
 fn background_artwork_mask_rounds_fades_and_blurs_without_touching_the_backdrop() {
     use gpui::{Edges, Hsla, black, white};
     use gpui_apple::metal_renderer::background_mask_marker;

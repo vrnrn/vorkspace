@@ -2,6 +2,54 @@ use super::*;
 use gpui::{EntityInputHandler, TestAppContext};
 
 #[gpui::test]
+fn explicit_conflict_save_keeps_the_draft_and_refreshes_only_the_disk_baseline(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("draft.txt");
+    std::fs::write(&path, "original\r\n").unwrap();
+    let file = path.clone();
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            let git =
+                cx.new(|cx| ProjectGit::new(directory.path().to_string_lossy().into_owned(), cx));
+            cx.new(|cx| FileEditor::new(file.to_string_lossy().into_owned(), git, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    window
+        .update(cx, |editor, w, cx| {
+            editor.input.update(cx, |input, cx| {
+                input.replace_text_in_range(None, "my draft", w, cx)
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    std::fs::write(&path, "external\r\n").unwrap();
+    window.update(cx, |editor, _, cx| editor.save(cx)).unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |editor, _, cx| {
+            assert!(editor.disk_changed);
+            assert!(editor.dirty);
+            assert!(editor.input.read(cx).content.contains("my draft"));
+            editor.save_my_changes(cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |editor, _, cx| {
+            assert!(!editor.dirty && !editor.disk_changed);
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                editor.input.read(cx).content.replace('\n', "\r\n")
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn replace_is_one_undo_and_autosave_formats_with_original_encoding(cx: &mut TestAppContext) {
     let path = std::env::temp_dir().join(format!(
         "vorkspace-editor-parity-{}.json",

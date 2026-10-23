@@ -12,12 +12,6 @@ pub(super) enum Kind {
     Bot,
 }
 impl Kind {
-    fn table(self) -> &'static str {
-        match self {
-            Self::Ordinary => "ordinary_blocks",
-            Self::Bot => "bot_blocks",
-        }
-    }
     fn position(self) -> &'static str {
         match self {
             Self::Ordinary => "position",
@@ -134,9 +128,19 @@ impl Store {
             .columns
             .contains("has_user_message")
         {
+            if let Some(tables) = &self.shared.as_ref().unwrap().earlier_bot_tables {
+                let current = self.current_bot_owner_predicate("sessions.id")?;
+                return Ok(format!("CASE WHEN EXISTS(SELECT 1 FROM {roots} WHERE session_id=sessions.id) AND NOT({current}) THEN EXISTS(SELECT 1 FROM {blocks} WHERE session_id=sessions.id AND is_user=1) ELSE has_user_message END",roots=tables.transcripts,blocks=tables.blocks));
+            }
             return Ok("has_user_message".into());
         }
         let mut source = String::from("CASE ");
+        if has_table(&self.conn, "bot_transcripts")? {
+            source.push_str(&format!("WHEN {} THEN EXISTS(SELECT 1 FROM bot_blocks WHERE session_id=sessions.id AND is_user=1) ",self.current_bot_owner_predicate("sessions.id")?));
+        }
+        if let Some(tables) = &self.shared.as_ref().unwrap().earlier_bot_tables {
+            source.push_str(&format!("WHEN EXISTS(SELECT 1 FROM {roots} WHERE session_id=sessions.id) THEN EXISTS(SELECT 1 FROM {blocks} WHERE session_id=sessions.id AND is_user=1) ",roots=tables.transcripts,blocks=tables.blocks));
+        }
         if has_table(&self.conn, "bot_transcripts")? {
             source.push_str("WHEN EXISTS(SELECT 1 FROM bot_transcripts WHERE session_id=sessions.id) THEN EXISTS(SELECT 1 FROM bot_blocks WHERE session_id=sessions.id AND is_user=1) ");
         }
@@ -182,16 +186,27 @@ impl Store {
                 UPDATE ordinary_transcripts SET normalized=0 WHERE session_id=NEW.id;
              END;"
         ))?;
-        for (table, key, changed) in [
-            ("ordinary_blocks", "session_id", "OLD.block_json IS NOT NEW.block_json OR OLD.position IS NOT NEW.position OR OLD.block_id IS NOT NEW.block_id"),
-            ("ordinary_transcripts", "session_id", "OLD.normalized IS NOT NEW.normalized"),
-            ("bot_blocks", "session_id", "OLD.block_json IS NOT NEW.block_json OR OLD.seq IS NOT NEW.seq OR OLD.block_id IS NOT NEW.block_id"),
-            ("bot_transcripts", "session_id", "1"),
-        ] {
-            if !has_table(&self.conn, table)? { continue; }
+        let mut guarded = vec![
+            ("ordinary_blocks".to_owned(), "session_id", "OLD.block_json IS NOT NEW.block_json OR OLD.position IS NOT NEW.position OR OLD.block_id IS NOT NEW.block_id"),
+            ("ordinary_transcripts".to_owned(), "session_id", "OLD.normalized IS NOT NEW.normalized"),
+            ("bot_blocks".to_owned(), "session_id", "OLD.block_json IS NOT NEW.block_json OR OLD.seq IS NOT NEW.seq OR OLD.block_id IS NOT NEW.block_id"),
+            ("bot_transcripts".to_owned(), "session_id", "1"),
+        ];
+        if let Some(tables) = &self.shared.as_ref().unwrap().earlier_bot_tables {
+            guarded.push((tables.blocks.clone(),"session_id","OLD.block_json IS NOT NEW.block_json OR OLD.seq IS NOT NEW.seq OR OLD.block_id IS NOT NEW.block_id"));
+            guarded.push((tables.transcripts.clone(), "session_id", "1"));
+        }
+        for (table, key, changed) in guarded {
+            if !has_table(&self.conn, &table)? {
+                continue;
+            }
             sql(tx.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS history_{table}_owner BEFORE UPDATE OF {key} ON {table}
                 WHEN OLD.{key} IS NOT NEW.{key} BEGIN SELECT RAISE(ABORT,'History ownership cannot be changed'); END;")))?;
-            for (event, owner, when) in [("INSERT","NEW","1"),("UPDATE","NEW",changed),("DELETE","OLD","1")] {
+            for (event, owner, when) in [
+                ("INSERT", "NEW", "1"),
+                ("UPDATE", "NEW", changed),
+                ("DELETE", "OLD", "1"),
+            ] {
                 sql(tx.execute_batch(&format!(
                     "CREATE TRIGGER IF NOT EXISTS history_{table}_{event} AFTER {event} ON {table}
                      WHEN {when} BEGIN
@@ -260,13 +275,7 @@ impl Store {
         if !has_table(&self.conn, "session_history_revisions")? {
             return Ok(None);
         }
-        if has_table(&self.conn, "bot_transcripts")?
-            && sql(self.conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM bot_transcripts WHERE session_id=?1)",
-                [original],
-                |r| r.get::<_, bool>(0),
-            ))?
-        {
+        if self.shared_bot_tables(original)?.is_some() {
             Ok(Some(Kind::Bot))
         } else if self.shared_ordinary_indexed(original)? {
             Ok(Some(Kind::Ordinary))
@@ -287,7 +296,7 @@ impl Store {
         let keys = sql(sql(self.conn.prepare(&format!(
             "SELECT {} FROM {} WHERE session_id=?1 ORDER BY {}",
             kind.position(),
-            kind.table(),
+            self.shared_history_table(kind, &original)?,
             kind.position()
         )))?
         .query_map([&original], |row| row.get::<_, i64>(0)))?
@@ -359,12 +368,12 @@ impl Store {
         let key = index.entries.get(from).map_or(0, |entry| entry.key);
         let mut query = sql(self.conn.prepare(&format!(
             "SELECT block_json FROM {} WHERE session_id=?1 AND {}>=?2 ORDER BY {}",
-            index.kind.table(),
+            self.shared_history_table(index.kind, &original)?,
             index.kind.position(),
             index.kind.position()
         )))?;
         let previous = sql(query.query_map(params![original, key], |row| row.get::<_, String>(0)))?
-            .map(|raw| parse(&sql(raw)?))
+            .map(|raw| parse_block(&sql(raw)?))
             .collect::<Result<Vec<Value>, String>>()?;
         drop(query);
         let next = blocks::merge(&previous, start - offset, rows)?;
@@ -398,7 +407,10 @@ impl Store {
                     || block.get("botHabit").is_some())
             {
                 sql(self.conn.execute(
-                    "INSERT OR IGNORE INTO bot_turns(session_id,seq) VALUES(?1,?2)",
+                    &format!(
+                        "INSERT OR IGNORE INTO {}(session_id,seq) VALUES(?1,?2)",
+                        self.shared_bot_tables(&original)?.ok_or(CHANGED)?.turns
+                    ),
                     params![original, position],
                 ))?;
             }
@@ -418,8 +430,8 @@ impl Store {
             sql(self.conn.execute("UPDATE ordinary_transcripts SET revision=CASE WHEN revision>=9007199254740990 THEN 0 ELSE revision+1 END WHERE session_id=?1",[&original]))?;
         }
         let flags = match index.kind {
-            Kind::Ordinary => "EXISTS(SELECT 1 FROM ordinary_blocks WHERE session_id=?1 AND has_user=1),EXISTS(SELECT 1 FROM ordinary_blocks WHERE session_id=?1 AND has_user=1 AND is_draft=1)",
-            Kind::Bot => "EXISTS(SELECT 1 FROM bot_blocks WHERE session_id=?1 AND is_user=1),EXISTS(SELECT 1 FROM bot_blocks WHERE session_id=?1 AND is_user=1 AND is_draft=1)",
+            Kind::Ordinary => "EXISTS(SELECT 1 FROM ordinary_blocks WHERE session_id=?1 AND has_user=1),EXISTS(SELECT 1 FROM ordinary_blocks WHERE session_id=?1 AND has_user=1 AND is_draft=1)".to_owned(),
+            Kind::Bot => format!("EXISTS(SELECT 1 FROM {table} WHERE session_id=?1 AND is_user=1),EXISTS(SELECT 1 FROM {table} WHERE session_id=?1 AND is_user=1 AND is_draft=1)",table=self.shared_history_table(index.kind,&original)?),
         };
         let (user, draft): (bool, bool) =
             sql(self
@@ -455,6 +467,13 @@ impl Store {
         Ok(true)
     }
 
+    fn shared_history_table(&self, kind: Kind, original: &str) -> Result<String, String> {
+        match kind {
+            Kind::Ordinary => Ok("ordinary_blocks".into()),
+            Kind::Bot => Ok(self.shared_bot_tables(original)?.ok_or(CHANGED)?.blocks),
+        }
+    }
+
     fn shared_write_indexed_block(
         &self,
         original: &str,
@@ -488,8 +507,8 @@ impl Store {
                 .collect::<Vec<_>>()
                 .join("\n")
                 .to_lowercase();
-                sql(self.conn.execute("INSERT INTO bot_blocks(session_id,seq,block_id,block_json,search_text,is_user,is_draft) VALUES(?1,?2,?3,?4,?5,?6,?7)
-                    ON CONFLICT(session_id,seq) DO UPDATE SET block_json=excluded.block_json,search_text=excluded.search_text,is_user=excluded.is_user,is_draft=excluded.is_draft",
+                sql(self.conn.execute(&format!("INSERT INTO {table}(session_id,seq,block_id,block_json,search_text,is_user,is_draft) VALUES(?1,?2,?3,?4,?5,?6,?7)
+                    ON CONFLICT(session_id,seq) DO UPDATE SET block_json=excluded.block_json,search_text=excluded.search_text,is_user=excluded.is_user,is_draft=excluded.is_draft",table=self.shared_history_table(kind,original)?),
                     params![original,position,id,raw,search,block["role"] == "user",block["draft"] == true]))?;
             }
         }

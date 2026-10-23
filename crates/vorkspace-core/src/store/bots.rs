@@ -132,30 +132,25 @@ impl Store {
             return Ok(None);
         }
         let original = self.persisted_session_id(id)?;
-        let indexed = super::shared::has_table(&self.conn, "bot_transcripts")?
-            && self
-                .conn
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM bot_transcripts WHERE session_id=?1)",
-                    [&original],
-                    |r| r.get::<_, bool>(0),
-                )
-                .map_err(|e| e.to_string())?;
-        // Return only references and confirmed app receipts from SQLite. A Bot
-        // can have megabytes of prose/tools; none of that crosses this boundary.
-        let source = if indexed {
-            "SELECT block_json AS block,seq FROM bot_blocks WHERE session_id=?1"
+        // Return only references and confirmed app receipts from SQLite.
+        let source = if let Some(tables) = self.shared_bot_tables(&original)? {
+            format!(
+                "SELECT block_json AS block,seq FROM {} WHERE session_id=?1",
+                tables.blocks
+            )
         } else if self.shared_ordinary_indexed(&original)? {
             "SELECT block_json AS block,position AS seq FROM ordinary_blocks WHERE session_id=?1"
+                .to_owned()
         } else {
-            "SELECT value AS block,key AS seq FROM sessions,json_each(sessions.blocks_json) WHERE sessions.id=?1"
+            "SELECT value AS block,key AS seq FROM sessions,json_each(sessions.blocks_json) WHERE sessions.id=?1".to_owned()
         };
+        let spawned = self.shared_earlier_bot_field("botSpawnedSessions").map(|old|format!("COALESCE(json_extract(block,'$.botSpawnedSessions'),json_extract(block,'$.{old}'))")).unwrap_or_else(||"json_extract(block,'$.botSpawnedSessions')".into());
         let query = format!(
             r#"SELECT json_object('id',json_extract(block,'$.id'),'role',json_extract(block,'$.role'),
-            'artifactCards',json_extract(block,'$.artifactCards'),'botSpawnedSessions',json_extract(block,'$.botSpawnedSessions'),
+            'artifactCards',json_extract(block,'$.artifactCards'),'botSpawnedSessions',{spawned},
             'text',CASE WHEN json_extract(block,'$.role')='tool' THEN json_extract(block,'$.text') ELSE '' END,
             'tool',CASE WHEN json_extract(block,'$.role')='tool' THEN json_extract(block,'$.tool') ELSE NULL END)
-            FROM ({source}) WHERE json_type(block,'$.artifactCards')='array' OR json_type(block,'$.botSpawnedSessions')='array'
+            FROM ({source}) WHERE json_type(block,'$.artifactCards')='array' OR json_type({spawned})='array'
             OR (json_extract(block,'$.role')='tool' AND json_extract(block,'$.tool.status') IN ('completed','success')
                 AND COALESCE(json_extract(block,'$.tool.preview.title'),json_extract(block,'$.tool.title'),json_extract(block,'$.text'),'') LIKE '%app%sessions.%') ORDER BY seq"#
         );

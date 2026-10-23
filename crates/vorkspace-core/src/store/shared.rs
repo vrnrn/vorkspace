@@ -2,6 +2,7 @@
 //! persistent native_* tables, or history conversion on open.
 mod accounts;
 pub(super) mod blocks;
+mod bot_tables;
 mod edit;
 mod incremental;
 mod ordinary;
@@ -25,6 +26,7 @@ use std::{
 
 pub(super) struct Shared {
     columns: HashSet<String>,
+    earlier_bot_tables: Option<bot_tables::BotTables>,
     ids: RefCell<HashMap<i64, String>>,
     extras: RefCell<BTreeMap<String, String>>,
     extras_path: Option<PathBuf>,
@@ -143,6 +145,18 @@ pub(super) fn encode<T: serde::Serialize>(value: &T) -> Result<String, String> {
 pub(crate) fn handle(id: &str) -> i64 {
     let bytes = Sha256::digest(id.as_bytes());
     (i64::from_le_bytes(bytes[..8].try_into().unwrap()) & ((1_i64 << 53) - 1)).max(1)
+}
+fn parse_block(raw: &str) -> Result<Value, String> {
+    let mut value = parse(raw)?;
+    crate::compatibility::block(&mut value);
+    Ok(value)
+}
+fn parse_blocks(raw: &str) -> Result<Vec<Value>, String> {
+    let mut blocks: Vec<Value> = parse(raw)?;
+    for block in &mut blocks {
+        crate::compatibility::block(block);
+    }
+    Ok(blocks)
 }
 pub(super) fn has_table(conn: &Connection, table: &str) -> Result<bool, String> {
     sql(conn.query_row(
@@ -309,10 +323,12 @@ impl Store {
             Some(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
             _ => BTreeMap::new(),
         };
+        let earlier_bot_tables = bot_tables::BotTables::discover(&conn)?;
         let store = Self {
             conn,
             path: path.into(),
             shared: Some(Shared {
+                earlier_bot_tables,
                 columns,
                 ids: RefCell::new(HashMap::new()),
                 extras: RefCell::new(extras),
@@ -503,6 +519,7 @@ impl Store {
             .cloned())
     }
     pub(super) fn shared_save_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        self.mark_attachment_activity();
         self.shared_writable()?;
         let shared = self.shared.as_ref().unwrap();
         let mut next = shared.extras.borrow().clone();
@@ -934,19 +951,14 @@ impl Store {
     }
     pub(super) fn shared_blocks(&self, id: i64) -> Result<Vec<Value>, String> {
         let original = self.persisted_session_id(id)?;
-        if has_table(&self.conn, "bot_transcripts")?
-            && sql(self.conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM bot_transcripts WHERE session_id=?1)",
-                [&original],
-                |r| r.get::<_, bool>(0),
-            ))?
-        {
-            let mut query = sql(self
-                .conn
-                .prepare("SELECT block_json FROM bot_blocks WHERE session_id=?1 ORDER BY seq"))?;
+        if let Some(tables) = self.shared_bot_tables(&original)? {
+            let mut query = sql(self.conn.prepare(&format!(
+                "SELECT block_json FROM {} WHERE session_id=?1 ORDER BY seq",
+                tables.blocks
+            )))?;
             let mut result = Vec::new();
             for row in sql(query.query_map([&original], |r| r.get::<_, String>(0)))? {
-                result.push(parse(&sql(row)?)?);
+                result.push(parse_block(&sql(row)?)?);
             }
             Ok(result)
         } else if self.shared_ordinary_indexed(&original)? {
@@ -957,24 +969,17 @@ impl Store {
                 [original],
                 |r| r.get(0),
             ))?;
-            parse(&raw)
+            parse_blocks(&raw)
         }
     }
-    fn shared_indexed_query(&self, original: &str) -> Result<Option<&'static str>, String> {
-        let query = if has_table(&self.conn, "bot_transcripts")?
-            && sql(self.conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM bot_transcripts WHERE session_id=?1)",
-                [original],
-                |row| row.get::<_, bool>(0),
-            ))? {
-            Some(
-                "SELECT block_json,(SELECT count(*) FROM bot_blocks WHERE session_id=?1)
-                 FROM bot_blocks WHERE session_id=?1 ORDER BY seq",
-            )
+    fn shared_indexed_query(&self, original: &str) -> Result<Option<String>, String> {
+        let query = if let Some(tables) = self.shared_bot_tables(original)? {
+            Some(format!("SELECT block_json,(SELECT count(*) FROM {table} WHERE session_id=?1) FROM {table} WHERE session_id=?1 ORDER BY seq",table=tables.blocks))
         } else if self.shared_ordinary_indexed(original)? {
             Some(
                 "SELECT block_json,(SELECT count(*) FROM ordinary_blocks WHERE session_id=?1)
-                 FROM ordinary_blocks WHERE session_id=?1 ORDER BY position",
+                 FROM ordinary_blocks WHERE session_id=?1 ORDER BY position"
+                    .to_owned(),
             )
         } else {
             None
@@ -990,13 +995,13 @@ impl Store {
         let Some(query) = self.shared_indexed_query(&original)? else {
             return project_turns(&self.shared_blocks(id)?);
         };
-        let mut query = sql(self.conn.prepare(query))?;
+        let mut query = sql(self.conn.prepare(&query))?;
         let mut records = sql(query.query([&original]))?;
         let mut turns = HashMap::new();
         let mut offset = 0;
         while let Some(record) = sql(records.next())? {
             let raw: String = sql(record.get(0))?;
-            let block: Value = parse(&raw)?;
+            let block: Value = parse_block(&raw)?;
             offset += project_turn(&block, offset, &mut turns)?;
         }
         Ok(turns)
@@ -1009,7 +1014,7 @@ impl Store {
             // Project one source block at a time. Indexed conversations must
             // not retain complete JSON histories alongside their display rows.
             // The scalar count and the rows share one SQLite read snapshot.
-            let mut query = sql(self.conn.prepare(query))?;
+            let mut query = sql(self.conn.prepare(&query))?;
             let mut records = sql(query.query([&original]))?;
             let mut rows = Vec::new();
             let mut digest = HistoryRevision::start(0);
@@ -1020,7 +1025,7 @@ impl Store {
                     first = false;
                 }
                 let raw: String = sql(record.get(0))?;
-                let block: Value = parse(&raw)?;
+                let block: Value = parse_block(&raw)?;
                 HistoryRevision::push(&mut digest, &block);
                 rows.extend(blocks::project(std::slice::from_ref(&block))?);
             }
@@ -1044,13 +1049,7 @@ impl Store {
     }
     pub(super) fn shared_store_blocks(&self, id: i64, blocks: &[Value]) -> Result<(), String> {
         let original = self.persisted_session_id(id)?;
-        let indexed = has_table(&self.conn, "bot_transcripts")?
-            && sql(self.conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM bot_transcripts WHERE session_id=?1)",
-                [&original],
-                |r| r.get::<_, bool>(0),
-            ))?;
-        if indexed {
+        if self.shared_bot_tables(&original)?.is_some() {
             self.shared_store_indexed_blocks(&original, blocks)?;
         } else if self.shared_ordinary_indexed(&original)? {
             self.shared_store_ordinary_blocks(&original, blocks)?;
@@ -1076,9 +1075,13 @@ impl Store {
         )
     }
     fn shared_store_indexed_blocks(&self, original: &str, blocks: &[Value]) -> Result<(), String> {
-        let mut query = sql(self.conn.prepare(
-            "SELECT seq,block_id,block_json FROM bot_blocks WHERE session_id=?1 ORDER BY seq",
-        ))?;
+        let tables = self
+            .shared_bot_tables(original)?
+            .ok_or("Bot transcript owner disappeared; its data was preserved")?;
+        let mut query = sql(self.conn.prepare(&format!(
+            "SELECT seq,block_id,block_json FROM {} WHERE session_id=?1 ORDER BY seq",
+            tables.blocks
+        )))?;
         let mut old = HashMap::new();
         let mut max_seq = 0;
         for row in sql(query.query_map([original], |r| {
@@ -1090,7 +1093,7 @@ impl Store {
         }))? {
             let (seq, id, raw) = sql(row)?;
             max_seq = max_seq.max(seq);
-            old.insert(id, (seq, parse::<Value>(&raw)?));
+            old.insert(id, (seq, parse_block(&raw)?));
         }
         let retained: HashSet<_> = blocks.iter().filter_map(|b| b["id"].as_str()).collect();
         if retained.len() != blocks.len() {
@@ -1112,23 +1115,37 @@ impl Store {
         if resequence {
             // An explicit insertion/reorder changes turn positions. Payloads
             // and block identities survive, in one enclosing transaction.
-            sql(self
-                .conn
-                .execute("DELETE FROM bot_turns WHERE session_id=?1", [original]))?;
-            sql(self
-                .conn
-                .execute("DELETE FROM bot_blocks WHERE session_id=?1", [original]))?;
+            sql(self.conn.execute(
+                &format!(
+                    "DELETE FROM {turns} WHERE session_id=?1",
+                    turns = tables.turns
+                ),
+                [original],
+            ))?;
+            sql(self.conn.execute(
+                &format!(
+                    "DELETE FROM {blocks} WHERE session_id=?1",
+                    blocks = tables.blocks
+                ),
+                [original],
+            ))?;
             old.clear();
             max_seq = 0;
         } else {
             for (id, (seq, _)) in &old {
                 if !retained.contains(id.as_str()) {
                     sql(self.conn.execute(
-                        "DELETE FROM bot_turns WHERE session_id=?1 AND seq=?2",
+                        &format!(
+                            "DELETE FROM {turns} WHERE session_id=?1 AND seq=?2",
+                            turns = tables.turns
+                        ),
                         params![original, seq],
                     ))?;
                     sql(self.conn.execute(
-                        "DELETE FROM bot_blocks WHERE session_id=?1 AND block_id=?2",
+                        &format!(
+                            "DELETE FROM {blocks} WHERE session_id=?1 AND block_id=?2",
+                            blocks = tables.blocks
+                        ),
                         params![original, id],
                     ))?;
                 }
@@ -1160,9 +1177,9 @@ impl Store {
                 .collect::<Vec<_>>()
                 .join("\n")
                 .to_lowercase();
-                sql(self.conn.execute("INSERT INTO bot_blocks(session_id,seq,block_id,block_json,search_text,is_user,is_draft)
+                sql(self.conn.execute(&format!("INSERT INTO {table}(session_id,seq,block_id,block_json,search_text,is_user,is_draft)
                     VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(session_id,seq) DO UPDATE SET block_json=excluded.block_json,
-                    search_text=excluded.search_text,is_user=excluded.is_user,is_draft=excluded.is_draft",
+                    search_text=excluded.search_text,is_user=excluded.is_user,is_draft=excluded.is_draft",table=tables.blocks),
                     params![original,seq,id,encode(block)?,search,block["role"]=="user",block["draft"]==true]))?;
             }
             if ix == 0
@@ -1171,7 +1188,10 @@ impl Store {
                 || block.get("botHabit").is_some()
             {
                 sql(self.conn.execute(
-                    "INSERT OR IGNORE INTO bot_turns(session_id,seq) VALUES(?1,?2)",
+                    &format!(
+                        "INSERT OR IGNORE INTO {turns}(session_id,seq) VALUES(?1,?2)",
+                        turns = tables.turns
+                    ),
                     params![original, seq],
                 ))?;
             }
@@ -1507,6 +1527,15 @@ impl Store {
         self.shared_writable()?;
         let original = self.persisted_session_id(id)?;
         let tx = sql(self.conn.unchecked_transaction())?;
+        self.delete_local_submissions(&original)?;
+        if let Some(tables) = &self.shared.as_ref().unwrap().earlier_bot_tables {
+            for table in [&tables.blocks, &tables.turns, &tables.transcripts] {
+                sql(self.conn.execute(
+                    &format!("DELETE FROM {table} WHERE session_id=?1"),
+                    [&original],
+                ))?;
+            }
+        }
         for (table, column) in [
             ("session_reminders", "session_id"),
             ("bot_blocks", "session_id"),

@@ -1,7 +1,12 @@
 //! Session storage. Desktop launches use vorkspace's existing schema directly.
+mod attachments;
 mod bots;
 mod composer_draft;
 pub use composer_draft::{ComposerDraft, ComposerRecovery};
+mod local_submissions;
+pub use local_submissions::{
+    SubmissionClaim, SubmissionInput, SubmissionOwner, SubmissionReceipt, SubmissionReservation,
+};
 mod managed_sessions;
 mod notes;
 mod remote;
@@ -204,6 +209,7 @@ impl Store {
             .map_err(|e| e.to_string())
     }
     pub fn save_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        self.mark_attachment_activity();
         if self.shared.is_some() {
             return self.shared_save_setting(key, value);
         }
@@ -1018,6 +1024,7 @@ impl Store {
         }
 
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        local_submissions::delete_if_present(&tx, &id.to_string())?;
         if tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='composer_draft_recoveries')",

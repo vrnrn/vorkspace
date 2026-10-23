@@ -458,6 +458,13 @@ pub(super) fn run(
             }
             if connected && state.admitted && !steering {
                 if let Some(message) = queue.pop_front() {
+                    if let Err(error) = emit(vec![Event::FollowUpDispatch(message.clone())]) {
+                        emit(vec![Event::FollowUpFailed {
+                            id: message.id,
+                            error,
+                        }])?;
+                        continue;
+                    }
                     steering = true;
                     let client = client.clone();
                     let session = session.clone();

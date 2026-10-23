@@ -219,11 +219,11 @@ fn css_color(raw: &str) -> Option<u32> {
 /// Nothing is created or copied when the native UI opens a Bot.
 pub(crate) fn codex_home(root: &Path, account: &str) -> Result<Option<PathBuf>, String> {
     crate::accounts::validate_id(account)?;
-    let home = root
+    let family = root
         .parent()
         .ok_or("Bot storage has no data directory")?
-        .join("codex-bots")
-        .join(account);
+        .join("codex-bots");
+    let home = crate::compatibility::bot_owner(&family, account, true);
     Ok(home.is_dir().then_some(home))
 }
 
