@@ -1719,7 +1719,7 @@ impl TranscriptView {
                                             12.
                                         };
                                         window.paint_quad(
-                                            gpui::fill(bounds, content(0.1))
+                                            gpui::fill(bounds, user_bubble_fill())
                                                 .corner_radii(px(radius)),
                                         );
                                     },
@@ -4618,7 +4618,7 @@ impl TranscriptView {
                                                 12.
                                             };
                                         window.paint_quad(
-                                            gpui::fill(bounds, content(0.1)).corner_radii(
+                                            gpui::fill(bounds, user_bubble_fill()).corner_radii(
                                                 gpui::Corners {
                                                     top_left: px(if first { radius } else { 0. }),
                                                     top_right: px(if first { radius } else { 0. }),

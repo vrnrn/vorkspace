@@ -6,7 +6,7 @@ use gpui::{
     Focusable, GlobalElementId, Hsla, InspectorElementId, KeyBinding, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, SharedString, Style,
     TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill,
-    point, prelude::*, px, relative, rgb, rgba, size,
+    point, prelude::*, px, relative, rgb, size,
 };
 use std::{borrow::Cow, ops::Range};
 use unicode_segmentation::UnicodeSegmentation;
@@ -204,7 +204,7 @@ pub struct Input {
     max_chars: Option<usize>,
     centered: bool,
     placeholder: SharedString,
-    placeholder_color: Option<Hsla>,
+    placeholder_alpha: Option<f32>,
     label: SharedString,
     font_size: f32,
     line_height: f32,
@@ -238,6 +238,14 @@ impl Focusable for Input {
     }
 }
 impl Input {
+    fn text_color(&self, placeholder: bool, ink: Hsla) -> Hsla {
+        match (placeholder, self.placeholder_alpha) {
+            (true, Some(alpha)) => crate::theme::content(alpha),
+            (true, None) if !self.single_line => crate::theme::content(0.4),
+            _ => ink,
+        }
+    }
+
     /// Keep authentication text out of drawing, accessibility and clipboard.
     pub(crate) fn set_secret(&mut self, secret: bool) {
         self.secret = secret;
@@ -253,7 +261,7 @@ impl Input {
             max_chars: None,
             centered: false,
             placeholder: "Ask, build, or describe a change…".into(),
-            placeholder_color: None,
+            placeholder_alpha: None,
             label: "Message composer".into(),
             font_size: FONT_SIZE,
             line_height: LINE_HEIGHT,
@@ -286,6 +294,7 @@ impl Input {
         input
     }
     /// A one-line field inside a popover, such as a picker's search box.
+    /// Keep its alpha; resolve the placeholder ink from the current theme.
     pub fn field(
         label: impl Into<SharedString>,
         placeholder: impl Into<SharedString>,
@@ -295,7 +304,7 @@ impl Input {
         let mut input = Self::search(cx);
         input.label = label.into();
         input.placeholder = placeholder.into();
-        input.placeholder_color = Some(placeholder_color);
+        input.placeholder_alpha = Some(placeholder_color.a);
         // Picker search fields are `text-[13px]`.
         input.font_size = 13.;
         input
@@ -310,7 +319,7 @@ impl Input {
         input.height = 20.;
         input.min_height = 20.;
         input.max_height = 152.;
-        input.placeholder_color = Some(crate::theme::content(0.35));
+        input.placeholder_alpha = Some(0.35);
         input.secondary_submit = true;
         input
     }
@@ -1399,12 +1408,7 @@ impl Element for InputElement {
         let run = TextRun {
             len: text.len(),
             font: style.font(),
-            color: match (placeholder, i.placeholder_color) {
-                (true, Some(color)) => color,
-                // `.composer-field::placeholder`: content ink at 40%.
-                (true, None) if !i.single_line => rgba(0xebebeb66).into(),
-                _ => style.color,
-            },
+            color: i.text_color(placeholder, style.color),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -1593,7 +1597,7 @@ impl Element for InputElement {
                                     point(x + left, y + sy),
                                     size((right - left).max(px(1.)), line_height),
                                 ),
-                                rgb(0x364b65),
+                                crate::theme::text_selection(),
                             ));
                             sy += line_height;
                         }
@@ -1609,7 +1613,7 @@ impl Element for InputElement {
                             .unwrap_or_default();
                         w.paint_quad(fill(
                             Bounds::new(point(x + p.x, y + p.y), size(px(1.5), line_height)),
-                            rgb(0xc1d8ff),
+                            crate::theme::content(1.),
                         ));
                     }
                 }
@@ -1674,7 +1678,7 @@ impl Render for Input {
                 d.h_full().font_family(crate::markdown::FIXED_FONT)
             })
             .track_focus(&self.focus)
-            .cursor(if self.single_line || self.code_rail_hovered() {
+            .cursor(if self.code_rail_hovered() {
                 CursorStyle::Arrow
             } else {
                 CursorStyle::IBeam
@@ -1754,6 +1758,52 @@ mod tests {
 mod native_input_tests {
     use super::*;
     use gpui::{TestAppContext, WindowBounds, WindowHandle, WindowOptions};
+
+    #[gpui::test]
+    fn existing_field_and_composer_reink_after_theme_changes_without_losing_text(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let mut preferences = crate::settings::Preferences::default();
+            crate::theme::configure(&preferences, false, true);
+            let field = cx
+                .new(|cx| Input::field("Search", "Search models", crate::theme::content(0.35), cx));
+            let composer = cx.new(Input::new);
+            let original_ink = field.read(cx).text_color(true, crate::theme::content(1.));
+            field.update(cx, |input, cx| {
+                input.set_text("unfinished 🙂 draft".into(), cx);
+                input.selection = 0..10;
+            });
+            for theme in ["light", "dark"] {
+                preferences.theme = theme.into();
+                crate::theme::configure(&preferences, false, true);
+                let input = field.read(cx);
+                assert_eq!(
+                    input.text_color(true, crate::theme::content(1.)),
+                    crate::theme::content(0.35)
+                );
+                assert_eq!(
+                    input.text_color(false, crate::theme::content(1.)),
+                    crate::theme::content(1.)
+                );
+                assert_eq!(
+                    composer
+                        .read(cx)
+                        .text_color(true, crate::theme::content(1.)),
+                    crate::theme::content(0.4)
+                );
+                assert_eq!(input.content, "unfinished 🙂 draft");
+                assert_eq!(input.selection, 0..10);
+                if theme == "light" {
+                    assert_ne!(
+                        input.text_color(true, crate::theme::content(1.)),
+                        original_ink
+                    );
+                }
+            }
+            crate::theme::configure(&Default::default(), false, true);
+        });
+    }
 
     fn field(cx: &mut TestAppContext, single_line: bool) -> WindowHandle<Input> {
         let window = cx.update(|cx| {

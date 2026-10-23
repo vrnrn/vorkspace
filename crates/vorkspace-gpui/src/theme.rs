@@ -40,6 +40,7 @@ struct Tokens {
     light: bool,
     ink: Hsla,
     accent: Hsla,
+    user_accent: Option<Hsla>,
     shell: Hsla,
     pane: Hsla,
     inset_pane: Hsla,
@@ -88,6 +89,7 @@ pub(crate) fn configure(
         light,
         ink: rgb(palette.content).into(),
         accent: rgb(custom.unwrap_or(palette.accent)).into(),
+        user_accent: custom.map(|color| rgb(color).into()),
         shell,
         pane,
         inset_pane,
@@ -129,6 +131,62 @@ pub(crate) fn content(alpha: f32) -> Hsla {
     });
     color.a = alpha;
     color
+}
+
+pub(crate) fn is_light() -> bool {
+    TOKENS.with(|tokens| tokens.borrow().as_ref().is_some_and(|tokens| tokens.light))
+}
+
+pub(crate) fn floating_fill() -> Hsla {
+    let mut fill = pane_fill();
+    if is_light() {
+        fill.l = 1.;
+    }
+    fill.a = 1.;
+    fill
+}
+
+/// Text selection follows the current accent without obscuring light-theme ink.
+pub(crate) fn text_selection() -> Hsla {
+    accent_color().opacity(if is_light() { 0.2 } else { 0.35 })
+}
+
+fn user_accent() -> Option<Hsla> {
+    TOKENS.with(|tokens| {
+        tokens
+            .borrow()
+            .as_ref()
+            .and_then(|tokens| tokens.user_accent)
+    })
+}
+
+pub(crate) fn user_bubble_fill() -> Hsla {
+    user_accent().map_or(content(0.1), |accent| accent.opacity(0.24))
+}
+
+/// Preserve neutral controls until the user explicitly chooses an accent.
+pub(crate) fn primary_action(enabled: bool) -> Option<(Hsla, Hsla)> {
+    let accent = user_accent()?;
+    if !enabled {
+        return Some((accent.opacity(0.28), content(0.35)));
+    }
+    let rgb = accent.to_rgb();
+    let linear = |value: f32| {
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b);
+    Some((
+        accent,
+        if luminance > 0.179 {
+            black(1.)
+        } else {
+            white(1.)
+        },
+    ))
 }
 
 /// `[data-composer-box]::before` uses content ink at 3% over its backdrop.
@@ -388,6 +446,44 @@ pub(crate) fn diff_background(add: bool, gutter: bool) -> Hsla {
 #[cfg(test)]
 mod composer_tests {
     use super::*;
+
+    #[test]
+    fn accent_reset_and_theme_switch_preserve_readable_controls() {
+        struct Restore(Option<Tokens>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                TOKENS.with(|tokens| *tokens.borrow_mut() = self.0);
+            }
+        }
+        let _restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
+        let mut preferences = crate::settings::Preferences::default();
+        for theme in ["dark", "light", "dark"] {
+            preferences.theme = theme.into();
+            configure(&preferences, false, true);
+            assert_eq!(user_bubble_fill(), content(0.1));
+            assert_eq!(primary_action(true), None);
+            assert_eq!(floating_fill().a, 1.);
+            assert_eq!(
+                text_selection().a,
+                if theme == "light" { 0.2 } else { 0.35 }
+            );
+            for (color, ink) in [("#ffff00", black(1.)), ("#000080", white(1.))] {
+                preferences.accent_color = Some(color.into());
+                configure(&preferences, false, true);
+                let accent = accent_color();
+                assert_eq!(primary_action(true), Some((accent, ink)));
+                assert_eq!(
+                    primary_action(false),
+                    Some((accent.opacity(0.28), content(0.35)))
+                );
+                assert_eq!(user_bubble_fill(), accent.opacity(0.24));
+            }
+            preferences.accent_color = None;
+            configure(&preferences, false, true);
+            assert_eq!(primary_action(true), None);
+            assert_eq!(user_bubble_fill(), content(0.1));
+        }
+    }
 
     #[test]
     fn both_layouts_share_opacity_and_keep_dark_glass_preferences_when_disabled() {

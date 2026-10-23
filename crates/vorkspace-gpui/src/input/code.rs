@@ -2012,7 +2012,7 @@ impl Element for CodeElement {
                                     point(x + left, y + sy),
                                     size((right - left).max(px(2.)), lh),
                                 ),
-                                crate::theme::accent_color().opacity(0.35),
+                                crate::theme::text_selection(),
                             ));
                             sy += lh;
                         }

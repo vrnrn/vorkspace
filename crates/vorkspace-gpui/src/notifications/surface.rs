@@ -7,11 +7,15 @@ pub(crate) fn backdrop(radius: f32) -> impl IntoElement {
         |_, _, _| {},
         move |bounds, _, window, _| {
             #[cfg(target_os = "macos")]
-            let quad = gpui::fill(bounds, content(0.02)).border_color(
-                gpui_apple::metal_renderer::backdrop_blur_marker(24. * window.scale_factor()),
-            );
+            let quad = if is_light() {
+                gpui::fill(bounds, floating_fill())
+            } else {
+                gpui::fill(bounds, content(0.02)).border_color(
+                    gpui_apple::metal_renderer::backdrop_blur_marker(24. * window.scale_factor()),
+                )
+            };
             #[cfg(not(target_os = "macos"))]
-            let quad = gpui::fill(bounds, pane_fill());
+            let quad = gpui::fill(bounds, floating_fill());
             window.paint_quad(quad.corner_radii(px(radius)));
         },
     )

@@ -130,6 +130,7 @@ impl SettingsView {
                     .relative()
                     .size_6()
                     .p_0()
+                    .justify_center()
                     .child(slot.probe())
                     .child(icon("folder-open", 14.))
                     .on_click(cx.listener(move |this, _, window, cx| {

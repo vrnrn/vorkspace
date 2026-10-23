@@ -3214,6 +3214,7 @@ impl Conversation {
                 && (!self.preparing_worktree || self.busy || self.stopping)
                 && (busy || (has_value && self.loaded))
                 && (busy || !draft || (!self.busy && self.follow_ups.state.draft.is_none())));
+        let accent = primary_action(enabled);
         div()
             .id("send-or-stop")
             .role(Role::Button)
@@ -3231,13 +3232,20 @@ impl Conversation {
             .flex()
             .items_center()
             .justify_center()
-            .bg(white(if enabled { 1. } else { 0.3 }))
-            .when(enabled, |d| d.hover(|s| s.bg(white(0.9))))
+            .map(|d| match accent {
+                Some((fill, _)) => d
+                    .bg(fill)
+                    .when(enabled, |d| d.hover(|s| s.bg(fill.blend(content(0.12))))),
+                None => d
+                    .bg(white(if enabled { 1. } else { 0.3 }))
+                    .when(enabled, |d| d.hover(|s| s.bg(white(0.9)))),
+            })
             .map(|d| {
+                let ink = accent.map_or(black(if enabled { 1. } else { 0.4 }), |(_, ink)| ink);
                 if busy {
-                    d.child(div().size(px(10.)).rounded(px(2.)).bg(black(1.)))
+                    d.child(div().size(px(10.)).rounded(px(2.)).bg(ink))
                 } else {
-                    d.child(icon("send", 14.).text_color(black(if enabled { 1. } else { 0.4 })))
+                    d.child(icon("send", 14.).text_color(ink))
                 }
             })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
