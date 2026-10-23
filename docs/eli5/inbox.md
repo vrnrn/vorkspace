@@ -18,8 +18,10 @@ Before sending an item to chat, you can choose another Bot or project instead.
 If the saved Bot is unavailable, Vorkspace lets you use a project.
 
 Inbox can play a quiet sound when new work or an update arrives. It stays quiet
-for old work when the app opens, muted projects, hidden items, and your own
-successful comments or actions. You can turn sounds off in Settings.
+for old work when the app opens, muted projects, hidden items, and updates it can
+identify as your own successful comments or actions. Someone else's later update
+still counts as new activity. If a service cannot identify your update, the app
+keeps notifications enabled for it. You can turn sounds off in Settings.
 
 Your existing desktop preferences are kept when using the native app.
 See the [technical guide](../inbox.md) or [Jira guide](jira.md) for details.

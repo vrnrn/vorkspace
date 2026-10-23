@@ -373,7 +373,7 @@ impl Shell {
                     session_id: chat.summary.id.to_string(),
                     title: chat.display_title().to_owned(),
                     provider: chat.summary.provider.clone(),
-                    harness: Kind::from_id(&chat.summary.provider).label().to_owned(),
+                    harness: Kind::display_label(&chat.summary.provider).to_owned(),
                     pending: chat.pending_notification_inputs(cx),
                     inbox_ask: false,
                     orchestration_worker: self.orchestration_worker(chat.summary.id),
@@ -475,7 +475,7 @@ impl Shell {
                 session_id: id.to_string(),
                 title: chat.display_title().to_owned(),
                 provider: chat.summary.provider.clone(),
-                harness: Kind::from_id(&chat.summary.provider).label().to_owned(),
+                harness: Kind::display_label(&chat.summary.provider).to_owned(),
                 pending: chat.pending_notification_inputs(cx),
                 inbox_ask: false,
                 orchestration_worker: self.orchestration_worker(id),
@@ -629,7 +629,7 @@ impl Shell {
         }
         self.notification_state.sequence = self.notification_state.sequence.wrapping_add(1);
         let body = if body.trim().is_empty() && category == "agentFinished" {
-            format!("{} finished", Kind::from_id(&summary.provider).label())
+            format!("{} finished", Kind::display_label(&summary.provider))
         } else {
             body.to_owned()
         };

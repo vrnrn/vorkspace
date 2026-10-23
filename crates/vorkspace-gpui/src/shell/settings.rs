@@ -425,6 +425,10 @@ impl Shell {
             footer.set_remaining(self.workspace.preferences.show_remaining_usage, cx)
         });
     }
+    pub(crate) fn observe_scale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.observations
+            .push(crate::settings::observe_window_scale(window, cx));
+    }
     fn choose_chat_background(&mut self, cx: &mut Context<Self>) {
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: true,

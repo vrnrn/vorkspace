@@ -16,8 +16,8 @@ pub fn display_title<'a>(title: &'a str, provider: &str) -> &'a str {
         return title;
     }
     if title == provider
-        || title == Kind::from_id(provider).label()
-        || title == format!("New {} session", Kind::from_id(provider).label())
+        || title == Kind::display_label(provider)
+        || title == format!("New {} session", Kind::display_label(provider))
     {
         return "New session";
     }

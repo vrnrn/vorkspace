@@ -518,7 +518,7 @@ impl Conversation {
         });
         let transcript = cx.new(|_| {
             let mut view = TranscriptView::new();
-            view.identity(&summary.provider, Kind::from_id(&summary.provider).label());
+            view.identity(&summary.provider, Kind::display_label(&summary.provider));
             view.file_link_base = Some(summary.cwd.clone());
             view.set_review(review.clone().into());
             view
@@ -2785,7 +2785,7 @@ impl Conversation {
                         .child(icon("response-handoff", 14.))
                         .child(div().min_w_0().flex_1().child(format!(
                             "Handoff from {} · Add your next instruction below",
-                            Kind::from_id(&handoff.from).label()
+                            Kind::display_label(&handoff.from)
                         )))
                         .child(
                             tool_pill("dismiss-handoff", "Dismiss handoff")

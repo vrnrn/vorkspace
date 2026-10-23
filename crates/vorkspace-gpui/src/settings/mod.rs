@@ -29,6 +29,26 @@ use gpui::{
 };
 use std::{cell::RefCell, collections::HashMap, time::Duration};
 
+/// Every window takes its initial scale from the same live preference owner.
+/// Keep the subscription on its root so closing the window releases it.
+pub(crate) fn observe_window_scale<T: 'static>(
+    window: &mut Window,
+    cx: &mut Context<T>,
+) -> Subscription {
+    apply_window_scale(window, cx);
+    cx.observe_global_in::<Preferences>(window, |_, window, cx| apply_window_scale(window, cx))
+}
+
+fn apply_window_scale<T: 'static>(window: &mut Window, cx: &mut Context<T>) {
+    let scale = cx
+        .try_global::<Preferences>()
+        .map_or(1., |p| p.ui_scale.clamp(50, 200) as f32 / 100.);
+    if window.ui_scale() != scale {
+        window.set_ui_scale(scale, cx);
+        cx.notify();
+    }
+}
+
 /// A session the Archive page lists.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ArchivedSession {

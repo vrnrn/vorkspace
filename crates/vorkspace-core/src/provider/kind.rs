@@ -43,6 +43,18 @@ impl Kind {
     pub fn from_id(id: &str) -> Self {
         Self::parse(id).unwrap_or(Self::Unsupported)
     }
+    /// Presentation of persisted identities is independent of CLI admission.
+    pub fn display_label(id: &str) -> &'static str {
+        match id {
+            "cursor" => "Cursor",
+            "grok" => "Grok Build",
+            "opencode" => "OpenCode",
+            "fx" => "fx",
+            "hermes" => "Hermes Agent",
+            "devin" => "Devin",
+            _ => Self::from_id(id).label(),
+        }
+    }
     pub fn is_supported(self) -> bool {
         self != Self::Unsupported
     }
@@ -99,5 +111,32 @@ mod tests {
             assert!(!Kind::from_id(id).is_supported());
             assert!(!Kind::from_id(id).is_acp());
         }
+    }
+    #[test]
+    fn historical_labels_do_not_admit_retired_executables() {
+        for (id, label) in [
+            ("cursor", "Cursor"),
+            ("grok", "Grok Build"),
+            ("opencode", "OpenCode"),
+            ("fx", "fx"),
+            ("hermes", "Hermes Agent"),
+            ("devin", "Devin"),
+        ] {
+            assert_eq!(Kind::display_label(id), label);
+            assert_eq!(Kind::parse(id), None);
+            assert_eq!(Kind::from_id(id), Kind::Unsupported);
+            assert_eq!(
+                crate::session_title::display_title(&format!("New {label} session"), id),
+                "New session"
+            );
+            assert_eq!(
+                crate::session_title::display_title("My saved title", id),
+                "My saved title"
+            );
+        }
+        for kind in Kind::ALL {
+            assert_eq!(Kind::display_label(kind.id()), kind.label());
+        }
+        assert_eq!(Kind::display_label("unknown"), "Unavailable provider");
     }
 }

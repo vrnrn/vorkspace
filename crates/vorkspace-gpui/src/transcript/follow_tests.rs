@@ -686,12 +686,18 @@ fn the_signature_keeps_its_opacity_and_position_when_the_reply_appears(cx: &mut 
             view.streaming(true, cx);
             view.patch(0, vec![row("user", "Hello"), row("assistant", "")], cx);
             view.entrances.clear();
+            // Isolate the reply entrance from the independent sent-prompt rise.
+            // Rendering under load must not choose which animation phase we test.
+            view.prompt_rise = None;
+            view.prompt_rise_pending = false;
+            view.follow.frame_elapsed = Some(0.);
+            view.fixed_animation_time = Some(Instant::now());
         })
         .unwrap();
     render(window, cx);
     let (before, alpha) = signature(window, cx);
     assert!((alpha - 0.07).abs() < 0.0001);
-    window
+    let born = window
         .update(cx, |view, _, cx| {
             view.patch(1, vec![row("assistant", "Here is the reply")], cx);
             view.streaming(false, cx);
@@ -699,19 +705,28 @@ fn the_signature_keeps_its_opacity_and_position_when_the_reply_appears(cx: &mut 
                 view.entrances.contains_key(&1),
                 "the response itself still enters"
             );
-            view.follow.last_frame = None;
+            let born = view.entrances[&1];
+            view.fixed_animation_time = Some(born);
+            born
         })
         .unwrap();
-    render(window, cx);
-    let (after, alpha) = signature(window, cx);
-    assert!(
-        (alpha - 0.07).abs() < 0.0001,
-        "the signature must not inherit the reply fade: {alpha}"
-    );
-    assert!(
-        (before.top() - after.top()).abs() < px(1.),
-        "the signature must not inherit the reply's 10px rise"
-    );
+    for ms in [0, 35, 140, 280] {
+        window
+            .update(cx, |view, _, _| {
+                view.fixed_animation_time = Some(born + std::time::Duration::from_millis(ms));
+            })
+            .unwrap();
+        render(window, cx);
+        let (after, alpha) = signature(window, cx);
+        assert!(
+            (alpha - 0.07).abs() < 0.0001,
+            "the signature must not inherit the reply fade at {ms}ms: {alpha}"
+        );
+        assert!(
+            (before.top() - after.top()).abs() < px(1.),
+            "the signature must not inherit the reply's 10px rise at {ms}ms"
+        );
+    }
 }
 
 #[gpui::test]

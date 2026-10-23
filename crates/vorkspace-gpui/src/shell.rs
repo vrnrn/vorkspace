@@ -5554,7 +5554,7 @@ impl Shell {
             .aria_label(session.display_title())
             .aria_description(format!(
                 "{} conversation",
-                Kind::from_id(&session.summary.provider).label()
+                Kind::display_label(&session.summary.provider)
             ))
             .cursor(CursorStyle::Arrow)
             // A nested row's `h-5` line and `px-1.5`, inside the card border.

@@ -201,7 +201,11 @@ pub fn jira_issue_thread(app: PathBuf, key: String) -> Result<JiraIssueThread, S
     parse_jira_issue_thread(&data, &config.site, key)
 }
 
-pub fn jira_issue_comment(app: PathBuf, key: String, body: String) -> Result<String, String> {
+pub fn jira_issue_comment(
+    app: PathBuf,
+    key: String,
+    body: String,
+) -> Result<super::CommentReceipt, String> {
     let config = require_config(&app)?;
     let key = require_issue_key(&key)?;
     let body = body.trim();
@@ -217,7 +221,10 @@ pub fn jira_issue_comment(app: PathBuf, key: String, body: String) -> Result<Str
     if id.is_empty() {
         return Err("Could not post Jira comment".into());
     }
-    Ok(comment_url(&config.site, key, &id))
+    Ok(super::CommentReceipt {
+        url: comment_url(&config.site, key, &id),
+        revision: string_field(&data, "created").map(|time| normalize_jira_time(&time)),
+    })
 }
 
 fn status_for(config: Option<&JiraConfig>) -> JiraStatus {

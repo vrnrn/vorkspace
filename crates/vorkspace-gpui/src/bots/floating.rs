@@ -6,6 +6,7 @@ struct Floating {
     pending_creation: Option<String>,
     _observe: Subscription,
     _created: Subscription,
+    _scale: Subscription,
 }
 impl gpui::Render for Floating {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -237,6 +238,7 @@ impl Bots {
                         pending_creation: None,
                         _observe: observation,
                         _created: created,
+                        _scale: crate::settings::observe_window_scale(window, cx),
                     }
                 })
             });

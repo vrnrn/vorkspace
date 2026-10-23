@@ -444,10 +444,7 @@ fn main() {
                         )
                     });
                     shell.update(cx, |shell, cx| {
-                        window.set_ui_scale(
-                            shell.workspace.preferences.ui_scale.clamp(50, 200) as f32 / 100.,
-                            cx,
-                        );
+                        shell.observe_scale(window, cx);
                         shell.focus_active(window, cx);
                     });
                     #[cfg(target_os = "macos")]

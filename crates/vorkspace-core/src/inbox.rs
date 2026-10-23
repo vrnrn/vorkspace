@@ -72,6 +72,13 @@ pub struct Item {
     pub project_path: String,
     pub attention_reason: String,
 }
+/// A successful write's URL and server-authored revision, when available.
+/// Missing revision metadata never turns a completed write into a failure.
+#[derive(Debug)]
+pub struct CommentReceipt {
+    pub url: String,
+    pub revision: Option<String>,
+}
 impl Item {
     pub fn key(&self) -> String {
         let identity = if self.provider == "jira" {
@@ -810,7 +817,12 @@ impl Service {
             _ => Err("Unsupported inbox provider".into()),
         }
     }
-    pub fn comment(&self, item: &Item, body: String, reply_to: String) -> Result<String, String> {
+    pub fn comment(
+        &self,
+        item: &Item,
+        body: String,
+        reply_to: String,
+    ) -> Result<CommentReceipt, String> {
         match item.provider.as_str() {
             "jira" => {
                 jira::jira_issue_comment(self.data_dir.clone(), item.identifier.clone(), body)

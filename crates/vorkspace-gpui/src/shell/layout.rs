@@ -711,7 +711,7 @@ mod tests {
             window
                 .update(cx, |shell, w, cx| {
                     let slide = shell.right_slide.as_ref().unwrap();
-                    slide.elapsed(Duration::from_millis(ms));
+                    slide.freeze_elapsed(Duration::from_millis(ms));
                     let now = Instant::now();
                     let before = slide.at(now);
                     let next = if manager.read(cx).active.as_deref() == Some(bot.as_str()) {

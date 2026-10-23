@@ -117,7 +117,7 @@ pub(crate) struct Inbox {
     active: bool,
     refresh_queued: bool,
     notifications: model::NotificationTracker,
-    self_activity: std::collections::HashMap<String, Instant>,
+    self_activity: std::collections::HashMap<String, (i64, Instant)>,
     last_refresh: Instant,
     _subscriptions: Vec<Subscription>,
 }
@@ -555,12 +555,21 @@ impl Inbox {
         }
         let observation = self.notifications.observe_snapshot(&snapshot, scope);
         self.self_activity
-            .retain(|_, time| time.elapsed() < Duration::from_secs(600));
+            .retain(|_, (_, time)| time.elapsed() < Duration::from_secs(600));
         let changed = observation
             .changed
             .into_iter()
             .filter(|item| {
-                if self.self_activity.remove(&item.key()).is_some() {
+                let own_revision = self
+                    .self_activity
+                    .get(&item.key())
+                    .map(|(revision, _)| *revision);
+                // A stale poll must not consume a pending receipt; a later
+                // external revision must never be classified as our mutation.
+                if own_revision.is_some_and(|revision| item.updated_ms() >= revision) {
+                    self.self_activity.remove(&item.key());
+                }
+                if own_revision == Some(item.updated_ms()) {
                     self.state.seen.mark(item);
                     false
                 } else {
@@ -890,6 +899,18 @@ impl Inbox {
         .detach();
         cx.notify();
     }
+    fn record_self_activity(&mut self, key: String, revision: i64) {
+        // Some providers omit receipt metadata. Keep uncertain revisions audible
+        // rather than swallowing whichever external change happens to arrive next.
+        if revision > 0
+            && self
+                .self_activity
+                .get(&key)
+                .is_none_or(|(old, _)| revision >= *old)
+        {
+            self.self_activity.insert(key, (revision, Instant::now()));
+        }
+    }
     fn post_comment(&mut self, cx: &mut Context<Self>) {
         if self.posting {
             return;
@@ -913,8 +934,13 @@ impl Inbox {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.posting = false;
-                if result.is_ok() {
-                    this.self_activity.insert(key.clone(), Instant::now());
+                if let Ok(receipt) = &result {
+                    let revision = receipt
+                        .revision
+                        .as_deref()
+                        .map(model::timestamp_ms)
+                        .unwrap_or(0);
+                    this.record_self_activity(key.clone(), revision);
                 }
                 if this.selected.as_ref() != Some(&key) {
                     cx.notify();
@@ -1067,11 +1093,13 @@ impl Inbox {
                 this.acting = false;
                 match result {
                     Ok(item) => {
-                        this.self_activity.insert(key.clone(), Instant::now());
+                        this.record_self_activity(key.clone(), item.updated_ms());
                         this.action_notice = (merging
                             && !item.state.eq_ignore_ascii_case("merged"))
                         .then(|| "Merge queued or auto-merge enabled.".into());
-                        if let Some(old) = this.snapshot.items.iter_mut().find(|i| i.key() == key) {
+                        if let Some(old) = this.snapshot.items.iter_mut().find(|i| i.key() == key)
+                            && old.updated_ms() <= item.updated_ms()
+                        {
                             *old = item;
                         }
                         this.confirm_action = None;

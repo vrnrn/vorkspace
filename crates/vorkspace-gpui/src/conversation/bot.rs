@@ -917,7 +917,7 @@ impl Conversation {
                             .debug_selector(|| "bot-model".into())
                             .aria_label(format!(
                                 "{}, {}",
-                                Kind::from_id(&self.summary.provider).label(),
+                                Kind::display_label(&self.summary.provider),
                                 self.model_label()
                             ))
                             .aria_expanded(models_open)

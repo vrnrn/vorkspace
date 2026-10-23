@@ -1,5 +1,5 @@
 use super::*;
-use gpui::{AnyElement, ImageSource, RenderImage};
+use gpui::{AnyElement, Entity, ImageSource, RenderImage};
 use image::{AnimationDecoder, Frame, ImageDecoder, ImageReader, Limits};
 use std::{
     fs::File,
@@ -86,24 +86,32 @@ pub(crate) fn message(rows: &[Row], end: usize, text: &str) -> (Option<String>, 
 /// File images use GPUI's asynchronous resource cache directly.
 pub(super) struct Photo {
     data: Arc<str>,
-    bytes: usize,
+    loading: bool,
     mime: SharedString,
     image: Option<Arc<RenderImage>>,
 }
 
 impl Photo {
+    fn decoded(&mut self, image: Option<Arc<RenderImage>>, cx: &mut Context<Self>) {
+        self.image = image;
+        self.loading = false;
+        cx.notify();
+    }
     fn matches_source(&self, data: &Arc<str>, mime: &SharedString) -> bool {
         (Arc::ptr_eq(&self.data, data) || self.data.as_ref() == data.as_ref()) && &self.mime == mime
     }
 
     fn retained_bytes(&self) -> usize {
-        let pixels = self.image.as_ref().map_or(0, |image| {
-            (0..image.frame_count())
-                .filter_map(|index| image.as_bytes(index))
-                .map(<[u8]>::len)
-                .sum()
-        });
-        self.bytes.saturating_add(pixels)
+        let pixels = self.image.as_ref().map_or(
+            if self.loading { MAX_THUMBNAIL_BYTES } else { 0 },
+            |image| {
+                (0..image.frame_count())
+                    .filter_map(|index| image.as_bytes(index))
+                    .map(<[u8]>::len)
+                    .sum()
+            },
+        );
+        self.data.len().saturating_add(pixels)
     }
 
     fn new(data: Arc<str>, mime: SharedString, cx: &mut Context<Self>) -> Self {
@@ -119,15 +127,11 @@ impl Photo {
         });
         cx.spawn(async move |this, cx| {
             let image = work.await.ok();
-            let _ = this.update(cx, |this, cx| {
-                this.image = image;
-                cx.notify();
-            });
+            let _ = this.update(cx, |this, cx| this.decoded(image, cx));
         })
         .detach();
         Self {
-            bytes: vorkspace_core::remote::attachments::attachment_source_size(&data)
-                .unwrap_or(data.len()),
+            loading: true,
             data,
             mime,
             image: None,
@@ -143,14 +147,11 @@ impl Photo {
         });
         cx.spawn(async move |this, cx| {
             let image = work.await.ok();
-            let _ = this.update(cx, |this, cx| {
-                this.image = image;
-                cx.notify();
-            });
+            let _ = this.update(cx, |this, cx| this.decoded(image, cx));
         })
         .detach();
         Self {
-            bytes: 0,
+            loading: true,
             data: display_path,
             mime,
             image: None,
@@ -164,6 +165,9 @@ const MAX_DECODED_DIMENSION: u32 = 32_768;
 const MAX_DECODED_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_DECODE_ALLOCATION: u64 = MAX_DECODED_PIXELS * 4;
 const MAX_GIF_THUMBNAIL_FRAMES: usize = 120;
+const MAX_THUMBNAIL_BYTES: usize =
+    THUMBNAIL_MAX_SIDE as usize * THUMBNAIL_MAX_SIDE as usize * 4 * MAX_GIF_THUMBNAIL_FRAMES;
+const THUMBNAIL_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 fn read_attachment_file(path: PathBuf) -> Result<Vec<u8>, String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
@@ -347,6 +351,33 @@ impl Render for Photo {
 }
 
 impl TranscriptView {
+    fn cache_photo(&mut self, key: String, photo: Entity<Photo>, cx: &mut Context<Self>) {
+        // Reserve the decoder's maximum retained output before it starts. A
+        // pending Photo can never grow beyond its reservation after publication.
+        // An oversized source stays visible without evicting the entire cache.
+        if photo.read(cx).retained_bytes() > THUMBNAIL_CACHE_BYTES {
+            return;
+        }
+        self.attachment_images.insert(key.clone(), photo);
+        while self.attachment_images.len() > 32
+            || self
+                .attachment_images
+                .values()
+                .map(|p| p.read(cx).retained_bytes())
+                .sum::<usize>()
+                > THUMBNAIL_CACHE_BYTES
+        {
+            let Some(old) = self
+                .attachment_images
+                .keys()
+                .find(|old| **old != key)
+                .cloned()
+            else {
+                break;
+            };
+            self.attachment_images.remove(&old);
+        }
+    }
     pub(super) fn attachment_row(
         &mut self,
         files: &[Attachment],
@@ -401,27 +432,7 @@ impl TranscriptView {
                                 .detach();
                                 photo
                             });
-                            self.attachment_images.insert(key.clone(), photo.clone());
-                            // The entry cap is immediate; the byte target is checked on
-                            // insertion. Async decoding has independent pixel/frame limits.
-                            while self.attachment_images.len() > 32
-                                || self
-                                    .attachment_images
-                                    .values()
-                                    .map(|photo| photo.read(cx).retained_bytes())
-                                    .sum::<usize>()
-                                    > 64 * 1024 * 1024
-                            {
-                                let Some(old) = self
-                                    .attachment_images
-                                    .keys()
-                                    .find(|old| **old != key)
-                                    .cloned()
-                                else {
-                                    break;
-                                };
-                                self.attachment_images.remove(&old);
-                            }
+                            self.cache_photo(key, photo.clone(), cx);
                             photo
                         });
                         photo.into_any_element()
@@ -497,6 +508,82 @@ mod tests {
     use image::{ImageBuffer, ImageFormat, Rgba};
     use std::{cell::Cell, rc::Rc};
 
+    #[gpui::test]
+    fn pending_thumbnail_reservations_bound_out_of_order_decode_publication(
+        cx: &mut TestAppContext,
+    ) {
+        let view = cx.new(|_| TranscriptView::new());
+        let pending = view.update(cx, |view, cx| {
+            (0..32)
+                .map(|ix| {
+                    let photo = cx.new(|_| Photo {
+                        data: Arc::from(format!("file:{ix}")),
+                        mime: "image/gif".into(),
+                        loading: true,
+                        image: None,
+                    });
+                    let weak = photo.downgrade();
+                    view.cache_photo(ix.to_string(), photo, cx);
+                    assert!(
+                        view.attachment_images
+                            .values()
+                            .map(|p| p.read(cx).retained_bytes())
+                            .sum::<usize>()
+                            <= THUMBNAIL_CACHE_BYTES
+                    );
+                    weak
+                })
+                .collect::<Vec<_>>()
+        });
+        // Complete in reverse order, after every insertion has happened. Each
+        // decoder publishes its largest permitted animation through the real owner.
+        let mut completed = 0;
+        for weak in pending.into_iter().rev() {
+            if let Some(photo) = weak.upgrade() {
+                let frames: Vec<_> = (0..MAX_GIF_THUMBNAIL_FRAMES)
+                    .map(|_| {
+                        Frame::new(ImageBuffer::from_pixel(
+                            THUMBNAIL_MAX_SIDE,
+                            THUMBNAIL_MAX_SIDE,
+                            Rgba([1, 2, 3, 255]),
+                        ))
+                    })
+                    .collect();
+                photo.update(cx, |photo, cx| {
+                    photo.decoded(Some(Arc::new(RenderImage::new(frames))), cx)
+                });
+                view.update(cx, |view, cx| {
+                    assert!(
+                        view.attachment_images
+                            .values()
+                            .map(|p| p.read(cx).retained_bytes())
+                            .sum::<usize>()
+                            <= THUMBNAIL_CACHE_BYTES
+                    );
+                });
+                completed += 1;
+            }
+        }
+        assert_eq!(
+            completed,
+            THUMBNAIL_CACHE_BYTES / (MAX_THUMBNAIL_BYTES + "file:31".len())
+        );
+        let failed = cx.new(|_| Photo {
+            data: Arc::from("file:failed"),
+            mime: "image/gif".into(),
+            loading: true,
+            image: None,
+        });
+        failed.update(cx, |photo, cx| {
+            assert_eq!(
+                photo.retained_bytes(),
+                MAX_THUMBNAIL_BYTES + photo.data.len()
+            );
+            photo.decoded(None, cx);
+            assert_eq!(photo.retained_bytes(), photo.data.len());
+        });
+    }
+
     #[test]
     fn decoded_attachment_thumbnail_bounds_both_retained_dimensions() {
         // This panorama's source RGBA pixels occupy 16 MiB. The retained
@@ -562,7 +649,7 @@ mod tests {
     fn path_photos_match_by_path_even_when_the_arc_is_recreated() {
         let photo = Photo {
             data: Arc::from("/tmp/photo.png"),
-            bytes: 0,
+            loading: false,
             mime: "image/png".into(),
             image: None,
         };
@@ -596,7 +683,7 @@ mod tests {
             .detach();
             Photo {
                 data: Arc::from("owned-test-image"),
-                bytes: 0,
+                loading: false,
                 mime: "image/png".into(),
                 image: Some(image.clone()),
             }

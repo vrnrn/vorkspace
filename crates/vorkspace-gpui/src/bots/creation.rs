@@ -91,14 +91,47 @@ impl Bots {
     ) {
         if let Some(draft) = &self.creation {
             let handle = draft.window;
+            let id = draft.bot.id.clone();
+            let requesting_window = window.window_handle();
+            let owner = cx.entity().downgrade();
             let field = self.fields.get("bot-name").cloned();
             cx.defer(move |cx| {
-                let _ = handle.update(cx, |_, window, cx| {
+                if !owner
+                    .update(cx, |owner, _| {
+                        owner.creation.as_ref().is_some_and(|draft| {
+                            draft.bot.id == id && draft.window.window_id() == handle.window_id()
+                        })
+                    })
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+                let focused = handle.update(cx, |_, window, cx| {
                     window.activate_window();
                     if let Some(field) = field {
                         window.focus(&field.focus_handle(cx), cx);
                     }
                 });
+                if focused.is_err() {
+                    let _ = requesting_window.update(cx, |_, window, cx| {
+                        let _ = owner.update(cx, |owner, cx| {
+                            // A cancelled/replaced draft must never be reclaimed by
+                            // a delayed window activation from its predecessor.
+                            if !owner.creation.as_ref().is_some_and(|draft| {
+                                draft.bot.id == id && draft.window.window_id() == handle.window_id()
+                            }) {
+                                return;
+                            }
+                            owner.save_open_file(cx);
+                            let draft = owner.creation.as_mut().unwrap();
+                            draft.window = requesting_window;
+                            draft.previous_focus = window.focused(cx);
+                            window.activate_window();
+                            owner.focus_creation(window, cx);
+                            cx.notify();
+                        });
+                    });
+                }
             });
             return;
         }

@@ -207,7 +207,7 @@ pub fn gitlab_work_item_comment(
     kind: String,
     number: i64,
     body: String,
-) -> Result<String, String> {
+) -> Result<super::CommentReceipt, String> {
     let config = require_config(&app)?;
     let repo = validate_repo(&repo)?;
     gitlab_work_item_comment_for(&config, &repo, &kind, number, &body)
@@ -305,7 +305,7 @@ fn gitlab_work_item_comment_for(
     kind: &str,
     number: i64,
     body: &str,
-) -> Result<String, String> {
+) -> Result<super::CommentReceipt, String> {
     validate_item(kind, number)?;
     let body = body.trim();
     if body.is_empty() {
@@ -318,7 +318,10 @@ fn gitlab_work_item_comment_for(
         .get("id")
         .and_then(Value::as_i64)
         .ok_or_else(|| "GitLab did not return a comment".to_string())?;
-    Ok(note_url(&config.url, repo, kind, number, id))
+    Ok(super::CommentReceipt {
+        url: note_url(&config.url, repo, kind, number, id),
+        revision: string_field(&response.value, "created_at"),
+    })
 }
 
 fn gitlab_mr_diff_for(

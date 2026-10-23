@@ -484,6 +484,8 @@ pub(crate) struct TranscriptView {
     /// footer re-measures them; mixed times leave the spacer a few pixels
     /// short of a fast disclosure, so an anchored prompt bounces.
     frame_now: Instant,
+    #[cfg(test)]
+    fixed_animation_time: Option<Instant>,
     measurements: measurements::Measurements,
     messages: Vec<Message>,
     rows: Vec<UiRow>,
@@ -554,6 +556,13 @@ pub(crate) struct TranscriptView {
     rebuild_passes: usize,
 }
 impl TranscriptView {
+    fn animation_now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(now) = self.fixed_animation_time {
+            return now;
+        }
+        Instant::now()
+    }
     pub(crate) fn side_question(&mut self) {
         self.side_question = true;
     }
@@ -1167,7 +1176,7 @@ impl TranscriptView {
     /// Measures the live turn's tail before the list lays it out, so growth
     /// the list follows is painted as an offset that eases away.
     fn update_follow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let now = Instant::now();
+        let now = self.frame_now;
         let animated = self.streaming || self.follow.until.is_some_and(|until| now < until);
         if self.document || !self.visible || cx.reduce_motion() {
             self.follow = Follow::default();
@@ -2175,6 +2184,8 @@ impl TranscriptView {
             review_shown: false,
             started_at: Instant::now(),
             frame_now: Instant::now(),
+            #[cfg(test)]
+            fixed_animation_time: None,
             measurements: Default::default(),
             messages: Vec::new(),
             rows: Vec::new(),
@@ -3683,16 +3694,16 @@ impl TranscriptView {
         merged
     }
     fn schedule_frame(&mut self, resized: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let now = Instant::now();
+        let now = self.frame_now;
         if self.visible
             && !cx.reduce_motion()
             && (resized
                 || self.streaming
                 || !self.motions.is_empty()
                 || self.agent_panels.animating()
-                || self
-                    .prompt_rise
-                    .is_some_and(|(_, born)| born.elapsed().as_secs_f32() < 0.88)
+                || self.prompt_rise.is_some_and(|(_, born)| {
+                    now.saturating_duration_since(born).as_secs_f32() < 0.88
+                })
                 || self.reveals.values().any(|r| r.active(now))
                 || self.chat_animating())
             && !self.frame_scheduled
@@ -3720,7 +3731,7 @@ impl TranscriptView {
                 }
             }
         }
-        let now = Instant::now();
+        let now = self.animation_now();
         let mut changed = None;
         for (&at, reveal) in &mut self.reveals {
             if reveal.step(now, self.streaming) {
@@ -4868,7 +4879,7 @@ impl TranscriptView {
             && message_start >= prompt
             && !cx.reduce_motion()
         {
-            let elapsed = born.elapsed().as_secs_f32();
+            let elapsed = self.frame_now.saturating_duration_since(born).as_secs_f32();
             if message_start == prompt {
                 let rise = crate::reveal::bezier((elapsed / 0.56).min(1.), 0.22, 1., 0.36, 1.);
                 let fade = crate::reveal::bezier((elapsed / 0.48).min(1.), 0., 0., 0.58, 1.);
@@ -4892,7 +4903,12 @@ impl TranscriptView {
             // 360ms, a reply 10px over 280ms.
             let (rise, duration) = if user { (16., 0.36) } else { (10., 0.28) };
             let t = crate::reveal::bezier(
-                (born.elapsed().as_secs_f32() / duration).min(1.),
+                (self
+                    .frame_now
+                    .saturating_duration_since(*born)
+                    .as_secs_f32()
+                    / duration)
+                    .min(1.),
                 0.22,
                 1.,
                 0.36,
@@ -5039,7 +5055,7 @@ impl Render for TranscriptView {
         }
         self.selection.begin_frame();
         self.phase_max_height = live_phase::max_height(window);
-        self.frame_now = Instant::now();
+        self.frame_now = self.animation_now();
         self.begin_measurements(window, cx);
         if !self.scroll_bound {
             self.scroll_bound = true;
@@ -5053,7 +5069,7 @@ impl Render for TranscriptView {
                 }));
         }
         self.update_follow(window, cx);
-        let now = Instant::now();
+        let now = self.frame_now;
         if self.prompt_rise_pending {
             self.prompt_rise_pending = false;
             if let Some((_, born)) = self.prompt_rise.as_mut() {

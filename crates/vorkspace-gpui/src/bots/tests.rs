@@ -436,6 +436,91 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
         );
     }
 }
+#[gpui::test]
+fn a_closed_creation_window_rehomes_the_same_unsaved_bot(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    cx.update(|cx| s.manager.update(cx, |m, cx| m.open_floating(cx)));
+    cx.run_until_parked();
+    let floating = s.manager.read_with(cx, |m, _| m.floating[0]);
+    let id = floating
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.create(vec![s.project.clone()], window, cx);
+                let id = m.creation.as_ref().unwrap().bot.id.clone();
+                m.fields["bot-name"]
+                    .update(cx, |field, cx| field.set_text("Recovered bot".into(), cx));
+                m.creation.as_mut().unwrap().soul = "Keep my unsaved soul".into();
+                id
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    floating
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager
+                .update(cx, |m, cx| m.create(Vec::new(), window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                let draft = m.creation.as_ref().unwrap();
+                assert_eq!(draft.window.window_id(), window.window_handle().window_id());
+                assert_eq!(draft.bot.id, id);
+                assert_eq!(draft.bot.name, "Recovered bot");
+                assert_eq!(draft.soul, "Keep my unsaved soul");
+                assert_eq!(m.roster.bots.len(), 1);
+                assert!(m.fields["bot-name"].focus_handle(cx).is_focused(window));
+                m.confirm_creation(window, cx);
+                assert!(m.creation.is_none());
+                assert_eq!(m.roster.bots.len(), 2);
+                assert_eq!(m.roster.get(&id).unwrap().name, "Recovered bot");
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        bot::files::load(&s.root, &id, None)
+            .unwrap()
+            .soul
+            .as_deref(),
+        Some("Keep my unsaved soul")
+    );
+}
+
+#[gpui::test]
+fn floating_chats_inherit_and_update_interface_scale(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut preferences = s.manager.read_with(cx, |m, _| m.prefs.clone());
+    preferences.ui_scale = 150;
+    cx.update(|cx| cx.set_global(preferences.clone()));
+    cx.update(|cx| s.manager.update(cx, |m, cx| m.open_floating(cx)));
+    cx.run_until_parked();
+    let floating = s.manager.read_with(cx, |m, _| m.floating[0]);
+    assert_eq!(
+        floating
+            .update(cx, |_, window, _| window.ui_scale())
+            .unwrap(),
+        1.5
+    );
+    for scale in [75, 125, 100] {
+        preferences.ui_scale = scale;
+        cx.update(|cx| cx.set_global(preferences.clone()));
+        cx.run_until_parked();
+        assert_eq!(
+            floating
+                .update(cx, |_, window, _| window.ui_scale())
+                .unwrap(),
+            scale as f32 / 100.
+        );
+    }
+}
+
 fn setup(cx: &mut TestAppContext) -> Setup {
     let dir = std::env::temp_dir().join(format!("native-bots-{}", bot::new_id()));
     std::fs::create_dir_all(&dir).unwrap();

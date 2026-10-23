@@ -431,7 +431,7 @@ mutation InboxReviewReply($threadId: ID!, $body: String!) {
     pullRequestReviewThreadId: $threadId
     body: $body
   }) {
-    comment { url }
+    comment { url createdAt }
   }
 }
 "#;
@@ -502,8 +502,8 @@ pub(super) fn git_github_work_item_comment_for(
     number: i64,
     body: &str,
     in_reply_to: &str,
-) -> Result<String, String> {
-    let (kind, body) = github_comment_input(kind, number, body)?;
+) -> Result<super::CommentReceipt, String> {
+    let (_, body) = github_comment_input(kind, number, body)?;
     let (owner, name) = split_github_repo(repo)?;
     let repo = format!("{owner}/{name}");
     let reply = in_reply_to.trim();
@@ -512,19 +512,19 @@ pub(super) fn git_github_work_item_comment_for(
     }
     let number = number.to_string();
     with_temp_markdown(body, |path| {
+        let body_field = format!("body=@{path}");
         let output = gh_checked(
             root,
             &[
-                kind,
-                "comment",
-                &number,
-                "--repo",
-                &repo,
-                "--body-file",
-                path,
+                "api",
+                "--method",
+                "POST",
+                &format!("repos/{repo}/issues/{number}/comments"),
+                "-F",
+                &body_field,
             ],
         )?;
-        github_url_from_output(&output, "GitHub did not return a comment URL")
+        parse_github_comment_receipt(&output, false)
     })
 }
 
@@ -532,7 +532,7 @@ pub(super) fn git_github_review_reply_for(
     root: &Path,
     thread_id: &str,
     body: &str,
-) -> Result<String, String> {
+) -> Result<super::CommentReceipt, String> {
     if !valid_github_node_id(thread_id) {
         return Err("Invalid review thread".into());
     }
@@ -552,20 +552,34 @@ pub(super) fn git_github_review_reply_for(
                 &body_field,
             ],
         )?;
-        parse_github_review_reply_url(&json)
+        parse_github_comment_receipt(&json, true)
     })
 }
 
-fn with_temp_markdown(
+fn with_temp_markdown<T>(
     body: &str,
-    run: impl FnOnce(&str) -> Result<String, String>,
-) -> Result<String, String> {
+    run: impl FnOnce(&str) -> Result<T, String>,
+) -> Result<T, String> {
+    use std::io::Write;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let path = std::env::temp_dir().join(format!("vorkspace-comment-{stamp}.md"));
-    std::fs::write(&path, body).map_err(|error| error.to_string())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).map_err(|error| error.to_string())?;
+    let written = file.write_all(body.as_bytes());
+    drop(file);
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&path);
+        return Err(error.to_string());
+    }
     let path_str = path.to_string_lossy().into_owned();
     let result = run(&path_str);
     let _ = std::fs::remove_file(&path);
@@ -595,6 +609,28 @@ fn github_url_from_output(output: &str, missing: &str) -> Result<String, String>
                 output.trim().to_string()
             }
         })
+}
+
+fn parse_github_comment_receipt(json: &str, review: bool) -> Result<super::CommentReceipt, String> {
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let (url, revision) = if review {
+        (
+            parse_github_review_reply_url(json)?,
+            value.pointer("/data/addPullRequestReviewThreadReply/comment/createdAt"),
+        )
+    } else {
+        (
+            github_url_from_output(
+                value["html_url"].as_str().unwrap_or(""),
+                "GitHub did not return a comment URL",
+            )?,
+            value.get("created_at"),
+        )
+    };
+    Ok(super::CommentReceipt {
+        url,
+        revision: revision.and_then(|v| v.as_str()).map(str::to_owned),
+    })
 }
 
 fn parse_github_review_reply_url(json: &str) -> Result<String, String> {
@@ -1820,5 +1856,46 @@ mod diff_tests {
             .unwrap_err(),
             "HTTP 403: rate limited"
         );
+    }
+}
+
+#[cfg(test)]
+mod comment_tests {
+    use super::*;
+    #[test]
+    fn comment_receipts_use_the_write_acknowledgement_not_a_later_item_read() {
+        let receipt = parse_github_comment_receipt(r#"{"html_url":"https://github.com/acme/app/issues/1#issuecomment-2","created_at":"2026-10-23T10:00:00Z"}"#, false).unwrap();
+        assert_eq!(receipt.revision.as_deref(), Some("2026-10-23T10:00:00Z"));
+        assert!(receipt.url.ends_with("issuecomment-2"));
+        let receipt = parse_github_comment_receipt(r#"{"data":{"addPullRequestReviewThreadReply":{"comment":{"url":"https://github.com/acme/app/pull/1#discussion_r2","createdAt":"2026-10-23T11:00:00Z"}}}}"#, true).unwrap();
+        assert_eq!(receipt.revision.as_deref(), Some("2026-10-23T11:00:00Z"));
+        let receipt = parse_github_comment_receipt(
+            r#"{"html_url":"https://github.com/acme/app/issues/1#issuecomment-2"}"#,
+            false,
+        )
+        .unwrap();
+        assert!(
+            receipt.revision.is_none(),
+            "missing metadata keeps the successful receipt"
+        );
+    }
+    #[test]
+    fn comment_body_files_are_private_and_removed_on_failure() {
+        let mut file_path = String::new();
+        let result: Result<(), String> = with_temp_markdown("private\nbody\n", |path| {
+            file_path = path.to_owned();
+            assert_eq!(std::fs::read_to_string(path).unwrap(), "private\nbody\n");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+            Err("fixture command failed".into())
+        });
+        assert_eq!(result.unwrap_err(), "fixture command failed");
+        assert!(!Path::new(&file_path).exists());
     }
 }

@@ -26,8 +26,11 @@ Bot messages use the Bot's normal durable outbox.
 After the first successful polling baseline, new items and newer remote
 revisions can play one activity cue per batch. Project notification mutes,
 category choices, active fetch/display filters, and the Sounds switch apply.
-Startup history, changing the fetch query, and the next revision caused by a
-successful comment or action in the app do not produce a cue.
+Startup history and changing the fetch query do not produce a cue. A successful
+comment's server receipt or a PR action's returned revision suppresses only that
+exact revision. Later remote changes remain unread and eligible for a cue, even
+if they arrive before the own revision is polled. Missing receipt metadata is
+treated conservatively and does not suppress an unknown revision.
 
 Old desktop connector switches, Jira filters, and default Bot choices are read
 from existing preferences. Subsequent changes are saved in the native settings

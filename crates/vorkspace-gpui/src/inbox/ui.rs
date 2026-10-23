@@ -3048,8 +3048,8 @@ mod tests {
                     vec![],
                     cx,
                 );
-                inbox.self_activity.insert(item.key(), Instant::now());
                 item.updated_at = "2026-10-22T11:00:00Z".into();
+                inbox.record_self_activity(item.key(), item.updated_ms());
                 inbox.finish_refresh(
                     1,
                     scope.clone(),
@@ -3076,6 +3076,84 @@ mod tests {
                     vec![],
                     cx,
                 );
+                subscription
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(*changes.borrow(), vec![0, 0, 1]);
+    }
+
+    #[gpui::test]
+    fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut TestAppContext) {
+        let window = inbox_window(cx);
+        let changes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let output = changes.clone();
+        let _subscription = window
+            .update(cx, |inbox, _, cx| {
+                let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
+                    if let Event::Activity { changed, .. } = event {
+                        output.borrow_mut().push(changed.len());
+                    }
+                });
+                let mut item = Item {
+                    provider: "jira".into(),
+                    kind: "jira".into(),
+                    id: "42".into(),
+                    identifier: "ENG-42".into(),
+                    updated_at: "2026-10-22T10:00:00Z".into(),
+                    ..Default::default()
+                };
+                inbox.generation = 1;
+                let scope = inbox.state.fetch_scope(&inbox.projects);
+                inbox.finish_refresh(
+                    1,
+                    scope.clone(),
+                    Snapshot {
+                        items: vec![item.clone()],
+                        ..Default::default()
+                    },
+                    vec![],
+                    cx,
+                );
+                let own = model::timestamp_ms("2026-10-22T11:00:00Z");
+                inbox.record_self_activity(item.key(), 0);
+                assert!(
+                    inbox.self_activity.is_empty(),
+                    "an uncertain receipt cannot suppress anything"
+                );
+                inbox.record_self_activity(item.key(), own);
+                inbox.record_self_activity(item.key(), own - 1);
+                assert_eq!(
+                    inbox.self_activity[&item.key()].0,
+                    own,
+                    "older completions cannot overwrite the newer receipt"
+                );
+                // A poll started before the write can still return the old snapshot.
+                inbox.finish_refresh(
+                    1,
+                    scope.clone(),
+                    Snapshot {
+                        items: vec![item.clone()],
+                        ..Default::default()
+                    },
+                    vec![],
+                    cx,
+                );
+                assert_eq!(inbox.self_activity[&item.key()].0, own);
+                // The own revision is never polled: another person's update arrives first.
+                item.updated_at = "2026-10-22T12:00:00Z".into();
+                inbox.finish_refresh(
+                    1,
+                    scope,
+                    Snapshot {
+                        items: vec![item.clone()],
+                        ..Default::default()
+                    },
+                    vec![],
+                    cx,
+                );
+                assert!(inbox.state.seen.unseen(&item));
+                assert!(inbox.self_activity.is_empty());
                 subscription
             })
             .unwrap();
