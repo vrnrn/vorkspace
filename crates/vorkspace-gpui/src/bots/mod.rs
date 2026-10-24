@@ -1,5 +1,5 @@
 //! Bot workspaces: one runtime per identity, shared by the rail, title tabs,
-//! overview, settings and floating windows.
+//! overview and settings.
 pub(crate) mod avatar;
 pub(crate) mod cards;
 mod changes;
@@ -8,7 +8,6 @@ mod color_picker;
 mod creation;
 mod files;
 mod filters;
-mod floating;
 mod host;
 mod html;
 mod memory_ui;
@@ -18,8 +17,6 @@ mod panel_stack;
 mod panels;
 mod scheduler;
 mod search;
-#[cfg(all(target_os = "macos", not(test)))]
-mod status;
 #[cfg(test)]
 mod tests;
 mod work;
@@ -76,8 +73,6 @@ struct RunningHabit {
 }
 pub(crate) struct Bots {
     channels: channels::ChannelUi,
-    #[cfg(all(target_os = "macos", not(test)))]
-    status: Option<status::Status>,
     parent_window: Option<gpui::AnyWindowHandle>,
     owner: WeakEntity<Shell>,
     store: Database,
@@ -142,7 +137,6 @@ pub(crate) struct Bots {
     drag: Option<(String, gpui::Point<gpui::Pixels>, Option<String>)>,
     rail_bounds: HashMap<String, AnchorSlot>,
     skip_click: bool,
-    floating: Vec<gpui::AnyWindowHandle>,
     scheduling: bool,
     persisted_messages: HashSet<String>,
     failed_reports: HashSet<String>,
@@ -209,62 +203,40 @@ impl Bots {
             view.update(cx, |v, cx| v.stop_if_busy(cx));
         }
     }
-    pub(crate) fn bind_window(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn bind_window(&mut self, window: &Window) {
         self.parent_window = Some(window.window_handle());
-        self.sync_status(cx);
     }
-    fn sync_status(&mut self, _cx: &mut Context<Self>) {
-        #[cfg(all(target_os = "macos", not(test)))]
-        {
-            if !self.prefs.bot_menu_bar_icon {
-                self.status = None;
+    pub(super) fn open_workspace(&self, id: i64, window: &Window, cx: &mut Context<Self>) {
+        let owner = self.owner.clone();
+        let handle = window.window_handle();
+        let app: &mut App = cx;
+        app.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = owner.update(cx, |owner, cx| owner.open(id, window, cx));
+            });
+        });
+    }
+    pub(crate) fn move_rail_drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
+        if let Some((_, start, over)) = &mut self.drag {
+            if event.pressed_button != Some(MouseButton::Left) {
+                self.finish_reorder(cx);
                 return;
             }
-            if self.status.is_none() {
-                self.status = status::Status::new();
-            }
-            let entity = _cx.weak_entity();
-            let app = std::cell::RefCell::new(_cx.to_async());
-            let run = std::rc::Rc::new(move |id: &str| {
-                let _ = entity.update(&mut *app.borrow_mut(), |this, cx| {
-                    if id == "quit" {
-                        // Use the workspace's unsaved-file guard, including
-                        // when this native menu belongs to a floating Bot.
-                        cx.defer(|cx| cx.dispatch_action(&crate::Quit));
-                    } else if id == "composer" {
-                        if let Some(handle) = this.parent_window {
-                            let owner = this.owner.clone();
-                            let app: &mut App = cx;
-                            app.defer(move |cx| {
-                                let _ = handle.update(cx, |_, window, cx| {
-                                    window.activate_window();
-                                    let _ = owner.update(cx, |o, cx| o.bot_quick_compose(cx));
-                                });
-                            });
-                        }
-                    } else if this.roster.get(id).is_some() {
-                        this.active = Some(id.into());
-                        this.ensure_chat(id, cx);
-                        this.open_floating(cx);
-                        this.changed(cx);
-                    }
+            if (event.position - *start).magnitude() > 5. {
+                self.skip_click = true;
+                *over = self.rail_bounds.iter().find_map(|(id, s)| {
+                    s.get()
+                        .filter(|b| b.contains(&event.position))
+                        .map(|_| id.clone())
                 });
-            });
-            let bots = self
-                .roster
-                .bots
-                .iter()
-                .map(|m| status::MenuBot {
-                    id: m.id.clone(),
-                    name: m.label(),
-                    mascot: m.mascot.clone(),
-                    color: m.color,
-                })
-                .collect::<Vec<_>>();
-            if let Some(status) = &mut self.status {
-                status.update(&bots, run);
             }
         }
+    }
+    pub(crate) fn visible_idle_sessions(&self, cx: &App) -> Vec<i64> {
+        self.chat()
+            .into_iter()
+            .map(|chat| chat.read(cx).summary.id)
+            .collect()
     }
     pub(crate) fn hide_html(&self, cx: &App) {
         for view in self.html_documents.values() {
@@ -344,8 +316,6 @@ impl Bots {
                 load_error: channel_error.clone(),
                 ..Default::default()
             },
-            #[cfg(all(target_os = "macos", not(test)))]
-            status: None,
             parent_window: None,
             owner,
             store,
@@ -405,7 +375,6 @@ impl Bots {
             drag: None,
             rail_bounds: HashMap::new(),
             skip_click: false,
-            floating: Vec::new(),
             scheduling: false,
             persisted_messages,
             failed_reports: HashSet::new(),
@@ -582,7 +551,6 @@ impl Bots {
         }
     }
     fn changed(&mut self, cx: &mut Context<Self>) {
-        self.sync_status(cx);
         cx.emit(Changed);
         cx.notify();
     }

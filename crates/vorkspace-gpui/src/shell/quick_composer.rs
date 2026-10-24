@@ -12,7 +12,7 @@ impl Shell {
             }));
         }
     }
-    fn toggle_quick_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn toggle_quick_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(handle) = self.quick.window.take()
             && handle
                 .update(cx, |_, window, _| window.remove_window())

@@ -20,6 +20,7 @@ pub(crate) struct Preferences {
     pub tab_animations: bool,
     pub notes: bool,
     pub quick_composer: bool,
+    pub clipboard_history: bool,
     pub working_agents: bool,
     pub close_to_tray: bool,
     // Appearance
@@ -104,6 +105,7 @@ impl Default for Preferences {
             tab_animations: false,
             notes: true,
             quick_composer: true,
+            clipboard_history: true,
             working_agents: true,
             close_to_tray: true,
             theme: "dark".into(),

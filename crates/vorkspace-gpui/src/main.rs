@@ -5,6 +5,8 @@ mod assets;
 mod automations;
 mod bots;
 mod changes;
+#[cfg(any(target_os = "macos", test))]
+mod clipboard;
 mod composer_completion;
 mod composer_motion;
 mod context_meter;
@@ -24,6 +26,8 @@ mod git_cache;
 mod git_graph;
 mod git_picker;
 mod git_status;
+#[cfg(all(target_os = "macos", not(test)))]
+mod global_hotkey;
 mod history;
 mod image_lightbox;
 mod inbox;
@@ -58,6 +62,8 @@ mod session_review;
 mod settings;
 mod shell;
 mod sound;
+#[cfg(any(target_os = "macos", test))]
+mod status_menu;
 mod syntax;
 mod tab_label;
 mod tab_motion;

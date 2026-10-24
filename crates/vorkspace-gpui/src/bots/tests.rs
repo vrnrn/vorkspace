@@ -439,10 +439,11 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
 #[gpui::test]
 fn a_closed_creation_window_rehomes_the_same_unsaved_bot(cx: &mut TestAppContext) {
     let s = setup(cx);
-    cx.update(|cx| s.manager.update(cx, |m, cx| m.open_floating(cx)));
-    cx.run_until_parked();
-    let floating = s.manager.read_with(cx, |m, _| m.floating[0]);
-    let id = floating
+    let creation_window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| cx.new(|_| gpui::EmptyView))
+            .unwrap()
+    });
+    let id = creation_window
         .update(cx, |_, window, cx| {
             s.manager.update(cx, |m, cx| {
                 m.create(vec![s.project.clone()], window, cx);
@@ -455,7 +456,7 @@ fn a_closed_creation_window_rehomes_the_same_unsaved_bot(cx: &mut TestAppContext
         })
         .unwrap();
     cx.run_until_parked();
-    floating
+    creation_window
         .update(cx, |_, window, _| window.remove_window())
         .unwrap();
     cx.run_until_parked();
@@ -491,34 +492,6 @@ fn a_closed_creation_window_rehomes_the_same_unsaved_bot(cx: &mut TestAppContext
             .as_deref(),
         Some("Keep my unsaved soul")
     );
-}
-
-#[gpui::test]
-fn floating_chats_inherit_and_update_interface_scale(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    let mut preferences = s.manager.read_with(cx, |m, _| m.prefs.clone());
-    preferences.ui_scale = 150;
-    cx.update(|cx| cx.set_global(preferences.clone()));
-    cx.update(|cx| s.manager.update(cx, |m, cx| m.open_floating(cx)));
-    cx.run_until_parked();
-    let floating = s.manager.read_with(cx, |m, _| m.floating[0]);
-    assert_eq!(
-        floating
-            .update(cx, |_, window, _| window.ui_scale())
-            .unwrap(),
-        1.5
-    );
-    for scale in [75, 125, 100] {
-        preferences.ui_scale = scale;
-        cx.update(|cx| cx.set_global(preferences.clone()));
-        cx.run_until_parked();
-        assert_eq!(
-            floating
-                .update(cx, |_, window, _| window.ui_scale())
-                .unwrap(),
-            scale as f32 / 100.
-        );
-    }
 }
 
 fn setup(cx: &mut TestAppContext) -> Setup {
@@ -734,21 +707,6 @@ fn overview_activity_returns_to_its_previous_tab_and_uses_the_shared_reveal(
             });
         })
         .unwrap();
-}
-
-#[gpui::test]
-fn floating_chat_opens_after_releasing_the_manager_and_shares_the_runtime(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    cx.update(|cx| s.manager.update(cx, |m, cx| m.open_floating(cx)));
-    cx.run_until_parked();
-    cx.update(|cx| s.manager.update(cx, |m, cx| m.open_floating(cx)));
-    cx.run_until_parked();
-    cx.update(|cx| {
-        let manager = s.manager.read(cx);
-        assert_eq!(manager.floating.len(), 1);
-        assert_eq!(manager.chats.len(), 1);
-        assert!(manager.chats.contains_key(&s.id));
-    });
 }
 
 #[gpui::test]

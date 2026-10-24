@@ -1,4 +1,6 @@
 //! The floating prompt window opened by the Settings global shortcut.
+#[cfg(all(target_os = "macos", not(test)))]
+use crate::global_hotkey as hotkey;
 use crate::{
     input::{self, Input},
     pickers::{
@@ -12,8 +14,6 @@ use gpui::{
     Window, WindowHandle, div, prelude::*, px,
 };
 use vorkspace_core::{agent::AccessMode, provider::Kind};
-#[cfg(all(target_os = "macos", not(test)))]
-mod hotkey;
 #[derive(Clone)]
 pub(crate) struct Launch {
     pub cwd: String,

@@ -99,6 +99,20 @@ impl SettingsView {
         ];
         if cfg!(target_os = "macos") {
             workspace.push(self.row(
+                Some("bot-menu-bar-icon"),
+                false,
+                "Menu bar icon",
+                Some("Open your clipboard history from the macOS menu bar.".into()),
+                vec![self.toggle(
+                    "bot-menu-bar-icon",
+                    "Menu bar icon",
+                    p.bot_menu_bar_icon,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.bot_menu_bar_icon = on),
+                )],
+            ));
+            workspace.push(self.row(
                 Some("quick-composer"),
                 false,
                 "Quick composer",
@@ -199,10 +213,14 @@ impl SettingsView {
                 ],
             ),
         ];
-        vec![
+        let mut groups = vec![
             self.group(None, true, "Alerts", None, None, alerts),
             self.group(None, false, "Workspace", None, None, workspace),
-            self.group(None, false, "About", None, None, about),
-        ]
+        ];
+        if cfg!(target_os = "macos") {
+            groups.push(self.clipboard_group(cx));
+        }
+        groups.push(self.group(None, false, "About", None, None, about));
+        groups
     }
 }

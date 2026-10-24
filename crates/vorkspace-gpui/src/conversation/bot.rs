@@ -7,7 +7,6 @@ pub(super) struct ChatState {
     pub(super) pending: Vec<Message>,
     pub(super) emoji: bool,
     pub(super) delivered: Option<String>,
-    pub(super) floating: std::collections::HashSet<gpui::WindowId>,
     /// ModelPicker with `hideSettings`: the model list opens on its own.
     pub(super) models: Option<(Entity<ModelList>, Vec<Subscription>)>,
     /// The setting pills' anchors, by `ComposerMenu::Setting` index.
@@ -24,11 +23,6 @@ pub(crate) struct QueueChanged {
 impl EventEmitter<QueueChanged> for Conversation {}
 impl EventEmitter<Submitted> for Conversation {}
 impl Conversation {
-    pub(crate) fn bot_floating_window(&mut self, window: &Window) {
-        self.bot_ui
-            .floating
-            .insert(window.window_handle().window_id());
-    }
     pub(crate) fn bot_quote(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.input.read(cx).is_composing() {
             return;
