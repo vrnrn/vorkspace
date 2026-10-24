@@ -387,6 +387,8 @@ impl Shell {
             .unwrap_or(Kind::Codex)
     }
     pub(super) fn apply_preferences(&mut self, cx: &mut Context<Self>) {
+        #[cfg(any(target_os = "macos", test))]
+        crate::clipboard::configure(self.workspace.preferences.clipboard_history, cx);
         if let Some(vox) = &self.vox {
             let prefs = self.workspace.preferences.clone();
             vox.update(cx, |v, cx| v.preferences(&prefs, cx));

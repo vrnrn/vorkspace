@@ -28,8 +28,8 @@ fn workspace_target(cx: &App) -> Option<AnyWindowHandle> {
         .or_else(|| cx.windows().into_iter().find(live))
 }
 
-/// Menus can run while an embedded native view owns first responder, a Bot
-/// window is active, or the workspace is hidden. Select one live workspace and
+/// Menus can run while an embedded native view owns first responder or the
+/// workspace is hidden. Select one live workspace and
 /// dispatch on its root, retaining the normal action and unsaved-file owners.
 fn workspace_fallback<A: Action>(cx: &mut App) {
     cx.on_action(|action: &A, cx| {
@@ -71,7 +71,43 @@ actions!(
     ]
 );
 
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn clipboard_route(action: crate::status_menu::Action, cx: &mut App) {
+    let Some(target) = workspace_target(cx) else {
+        return;
+    };
+    cx.defer(move |cx| {
+        let _ = target.update(cx, |root, window, cx| {
+            if let Ok(shell) = root.downcast::<shell::Shell>() {
+                shell.update(cx, |shell, cx| shell.status_menu_action(action, window, cx));
+            }
+        });
+    });
+}
+
 pub(crate) fn init(cx: &mut App) {
+    #[cfg(any(target_os = "macos", test))]
+    cx.on_action(|_: &crate::clipboard::Toggle, cx| {
+        let Some(target) = workspace_target(cx) else {
+            return;
+        };
+        // Preserve the external app that will receive the next Paste.
+        cx.defer(move |cx| {
+            let _ = target.update(cx, |root, window, cx| {
+                if let Ok(shell) = root.downcast::<shell::Shell>() {
+                    shell.update(cx, |shell, cx| shell.toggle_clipboard(false, window, cx));
+                }
+            });
+        });
+    });
+    #[cfg(any(target_os = "macos", test))]
+    cx.on_action(|_: &crate::clipboard::Settings, cx| {
+        clipboard_route(crate::status_menu::Action::Settings, cx)
+    });
+    #[cfg(any(target_os = "macos", test))]
+    cx.on_action(|_: &crate::clipboard::Composer, cx| {
+        clipboard_route(crate::status_menu::Action::QuickComposer, cx)
+    });
     macro_rules! workspace_commands {
         ($($action:ty),+ $(,)?) => { $(workspace_fallback::<$action>(cx);)+ };
     }

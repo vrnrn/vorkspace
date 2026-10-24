@@ -17,10 +17,6 @@ impl Shell {
     pub(crate) fn bot_manager(&self) -> Entity<crate::bots::Bots> {
         self.bots.as_ref().unwrap().clone()
     }
-    #[cfg(all(target_os = "macos", not(test)))]
-    pub(crate) fn bot_quick_compose(&mut self, cx: &mut Context<Self>) {
-        self.create(Kind::Codex, cx);
-    }
     pub(super) fn bot_active(&self, cx: &App) -> bool {
         self.bots
             .as_ref()

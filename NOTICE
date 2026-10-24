@@ -1,6 +1,11 @@
 vorkspace is not affiliated with, endorsed by, or sponsored by the makers of the
 agent harnesses it can drive.
 
+The minimal native clipboard adapts Maccy's change-count and confidential-type
+rules. Copyright (c) 2025 Alex Rodionov. Licensed under MIT.
+Source: https://github.com/p0deje/Maccy
+License text: licenses/LICENSE-MACCY-MIT
+
 Provider marks that appear in the UI (including Claude, Codex, Cursor, GitHub, GitLab, Linear, Grok, OpenCode, Pi, omp, fx, Hermes, Nous Research, Devin, and Cognition) are trademarks of their respective owners and are used only to identify those products.
 
 The native application and its build tools include source by Nick (hardbeat920).

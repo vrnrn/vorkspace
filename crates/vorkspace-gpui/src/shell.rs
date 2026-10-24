@@ -31,6 +31,8 @@ mod settings;
 mod shortcuts;
 mod sidebar_list;
 mod sidebar_peek;
+#[cfg(any(target_os = "macos", test))]
+mod status_menu;
 mod terminal_dock;
 mod title_tabs;
 mod vox;
@@ -503,6 +505,8 @@ struct SessionPreview {
 }
 
 pub(crate) struct Shell {
+    #[cfg(all(target_os = "macos", not(test)))]
+    status_menu: Option<crate::status_menu::Status>,
     bots: Option<Entity<crate::bots::Bots>>,
     vox: Option<Entity<crate::vox::Vox>>,
     quick_open: Option<quick_open::Open>,
@@ -831,6 +835,8 @@ impl Shell {
         let session_worktrees = sidebar_metadata.worktrees;
         let notification_state = notifications::State::new(&workspace, cx);
         let mut this = Self {
+            #[cfg(all(target_os = "macos", not(test)))]
+            status_menu: None,
             bots: None,
             vox: None,
             quick_open: None,
@@ -7020,8 +7026,10 @@ impl Render for Shell {
         }
         if let Some(m) = &self.bots {
             m.read(cx).hide_html(cx);
-            m.update(cx, |m, cx| m.bind_window(window, cx));
+            m.update(cx, |m, _| m.bind_window(window));
         }
+        #[cfg(all(target_os = "macos", not(test)))]
+        self.sync_status_menu(window, cx);
         self.render_passes += 1;
         if let Some((id, tab)) = self.pending_review.take()
             && self.workspace.tab_of(id).is_some()
@@ -7114,11 +7122,7 @@ impl Render for Shell {
                     .update(cx, |shell, cx| {
                         #[cfg(all(target_os = "macos", not(test)))]
                         if shell.workspace.preferences.close_to_tray
-                            && shell.workspace.preferences.bot_menu_bar_icon
-                            && shell
-                                .bots
-                                .as_ref()
-                                .is_some_and(|m| !m.read(cx).roster.bots.is_empty())
+                            && shell.status_menu.is_some()
                             && !shell.unsaved_files(cx)
                         {
                             if let Some(vox) = &shell.vox {
@@ -7310,6 +7314,21 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.open_settings(crate::settings::Section::General, window, cx)
             }))
+            .when(cfg!(any(target_os = "macos", test)), |d| {
+                #[cfg(any(target_os = "macos", test))]
+                let d = d.on_action(cx.listener(
+                    |this, _: &crate::clipboard::Toggle, window, cx| {
+                        this.status_menu_action(
+                            crate::status_menu::Action::Clipboard {
+                                status_click: false,
+                            },
+                            window,
+                            cx,
+                        )
+                    },
+                ));
+                d
+            })
             .on_action(
                 cx.listener(|this, _: &session_groups::RenameSidebarItem, window, cx| {
                     this.rename_sidebar_item(window, cx)
@@ -10409,6 +10428,15 @@ mod tests {
         // Native menu-bar and status-menu Quit enter through the application
         // action. Cancelling must retain the same dirty editor and live window.
         cx.cx.update(|cx| cx.dispatch_action(&crate::Quit));
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, window, cx| {
+                shell.status_menu_action(crate::status_menu::Action::Quit, window, cx);
+            })
+            .unwrap();
         cx.run_until_parked();
         assert!(cx.has_pending_prompt());
         cx.simulate_prompt_answer("Cancel");

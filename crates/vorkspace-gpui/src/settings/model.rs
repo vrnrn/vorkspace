@@ -131,7 +131,9 @@ impl Section {
     }
     fn keywords(self) -> &'static str {
         match self {
-            Section::General => "version update sounds notifications notes rail",
+            Section::General => {
+                "version update sounds notifications notes rail clipboard copy paste"
+            }
             Section::Vox => "voice microphone speech conversation memory silent",
             Section::Connections => "ssh remote host machine server environment always on",
             Section::Appearance => {
@@ -241,6 +243,18 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::General,
         "Quick composer",
         "spotlight global shortcut hotkey floating prompt anywhere",
+    ),
+    (
+        "bot-menu-bar-icon",
+        Section::General,
+        "Menu bar icon",
+        "macos status tray quick composer quit",
+    ),
+    (
+        "clipboard-history",
+        Section::General,
+        "Clipboard",
+        "copy paste text screenshot image clipboard memory menu bar",
     ),
     (
         "working-agents",

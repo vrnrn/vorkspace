@@ -37,7 +37,7 @@ cp crates/vorkspace-gpui/assets/icon.icns "$native_bundle/Contents/Resources/vor
 # Add these before signing so the signature covers the notices too.
 native_licenses="$native_bundle/Contents/Resources/licenses"
 mkdir -p "$native_licenses"
-cp LICENSE NOTICE licenses/LICENSE-GPUI-APACHE licenses/LICENSE-UPSTREAM-MIT "$native_licenses/"
+cp LICENSE NOTICE licenses/LICENSE-GPUI-APACHE licenses/LICENSE-UPSTREAM-MIT licenses/LICENSE-MACCY-MIT "$native_licenses/"
 cp crates/vorkspace-gpui/assets/hugeicons.LICENSE \
   crates/vorkspace-gpui/assets/dark-plus.LICENSE \
   crates/vorkspace-gpui/assets/native-editor.LICENSE.txt "$native_licenses/"

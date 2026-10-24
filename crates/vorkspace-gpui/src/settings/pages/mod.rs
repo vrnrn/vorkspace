@@ -3,6 +3,7 @@ mod appearance;
 mod archive;
 mod bots;
 mod chat;
+mod clipboard;
 mod connections;
 mod general;
 mod inbox;

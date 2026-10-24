@@ -2,6 +2,12 @@
 
 The desktop app window is drawn by GPUI. Rust keeps track of conversations, files, Bots, and running agents in the same desktop process. Saved history lives in SQLite, with extra window settings beside it.
 
+Open Bots in the main app window. Click the macOS menu bar icon or press ⌘⇧C to find recently copied text and images. Search finds text; image thumbnails show what you copied. Hover over an image for one second to show its larger preview; moving away hides that pane. Choosing an item puts its original contents back on the clipboard, ready for your usual Paste command. Settings and Quick Composer are also in this menu.
+
+Clipboard history keeps at most 50 items in memory and disappears when you quit. It also has a memory limit, so large images can make older items leave sooner. Very large copies are skipped. Clear history removes the app's saved copies; it leaves your current system clipboard alone. Turning clipboard history off in the Clipboard group in General settings clears it and stops watching for copies. When history is off, the menu shows only Settings, Quick Composer and Quit. Password-manager copies marked private are ignored.
+
+The app checks whether the clipboard changed twice a second. It makes small image previews in the background, one at a time, and never saves a clipboard history file.
+
 Rust controls Vox calls and translates desktop Copilot requests. Small JavaScript helpers handle editor language tools, voice audio, and remote machines. Empty conversations show the composer, and session titles stay still. A remote machine keeps its own agents running and history saved even when your desktop disconnects. Voice and HTML previews use a limited browser surface inside the native app.
 
 The [repository map](repository.md) shows where each part lives. Embedded helper code has its own folder; the scripts folder contains developer tools.

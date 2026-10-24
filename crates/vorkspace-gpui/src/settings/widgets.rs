@@ -254,6 +254,7 @@ impl SettingsView {
                     | "tab-animations"
                     | "notes"
                     | "quick-composer"
+                    | "clipboard-history"
                     | "working-agents"
                     | "close-to-tray"
                     | "main-pane-glass"
