@@ -71,13 +71,28 @@ impl Conversation {
             .bot_ui
             .pending
             .iter()
-            .filter(|m| !m.internal && Some(&m.id) != delivered.as_ref())
-            .map(|m| crate::transcript::PendingMessage {
-                id: m.id.clone(),
-                text: m.text.clone().into(),
-                error: m.error.clone(),
-                sent_at: m.sent_at,
-                attachments: m.attachments.iter().map(PathBuf::from).collect(),
+            .filter(|m| {
+                (!m.internal || m.peer.is_some())
+                    && (m.error.is_some() || Some(&m.id) != delivered.as_ref())
+            })
+            .map(|m| {
+                let peer = m
+                    .peer
+                    .as_ref()
+                    .and_then(|_| vorkspace_core::bot::peers::presentation(&m.text));
+                crate::transcript::PendingMessage {
+                    id: m.id.clone(),
+                    text: peer
+                        .as_ref()
+                        .map(|(_, body)| *body)
+                        .unwrap_or(&m.text)
+                        .to_owned()
+                        .into(),
+                    error: m.error.clone(),
+                    sent_at: m.sent_at,
+                    attachments: m.attachments.iter().map(PathBuf::from).collect(),
+                    peer: peer.map(|(origin, _)| origin),
+                }
             })
             .collect();
         self.transcript
@@ -93,6 +108,65 @@ impl Conversation {
             && self.loaded
             && self.settings.usage_limit.is_none()
             && !self.account_switching
+    }
+    pub(crate) fn bot_configuration_ready(&self) -> bool {
+        self.history_ready() && self.loaded && !self.account_switching
+    }
+    /// Channel history belongs to its own session; execution choices belong to
+    /// the member Bot. Refresh them only at the boundary of a new idle turn.
+    pub(crate) fn inherit_bot_configuration(
+        &mut self,
+        provider: Kind,
+        settings: &Settings,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.bot_configuration_ready() || self.busy || self.stopping {
+            return false;
+        }
+        if (self.summary.provider != provider.id() || self.model != settings.model)
+            && !self.apply_model_pick(&ModelPicked(provider, settings.model.clone()), cx)
+        {
+            return false;
+        }
+        let account_changed = self.settings.account != settings.account;
+        if account_changed {
+            // Provider resume IDs are account-owned. Keep the local history and
+            // carry a recap into a fresh provider thread under the new account.
+            if self.summary.provider_id.is_some() {
+                if let Err(error) = locked(&self.store).and_then(|store| {
+                    store.reset_provider_id_if(self.summary.id, self.summary.provider_id.as_deref())
+                }) {
+                    self.status = error;
+                    cx.notify();
+                    return false;
+                }
+                self.summary.provider_id = None;
+                self.settings.handoff = Some(vorkspace_core::agent::Handoff {
+                    from: self.summary.provider.clone(),
+                    brief: vorkspace_core::response::handoff(self.bot_rows(cx)),
+                });
+            }
+            self.settings.usage_limit = None;
+            self.status = "Ready".into();
+            self.catalog.clear();
+            self.resolved_model = None;
+        }
+        self.settings.account = settings.account.clone();
+        self.settings.access = settings.access;
+        self.settings.model = settings.model.clone();
+        self.settings.effort = settings.effort.clone();
+        self.settings.fast = settings.fast;
+        self.settings.service_tier = settings.service_tier.clone();
+        self.settings.thinking = settings.thinking;
+        self.settings.model_settings = settings.model_settings.clone();
+        self.settings.plan = settings.plan;
+        self.settings.operator = settings.operator;
+        self.settings.orchestrator = settings.orchestrator;
+        if account_changed {
+            self.attach_account(cx);
+        }
+        self.save_settings(cx);
+        self.bot_ready()
     }
     pub(crate) fn bot_dispatch(&mut self, message: &Message, cx: &mut Context<Self>) -> bool {
         if !self.history_ready() {

@@ -480,7 +480,7 @@ fn multiline_sends_keep_sliding_when_the_composer_shrinks_and_delivery_is_immedi
             window.update(cx, |chat, _, cx| {
                 let sent = chat.input.update(cx, |input, cx| input.take(cx)).unwrap();
                 chat.transcript.update(cx, |view, cx| {
-                    view.set_pending(vec![PendingMessage {id:"queued".into(),text:sent.clone().into(),error:None,sent_at:None,attachments:Vec::new()}], cx);
+                    view.set_pending(vec![PendingMessage {id:"queued".into(),text:sent.clone().into(),error:None,sent_at:None,attachments:Vec::new(),peer:None}], cx);
                     let born = Instant::now() - std::time::Duration::from_millis(10);
                     view.pending_entrances.insert("queued".into(), born);
                     if remove_first {
@@ -578,6 +578,7 @@ fn delivery_does_not_restart_settled_bubbles_or_override_reduced_motion(cx: &mut
                         error: None,
                         sent_at: None,
                         attachments: Vec::new(),
+                        peer: None,
                     }],
                     cx,
                 );
@@ -832,6 +833,7 @@ fn queued_messages_contribute_their_height_once(cx: &mut TestAppContext) {
                     error: None,
                     sent_at: None,
                     attachments: Vec::new(),
+                    peer: None,
                 }],
                 cx,
             );

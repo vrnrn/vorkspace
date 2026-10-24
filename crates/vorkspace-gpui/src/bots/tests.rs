@@ -14,6 +14,312 @@ struct Setup {
 }
 
 #[gpui::test]
+fn channel_settings_are_anchored_and_keep_the_conversation_and_draft_visible(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        crate::shell::bind_keys(cx);
+        input::bind(cx);
+        crate::popover::bind(cx);
+        crate::composer_completion::bind(cx);
+    });
+    let s = setup(cx);
+    let id = s.manager.update(cx, |m, cx| {
+        let mut next = m.channels.state.clone();
+        let id = next
+            .create("settings-test", "Old topic", vec![s.id.clone()], &m.roster)
+            .unwrap();
+        next.post(
+            &id,
+            Some(m.roster.get(&s.id).unwrap()),
+            "Keep this conversation",
+            "note",
+            0,
+            &[],
+            &m.roster,
+        )
+        .unwrap();
+        m.commit_channels(next, cx).unwrap();
+        m.channels.open = true;
+        m.channels.selected = Some(id.clone());
+        cx.notify();
+        id
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    for (width, height) in [(1400., 900.), (900., 650.)] {
+        visual.simulate_resize(gpui::size(px(width), px(height)));
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let messages = visual.debug_bounds("channel-messages").unwrap();
+        let composer = visual.debug_bounds("channel-composer").unwrap();
+        assert!(visual.debug_bounds("close-channels").is_none());
+        let gear = visual.debug_bounds("channel-settings").unwrap();
+        visual.simulate_click(gear.center(), Default::default());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let menu = visual.debug_bounds("channel-settings-menu").unwrap();
+        assert!(menu.size.width <= px(400.) && menu.size.height < px(height));
+        assert!(menu.right() <= px(width) && menu.bottom() <= px(height));
+        assert_eq!(messages, visual.debug_bounds("channel-messages").unwrap());
+        assert_eq!(composer, visual.debug_bounds("channel-composer").unwrap());
+        s.manager.update(visual, |m, cx| {
+            m.fields[&format!("channel-edit:{id}:topic")]
+                .update(cx, |input, cx| input.set_text("Updated topic".into(), cx));
+            m.fields[&format!("channel-draft:{id}")].update(cx, |input, cx| {
+                input.set_text("Unsent channel draft".into(), cx)
+            });
+        });
+        visual.run_until_parked();
+        let save = visual.debug_bounds("save-channel").unwrap();
+        visual.simulate_click(save.center(), Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("channel-settings-menu").is_none());
+        s.manager.read_with(visual, |m, cx| {
+            assert_eq!(m.channels.state.get(&id).unwrap().topic, "Updated topic");
+            assert_eq!(m.channels.state.get(&id).unwrap().messages.len(), 1);
+            assert_eq!(
+                m.fields[&format!("channel-draft:{id}")].read(cx).content,
+                "Unsent channel draft"
+            );
+        });
+        let gear = visual.debug_bounds("channel-settings").unwrap();
+        visual.simulate_click(gear.center(), Default::default());
+        visual.run_until_parked();
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("channel-settings-menu").is_none());
+    }
+}
+
+#[gpui::test]
+fn peer_delivery_is_durable_replies_once_and_accepts_the_next_message(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.roster.bots.push(Bot {
+            id: "peer-beta".into(),
+            name: "Beta".into(),
+            projects: vec![s.project.clone()],
+            ..Default::default()
+        });
+        m.ensure_chat("peer-beta", cx);
+        m.save(cx);
+        m.chats[&s.id].update(cx, |v, _| v.busy = true);
+    });
+    cx.run_until_parked();
+    s.manager.update(cx, |m, cx| {
+        m.chats["peer-beta"].update(cx, |v, _| v.busy = true);
+    });
+    let input = json!({"to":"Beta","message":"Review the approach"});
+    let first = call(&s, "peer-one", "bots.send", input.clone(), cx)
+        .recv()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        call(&s, "peer-one", "bots.send", input, cx)
+            .recv()
+            .unwrap()
+            .unwrap(),
+        first
+    );
+    s.manager.update(cx, |m, cx| {
+        let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+        let sent = saved.get("peer-beta").unwrap().outbox[0].clone();
+        assert_eq!(saved.get("peer-beta").unwrap().outbox.len(), 1);
+        assert_eq!(sent.peer.as_ref().unwrap().hop, 1);
+        let recipient = m.chats["peer-beta"].clone();
+        recipient.update(cx, |v, cx| {
+            v.busy = false;
+            v.bot_post("bot-system", sent.text.clone(), cx).unwrap();
+            v.bot_post("assistant", "The approach is sound.".into(), cx)
+                .unwrap();
+        });
+        m.inflight.insert("peer-beta".into(), sent);
+        m.chat_changed("peer-beta", cx);
+        assert!(m.roster.get("peer-beta").unwrap().outbox.is_empty());
+        assert!(!m.inflight.contains_key("peer-beta"));
+        assert_eq!(recipient.read(cx).bot_status(), "idle");
+        let reply = &m.roster.get(&s.id).unwrap().outbox[0];
+        assert!(reply.text.ends_with("The approach is sound."));
+        assert!(!reply.peer.as_ref().unwrap().expect_reply);
+        assert_eq!(reply.peer.as_ref().unwrap().hop, 2);
+        recipient.update(cx, |v, _| v.busy = true);
+    });
+    cx.run_until_parked();
+    call(
+        &s,
+        "peer-two",
+        "bots.send",
+        json!({"to":"Beta","message":"Check recovery next","expectReply":false}),
+        cx,
+    )
+    .recv()
+    .unwrap()
+    .unwrap();
+    s.manager.read_with(cx, |m, _| {
+        assert_eq!(m.roster.get("peer-beta").unwrap().outbox.len(), 1);
+        assert!(
+            m.roster.get("peer-beta").unwrap().outbox[0]
+                .text
+                .ends_with("Check recovery next")
+        );
+    });
+}
+
+#[gpui::test]
+fn switching_from_peer_to_channel_keeps_the_autonomous_budget(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        let mut sent = Message {
+            peer: Some(bot::peers::Peer {
+                from: "peer".into(),
+                hop: 4,
+                expect_reply: false,
+            }),
+            id: "hop-cap".into(),
+            text: "Review".into(),
+            attachments: Vec::new(),
+            internal: true,
+            sent_at: None,
+            error: None,
+        };
+        m.inflight.insert(s.id.clone(), sent.clone());
+        m.chats[&s.id].update(cx, |v, _| v.busy = true);
+        assert_eq!(m.collaboration_hop(s.session, cx), 4);
+        sent.peer.as_mut().unwrap().hop = 3;
+        m.inflight.insert(s.id.clone(), sent);
+        assert_eq!(m.collaboration_hop(s.session, cx), 3);
+    });
+    let result = call(
+        &s,
+        "hop-channel",
+        "channels.create",
+        json!({"name":"hop-test","members":[s.id]}),
+        cx,
+    )
+    .recv()
+    .unwrap()
+    .unwrap();
+    let id = result["id"].as_str().unwrap();
+    call(
+        &s,
+        "hop-post",
+        "channels.post",
+        json!({"channel":id,"message":"End of chain"}),
+        cx,
+    )
+    .recv()
+    .unwrap()
+    .unwrap();
+    s.manager.read_with(cx, |m, _| {
+        let channel = m.channels.state.get(id).unwrap();
+        assert_eq!(channel.messages[0]["hop"], 3);
+        assert!(channel.deliveries.is_empty()); // The author never wakes itself.
+    });
+}
+
+#[gpui::test]
+fn submitted_peer_messages_pause_after_reopening_instead_of_replaying(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.roster.bots.push(Bot {
+            id: "recovery-sender".into(),
+            name: "Sender".into(),
+            ..Default::default()
+        });
+        bot::peers::enqueue(
+            &mut m.roster,
+            "recovery-sender",
+            &s.id,
+            "A submitted request",
+            "recovery",
+            1,
+            true,
+        )
+        .unwrap();
+        let sent = &m.roster.get(&s.id).unwrap().outbox[0];
+        locked(&s.store)
+            .unwrap()
+            .save_setting(&format!("bot-delivered:{}:{}", s.session, sent.id), "yes")
+            .unwrap();
+        m.roster.save(&locked(&s.store).unwrap()).unwrap();
+        m.chats.remove(&s.id);
+        m.ensure_chat(&s.id, cx);
+    });
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, cx| {
+        let message = &m.roster.get(&s.id).unwrap().outbox[0];
+        assert!(message.error.as_deref().unwrap().contains("Interrupted"));
+        assert_eq!(message.peer.as_ref().unwrap().hop, 2);
+        assert!(!m.chats[&s.id].read(cx).busy);
+        assert!(!m.inflight.contains_key(&s.id));
+    });
+}
+
+#[gpui::test]
+fn channel_workers_refresh_member_permissions_account_and_model_without_losing_history(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let summary = locked(&s.store)
+        .unwrap()
+        .create("codex", &s.project)
+        .unwrap();
+    let worker = cx.new(|cx| Conversation::new(summary, s.store.clone(), cx));
+    worker.update(cx, |v, cx| v.load(cx));
+    cx.run_until_parked();
+    worker.update(cx, |v, cx| {
+        v.bot_post("assistant", "Previous channel reply".into(), cx)
+            .unwrap();
+        locked(&s.store)
+            .unwrap()
+            .provider_id(v.summary.id, "previous-account-thread")
+            .unwrap();
+        v.summary.provider_id = Some("previous-account-thread".into());
+        v.settings.usage_limit = Some(Default::default());
+        let settings = Settings {
+            account: vorkspace_core::accounts::Profile::new("work", &s.root),
+            access: AccessMode::ReadOnly,
+            model: Some("chosen-model".into()),
+            effort: Some("high".into()),
+            service_tier: Some("priority".into()),
+            ..Default::default()
+        };
+        assert!(v.inherit_bot_configuration(Kind::Codex, &settings, cx));
+        assert_eq!(v.settings.access, AccessMode::ReadOnly);
+        assert_eq!(v.settings.account.id, "work");
+        assert!(v.settings.usage_limit.is_none());
+        assert!(v.summary.provider_id.is_none());
+        assert!(
+            locked(&s.store)
+                .unwrap()
+                .bot_session(v.summary.id)
+                .unwrap()
+                .unwrap()
+                .provider_id
+                .is_none()
+        );
+        assert!(
+            v.settings
+                .handoff
+                .as_ref()
+                .unwrap()
+                .brief
+                .contains("Previous channel reply")
+        );
+        assert_eq!(v.bot_model(), settings.model);
+        assert_eq!(v.settings.effort.as_deref(), Some("high"));
+        assert_eq!(v.settings.service_tier.as_deref(), Some("priority"));
+        assert_eq!(
+            v.bot_rows(cx).last().unwrap().text,
+            "Previous channel reply"
+        );
+        v.busy = true;
+        assert!(!v.inherit_bot_configuration(Kind::Codex, &Settings::default(), cx));
+        assert_eq!(v.settings.account.id, "work");
+    });
+}
+
+#[gpui::test]
 fn channel_receipts_survive_retry_and_unreadable_history_is_never_replaced(
     cx: &mut TestAppContext,
 ) {
@@ -138,6 +444,148 @@ fn channels_keep_drafts_when_hidden_and_render_in_the_native_shell(cx: &mut Test
         assert_eq!(
             m.fields[&format!("channel-draft:{id}")].read(cx).content,
             "Keep this unsent draft"
+        );
+    });
+}
+
+#[gpui::test]
+fn channel_composer_fits_both_sizes_and_failed_sends_preserve_the_draft(cx: &mut TestAppContext) {
+    cx.update(input::bind);
+    let s = setup(cx);
+    let id = s.manager.update(cx, |m, cx| {
+        let mut next = m.channels.state.clone();
+        let id = next
+            .create("layout", "", vec![s.id.clone()], &m.roster)
+            .unwrap();
+        next.post(
+            &id,
+            Some(m.roster.get(&s.id).unwrap()),
+            "## Heading\n\n- Item",
+            "layout-note",
+            0,
+            &[],
+            &m.roster,
+        )
+        .unwrap();
+        m.commit_channels(next, cx).unwrap();
+        m.channels.open = true;
+        m.channels.selected = Some(id.clone());
+        // Keep this UI test local: admitted turns cannot start a provider.
+        m.channels.loading.insert((id.clone(), s.id.clone()));
+        cx.notify();
+        id
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    for (width, height) in [(1400., 900.), (900., 650.)] {
+        visual.simulate_resize(gpui::size(px(width), px(height)));
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let surface = visual.debug_bounds("channel-surface").unwrap();
+        let composer = visual.debug_bounds("channel-composer").unwrap();
+        let send = visual.debug_bounds("send-channel").unwrap();
+        assert!(composer.left() >= surface.left() && composer.right() <= surface.right());
+        assert!(send.bottom() <= surface.bottom());
+        assert!(send.size.width < px(100.));
+        assert!(visual.debug_bounds("save-channel").is_none());
+    }
+    let cached = s.manager.read_with(visual, |m, _| {
+        m.channels.message_cache.values().next().unwrap().clone()
+    });
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    handle
+        .update(visual, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                let input = m.fields[&format!("channel-draft:{id}")].clone();
+                input.update(cx, |i, cx| i.set_text("Keep this draft".into(), cx));
+                m.channels.load_error = Some("Injected unavailable storage".into());
+                window.focus(&input.focus_handle(cx), cx);
+            })
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.simulate_keystrokes("shift-enter");
+    visual.run_until_parked();
+    s.manager.read_with(visual, |m, cx| {
+        assert!(
+            m.fields[&format!("channel-draft:{id}")]
+                .read(cx)
+                .content
+                .contains('\n')
+        );
+        assert!(Arc::ptr_eq(
+            &cached,
+            m.channels.message_cache.values().next().unwrap()
+        ));
+    });
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    s.manager.update(visual, |m, cx| {
+        assert!(
+            !m.fields[&format!("channel-draft:{id}")]
+                .read(cx)
+                .content
+                .is_empty()
+        );
+        assert_eq!(m.channels.state.get(&id).unwrap().messages.len(), 1);
+        m.channels.load_error = None;
+    });
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    s.manager.read_with(visual, |m, cx| {
+        assert!(
+            m.fields[&format!("channel-draft:{id}")]
+                .read(cx)
+                .content
+                .is_empty()
+        );
+        assert_eq!(m.channels.state.get(&id).unwrap().messages.len(), 2);
+        assert_eq!(
+            locked(&s.store)
+                .unwrap()
+                .setting(&format!("channel-draft:{id}"))
+                .unwrap()
+                .as_deref(),
+            Some("")
+        );
+    });
+}
+
+#[gpui::test]
+fn stopped_channel_work_cannot_publish_a_late_reply(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        let mut next = m.channels.state.clone();
+        let id = next
+            .create("stop-test", "", vec![s.id.clone()], &m.roster)
+            .unwrap();
+        next.post(&id, None, "Inspect this", "stop-request", 0, &[], &m.roster)
+            .unwrap();
+        let delivery = &mut next.get_mut(&id).unwrap().deliveries[0];
+        delivery.state = "running".into();
+        let delivery_id = delivery.id.clone();
+        m.commit_channels(next, cx).unwrap();
+        let key = (id.clone(), s.id.clone());
+        m.channels.views.insert(key.clone(), m.chats[&s.id].clone());
+        m.channels.starts.insert(delivery_id.clone(), 0);
+        m.stop_channel_delivery(&id, &delivery_id, cx);
+        let view = m.chats[&s.id].clone();
+        view.update(cx, |v, cx| {
+            v.bot_post("assistant", "Late reply".into(), cx).unwrap()
+        });
+        m.channel_finished(&key, cx);
+        assert_eq!(m.channels.state.get(&id).unwrap().messages.len(), 1);
+        assert_eq!(
+            m.channels.state.get(&id).unwrap().deliveries[0].state,
+            "interrupted"
+        );
+        assert_eq!(
+            bot::channels::Channels::load(&locked(&s.store).unwrap())
+                .unwrap()
+                .get(&id)
+                .unwrap()
+                .messages
+                .len(),
+            1
         );
     });
 }
@@ -1166,6 +1614,7 @@ fn queued_messages_are_saved_before_dispatch_and_do_not_run_while_blocked(cx: &m
     cx.update(|cx| {
         s.manager.update(cx, |m, cx| {
             m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                peer: None,
                 sent_at: None,
                 id: message.clone(),
                 text: "Keep this queued".into(),

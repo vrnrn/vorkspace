@@ -221,6 +221,22 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// Publish related settings together, preserving their previous values if
+    /// any write fails. The desktop sidecar publishes one atomic root.
+    pub fn save_settings(&self, values: &[(&str, &str)]) -> Result<(), String> {
+        self.mark_attachment_activity();
+        if self.shared.is_some() {
+            return self.shared_save_settings(values);
+        }
+        let transaction = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        for (key, value) in values {
+            transaction.execute("INSERT INTO native_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key,value]).map_err(|e| e.to_string())?;
+        }
+        transaction.commit().map_err(|e| e.to_string())
+    }
     pub fn ui_state(&self) -> Result<Option<String>, String> {
         if self.shared.is_some() {
             return self.shared_ui_state();
@@ -1195,6 +1211,43 @@ impl Store {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn related_settings_publish_atomically_on_native_and_shared_failures() {
+        use super::Store;
+        let dir = tempfile::tempdir().unwrap();
+        let native = dir.path().join("native.db");
+        let db = Store::open(&native).unwrap();
+        db.save_settings(&[("history", "old"), ("draft", "keep")])
+            .unwrap();
+        db.conn.execute_batch("CREATE TRIGGER reject_draft BEFORE UPDATE ON native_settings WHEN NEW.key='draft' BEGIN SELECT RAISE(ABORT,'injected write failure'); END;").unwrap();
+        assert!(db
+            .save_settings(&[("history", "new"), ("draft", "")])
+            .is_err());
+        drop(db);
+        let db = Store::open(&native).unwrap();
+        assert_eq!(db.setting("history").unwrap().as_deref(), Some("old"));
+        assert_eq!(db.setting("draft").unwrap().as_deref(), Some("keep"));
+
+        let path = dir.path().join("shared.db");
+        let db = Store::open_vorkspace(&path).unwrap();
+        db.save_settings(&[("history", "old"), ("draft", "keep")])
+            .unwrap();
+        let sidecar = dir.path().join("shared.db.gpui.json");
+        let backup = dir.path().join("saved.json");
+        std::fs::rename(&sidecar, &backup).unwrap();
+        std::fs::create_dir(&sidecar).unwrap();
+        assert!(db
+            .save_settings(&[("history", "new"), ("draft", "")])
+            .is_err());
+        assert_eq!(db.setting("history").unwrap().as_deref(), Some("old"));
+        assert_eq!(db.setting("draft").unwrap().as_deref(), Some("keep"));
+        drop(db);
+        std::fs::remove_dir(&sidecar).unwrap();
+        std::fs::rename(&backup, &sidecar).unwrap();
+        let db = Store::open_vorkspace(&path).unwrap();
+        assert_eq!(db.setting("history").unwrap().as_deref(), Some("old"));
+        assert_eq!(db.setting("draft").unwrap().as_deref(), Some("keep"));
+    }
+    #[test]
     fn removed_worktree_keeps_history_and_requires_reattachment() {
         let mut store = super::Store::open(std::path::Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/project-worktrees/feature").unwrap();
@@ -1445,6 +1498,7 @@ mod tests {
             .unwrap()
             .outbox
             .push(crate::bot::Message {
+                peer: None,
                 id: "queued".into(),
                 text: "Tomorrow".into(),
                 sent_at,

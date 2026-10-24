@@ -15,6 +15,7 @@ mod notifications;
 mod overview;
 mod panel_stack;
 mod panels;
+mod peers;
 mod scheduler;
 mod search;
 #[cfg(test)]
@@ -313,6 +314,11 @@ impl Bots {
         let mut this = Self {
             channels: channels::ChannelUi {
                 state: channel_state.unwrap_or_default(),
+                read_through: locked(&store)
+                    .ok()
+                    .and_then(|db| db.setting(channels::READ_KEY).ok().flatten())
+                    .and_then(|raw| serde_json::from_str(&raw).ok())
+                    .unwrap_or_default(),
                 load_error: channel_error.clone(),
                 ..Default::default()
             },
@@ -536,7 +542,12 @@ impl Bots {
         removed: bool,
         cx: &mut Context<Self>,
     ) {
-        for view in self.chats.values() {
+        for view in self
+            .chats
+            .values()
+            .chain(self.running.values().map(|run| &run.view))
+            .chain(self.channels.views.values())
+        {
             if view.read(cx).summary.provider == kind.id()
                 && view.read(cx).settings.account.id == id
             {
@@ -590,6 +601,12 @@ impl Bots {
                         this.persisted_messages.extend(messages);
                         this.dispatch(&id, cx);
                     }
+                    this.persisted_messages.retain(|id| {
+                        this.roster
+                            .bots
+                            .iter()
+                            .any(|bot| bot.outbox.iter().any(|m| &m.id == id))
+                    });
                 }
             });
         }));
@@ -671,7 +688,13 @@ impl Bots {
                 };
                 bot.session_id = Some(summary.id);
                 bot.initial_configuration = None;
-                bot.outbox.retain(|q| !delivered.contains(&q.id));
+                bot.outbox.retain_mut(|q| {
+                    if !delivered.contains(&q.id) { return true; }
+                    if q.peer.is_some() {
+                        q.error = Some("Interrupted before the peer reply was recorded. Inspect the conversation before retrying.".into());
+                        true
+                    } else { false }
+                });
                 let bot = bot.clone();
                 let view = cx.new(|cx| Conversation::new(summary, this.store.clone(), cx));
                 let root = this.root.clone();
@@ -746,6 +769,10 @@ impl Bots {
                             cx.notify();
                         }
                         this.dispatch(&source, cx);
+                        if this.channels.state.channels.iter().any(|c| {
+                            !this.channels.views.contains_key(&(c.id.clone(), source.clone()))
+                                && c.deliveries.iter().any(|d| d.bot == source && d.state == "queued")
+                        }) { this.channel_tick(cx); }
                     }));
                 let source = id.clone();
                 this.observations.push(cx.subscribe(
@@ -808,6 +835,7 @@ impl Bots {
                 }
                 this.save(cx);
                 this.dispatch(&id, cx);
+                this.channel_tick(cx);
             });
         })
         .detach();
@@ -818,6 +846,11 @@ impl Bots {
             if remove {
                 bot.outbox.retain(|m| m.id != id);
             } else if let Some(message) = bot.outbox.iter_mut().find(|m| m.id == id) {
+                // A retry is a new explicit submission, never a replay of the
+                // provider receipt from a failed or interrupted turn.
+                if message.peer.is_some() {
+                    message.id = format!("peer:retry:{}", bot::new_id());
+                }
                 message.error = None;
             }
         }
@@ -847,6 +880,7 @@ impl Bots {
     ) {
         if let Some(bot) = self.roster.get_mut(id) {
             bot.outbox.push(Message {
+                peer: None,
                 id: bot::new_id(),
                 text,
                 sent_at: Some(vorkspace_core::time::now_ms()),
@@ -866,14 +900,19 @@ impl Bots {
             .and_then(|v| v.read(cx).bot_delivered())
             .map(str::to_owned);
         if let Some(message) = delivered
-            && let Some(m) = self
-                .roster
-                .get_mut(id)
-                .filter(|m| m.outbox.first().is_some_and(|q| q.id == message))
+            && let Some(m) = self.roster.get_mut(id).filter(|m| {
+                m.outbox
+                    .first()
+                    .is_some_and(|q| q.id == message && q.peer.is_none())
+            })
         {
             m.outbox.remove(0);
             self.save(cx);
             self.configure_chat(id, cx);
+        }
+
+        if self.inflight.contains_key(id) {
+            return;
         }
 
         if let Some(view) = self
@@ -954,8 +993,22 @@ impl Bots {
         }
         if finished {
             if let Some(mut sent) = self.inflight.remove(id) {
-                let (ok, status) = self.chats[id].read(cx).external_outcome(cx);
-                if !ok && !status.starts_with("Stopped") {
+                let (mut ok, mut status) = self.chats[id].read(cx).external_outcome(cx);
+                if ok && let Err(error) = self.reply_to_peer(id, &sent, cx) {
+                    ok = false;
+                    status = format!(
+                        "Peer reply could not be delivered: {error}. Inspect the conversation before retrying."
+                    );
+                }
+                if ok {
+                    if sent.peer.is_some() {
+                        if let Some(bot) = self.roster.get_mut(id) {
+                            bot.outbox.retain(|m| m.id != sent.id);
+                        }
+                        self.save(cx);
+                        self.configure_chat(id, cx);
+                    }
+                } else if sent.peer.is_some() || !status.starts_with("Stopped") {
                     if let Some(bot) = self.roster.get_mut(id) {
                         if let Some(queued) = bot.outbox.iter_mut().find(|m| m.id == sent.id) {
                             queued.error = Some(status);
@@ -984,7 +1037,8 @@ impl Bots {
             self.pause_changes(cx);
             self.route = None;
             self.details.update(cx, |details, cx| details.reset(cx));
-            self.fields.retain(|k, _| k.starts_with("file:"));
+            self.fields
+                .retain(|k, _| k.starts_with("file:") || k.starts_with("channel-"));
             self.files = None;
             self.activity_turn = None;
             self.memory_adding = false;

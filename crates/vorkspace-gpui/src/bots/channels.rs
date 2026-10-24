@@ -1,10 +1,13 @@
 use super::*;
 use serde_json::{Value, json};
 use vorkspace_core::bot::channels::Channels;
+mod ui;
+pub(super) const READ_KEY: &str = "bot-channel-read";
 
 #[derive(Default)]
 pub(super) struct ChannelUi {
     pub state: Channels,
+    pub read_through: HashMap<String, String>,
     pub load_error: Option<String>,
     pub open: bool,
     pub inspecting: Option<(String, String)>,
@@ -12,9 +15,66 @@ pub(super) struct ChannelUi {
     pub views: HashMap<(String, String), Entity<Conversation>>,
     pub(super) loading: HashSet<(String, String)>,
     pub(super) starts: HashMap<String, usize>,
+    pub(super) editing: bool,
+    pub(super) settings_anchor: AnchorSlot,
+    pub(super) completions: HashMap<String, Entity<crate::composer_completion::Completion>>,
+    pub(super) form_members: HashMap<String, HashSet<String>>,
+    pub(super) message_cache: HashMap<String, std::sync::Arc<Vec<crate::markdown::MarkdownRow>>>,
+    pub(super) scroll: HashMap<String, gpui::ScrollHandle>,
 }
 
 impl Bots {
+    fn channel_unread(&self, id: &str) -> bool {
+        self.channels
+            .state
+            .get(id)
+            .and_then(|c| c.messages.last())
+            .and_then(|m| m["id"].as_str())
+            .is_some_and(|last| {
+                self.channels.read_through.get(id).map(String::as_str) != Some(last)
+            })
+    }
+
+    fn mark_channel_read(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.channel_unread(id) {
+            return;
+        }
+        let Some(last) = self
+            .channels
+            .state
+            .get(id)
+            .and_then(|c| c.messages.last())
+            .and_then(|m| m["id"].as_str())
+        else {
+            return;
+        };
+        let mut next = self.channels.read_through.clone();
+        next.retain(|id, _| self.channels.state.get(id).is_some());
+        next.insert(id.into(), last.into());
+        let saved = serde_json::to_string(&next)
+            .map_err(|e| e.to_string())
+            .and_then(|raw| locked(&self.store)?.save_setting(READ_KEY, &raw));
+        match saved {
+            Ok(()) => {
+                self.channels.read_through = next;
+                self.changed(cx);
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    fn mark_visible_channel_read(&mut self, cx: &mut Context<Self>) {
+        if self.channels.open
+            && !self.channels.editing
+            && self.channels.inspecting.is_none()
+            && self.parent_window.is_some()
+            && self.parent_window == cx.active_window()
+            && let Some(id) = self.channels.selected.clone()
+        {
+            self.mark_channel_read(&id, cx);
+        }
+    }
+
     pub(crate) fn classic_channels_open(&self) -> bool {
         self.prefs.bots && self.channels.open
     }
@@ -55,12 +115,16 @@ impl Bots {
                 let selector = id.clone();
                 let selected = self.channels.open
                     && self.channels.selected.as_deref() == Some(channel.id.as_str());
-                let count = channel.member_ids.len();
+                let unread = self.channel_unread(&id);
                 div()
                     .id(SharedString::from(format!("classic-channel-{id}")))
                     .debug_selector(move || format!("classic-channel-{selector}"))
                     .role(Role::Button)
-                    .aria_label(format!("Channel {}, {count} members", channel.name))
+                    .aria_label(format!(
+                        "Channel #{}{}",
+                        channel.name,
+                        if unread { ", unread messages" } else { "" }
+                    ))
                     .aria_selected(selected)
                     .focusable()
                     .tab_stop(true)
@@ -76,38 +140,32 @@ impl Bots {
                     .when(selected, |d| d.bg(content(0.1)))
                     .hover(|s| s.bg(content(0.08)).opacity(1.))
                     .focus(|s| s.bg(content(0.08)).opacity(1.))
-                    .child(icon("hash", 16.))
-                    .child(
-                        div().flex().items_center().children(
-                            channel
-                                .member_ids
-                                .iter()
-                                .take(3)
-                                .filter_map(|id| self.roster.get(id))
-                                .enumerate()
-                                .map(|(ix, bot)| {
-                                    div()
-                                        .size(px(8.))
-                                        .rounded_full()
-                                        .bg(rgb(bot.color))
-                                        .when(ix > 0, |d| d.ml(px(-2.)))
-                                }),
-                        ),
-                    )
+                    .child(div().w(px(16.)).flex_shrink_0().text_center().child("#"))
                     .child(
                         div()
+                            .debug_selector({
+                                let id = id.clone();
+                                move || format!("channel-label-{id}")
+                            })
                             .flex_1()
                             .min_w_0()
                             .truncate()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .child(channel.name.clone()),
                     )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(content(0.5))
-                            .child(count.to_string()),
-                    )
+                    .when(unread, |d| {
+                        d.child(
+                            div()
+                                .debug_selector({
+                                    let id = id.clone();
+                                    move || format!("channel-unread-{id}")
+                                })
+                                .size(px(6.))
+                                .flex_shrink_0()
+                                .rounded_full()
+                                .bg(accent_color()),
+                        )
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_classic_channel(Some(id.clone()), window, cx);
                     }))
@@ -122,12 +180,27 @@ impl Bots {
         cx: &mut Context<Self>,
     ) {
         self.channels.open = true;
+        self.channels.editing = false;
+        if self.channels.selected != id {
+            self.channels.message_cache.clear();
+        }
         self.channels.selected = id;
         self.channels.inspecting = None;
+        self.mark_visible_channel_read(cx);
         self.changed(cx);
         let owner = self.owner.clone();
+        let manager = cx.weak_entity();
         window.defer(cx, move |window, cx| {
             let _ = owner.update(cx, |shell, cx| shell.open_classic_channels(window, cx));
+            let _ = manager.update(cx, |this, cx| {
+                if this.channels.selected.is_some() {
+                    this.focus_channel_composer(window, cx);
+                } else {
+                    let name =
+                        this.field("channel-new:name", "Channel name", String::new(), false, cx);
+                    window.focus(&name.focus_handle(cx), cx);
+                }
+            });
         });
     }
 
@@ -170,15 +243,29 @@ impl Bots {
         }
         next.save(&*locked(&self.store)?)?;
         self.channels.state = next;
-        cx.notify();
+        self.mark_visible_channel_read(cx);
+        self.changed(cx);
         Ok(())
     }
+    #[cfg(test)]
     pub(super) fn channel_action(
         &mut self,
         action: &str,
         input: &Value,
         author: Option<&Bot>,
         request: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<Value, String> {
+        self.channel_action_with_hop(action, input, author, request, 0, cx)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn channel_action_with_hop(
+        &mut self,
+        action: &str,
+        input: &Value,
+        author: Option<&Bot>,
+        request: &str,
+        hop: u8,
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
         if let Some(error) = &self.channels.load_error {
@@ -207,7 +294,7 @@ impl Bots {
                     // A channel worker publishes exactly once through its final
                     // reply. Reject recursive same-turn posts through the CLI.
                     let targets = input["to"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
-                    let message = next.post(id,author,input["message"].as_str().ok_or("Provide message")?,request,0,&targets,&self.roster)?;
+                    let message = next.post(id,author,input["message"].as_str().ok_or("Provide message")?,request,hop,&targets,&self.roster)?;
                     json!({"accepted":true,"messageId":message})
                 }
             },
@@ -256,7 +343,32 @@ impl Bots {
                 self.load_channel_view(key, bot, cx);
                 continue;
             };
-            if !view.read(cx).bot_ready() {
+            if !view.read(cx).bot_configuration_ready() || view.read(cx).busy {
+                continue;
+            }
+            let Some(primary) = self
+                .chats
+                .get(&bot.id)
+                .filter(|v| v.read(cx).bot_configuration_ready())
+            else {
+                self.ensure_chat(&bot.id, cx);
+                continue;
+            };
+            let configuration = primary.read(cx).settings.clone();
+            let provider = Kind::from_id(&primary.read(cx).summary.provider);
+            let mut context = bot.clone();
+            // This lane owns its channel turn, not the primary Bot's queue.
+            context.outbox.clear();
+            let root = self.root.clone();
+            let environment = self
+                .bridge
+                .as_ref()
+                .map(|b| b.environment(view.read(cx).summary.id))
+                .unwrap_or_default();
+            view.update(cx, |v, cx| v.configure_bot(context, root, environment, cx));
+            if !view.update(cx, |view, cx| {
+                view.inherit_bot_configuration(provider, &configuration, cx)
+            }) {
                 continue;
             }
             let prompt = self
@@ -280,6 +392,7 @@ impl Bots {
                 .starts
                 .insert(delivery.id.clone(), view.read(cx).bot_rows(cx).len());
             let message = Message {
+                peer: None,
                 id: delivery.id.clone(),
                 text: prompt,
                 attachments: Vec::new(),
@@ -301,6 +414,10 @@ impl Bots {
             self.channels.loading.remove(&key);
             return;
         };
+        if !primary.read(cx).bot_configuration_ready() {
+            self.channels.loading.remove(&key);
+            return;
+        }
         let mut settings = primary.read(cx).settings.clone();
         settings.bot = None;
         settings.turns.clear();
@@ -339,12 +456,27 @@ impl Bots {
                     }
                 };
                 let mut next = this.channels.state.clone();
-                let Some(channel) = next.get_mut(&key.0) else {
+                let valid = this.roster.get(&key.1).is_some()
+                    && next.get(&key.0).is_some_and(|c| {
+                        (c.member_ids.contains(&key.1)
+                            || (saved.is_some() && this.channels.inspecting.as_ref() == Some(&key)))
+                            && c.member_sessions.get(&key.1).copied() == saved
+                    });
+                if !valid {
+                    // Only this task owns a newly created, unpublished session.
+                    // Existing backing history is never deleted during a race.
+                    if saved.is_none() {
+                        let _ = locked(&this.store).and_then(|mut db| db.delete(summary.id));
+                    }
                     return;
-                };
+                }
+                let channel = next.get_mut(&key.0).unwrap();
                 channel.member_sessions.insert(key.1.clone(), summary.id);
                 if let Err(e) = this.commit_channels(next, cx) {
                     this.error = Some(e);
+                    if saved.is_none() {
+                        let _ = locked(&this.store).and_then(|mut db| db.delete(summary.id));
+                    }
                     return;
                 }
                 let id = summary.id;
@@ -355,6 +487,8 @@ impl Bots {
                     .map(|b| b.environment(id))
                     .unwrap_or_default();
                 let root = this.root.clone();
+                let mut bot = this.roster.get(&key.1).cloned().unwrap();
+                bot.outbox.clear();
                 view.update(cx, |v, cx| {
                     v.configure_bot(bot, root, env, cx);
                     v.load(cx);
@@ -365,6 +499,11 @@ impl Bots {
                         this.channel_finished(&observed, cx)
                     }),
                 );
+                this.observations.push(cx.observe(&view, |this, view, cx| {
+                    if view.read(cx).bot_ready() {
+                        this.channel_tick(cx);
+                    }
+                }));
                 this.channels.views.insert(key, view);
                 this.roster.hidden_sessions.push(id);
                 this.save(cx);
@@ -373,7 +512,7 @@ impl Bots {
         })
         .detach();
     }
-    fn channel_finished(&mut self, key: &(String, String), cx: &mut Context<Self>) {
+    pub(super) fn channel_finished(&mut self, key: &(String, String), cx: &mut Context<Self>) {
         let Some(view) = self.channels.views.get(key) else {
             return;
         };
@@ -399,21 +538,19 @@ impl Bots {
             return;
         };
         let rows = &view.bot_rows(cx)[start.min(view.bot_rows(cx).len())..];
-        let failed = rows.iter().any(|r| r.role == "error");
-        let text = rows
-            .iter()
-            .filter(|r| r.role == "assistant")
-            .map(|r| r.text.as_str())
-            .collect::<Vec<_>>()
-            .join("");
+        let (completed, status) = view.external_outcome(cx);
+        let failed = !completed || rows.iter().any(|r| r.role == "error");
+        let reply = bot::peers::final_reply(rows);
+        let failed = failed || reply.is_err();
+        let error = reply.as_ref().err().cloned().unwrap_or(status);
+        let text = reply.unwrap_or_default();
         let mut next = self.channels.state.clone();
         if let Some(d) = next
             .get_mut(&key.0)
             .and_then(|c| c.deliveries.iter_mut().find(|d| d.id == delivery.id))
         {
             d.state = if failed { "interrupted" } else { "done" }.into();
-            d.error =
-                failed.then(|| "Bot turn failed; inspect its conversation before retrying".into());
+            d.error = failed.then(|| format!("{error}\nInspect its conversation before retrying"));
         }
         let silent = matches!(
             text.trim().to_ascii_lowercase().as_str(),
@@ -453,197 +590,7 @@ impl Bots {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if let Some(key) = self.channels.inspecting.clone() {
-            let mut panel = div().size_full().flex().flex_col().child(
-                panels::button("back-to-channel", "Back to channel").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.channels.inspecting = None;
-                        cx.notify();
-                    },
-                )),
-            );
-            if let Some(view) = self.channels.views.get(&key).cloned() {
-                let transcript = view.read(cx).transcript.clone();
-                let id = view.read(cx).summary.id;
-                if view.read(cx).busy {
-                    panel = panel.child(
-                        panels::button("stop-channel-conversation", "Stop")
-                            .on_click(cx.listener(move |this, _, _, cx| this.stop_session(id, cx))),
-                    );
-                }
-                panel = panel
-                    .child(div().flex_1().min_h_0().child(transcript))
-                    .child(view.update(cx, |v, cx| v.bot_attention(window, cx)));
-            } else {
-                panel = panel.child(
-                    self.error
-                        .clone()
-                        .unwrap_or("Loading saved conversation…".into()),
-                );
-            }
-            return panel.into_any_element();
-        }
-        let name = self.field("channel-name", "Channel name", String::new(), false, cx);
-        let members = self.field(
-            "channel-members",
-            "Member Bot names, separated by commas",
-            String::new(),
-            false,
-            cx,
-        );
-        let topic = self.field("channel-topic", "Topic", String::new(), false, cx);
-        let mut body=div().size_full().flex().flex_col().p_4().gap_3().text_size(px(13.)).text_color(content(0.85))
-            .on_key_down(cx.listener(|this,event:&gpui::KeyDownEvent,_,cx|{if event.keystroke.key=="escape"{this.channels.open=false;this.changed(cx);}}))
-            .child(div().flex().items_center().justify_between().child("Bot Channels").child(panels::button("close-channels",if self.active.is_some() {"Back to Bot"} else {"Back to workspace"}).debug_selector(|| "close-channels".into()).on_click(cx.listener(|this,_,_,cx|{this.channels.open=false;this.changed(cx);}))))
-            .child(div().flex().gap_2().children(self.channels.state.channels.iter().map(|c|{let id=c.id.clone();panels::button(SharedString::from(format!("channel-{id}")),format!("#{}",c.name)).on_click(cx.listener(move|this,_,_,cx|{this.channels.selected=Some(id.clone());this.changed(cx);}))})))
-            .child(div().flex().gap_2().child(div().flex_1().child(name)).child(div().flex_1().child(members)).child(div().flex_1().child(topic)).child(panels::button("create-channel","Create").on_click(cx.listener(|this,_,_,cx|{
-                let field=|key:&str|this.fields[key].read(cx).content.clone();
-                let input=json!({"name":field("channel-name"),"topic":field("channel-topic"),"members":field("channel-members").split(',').map(str::trim).filter(|s|!s.is_empty()).collect::<Vec<_>>()});
-                match this.channel_action("channels.create",&input,None,&bot::new_id(),cx){Ok(v)=>this.channels.selected=v["id"].as_str().map(str::to_owned),Err(e)=>this.error=Some(e)};this.changed(cx);
-            }))));
-        if let Some(c) = self
-            .channels
-            .selected
-            .as_deref()
-            .and_then(|id| self.channels.state.get(id))
-            .cloned()
-        {
-            let mut messages = div()
-                .id("channel-messages")
-                .debug_selector(|| "channel-messages".into())
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap_3();
-            for m in &c.messages {
-                messages = messages.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_color(content(0.5))
-                                .child(m["from"]["name"].as_str().unwrap_or("You").to_string()),
-                        )
-                        .child(m["text"].as_str().unwrap_or_default().to_string()),
-                );
-            }
-            for d in c.deliveries.iter().filter(|d| d.state != "done") {
-                let label = format!(
-                    "{}: {}{}",
-                    self.roster
-                        .get(&d.bot)
-                        .map(|b| b.label())
-                        .unwrap_or(d.bot.clone()),
-                    d.state,
-                    d.error
-                        .as_ref()
-                        .map(|e| format!(" · {e}"))
-                        .unwrap_or_default()
-                );
-                let channel = c.id.clone();
-                let delivery = d.id.clone();
-                let key = (c.id.clone(), d.bot.clone());
-                let inspect = key.clone();
-                if c.member_sessions.contains_key(&d.bot) {
-                    messages = messages.child(
-                        panels::button(
-                            SharedString::from(format!("inspect-{}", d.id)),
-                            "Inspect conversation",
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.channels.inspecting = Some(inspect.clone());
-                            cx.notify();
-                        })),
-                    );
-                }
-                let interrupted = d.state == "interrupted";
-                messages = messages.child(
-                    div().child(label).child(
-                        panels::button(
-                            SharedString::from(format!("stop-{}", d.id)),
-                            if interrupted { "Dismiss" } else { "Stop" },
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let mut next = this.channels.state.clone();
-                            if interrupted {
-                                if let Some(c) = next.get_mut(&channel) {
-                                    c.deliveries.retain(|d| d.id != delivery);
-                                }
-                                if let Err(error) = this.commit_channels(next, cx) {
-                                    this.error = Some(error);
-                                }
-                                return;
-                            }
-                            this.stop_channel_delivery(&channel, &delivery, cx);
-                            cx.notify();
-                        })),
-                    ),
-                );
-                if let Some(view) = self.channels.views.get(&(c.id.clone(), d.bot.clone())) {
-                    messages = messages.child(view.update(cx, |v, cx| v.bot_attention(window, cx)));
-                }
-            }
-            for bot in c.member_sessions.keys() {
-                let key = (c.id.clone(), bot.clone());
-                let label = self
-                    .roster
-                    .get(bot)
-                    .map(|m| m.label())
-                    .unwrap_or(bot.clone());
-                messages = messages.child(
-                    panels::button(
-                        SharedString::from(format!("history-{bot}")),
-                        format!("Inspect {label}'s conversation"),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.channels.inspecting = Some(key.clone());
-                        this.channel_tick(cx);
-                        cx.notify();
-                    })),
-                );
-            }
-            let input_key = format!("channel-draft:{}", c.id);
-            let draft = if self.fields.contains_key(&input_key) {
-                String::new()
-            } else {
-                locked(&self.store)
-                    .ok()
-                    .and_then(|db| db.setting(&input_key).ok().flatten())
-                    .unwrap_or_default()
-            };
-            let input = self.field(&input_key, "Message the channel", draft, true, cx);
-            let target = c.id.clone();
-            body = body
-                .child(format!("#{} · {}", c.name, c.topic))
-                .child(messages)
-                .child(div().h(px(100.)).child(input))
-                .child(panels::button("send-channel", "Send").on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        let text = this.fields[&input_key].read(cx).content.clone();
-                        let value = json!({"channel":target,"message":text});
-                        match this.channel_action("channels.post", &value, None, &bot::new_id(), cx)
-                        {
-                            Ok(_) => {
-                                this.fields[&input_key]
-                                    .update(cx, |i, cx| i.set_text(String::new(), cx));
-                                this.channel_tick(cx);
-                            }
-                            Err(e) => this.error = Some(e),
-                        };
-                        cx.notify();
-                    },
-                )));
-        } else {
-            body = body.child("Create a channel to let your Bots work together.");
-        }
-        if let Some(error) = &self.error {
-            body = body.child(error.clone());
-        }
-        body.into_any_element()
+        self.channel_surface(window, cx)
     }
 }
 
@@ -676,29 +623,74 @@ mod classic_rail_tests {
             .unwrap();
         manager.update(cx, |manager, cx| {
             assert!(manager.active.is_none());
+            manager.roster.bots.push(Bot { id: "reader".into(), name: "Reader".into(), ..Default::default() });
             manager.channels.state.channels.push(Channel {
                 id: "team".into(),
                 name: "team".into(),
+                member_ids: vec!["reader".into()],
+                messages: vec![json!({"id":"first","from":{"kind":"bot","botId":"reader"},"text":"First message"})],
                 ..Default::default()
             });
             manager.changed(cx);
         });
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1400.), px(900.)));
+        window
+            .update(visual, |_, window, _| window.activate_window())
+            .unwrap();
         visual.run_until_parked();
         let channel = visual.debug_bounds("classic-channel-team").unwrap();
+        let label = visual.debug_bounds("channel-label-team").unwrap();
+        let bot = visual.debug_bounds("bot-rail-reader").unwrap();
+        let project = visual.debug_bounds("classic-project-label-0").unwrap();
+        assert_eq!(label.left(), bot.left() + px(32.));
+        assert_eq!(label.left(), project.left());
+        assert!(visual.debug_bounds("channel-unread-team").is_some());
         visual.simulate_click(channel.center(), Default::default());
         visual.run_until_parked();
         manager.read_with(visual, |manager, _| {
             assert!(manager.classic_channels_open());
             assert!(manager.active.is_none());
             assert_eq!(manager.channels.selected.as_deref(), Some("team"));
+            assert!(!manager.channel_unread("team"));
         });
+        assert!(visual.debug_bounds("channel-unread-team").is_none());
+        manager.update(visual, |manager, cx| {
+            let mut next = manager.channels.state.clone();
+            next.get_mut("team").unwrap().messages.push(json!({"id":"visible","from":{"kind":"bot","botId":"reader"},"text":"Visible reply"}));
+            manager.commit_channels(next, cx).unwrap();
+            assert!(!manager.channel_unread("team"));
+        });
+        visual.deactivate_window();
+        manager.update(visual, |manager, cx| {
+            let mut next = manager.channels.state.clone();
+            next.get_mut("team").unwrap().messages.push(json!({"id":"background","from":{"kind":"bot","botId":"reader"},"text":"Reply while inactive"}));
+            manager.commit_channels(next, cx).unwrap();
+            assert!(manager.channel_unread("team"));
+            let db = locked(&manager.store).unwrap();
+            let seen: HashMap<String, String> = serde_json::from_str(&db.setting(READ_KEY).unwrap().unwrap()).unwrap();
+            let restored = Channels::load(&db).unwrap();
+            assert_eq!(seen["team"], "visible");
+            assert_eq!(restored.get("team").unwrap().messages.last().unwrap()["id"], "background");
+        });
+        visual.run_until_parked();
+        manager.read_with(visual, |manager, cx| {
+            assert!(cx.active_window().is_none());
+            assert!(manager.channel_unread("team"));
+        });
+        assert!(visual.debug_bounds("channel-unread-team").is_some());
+        window
+            .update(visual, |_, window, _| window.activate_window())
+            .unwrap();
+        visual.refresh().unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("channel-unread-team").is_none());
         assert!(visual.debug_bounds("channel-messages").is_some());
         assert!(visual.debug_bounds("classic-project-rail").is_some());
         assert!(visual.debug_bounds("sidebar-frame").is_none());
 
-        let close = visual.debug_bounds("close-channels").unwrap();
+        assert!(visual.debug_bounds("close-channels").is_none());
+        let close = visual.debug_bounds("classic-project-0").unwrap();
         visual.simulate_click(close.center(), Default::default());
         visual.run_until_parked();
         assert!(!manager.read_with(visual, |manager, _| manager.classic_channels_open()));
@@ -710,6 +702,14 @@ mod classic_rail_tests {
         manager.read_with(visual, |manager, _| {
             assert!(manager.classic_channels_open());
             assert!(manager.channels.selected.is_none());
+        });
+        visual.simulate_input("focused-channel-name");
+        visual.run_until_parked();
+        manager.read_with(visual, |manager, cx| {
+            assert_eq!(
+                manager.fields["channel-new:name"].read(cx).content,
+                "focused-channel-name"
+            );
         });
         let project = visual.debug_bounds("classic-project-0").unwrap();
         visual.simulate_click(project.center(), Default::default());

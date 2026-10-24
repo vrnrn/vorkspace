@@ -374,7 +374,15 @@ impl Shell {
             .when(selected, |d| d.bg(content(0.16)))
             .hover(|s| s.bg(content(0.08)).opacity(1.))
             .focus(|s| s.bg(content(0.1)).opacity(1.))
-            .child(self.project_mark(&path, 12.))
+            .child(
+                div()
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(self.project_mark(&path, 12.)),
+            )
             .child(
                 div()
                     .flex_1()
@@ -383,6 +391,7 @@ impl Shell {
                     .text_size(px(14.))
                     .font_weight(FontWeight::MEDIUM)
                     .group_hover("classic-project-row", |s| s.pr(px(24.)))
+                    .debug_selector(move || format!("classic-project-label-{ix}"))
                     .child(self.project_label(&path)),
             )
             .when(busy, |d| {

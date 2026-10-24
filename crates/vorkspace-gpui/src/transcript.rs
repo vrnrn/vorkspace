@@ -10,6 +10,7 @@ mod live_phase;
 mod mascot;
 mod measurements;
 mod outline;
+mod peers;
 pub(crate) mod phases;
 mod remote_plans;
 pub(crate) mod selection;
@@ -55,6 +56,7 @@ pub(crate) struct PendingMessage {
     pub error: Option<String>,
     pub sent_at: Option<u64>,
     pub attachments: Vec<std::path::PathBuf>,
+    pub peer: Option<vorkspace_core::bot::peers::Origin>,
 }
 struct TakenMessage {
     text: SharedString,
@@ -107,6 +109,7 @@ struct Message {
     /// The turn this message belongs to, as `Body::Actions` numbers it.
     turn: usize,
     attachments: Arc<[attachments::Attachment]>,
+    peer: Option<vorkspace_core::bot::peers::Origin>,
 }
 #[derive(Clone)]
 enum Body {
@@ -329,6 +332,7 @@ pub(crate) fn bot_continues(source: &[Row], turn: usize) -> Option<usize> {
     let prompt = prompt_start(source, turn);
     if prompt == 0
         || source[prompt..turn].iter().any(|r| r.role != "bot-system")
+        || peers::prompt_origin(&source[prompt..turn]).is_some()
         || source[prompt - 1].is_prompt()
         || dates::bot_opens_stretch(source, prompt)
     {
@@ -965,6 +969,7 @@ impl TranscriptView {
             .line_height(px(20.))
             .text_color(content(0.5))
             .child(pill)
+            .children(self.peer_response_label(turn))
             .when(live, |d| {
                 let label = self.bot_work_label(turn);
                 d.child(div().flex_shrink_0().text_color(content(0.25)).child("·"))
@@ -1684,6 +1689,7 @@ impl TranscriptView {
         let attachments = attachments::Attachment::from_paths(&message.attachments);
         let attachment_body = (!attachments.is_empty())
             .then(|| self.attachment_row(&attachments, &format!("pending-{}", message.id), cx));
+        let peer_pending = message.peer.is_some();
         div()
             .id(SharedString::from(format!("bot-pending-{}", message.id)))
             .debug_selector(|| "bot-pending-message".into())
@@ -1700,13 +1706,14 @@ impl TranscriptView {
                     .w_full()
                     .max_w(px(COLUMN))
                     .min_w_0()
-                    .pl(px(72.))
+                    .pl(px(if peer_pending { 32. } else { 72. }))
                     .pr(px(32.))
                     .pt_1()
                     .pb(px(if stacked { 0. } else { 20. }))
                     .flex()
                     .flex_col()
                     .items_end()
+                    .when(peer_pending, |d| d.items_start())
                     .text_size(px(14.))
                     .line_height(px(20.))
                     .child(
@@ -1718,26 +1725,36 @@ impl TranscriptView {
                             .flex_col()
                             .px_3()
                             .py_2()
-                            .child(
-                                canvas(
-                                    |_, _, _| {},
-                                    move |bounds, _, window, _| {
-                                        let radius = if bounds.size.height <= px(37.) {
-                                            f32::from(bounds.size.height) * 0.5
-                                        } else {
-                                            12.
-                                        };
-                                        window.paint_quad(
-                                            gpui::fill(bounds, user_bubble_fill())
-                                                .corner_radii(px(radius)),
-                                        );
-                                    },
-                                )
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .size_full(),
+                            .when(peer_pending, |d| {
+                                d.border_l_2().border_color(content(0.2)).bg(content(0.04))
+                            })
+                            .children(
+                                message.peer.as_ref().map(|peer| {
+                                    self.peer_message_label(peer, message.error.is_none())
+                                }),
                             )
+                            .when(!peer_pending, |d| {
+                                d.child(
+                                    canvas(
+                                        |_, _, _| {},
+                                        move |bounds, _, window, _| {
+                                            let radius = if bounds.size.height <= px(37.) {
+                                                f32::from(bounds.size.height) * 0.5
+                                            } else {
+                                                12.
+                                            };
+                                            window.paint_quad(
+                                                gpui::fill(bounds, user_bubble_fill())
+                                                    .corner_radii(px(radius)),
+                                            );
+                                        },
+                                    )
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .size_full(),
+                                )
+                            })
                             .children(attachment_body.map(|body| {
                                 div()
                                     .when(!message.text.is_empty(), |d| d.mb_2())
@@ -1817,7 +1834,7 @@ impl TranscriptView {
         }
         while let Some(row) = self.source.get(at) {
             if row.is_prompt() {
-                return !self.bot_opens_stretch(at);
+                return self.peer_at(at).is_none() && !self.bot_opens_stretch(at);
             }
             let end = (at + 1..self.source.len())
                 .find(|&i| self.source[i].first)
@@ -2899,9 +2916,15 @@ impl TranscriptView {
                 .iter()
                 .map(|r| r.text.as_str())
                 .collect();
+            let peer = (role == "bot-system")
+                .then(|| vorkspace_core::bot::peers::presentation(&text))
+                .flatten();
+            let peer_origin = peer.as_ref().map(|(origin, _)| origin.clone());
             // Older native versions saved user cancellation as an error row.
             let stopped_notice = role == "error" && text.trim() == "Stopped";
-            let (display_text, attachments) = if role == "user" {
+            let (display_text, attachments) = if let Some((_, body)) = peer {
+                (Some(body.to_owned()), Arc::default())
+            } else if role == "user" {
                 attachments::message(&self.source, end, &text)
             } else {
                 (None, Arc::default())
@@ -3268,6 +3291,7 @@ impl TranscriptView {
                     turn
                 },
                 attachments,
+                peer: peer_origin,
             });
             let last_prompt = self.source.iter().rposition(|r| r.is_prompt());
             if self.bot && is_prompt && self.streaming && last_prompt.is_some_and(|p| end > p) {
@@ -4162,6 +4186,7 @@ impl TranscriptView {
         let nested_phase = row.in_phase();
         let thought_header = matches!(row.body, Body::Reasoning);
         let attachments = message.attachments.clone();
+        let peer = message.peer.clone();
         let attachment_body = (user && first && !attachments.is_empty())
             .then(|| self.attachment_row(&attachments, &format!("sent-{message_start}"), cx));
         let step_opacity = self
@@ -4730,6 +4755,11 @@ impl TranscriptView {
                 })
                 .child(body)
                 .into_any_element()
+        } else {
+            body
+        };
+        let body = if let Some(peer) = peer {
+            self.peer_message_body(message_start, &peer, first, last, body)
         } else {
             body
         };
@@ -5859,6 +5889,7 @@ mod scroll_tests {
                     error: None,
                     sent_at: None,
                     attachments: Vec::new(),
+                    peer: None,
                 }],
                 cx,
             );
@@ -5953,6 +5984,7 @@ mod scroll_tests {
                     error: None,
                     sent_at: None,
                     attachments: Vec::new(),
+                    peer: None,
                 }],
                 cx,
             );

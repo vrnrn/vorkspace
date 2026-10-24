@@ -37,9 +37,19 @@ impl Bots {
         }
         let store = self.store.clone();
         let roster = self.roster.clone();
+        let queued = roster
+            .bots
+            .iter()
+            .map(|b| {
+                (
+                    b.id.clone(),
+                    b.outbox.iter().map(|m| m.id.clone()).collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
         let reply = call.reply.clone();
         let previous = self.writes.take();
-        self.writes=Some(cx.spawn(async move|_,cx|{
+        self.writes=Some(cx.spawn(async move|this,cx|{
             if let Some(previous)=previous { previous.await; }
             let work=cx.background_executor().spawn(async move{
                 let store=locked(&store)?;
@@ -49,7 +59,17 @@ impl Bots {
                 store.finish_app_command(call.session,&call.request_id,&call.action,&call.input,&result)?;
                 Ok::<_,String>(result)
             });
-            let _=reply.send(work.await.and_then(|result|result));
+            let result = work.await;
+            if result.is_ok() {
+                let _ = this.update(cx, |this, cx| {
+                    for (bot, messages) in queued {
+                        this.persisted_messages.extend(messages);
+                        this.dispatch(&bot, cx);
+                    }
+                    this.persisted_messages.retain(|id| this.roster.bots.iter().any(|bot| bot.outbox.iter().any(|m| &m.id == id)));
+                });
+            }
+            let _=reply.send(result.and_then(|result|result));
         }));
     }
     fn call_work(
@@ -235,6 +255,11 @@ impl Bots {
                 }
             }
         }
+        if call.action.starts_with("bots.") {
+            let result = self.peer_action(&call, &bot.id, cx);
+            self.finish_call(call, result, cx);
+            return;
+        }
         if call.action.starts_with("channels.") {
             if call.action == "channels.post"
                 && self
@@ -250,8 +275,15 @@ impl Bots {
                 );
                 return;
             }
-            let result =
-                self.channel_action(&call.action, &call.input, Some(&bot), &call.request_id, cx);
+            let hop = self.collaboration_hop(call.session, cx);
+            let result = self.channel_action_with_hop(
+                &call.action,
+                &call.input,
+                Some(&bot),
+                &call.request_id,
+                hop,
+                cx,
+            );
             self.finish_call(call, result, cx);
             return;
         }
@@ -274,11 +306,7 @@ impl Bots {
             String::new()
         };
         let hidden = self.roster.hidden_sessions.clone();
-        let source = self
-            .chats
-            .get(&bot.id)
-            .or_else(|| self.running.get(&call.session).map(|r| &r.view))
-            .cloned();
+        let source = self.calling_view(call.session, cx);
         let result=match action.as_str(){
             "models.list"=>Ok(json!(Kind::ALL.into_iter().map(|kind|json!({"harness":kind.id(),"name":kind.label(),"models":self.chats.values().find(|v|{let v=v.read(cx);let profile=source.as_ref().filter(|s|s.read(cx).summary.provider==kind.id()).map(|s|s.read(cx).settings.account.clone()).unwrap_or_else(||crate::accounts::get(cx).map(|center|center.read(cx).selected(kind,&project)).unwrap_or_default());v.summary.provider==kind.id()&&v.settings.account.id==profile.id}).map(|v|v.read(cx).settings_models()).unwrap_or_default()})).collect::<Vec<_>>())),
             "sessions.start"=>{

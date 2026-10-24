@@ -1175,6 +1175,18 @@ impl Bots {
         .detach();
     }
     pub(super) fn tick(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        // A failed settlement write may be retried locally. The provider turn
+        // itself is never replayed; starts belong only to this live owner.
+        let unsettled = self
+            .channels
+            .views
+            .iter()
+            .filter(|(_, v)| !v.read(cx).busy)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in unsettled {
+            self.channel_finished(&key, cx);
+        }
         self.channel_tick(cx);
         self.check_habits(cx);
         cx.notify();
@@ -1330,7 +1342,7 @@ impl Bots {
                 this.roster.hidden_sessions.push(session);
                 if let Some(m)=this.roster.get_mut(&target){m.habit_sessions.push(session);}
                 this.save(cx);
-                let message=Message{sent_at:Some(vorkspace_core::time::now_ms()),id:bot::new_id(),text:format!("[Scheduled habit: {}]\n{}\n\nDo this scheduled work independently. Return a concise report; if nothing requires attention, reply exactly NOTHING_TO_REPORT. Any session you start belongs to this habit. Do not change the habit unless asked.",habit.name,habit.instructions),internal:true,error:None,attachments:Vec::new()};
+                let message=Message{peer:None,sent_at:Some(vorkspace_core::time::now_ms()),id:bot::new_id(),text:format!("[Scheduled habit: {}]\n{}\n\nDo this scheduled work independently. Return a concise report; if nothing requires attention, reply exactly NOTHING_TO_REPORT. Any session you start belongs to this habit. Do not change the habit unless asked.",habit.name,habit.instructions),internal:true,error:None,attachments:Vec::new()};
                 view.update(cx,|v,cx|v.bot_dispatch(&message,cx));
             }}this.changed(cx);
         });}).detach();
@@ -1353,6 +1365,7 @@ impl Bots {
         }) {
             let view = self.running[&session].view.clone();
             let message = Message {
+                peer: None,
                 id: bot::new_id(),
                 text,
                 sent_at: Some(vorkspace_core::time::now_ms()),
