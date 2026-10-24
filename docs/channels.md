@@ -40,7 +40,14 @@ final reply is posted automatically, so recursive channel posts are rejected.
 
 The same scoped app capability exposes `bots.list`, `bots.read` and `bots.send`.
 Read returns a bounded slice of a peer's primary conversation, excluding tool
-and reasoning rows. Send accepts a Bot name or ID, message and optional
+and reasoning rows. It runs off the UI thread and projects at most 100 source
+records per page. Indexed owners seek directly; legacy JSON scanning is bounded
+by the document limit. Use its opaque `before` cursor with `hasMore` even when a
+tool-only page contains no public messages. Selected text is truncated before
+leaving SQLite; each message reports `truncated`. Remote history, unindexed
+documents over 8 MiB and selected shared blocks over 1 MiB return an explicit
+read-limit error rather than loading the full source. Reads do not migrate or
+rewrite history. Send accepts a Bot name or ID, message and optional
 `expectReply` (default true). The recipient keeps its own model, account,
 permissions and assigned projects. Direct messages use its durable primary
 outbox and wait while it is busy. The final assistant message returns to the
@@ -60,5 +67,8 @@ visible for explicit retry or discard. After restart, already-submitted peer
 messages pause for inspection rather than replaying unknown external effects.
 Queued, unsubmitted messages can continue normally. Command receipts fence
 duplicate API submissions.
+Automatic usage recovery preserves uncertain peer deliveries for inspection;
+explicit Retry publishes a fresh submission identity while retaining the old
+receipt's replay protection.
 
 See [verification](testing.md) and [runtime boundaries](architecture.md).

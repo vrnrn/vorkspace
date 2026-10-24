@@ -3,6 +3,31 @@ use serde_json::{Value, json};
 use vorkspace_core::bot::{channels, peers};
 
 impl Bots {
+    /// A saved queue owns work independently of which Bot is visible. Loading
+    /// through ensure_chat checks submission receipts before any dispatch.
+    pub(super) fn resume_peer_queues(&mut self, cx: &mut Context<Self>) {
+        let recipients = self
+            .roster
+            .bots
+            .iter()
+            .filter(|bot| {
+                !self.chats.contains_key(&bot.id)
+                    && bot.outbox.first().is_some_and(|message| {
+                        message.error.is_none() && self.persisted_messages.contains(&message.id)
+                    })
+                    && bot.outbox.iter().any(|message| {
+                        message.peer.is_some()
+                            && message.error.is_none()
+                            && self.persisted_messages.contains(&message.id)
+                    })
+            })
+            .map(|bot| bot.id.clone())
+            .collect::<Vec<_>>();
+        for id in recipients {
+            self.ensure_chat(&id, cx);
+        }
+    }
+
     pub(super) fn calling_view(&self, session: i64, cx: &App) -> Option<Entity<Conversation>> {
         self.chats
             .values()
@@ -81,33 +106,6 @@ impl Bots {
             "bots.list" => Ok(
                 json!({"bots":self.roster.bots.iter().filter(|b| b.id != author).map(|b| json!({"id":b.id,"name":b.label(),"mascot":b.mascot,"status":self.chats.get(&b.id).map(|v|v.read(cx).bot_status()).unwrap_or("idle")})).collect::<Vec<_>>()}),
             ),
-            "bots.read" => {
-                let target = channels::resolve(
-                    &self.roster,
-                    call.input["bot"].as_str().ok_or("Provide bot")?,
-                )?;
-                if target.id == author {
-                    return Err("Use your own conversation history".into());
-                }
-                let session = target
-                    .session_id
-                    .ok_or("That Bot's conversation is unavailable")?;
-                let store = locked(&self.store)?;
-                let rows = store.load(session)?.rows;
-                let end = call.input["before"]
-                    .as_u64()
-                    .unwrap_or(rows.len() as u64)
-                    .min(rows.len() as u64) as usize;
-                let limit = call.input["limit"].as_u64().unwrap_or(40).clamp(1, 100) as usize;
-                let max = call.input["maxChars"]
-                    .as_u64()
-                    .unwrap_or(24_000)
-                    .clamp(100, 100_000) as usize;
-                let start = end.saturating_sub(limit);
-                Ok(
-                    json!({"bot":{"id":target.id,"name":target.label()},"messages":rows[start..end].iter().filter(|r| matches!(r.role.as_str(),"user"|"assistant")).map(|r|json!({"role":r.role,"text":vorkspace_core::response::limit(&r.text,max/limit)})).collect::<Vec<_>>(),"before":start,"hasMore":start>0}),
-                )
-            }
             "bots.send" => self.queue_peer(
                 author,
                 call.input["to"].as_str().ok_or("Provide to")?,

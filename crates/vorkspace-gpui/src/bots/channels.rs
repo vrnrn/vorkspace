@@ -354,7 +354,7 @@ impl Bots {
                 self.ensure_chat(&bot.id, cx);
                 continue;
             };
-            let configuration = primary.read(cx).settings.clone();
+            let configuration = primary.read(cx).bot_execution_settings();
             let provider = Kind::from_id(&primary.read(cx).summary.provider);
             let mut context = bot.clone();
             // This lane owns its channel turn, not the primary Bot's queue.
@@ -418,7 +418,7 @@ impl Bots {
             self.channels.loading.remove(&key);
             return;
         }
-        let mut settings = primary.read(cx).settings.clone();
+        let mut settings = primary.read(cx).bot_execution_settings();
         settings.bot = None;
         settings.turns.clear();
         settings.environment.clear();

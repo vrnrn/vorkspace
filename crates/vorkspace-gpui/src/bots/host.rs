@@ -255,6 +255,47 @@ impl Bots {
                 }
             }
         }
+        if call.action == "bots.read" {
+            let target = bot::channels::resolve(
+                &self.roster,
+                call.input["bot"].as_str().unwrap_or_default(),
+            )
+            .and_then(|target| {
+                if target.id == bot.id {
+                    return Err("Use your own conversation history".into());
+                }
+                Ok((
+                    target
+                        .session_id
+                        .ok_or("That Bot's conversation is unavailable")?,
+                    json!({"id":target.id,"name":target.label()}),
+                ))
+            });
+            let (session, target) = match target {
+                Ok(target) => target,
+                Err(error) => {
+                    self.finish_call(call, Err(error), cx);
+                    return;
+                }
+            };
+            let before = call.input["before"].as_u64();
+            let limit = call.input["limit"].as_u64().unwrap_or(40).clamp(1, 100) as usize;
+            let max = call.input["maxChars"]
+                .as_u64()
+                .unwrap_or(24_000)
+                .clamp(100, 100_000) as usize;
+            self.call_work(
+                call,
+                bot.id.clone(),
+                move |store| {
+                    let mut page = locked(&store)?.peer_history(session, before, limit, max)?;
+                    page["bot"] = target;
+                    Ok((page, Effect::None))
+                },
+                cx,
+            );
+            return;
+        }
         if call.action.starts_with("bots.") {
             let result = self.peer_action(&call, &bot.id, cx);
             self.finish_call(call, result, cx);
@@ -314,7 +355,7 @@ impl Bots {
 
                 let source_provider=source.as_ref().map(|v|v.read(cx).summary.provider.clone()).unwrap_or_else(||"codex".into());
                 let source_project=source.as_ref().map(|v|v.read(cx).summary.cwd.clone()).unwrap_or_else(||project.clone());
-                let settings=source.as_ref().map(|v|v.read(cx).settings.clone()).unwrap_or_default();
+                let settings=source.as_ref().map(|v|v.read(cx).bot_execution_settings()).unwrap_or_default();
                 let mut launch=match bot::launch::Launch::parse(&input,&source_provider,&source_project,&project,settings,false){Ok(launch)=>launch,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
                 if launch.provider.id()!=source_provider { launch.settings.account=crate::accounts::get(cx).map(|center|center.read(cx).selected(launch.provider,&project)).unwrap_or_default(); }
                 self.call_work(call,target,move|store|{

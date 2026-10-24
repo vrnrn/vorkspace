@@ -112,6 +112,16 @@ impl Conversation {
     pub(crate) fn bot_configuration_ready(&self) -> bool {
         self.history_ready() && self.loaded && !self.account_switching
     }
+    pub(crate) fn bot_settled(&self) -> bool {
+        !self.busy && !self.stopping
+    }
+    /// Model selection belongs to the conversation, while Settings also holds
+    /// the last loaded model. Derived execution lanes need the live selection.
+    pub(crate) fn bot_execution_settings(&self) -> Settings {
+        let mut settings = self.settings.clone();
+        settings.model = self.model.clone();
+        settings
+    }
     /// Channel history belongs to its own session; execution choices belong to
     /// the member Bot. Refresh them only at the boundary of a new idle turn.
     pub(crate) fn inherit_bot_configuration(
@@ -248,6 +258,15 @@ impl Conversation {
     #[cfg(test)]
     pub(crate) fn app_hold_account_switch(&mut self) {
         self.account_switching = true;
+    }
+    #[cfg(test)]
+    pub(crate) fn app_settle_stopped_turn(&mut self, cx: &mut Context<Self>) {
+        // Reproduce a late terminal update that leaves status Ready. The
+        // cancellation receipt, not the provider's status text, must win.
+        assert!(self.stopping);
+        self.stopping = false;
+        cx.emit(SessionChanged);
+        cx.notify();
     }
     pub(crate) fn app_flush_draft(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         self.capture_composer(cx);

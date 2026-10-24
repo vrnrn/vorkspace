@@ -1175,6 +1175,7 @@ impl Bots {
         .detach();
     }
     pub(super) fn tick(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.resume_peer_queues(cx);
         // A failed settlement write may be retried locally. The provider turn
         // itself is never replayed; starts belong only to this live owner.
         let unsettled = self
@@ -1315,7 +1316,7 @@ impl Bots {
         let inherited = self
             .chats
             .get(id)
-            .map(|v| v.read(cx).settings.clone())
+            .map(|v| v.read(cx).bot_execution_settings())
             .unwrap_or_default();
         let provider = self
             .chats

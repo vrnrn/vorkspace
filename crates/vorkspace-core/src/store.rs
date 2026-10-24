@@ -12,6 +12,7 @@ pub use local_submissions::{
 };
 mod managed_sessions;
 mod notes;
+mod peer_history;
 mod remote;
 mod remote_legacy;
 mod vorkspace_import;

@@ -421,6 +421,7 @@ impl Bots {
             this.ensure_chat(&id, cx);
             this.reload_files(&id, cx);
         }
+        this.resume_peer_queues(cx);
         this
     }
     pub(crate) fn is_bot_session(&self, id: i64) -> bool {
@@ -754,7 +755,12 @@ impl Bots {
                         } else {
                             if let Some(bot) = this.roster.get_mut(&source) {
                                 for message in &mut bot.outbox {
-                                    message.error = None;
+                                    // Usage recovery may be automatic. Only an
+                                    // explicit Retry can authorize a new peer
+                                    // submission after uncertain external effects.
+                                    if message.peer.is_none() {
+                                        message.error = None;
+                                    }
                                 }
                             }
                             this.save(cx);
@@ -974,7 +980,7 @@ impl Bots {
         };
         let view = view.read(cx);
         let row_count = view.bot_rows(cx).len();
-        let finished = !view.busy;
+        let finished = view.bot_settled();
         let completion =
             (finished && self.inflight.contains_key(id)).then(|| NotificationFinished {
                 summary: view.summary.clone(),
@@ -994,6 +1000,10 @@ impl Bots {
         if finished {
             if let Some(mut sent) = self.inflight.remove(id) {
                 let (mut ok, mut status) = self.chats[id].read(cx).external_outcome(cx);
+                if sent.peer.is_some() && self.chats[id].read(cx).notification_was_cancelled() {
+                    ok = false;
+                    status = "Stopped before the peer reply completed. Inspect the conversation before retrying.".into();
+                }
                 if ok && let Err(error) = self.reply_to_peer(id, &sent, cx) {
                     ok = false;
                     status = format!(

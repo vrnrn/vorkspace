@@ -21,6 +21,10 @@ from your own messages. Replies identify the Bot they answer, including after
 you reopen the conversation. Queued messages keep the same sender label.
 Failed messages stay visible
 for inspection, retry or discard; very large messages are rejected.
+Recovering from a usage limit does not silently resend a Bot message whose
+result is uncertain. Choose Retry after inspecting it. When one Bot reads
+another's history, it gets a small page of public text. Very large or remote
+histories can return a read-limit message, and saved history is never changed.
 
 After a crash, interrupted work is shown for inspection rather than quietly
 repeated. Drafts and messages stay saved. Native channel changes stay in the

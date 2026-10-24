@@ -256,6 +256,473 @@ fn submitted_peer_messages_pause_after_reopening_instead_of_replaying(cx: &mut T
 }
 
 #[gpui::test]
+fn cold_peer_recovery_loads_inactive_recipients_and_pauses_submitted_work(cx: &mut TestAppContext) {
+    for (submitted, human_head) in [(false, false), (false, true), (true, false), (true, true)] {
+        let s = setup(cx);
+        let (owner, prefs, receipt) = s.manager.update(cx, |m, _| {
+            m.roster.bots.extend([
+                Bot {
+                    id: "cold-sender".into(),
+                    name: "Sender".into(),
+                    ..Default::default()
+                },
+                Bot {
+                    id: "unrelated-idle".into(),
+                    name: "Idle".into(),
+                    ..Default::default()
+                },
+            ]);
+            if human_head {
+                m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                    id: "cold-human".into(),
+                    text: "Already queued human work".into(),
+                    peer: None,
+                    error: None,
+                    internal: false,
+                    sent_at: None,
+                    attachments: Vec::new(),
+                });
+            }
+            bot::peers::enqueue(
+                &mut m.roster,
+                "cold-sender",
+                &s.id,
+                "Resume this request",
+                "cold-request",
+                0,
+                true,
+            )
+            .unwrap();
+            let receipt = m
+                .roster
+                .get(&s.id)
+                .unwrap()
+                .outbox
+                .last()
+                .unwrap()
+                .id
+                .clone();
+            let db = locked(&s.store).unwrap();
+            let mut settings = db.agent_settings(s.session).unwrap().unwrap_or_default();
+            // Hold the restored owner at an existing admission gate. This
+            // tests cold recovery without launching a real provider process.
+            settings.usage_limit = Some(Default::default());
+            db.save_agent_settings(s.session, &settings).unwrap();
+            if submitted {
+                db.save_setting(&format!("bot-delivered:{}:{receipt}", s.session), "yes")
+                    .unwrap();
+            }
+            m.roster.save(&db).unwrap();
+            (m.owner.clone(), m.prefs.clone(), receipt)
+        });
+        let restored = cx.new(|cx| {
+            Bots::new(
+                s.store.clone(),
+                owner,
+                prefs,
+                Some("cold-sender".into()),
+                AnchorSlot::default(),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        restored.read_with(cx, |m, cx| {
+            assert_eq!(m.active.as_deref(), Some("cold-sender"));
+            assert!(
+                m.chats.contains_key(&s.id),
+                "an inactive recipient must load without being opened"
+            );
+            assert!(
+                !m.chats.contains_key("unrelated-idle"),
+                "idle Bots need no new owner"
+            );
+            assert!(!m.chats[&s.id].read(cx).busy);
+            assert!(!m.inflight.contains_key(&s.id));
+            let message = m
+                .roster
+                .get(&s.id)
+                .unwrap()
+                .outbox
+                .iter()
+                .find(|message| message.id == receipt)
+                .unwrap();
+            assert_eq!(message.id, receipt);
+            if submitted {
+                assert!(message.error.as_deref().unwrap().contains("Interrupted"));
+            } else {
+                assert!(message.error.is_none());
+                assert!(m.persisted_messages.contains(&receipt));
+            }
+        });
+        if !submitted {
+            restored.update(cx, |m, _| {
+                m.chats.remove(&s.id);
+                m.prefs.bots = false;
+            });
+            gpui::AnyWindowHandle::from(s.window)
+                .update(cx, |_, window, cx| {
+                    restored.update(cx, |m, cx| m.tick(window, cx))
+                })
+                .unwrap();
+            cx.run_until_parked();
+            restored.read_with(cx, |m, _| {
+                assert!(
+                    m.chats.contains_key(&s.id),
+                    "hiding Bots does not abandon accepted work"
+                )
+            });
+        }
+        let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+        assert_eq!(
+            saved
+                .get(&s.id)
+                .unwrap()
+                .outbox
+                .iter()
+                .find(|message| message.id == receipt)
+                .unwrap()
+                .error
+                .is_some(),
+            submitted
+        );
+    }
+}
+
+#[gpui::test]
+fn usage_resume_preserves_uncertain_peer_requests_until_explicit_retry(cx: &mut TestAppContext) {
+    use vorkspace_core::store::SubmissionInput;
+    let s = setup(cx);
+    let (old, text, peer) = s.manager.update(cx, |m, cx| {
+        m.roster.bots.push(Bot {
+            id: "usage-sender".into(),
+            name: "Sender".into(),
+            ..Default::default()
+        });
+        bot::peers::enqueue(
+            &mut m.roster,
+            "usage-sender",
+            &s.id,
+            "Finish this request",
+            "usage-request",
+            0,
+            true,
+        )
+        .unwrap();
+        let message = &mut m.roster.get_mut(&s.id).unwrap().outbox[0];
+        message.error = Some("Usage limit; inspect the uncertain turn".into());
+        let result = (
+            message.id.clone(),
+            message.text.clone(),
+            message.peer.clone(),
+        );
+        m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+            id: "human-queued".into(),
+            text: "Queued human follow-up".into(),
+            error: Some("Usage limit".into()),
+            peer: None,
+            internal: false,
+            sent_at: None,
+            attachments: Vec::new(),
+        });
+        m.chats[&s.id].update(cx, |v, _| v.busy = true);
+        m.save(cx);
+        result
+    });
+    let input = |attempt: &str, turn: &str| SubmissionInput {
+        attempt_id: attempt.into(),
+        user_turn_id: turn.into(),
+        session_id: String::new(),
+        payload_json: "{}".into(),
+        user_turn: None,
+    };
+    {
+        let db = locked(&s.store).unwrap();
+        assert!(
+            db.reserve_local_submission(s.session, input("uncertain-peer-attempt", &old))
+                .unwrap()
+                .created
+        );
+        assert!(
+            db.dispatch_local_submission("uncertain-peer-attempt")
+                .unwrap()
+                .claimed
+        );
+        db.settle_local_submission(
+            "uncertain-peer-attempt",
+            "uncertain",
+            Some("Usage limit".into()),
+        )
+        .unwrap();
+    }
+    cx.run_until_parked();
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |v, cx| {
+            v.settings.usage_limit = Some(Default::default());
+            v.busy = false;
+            v.resume_usage(cx);
+            // Hold execution before deferred recovery events are delivered.
+            v.busy = true;
+        })
+    });
+    cx.run_until_parked();
+    let fresh = s.manager.update(cx, |m, cx| {
+        let queue = &m.roster.get(&s.id).unwrap().outbox;
+        assert_eq!(queue[0].id, old);
+        assert_eq!(queue[0].text, text);
+        assert_eq!(queue[0].peer, peer);
+        assert!(queue[0].error.as_deref().unwrap().contains("uncertain"));
+        assert!(
+            queue[1].error.is_none(),
+            "ordinary usage recovery remains available"
+        );
+        assert!(m.roster.get("usage-sender").unwrap().outbox.is_empty());
+        m.queue_changed(&s.id, &old, false, cx);
+        let fresh = m.roster.get(&s.id).unwrap().outbox[0].id.clone();
+        assert_ne!(fresh, old);
+        assert!(
+            !m.persisted_messages.contains(&fresh),
+            "Retry must await ordered persistence"
+        );
+        fresh
+    });
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, _| {
+        let retry = &m.roster.get(&s.id).unwrap().outbox[0];
+        assert!(m.persisted_messages.contains(&fresh));
+        assert!(retry.error.is_none());
+        assert_eq!(retry.text, text);
+        assert_eq!(retry.peer, peer);
+    });
+    let db = locked(&s.store).unwrap();
+    assert!(
+        db.reserve_local_submission(s.session, input("replay-old-peer", &old))
+            .is_err()
+    );
+    assert!(
+        db.reserve_local_submission(s.session, input("fresh-peer-attempt", &fresh))
+            .unwrap()
+            .created
+    );
+    assert_eq!(
+        db.local_submissions(s.session)
+            .unwrap()
+            .iter()
+            .find(|r| r.attempt_id == "uncertain-peer-attempt")
+            .unwrap()
+            .phase,
+        "uncertain"
+    );
+}
+
+#[gpui::test]
+fn peer_history_app_calls_page_public_text_without_loading_a_peer_conversation(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, _| {
+        let mut db = locked(&s.store).unwrap();
+        let session = db.create("codex", &s.project).unwrap();
+        db.write_rows(
+            session.id,
+            0,
+            &[
+                vorkspace_core::transcript::Row {
+                    role: "assistant".into(),
+                    text: "Earlier reply".into(),
+                    first: true,
+                    sent_at: None,
+                },
+                vorkspace_core::transcript::Row {
+                    role: "tool".into(),
+                    text: "Private output".repeat(100_000),
+                    first: true,
+                    sent_at: None,
+                },
+                vorkspace_core::transcript::Row {
+                    role: "assistant".into(),
+                    text: "Latest reply".into(),
+                    first: true,
+                    sent_at: None,
+                },
+            ],
+        )
+        .unwrap();
+        m.roster.bots.push(Bot {
+            id: "read-peer".into(),
+            name: "Reader target".into(),
+            session_id: Some(session.id),
+            ..Default::default()
+        });
+    });
+    let result = call(
+        &s,
+        "bounded-peer-read",
+        "bots.read",
+        json!({"bot":"read-peer","limit":2,"maxChars":100}),
+        cx,
+    )
+    .recv()
+    .unwrap()
+    .unwrap();
+    assert_eq!(result["bot"]["id"], "read-peer");
+    assert_eq!(
+        result["messages"],
+        json!([{"role":"assistant","text":"Latest reply","truncated":false}])
+    );
+    assert_eq!(result["before"], 1);
+    assert_eq!(result["hasMore"], true);
+    s.manager
+        .read_with(cx, |m, _| assert!(!m.chats.contains_key("read-peer")));
+    let own = call(
+        &s,
+        "reject-self-peer-read",
+        "bots.read",
+        json!({"bot":s.id}),
+        cx,
+    )
+    .recv()
+    .unwrap();
+    assert!(own.unwrap_err().contains("own conversation"));
+}
+
+#[gpui::test]
+fn stopped_peer_turn_keeps_its_request_and_never_forwards_a_late_partial_reply(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.roster.bots.push(Bot {
+            id: "stop-sender".into(),
+            name: "Sender".into(),
+            ..Default::default()
+        });
+        bot::peers::enqueue(
+            &mut m.roster,
+            "stop-sender",
+            &s.id,
+            "Review this",
+            "stop-request",
+            0,
+            true,
+        )
+        .unwrap();
+        let sent = m.roster.get(&s.id).unwrap().outbox[0].clone();
+        m.chats[&s.id].update(cx, |v, cx| {
+            v.bot_post("bot-system", sent.text.clone(), cx).unwrap();
+            v.bot_post("assistant", "Unfinished answer".into(), cx)
+                .unwrap();
+            v.busy = true;
+        });
+        m.inflight.insert(s.id.clone(), sent);
+        m.save(cx);
+    });
+    cx.run_until_parked();
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |v, cx| v.bot_stop(cx));
+        m.chat_changed(&s.id, cx);
+        assert!(
+            m.inflight.contains_key(&s.id),
+            "Stop must wait for worker settlement"
+        );
+        assert!(m.roster.get("stop-sender").unwrap().outbox.is_empty());
+        assert_eq!(m.roster.get(&s.id).unwrap().outbox.len(), 1);
+    });
+    cx.run_until_parked();
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |v, cx| {
+            assert!(v.notification_was_cancelled());
+            v.app_settle_stopped_turn(cx);
+            v.bot_post("assistant", "Late partial answer".into(), cx)
+                .unwrap();
+        });
+        m.chat_changed(&s.id, cx);
+        m.chat_changed(&s.id, cx);
+        assert!(!m.inflight.contains_key(&s.id));
+        assert!(m.roster.get("stop-sender").unwrap().outbox.is_empty());
+        let queue = &m.roster.get(&s.id).unwrap().outbox;
+        assert_eq!(queue.len(), 1);
+        assert!(queue[0].error.as_deref().unwrap().starts_with("Stopped"));
+        assert!(
+            m.chats[&s.id]
+                .read(cx)
+                .bot_rows(cx)
+                .iter()
+                .any(|row| row.text == "Late partial answer")
+        );
+    });
+    cx.run_until_parked();
+    let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+    assert!(saved.get("stop-sender").unwrap().outbox.is_empty());
+    assert!(
+        saved.get(&s.id).unwrap().outbox[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .starts_with("Stopped")
+    );
+}
+
+#[gpui::test]
+fn channel_workers_use_the_live_bot_model_for_new_and_reused_lanes(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let id = s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |v, cx| {
+            v.bot_config(
+                Kind::Codex,
+                Some("selected-codex-model".into()),
+                HashMap::new(),
+                cx,
+            )
+            .unwrap();
+            assert_ne!(
+                v.settings.model,
+                v.bot_model(),
+                "exercise the stale loaded Settings field"
+            );
+        });
+        let mut next = m.channels.state.clone();
+        let id = next
+            .create("live-model", "", vec![s.id.clone()], &m.roster)
+            .unwrap();
+        m.commit_channels(next, cx).unwrap();
+        m.channels.inspecting = Some((id.clone(), s.id.clone()));
+        m.channel_tick(cx);
+        id
+    });
+    cx.run_until_parked();
+    s.manager.update(cx, |m, cx| {
+        let key = (id.clone(), s.id.clone());
+        assert_eq!(
+            m.channels.views[&key].read(cx).bot_model().as_deref(),
+            Some("selected-codex-model")
+        );
+        m.chats[&s.id].update(cx, |v, cx| {
+            v.bot_config(
+                Kind::Claude,
+                Some("selected-claude-model".into()),
+                HashMap::new(),
+                cx,
+            )
+            .unwrap();
+        });
+        let primary = m.chats[&s.id].read(cx);
+        let provider = Kind::from_id(&primary.summary.provider);
+        let configuration = primary.bot_execution_settings();
+        m.channels.views[&key].update(cx, |worker, cx| {
+            assert!(worker.inherit_bot_configuration(provider, &configuration, cx))
+        });
+        let worker = m.channels.views[&key].read(cx);
+        assert_eq!(worker.summary.provider, Kind::Claude.id());
+        assert_eq!(worker.bot_model().as_deref(), Some("selected-claude-model"));
+        assert!(
+            !worker.busy,
+            "configuration inheritance must not itself start provider execution"
+        );
+        assert!(m.channels.state.get(&id).unwrap().deliveries.is_empty());
+    });
+}
+
+#[gpui::test]
 fn channel_workers_refresh_member_permissions_account_and_model_without_losing_history(
     cx: &mut TestAppContext,
 ) {
