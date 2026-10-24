@@ -19,6 +19,8 @@ Usage: vorkspace-gpui app ACTION --json '{...}' [--request-id ID]
 Pass --input FILE or --input - to read a JSON object instead.
 Actions:
 models.list {}
+bots.list {}; bots.read {bot,before?,limit?,maxChars?}; bots.send {to,message,expectReply?}
+Peer replies arrive in the sender's conversation after the recipient finishes. End your turn to allow queued replies to run.
 sessions.list {project?}
 sessions.read {sessionId,project?,before?,limit?,maxChars?}
 sessions.start {prompt,project?,harness?,model?,modelSettings?,runtimeMode?,title?,draft?,reveal?,workspaceMode?,worktreeBase?,worktreeCwd?,notifyOnComplete?,placement?,besideSessionId?}

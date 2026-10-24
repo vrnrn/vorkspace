@@ -104,6 +104,10 @@ impl Channels {
             &serde_json::to_string(self).map_err(|e| e.to_string())?,
         )
     }
+    pub fn save_with_draft(&self, store: &Store, key: &str, draft: &str) -> Result<(), String> {
+        let state = serde_json::to_string(self).map_err(|e| e.to_string())?;
+        store.save_settings(&[(KEY, &state), (key, draft)])
+    }
     pub fn create(
         &mut self,
         name: &str,
@@ -144,6 +148,7 @@ impl Channels {
             if !topic.is_empty() {
                 channel.topic = topic.into();
             }
+            channel.updated_at = now_ms();
             return Ok(channel.id.clone());
         }
         if self.channels.len() >= 24 {
@@ -165,6 +170,38 @@ impl Channels {
         self.channels
             .iter()
             .find(|c| c.id == id || c.name == id.trim_start_matches('#'))
+    }
+    pub fn edit(
+        &mut self,
+        id: &str,
+        name: &str,
+        topic: &str,
+        members: Vec<String>,
+        roster: &Roster,
+    ) -> Result<(), String> {
+        let mut draft = Channels::default();
+        draft.create(name, topic, members, roster)?;
+        let draft = draft.channels.pop().unwrap();
+        if self
+            .channels
+            .iter()
+            .any(|c| c.id != id && c.name == draft.name)
+        {
+            return Err("A channel with that name already exists".into());
+        }
+        let channel = self.get_mut(id).ok_or("Channel not found")?;
+        if channel
+            .deliveries
+            .iter()
+            .any(|d| d.state != "done" && !draft.member_ids.contains(&d.bot))
+        {
+            return Err("Stop and dismiss pending turns before removing their Bot".into());
+        }
+        channel.name = draft.name;
+        channel.topic = draft.topic;
+        channel.member_ids = draft.member_ids;
+        channel.updated_at = now_ms();
+        Ok(())
     }
     pub fn get_mut(&mut self, id: &str) -> Option<&mut Channel> {
         self.channels
@@ -214,19 +251,52 @@ impl Channels {
                 mentions.push(bot.id.clone());
             }
         }
-        for bot in roster.bots.iter().filter(|m| c.member_ids.contains(&m.id)) {
-            let pattern = format!(r"(?i)@{}(?:\b|$)", regex::escape(&bot.label()));
-            if regex::Regex::new(&pattern).is_ok_and(|p| p.is_match(text))
-                && !mentions.contains(&bot.id)
+        for (offset, _) in text.match_indices('@') {
+            if text[..offset]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '@')
             {
-                mentions.push(bot.id.clone());
+                continue;
+            }
+            let tail = &text[offset + 1..];
+            let mut matches = roster
+                .bots
+                .iter()
+                .filter(|m| c.member_ids.contains(&m.id))
+                .filter_map(|bot| {
+                    [bot.label(), bot.id.clone()]
+                        .iter()
+                        .filter_map(|name| {
+                            let prefix = tail.get(..name.len())?;
+                            let boundary = tail[name.len()..]
+                                .chars()
+                                .next()
+                                .is_none_or(|c| !c.is_alphanumeric() && c != '_' && c != '-');
+                            (boundary && prefix.eq_ignore_ascii_case(name)).then_some(name.len())
+                        })
+                        .max()
+                        .map(|len| (len, &bot.id))
+                })
+                .collect::<Vec<_>>();
+            matches.sort_by_key(|(len, _)| std::cmp::Reverse(*len));
+            if let Some((len, id)) = matches.first() {
+                if matches.get(1).is_some_and(|(n, _)| n == len) {
+                    return Err("Ambiguous Bot mention; use its ID".into());
+                }
+                if !mentions.contains(id) {
+                    mentions.push((*id).clone());
+                }
             }
         }
         let wake = if author.is_none() && mentions.is_empty() {
             c.member_ids.clone()
         } else {
             mentions.clone()
-        };
+        }
+        .into_iter()
+        .filter(|id| hop < MAX_HOPS && author.is_none_or(|bot| bot.id != *id))
+        .collect::<Vec<_>>();
         let author = author.map(|m| json!({"kind":"bot","botId":m.id,"name":m.label(),"mascot":m.mascot,"color":format!("#{:06x}",m.color)})).unwrap_or(json!({"kind":"user"}));
         let id = super::new_id();
         c.messages.push(json!({"id":id,"channelId":c.id,"from":author,"author":author,"text":text,"mentions":mentions,"requestId":request,"requestedTargets":targets,"hop":hop,"createdAt":now_ms()}));
@@ -331,6 +401,96 @@ mod tests {
                 },
             ],
             ..Default::default()
+        }
+    }
+    #[test]
+    fn mention_boundaries_and_member_edits_preserve_pending_intent() {
+        let mut r = roster();
+        r.bots[1].name = "Alpha Team++".into();
+        let mut state = Channels::default();
+        let id = state
+            .create("team", "", vec!["a".into(), "b".into()], &r)
+            .unwrap();
+        state
+            .post(
+                &id,
+                Some(&r.bots[0]),
+                "@Alpha Team++ check user@Alpha.example",
+                "one",
+                1,
+                &[],
+                &r,
+            )
+            .unwrap();
+        assert_eq!(
+            state
+                .get(&id)
+                .unwrap()
+                .deliveries
+                .iter()
+                .map(|d| d.bot.as_str())
+                .collect::<Vec<_>>(),
+            ["b"]
+        );
+        let before = serde_json::to_string(&state).unwrap();
+        assert!(state
+            .edit(&id, "renamed", "topic", vec!["a".into()], &r)
+            .is_err());
+        assert_eq!(serde_json::to_string(&state).unwrap(), before);
+        state
+            .edit(&id, "renamed", "topic", vec!["b".into(), "a".into()], &r)
+            .unwrap();
+        assert_eq!(state.get(&id).unwrap().messages.len(), 1);
+        assert_eq!(state.get(&id).unwrap().topic, "topic");
+        state
+            .post(
+                &id,
+                Some(&r.bots[0]),
+                "@Alpha Team++ final",
+                "cap",
+                MAX_HOPS,
+                &[],
+                &r,
+            )
+            .unwrap();
+        assert_eq!(state.get(&id).unwrap().deliveries.len(), 1);
+    }
+    #[test]
+    fn sending_and_clearing_the_draft_reopen_together() {
+        for shared in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("workspace.db");
+            let open = || {
+                if shared {
+                    Store::open_vorkspace(&path)
+                } else {
+                    Store::open(&path)
+                }
+            };
+            let store = open().unwrap();
+            let r = roster();
+            let mut state = Channels::default();
+            let id = state.create("team", "", vec!["a".into()], &r).unwrap();
+            let draft = format!("channel-draft:{id}");
+            state
+                .save_with_draft(&store, &draft, "Unsaved message")
+                .unwrap();
+            state
+                .post(&id, None, "Sent message", "send", 0, &[], &r)
+                .unwrap();
+            state.save_with_draft(&store, &draft, "").unwrap();
+            drop(store);
+            let store = open().unwrap();
+            assert_eq!(store.setting(&draft).unwrap().as_deref(), Some(""));
+            assert_eq!(
+                Channels::load(&store)
+                    .unwrap()
+                    .get(&id)
+                    .unwrap()
+                    .messages
+                    .len(),
+                1
+            );
         }
     }
     #[test]

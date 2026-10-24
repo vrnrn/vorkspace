@@ -104,7 +104,7 @@ impl TranscriptView {
             return None;
         }
         let row = self.source.get(start)?;
-        let stamp = if row.role == "user" {
+        let stamp = if row.role == "user" || self.peer_at(start).is_some() {
             start
         } else if row.is_prompt() {
             return None;
@@ -117,7 +117,9 @@ impl TranscriptView {
                 return None;
             }
             let prompt = self.prompt_start(turn);
-            if self.source[prompt..turn].iter().any(|r| r.role == "user") {
+            if self.peer_at(prompt).is_some()
+                || self.source[prompt..turn].iter().any(|r| r.role == "user")
+            {
                 return None;
             }
             prompt
@@ -241,6 +243,7 @@ mod tests {
                     error: None,
                     sent_at: Some(at(6, 0, 5)),
                     attachments: Vec::new(),
+                    peer: None,
                 }],
                 cx,
             );

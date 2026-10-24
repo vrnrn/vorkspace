@@ -2,7 +2,9 @@ use serde_json::Value;
 /// Reject misspelled fields and ambiguous types before any app mutation.
 pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     let fields = match action {
-        "models.list" | "soul.read" | "habits.list" | "channels.list" => "",
+        "models.list" | "soul.read" | "habits.list" | "channels.list" | "bots.list" => "",
+        "bots.read" => "bot before limit maxChars",
+        "bots.send" => "to message expectReply",
         "channels.create" => "name topic members",
         "channels.read" => "channel limit",
         "channels.post" => "channel message to",
@@ -38,7 +40,15 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         if !fields.split_whitespace().any(|f| f == key) {
             return Err(format!("{action} does not take {key}"));
         }
-        if ["draft", "reveal", "notifyOnComplete", "existing", "enabled"].contains(&key.as_str())
+        if [
+            "draft",
+            "reveal",
+            "notifyOnComplete",
+            "existing",
+            "enabled",
+            "expectReply",
+        ]
+        .contains(&key.as_str())
             && !value.is_boolean()
         {
             return Err(format!("{key} must be true or false"));
@@ -54,6 +64,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
             "notifyOnComplete",
             "existing",
             "enabled",
+            "expectReply",
             "before",
             "limit",
             "offset",
@@ -110,7 +121,10 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     }) {
         return Err("tags must be an array of up to 32 short strings".into());
     }
-    for key in ["members", "to"] {
+    for key in ["members", "to"]
+        .into_iter()
+        .filter(|key| *key != "to" || action != "bots.send")
+    {
         if input.get(key).is_some_and(|v| {
             v.as_array().is_none_or(|a| {
                 a.len() > 32
@@ -121,6 +135,9 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
             return Err(format!("{key} must be an array of up to 32 Bot names"));
         }
     }
+    if action == "bots.send" && input.get("to").is_some_and(|v| !v.is_string()) {
+        return Err("to must be a Bot name or ID".into());
+    }
     Ok(())
 }
 /// Read queries do not reserve durable effects or turn a frequent listing into
@@ -129,6 +146,8 @@ pub fn is_read_only(action: &str) -> bool {
     matches!(
         action,
         "models.list"
+            | "bots.list"
+            | "bots.read"
             | "sessions.list"
             | "sessions.read"
             | "folders.list"
@@ -152,6 +171,16 @@ mod tests {
     use serde_json::json;
     #[test]
     fn validates_before_mutation() {
+        assert!(validate(
+            "bots.send",
+            &json!({"to":"Beta","message":"Review","expectReply":true})
+        )
+        .is_ok());
+        assert!(validate("bots.send", &json!({"to":["Beta"],"message":"Review"})).is_err());
+        assert!(validate("bots.send", &json!({"to":"Beta","expectReply":"true"})).is_err());
+        assert!(
+            is_read_only("bots.read") && is_read_only("bots.list") && !is_read_only("bots.send")
+        );
         assert!(validate("sessions.start", &json!({"prompt":"x","draft":"false"})).is_err());
         assert!(validate("sessions.delete", &json!({"sessionId":1,"force":true})).is_err());
         assert!(validate("sessions.start", &json!({"runtimeMode":"unsafe"})).is_err());

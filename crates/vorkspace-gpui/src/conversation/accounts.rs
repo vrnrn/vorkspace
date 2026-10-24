@@ -401,7 +401,6 @@ impl Conversation {
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(content(1.))
                     .bg(content(0.1))
-                    .hover(|s| s.bg(content(0.15)))
                     .child("Choose another model")
                     .child(icon("chevron-down", 11.).text_color(content(0.5)))
                     .when(!switching, |d| {
@@ -618,13 +617,28 @@ fn usage_button(
         .when(disabled, |d| d.opacity(0.45))
         .when(!disabled, |d| {
             d.cursor_pointer()
-                .hover(move |s| s.bg(content(0.1)).text_color(content(1.)))
+                .hover(move |s| s.bg(content(0.15)).text_color(content(1.)))
         })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn bot_usage_notice_renders_model_recovery_without_duplicate_hover_styles(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let store = Arc::new(std::sync::Mutex::new(
+            vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        ));
+        let summary = locked(&store).unwrap().create("codex", "/fixture").unwrap();
+        let view = cx.new(|cx| Conversation::new(summary, store, cx));
+        view.update(cx, |view, cx| {
+            view.settings.usage_limit = Some(Default::default());
+            assert!(view.usage_notice(true, cx).is_some());
+        });
+    }
 
     #[gpui::test]
     fn account_recovery_uses_the_terminal_limit_without_reviving_an_older_failure(

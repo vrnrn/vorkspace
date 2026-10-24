@@ -30,6 +30,13 @@ pub(crate) fn bind(cx: &mut App) {
     ]);
 }
 pub(crate) struct ModePicked(pub &'static str);
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct BotMention {
+    pub id: String,
+    pub name: String,
+    pub mascot: String,
+    pub color: u32,
+}
 #[derive(Clone)]
 struct Choice {
     label: String,
@@ -41,6 +48,7 @@ struct Choice {
 }
 pub(crate) struct Completion {
     input: Entity<input::Input>,
+    bots: Option<Vec<BotMention>>,
     store: Option<crate::runtime::Database>,
     notes: Vec<vorkspace_core::notes::Note>,
     cwd: String,
@@ -78,10 +86,30 @@ impl Drop for Completion {
 }
 impl Completion {
     pub(crate) fn new(input: Entity<input::Input>, cwd: String, cx: &mut Context<Self>) -> Self {
-        input.update(cx, |input, cx| input.enable_inline_commands(cx));
+        Self::create(input, cwd, None, cx)
+    }
+    pub(crate) fn bot_mentions(
+        input: Entity<input::Input>,
+        bots: Vec<BotMention>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut view = Self::create(input, String::new(), Some(bots), cx);
+        view.sync(cx);
+        view
+    }
+    fn create(
+        input: Entity<input::Input>,
+        cwd: String,
+        bots: Option<Vec<BotMention>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        if bots.is_none() {
+            input.update(cx, |input, cx| input.enable_inline_commands(cx));
+        }
         let observe = cx.observe(&input, |this, _, cx| this.sync(cx));
         Self {
             input,
+            bots,
             store: None,
             notes: Vec::new(),
             cwd,
@@ -121,6 +149,15 @@ impl Completion {
             inline_field: false,
             _observe: observe,
         }
+    }
+    pub(crate) fn set_bots(&mut self, bots: Vec<BotMention>, cx: &mut Context<Self>) {
+        if self.bots.as_ref() == Some(&bots) {
+            return;
+        }
+        self.bots = Some(bots);
+        self.token = None;
+        self.dismissed = None;
+        self.sync(cx);
     }
     pub(crate) fn with_store(mut self, store: crate::runtime::Database) -> Self {
         self.store = Some(store);
@@ -315,6 +352,26 @@ impl Completion {
         cx.notify();
     }
     fn sync(&mut self, cx: &mut Context<Self>) {
+        // Channel membership is already local. Mention completion never loads
+        // project files, provider catalogs, commands, skills or notes.
+        if self.bots.is_some() {
+            let token = self
+                .input
+                .read(cx)
+                .completion_token()
+                .filter(|t| t.trigger == Trigger::Mention);
+            if token.is_some() && token == self.dismissed {
+                return;
+            }
+            self.dismissed = None;
+            if token != self.token {
+                self.token = token;
+                self.active = 0;
+                self.rank();
+                cx.notify();
+            }
+            return;
+        }
         if self.cwd.starts_with("remote://") {
             self.choices.clear();
             self.token = None;
@@ -500,6 +557,35 @@ impl Completion {
         let Some(token) = &self.token else {
             return;
         };
+        if let Some(bots) = &self.bots {
+            let mut choices = bots
+                .iter()
+                .filter_map(|bot| {
+                    composer::score(&token.query, &bot.name).map(|score| {
+                        let unique = bots
+                            .iter()
+                            .filter(|b| b.name.eq_ignore_ascii_case(&bot.name))
+                            .count()
+                            == 1;
+                        (
+                            score,
+                            Choice {
+                                label: bot.name.clone(),
+                                detail: if unique { "Bot".into() } else { bot.id.clone() },
+                                insertion: format!("@{}", if unique { &bot.name } else { &bot.id }),
+                                mode: None,
+                                file: false,
+                                server: None,
+                            },
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            choices.sort_by(|(a, x), (b, y)| b.cmp(a).then_with(|| x.label.cmp(&y.label)));
+            self.choices = choices.into_iter().take(8).map(|(_, c)| c).collect();
+            self.scroll.scroll_to_item(self.active);
+            return;
+        }
         if self.mcp_open {
             let mut servers = self.mcp.clone();
             servers.sort_by_key(|server| {
@@ -873,29 +959,47 @@ impl Render for Completion {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(if choice.file {
-                                    crate::file_icons::file_type_icon(
-                                        &choice.label,
-                                        false,
-                                        false,
-                                        16.,
-                                    )
-                                } else {
-                                    icon(
-                                        command.map(input::Command::icon).unwrap_or_else(|| {
-                                            if choice.insertion.starts_with("@note/") {
-                                                "note"
-                                            } else {
-                                                "sparkles"
-                                            }
-                                        }),
-                                        16.,
-                                    )
-                                    .text_color(
-                                        command.map_or_else(accent_color, input::Command::color),
-                                    )
-                                    .into_any_element()
-                                }),
+                                .child(
+                                    if let Some(bot) = self.bots.as_ref().and_then(|bots| {
+                                        bots.iter().find(|bot| {
+                                            format!("@{}", bot.name) == choice.insertion
+                                                || format!("@{}", bot.id) == choice.insertion
+                                        })
+                                    }) {
+                                        crate::bots::avatar::avatar(
+                                            &bot.mascot,
+                                            bot.color,
+                                            "idle",
+                                            20.,
+                                            true,
+                                        )
+                                    } else if choice.file {
+                                        crate::file_icons::file_type_icon(
+                                            &choice.label,
+                                            false,
+                                            false,
+                                            16.,
+                                        )
+                                    } else {
+                                        icon(
+                                            command.map(input::Command::icon).unwrap_or_else(
+                                                || {
+                                                    if choice.insertion.starts_with("@note/") {
+                                                        "note"
+                                                    } else {
+                                                        "sparkles"
+                                                    }
+                                                },
+                                            ),
+                                            16.,
+                                        )
+                                        .text_color(
+                                            command
+                                                .map_or_else(accent_color, input::Command::color),
+                                        )
+                                        .into_any_element()
+                                    },
+                                ),
                         )
                         .child(
                             div()
@@ -921,7 +1025,9 @@ impl Render for Completion {
                 })
                 .collect();
             let weak = cx.weak_entity();
-            let title = if self.mcp_open {
+            let title = if self.bots.is_some() {
+                "BOTS"
+            } else if self.mcp_open {
                 "MCP SERVERS"
             } else if self
                 .token
@@ -1044,6 +1150,93 @@ impl Render for Completion {
 mod tests {
     use super::*;
     use gpui::{TestAppContext, WindowHandle};
+    #[gpui::test]
+    fn bot_mentions_replace_only_the_token_without_loading_catalogs_or_submitting(
+        cx: &mut TestAppContext,
+    ) {
+        let window = cx.update(|cx| {
+            input::bind(cx);
+            bind(cx);
+            crate::popover::bind(cx);
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    let input = cx.new(input::Input::channel_message);
+                    Completion::bot_mentions(
+                        input,
+                        vec![
+                            BotMention {
+                                id: "alpha".into(),
+                                name: "Alpha".into(),
+                                mascot: "cat".into(),
+                                color: 0xabcdef,
+                            },
+                            BotMention {
+                                id: "beta".into(),
+                                name: "Beta Team".into(),
+                                mascot: "robot".into(),
+                                color: 0xabcdef,
+                            },
+                        ],
+                        cx,
+                    )
+                })
+            })
+            .unwrap()
+        });
+        let submitted = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = submitted.clone();
+        let _subscription = window
+            .update(cx, |view, window, cx| {
+                window.focus(&view.input.focus_handle(cx), cx);
+                view.input.update(cx, |input, cx| {
+                    input.set_text("Ask @Be later 🦀".into(), cx);
+                    input.select_utf16(7..7, cx);
+                });
+                cx.subscribe(&view.input, move |_, _, _: &input::Submitted, _| {
+                    count.set(count.get() + 1)
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                assert_eq!(view.choices.len(), 1);
+                assert_eq!(view.choices[0].insertion, "@Beta Team");
+                assert!(!view.loading && !view.native_loading);
+                assert!(view.files.is_empty() && view.skills.is_empty() && view.notes.is_empty());
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |view, window, cx| {
+                assert_eq!(view.input.read(cx).content, "Ask @Beta Team later 🦀");
+                assert!(view.input.focus_handle(cx).is_focused(window));
+                view.input
+                    .update(cx, |input, cx| input.set_text("@Al".into(), cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "escape");
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert!(view.token.is_none());
+                assert_eq!(view.input.read(cx).content, "@Al");
+                view.set_bots(
+                    vec![BotMention {
+                        id: "beta".into(),
+                        name: "Beta Team".into(),
+                        mascot: "robot".into(),
+                        color: 0xabcdef,
+                    }],
+                    cx,
+                );
+                assert!(view.choices.is_empty());
+            })
+            .unwrap();
+        assert_eq!(submitted.get(), 0);
+    }
     fn window(cx: &mut TestAppContext) -> WindowHandle<Completion> {
         let window = cx.update(|cx| {
             input::bind(cx);

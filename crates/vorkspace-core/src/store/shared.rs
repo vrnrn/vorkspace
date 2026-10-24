@@ -519,11 +519,25 @@ impl Store {
             .cloned())
     }
     pub(super) fn shared_save_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        self.shared_save_settings(&[(key, value)])
+    }
+    pub(super) fn shared_save_settings(&self, values: &[(&str, &str)]) -> Result<(), String> {
         self.mark_attachment_activity();
         self.shared_writable()?;
         let shared = self.shared.as_ref().unwrap();
+        if values.iter().all(|(key, value)| {
+            shared
+                .extras
+                .borrow()
+                .get(*key)
+                .is_some_and(|old| old == value)
+        }) {
+            return Ok(());
+        }
         let mut next = shared.extras.borrow().clone();
-        next.insert(key.into(), value.into());
+        for (key, value) in values {
+            next.insert((*key).into(), (*value).into());
+        }
         if let Some(path) = &shared.extras_path {
             atomic_json(path, &next)?;
         }

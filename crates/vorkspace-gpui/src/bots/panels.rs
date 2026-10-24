@@ -693,7 +693,9 @@ impl Bots {
         }
         let label = label.to_string();
         let field = cx.new(|cx| {
-            let mut f = if multi {
+            let mut f = if key.starts_with("channel-draft:") {
+                Input::channel_message(cx)
+            } else if multi {
                 Input::markdown_editor(&label, cx)
             } else if key == "memory-fact" || key.starts_with("memory-edit:") {
                 Input::memory_fact(&label, cx)
@@ -743,6 +745,17 @@ impl Bots {
             }),
         );
         self.fields.insert(key.into(), field.clone());
+        if let Some(channel) = key.strip_prefix("channel-draft:") {
+            let channel = channel.to_owned();
+            self.observations.push(cx.subscribe(
+                &field,
+                move |this, _, _: &input::Submitted, cx| {
+                    if this.channels.open && this.channels.selected.as_deref() == Some(&channel) {
+                        this.send_channel_message(&channel, cx);
+                    }
+                },
+            ));
+        }
         field
     }
     pub(super) fn value(&self, key: &str, cx: &App) -> String {

@@ -323,6 +323,12 @@ impl Input {
         input.secondary_submit = true;
         input
     }
+    pub(crate) fn channel_message(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.label = "Message the channel".into();
+        input.placeholder = "Message the channel · @mention a Bot to address it".into();
+        input
+    }
     pub(crate) fn multiline_field(label: &str, placeholder: &str, cx: &mut Context<Self>) -> Self {
         let mut input = Self::commit_message(cx);
         input.label = label.to_owned().into();
