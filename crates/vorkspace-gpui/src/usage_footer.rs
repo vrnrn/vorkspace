@@ -57,8 +57,9 @@ pub(crate) struct UsageFooter {
     details: FocusHandle,
     previous_focus: Option<FocusHandle>,
     open: bool,
-    /// UsageFooter's `footer` variant: the classic layout's bordered strip.
-    classic: bool,
+    compact: bool,
+    context_key: Key,
+    rows: std::collections::HashMap<Key, (AnchorSlot, FocusHandle, FocusHandle)>,
     show_remaining: bool,
     _clock: gpui::Task<()>,
 }
@@ -75,9 +76,10 @@ impl UsageFooter {
         let key = Key::new(kind, profile, model);
         self.project = project;
         self.session = session;
-        if self.key != key {
+        if self.context_key != key {
+            self.context_key = key.clone();
             self.kind = kind;
-            self.key = key;
+            self.select_subscription(key, cx);
             self.open = false;
             self.show_accounts = false;
             self.confirm_reset = None;
@@ -115,11 +117,19 @@ impl UsageFooter {
             _account_events: crate::accounts::get(cx).map(|center| {
                 cx.subscribe(
                     &center,
-                    |_this, center, event: &crate::accounts::AccountEvent, cx| {
+                    |this, center, event: &crate::accounts::AccountEvent, cx| {
+                        if matches!(
+                            event,
+                            crate::accounts::AccountEvent::Updated
+                                | crate::accounts::AccountEvent::Authenticated(..)
+                        ) {
+                            this.refresh_subscriptions(cx);
+                        }
                         let modal_auth =
                             matches!(event, crate::accounts::AccountEvent::AuthStarted)
                                 && center.read(cx).has_modal_auth();
                         if modal_auth
+                            || matches!(event, crate::accounts::AccountEvent::Removing(kind, id) if *kind == this.kind && *id == this.key.profile.id)
                             || matches!(
                                 event,
                                 crate::accounts::AccountEvent::Select { .. }
@@ -150,10 +160,21 @@ impl UsageFooter {
             details: cx.focus_handle(),
             previous_focus: None,
             open: false,
-            classic: false,
+            compact: false,
+            context_key: Key::new(kind, Default::default(), None),
+            rows: Default::default(),
             show_remaining: false,
             _clock: clock,
         };
+        this.rows.insert(
+            this.key.clone(),
+            (
+                this.anchor.clone(),
+                this.trigger.clone(),
+                this.refresh_focus.clone(),
+            ),
+        );
+        this.refresh_subscriptions(cx);
         this.refresh(false, cx);
         this
     }
@@ -177,11 +198,138 @@ impl UsageFooter {
             if self.show_remaining { "left" } else { "used" }
         )
     }
-    pub(crate) fn set_classic(&mut self, classic: bool, cx: &mut Context<Self>) {
-        if self.classic != classic {
-            self.classic = classic;
+    pub(crate) fn hide(&mut self, cx: &mut Context<Self>) {
+        self.open = false;
+        self.show_accounts = false;
+        self.confirm_reset = None;
+        self.previous_focus = None;
+        cx.notify();
+    }
+    pub(crate) fn set_compact(&mut self, compact: bool, cx: &mut Context<Self>) {
+        if self.compact != compact {
+            self.compact = compact;
             cx.notify();
         }
+    }
+    fn refresh_subscriptions(&self, cx: &mut Context<Self>) {
+        if let Some(center) = crate::accounts::get(cx) {
+            center.update(cx, |center, cx| {
+                for kind in vorkspace_core::accounts::PROVIDERS {
+                    center.load_provider(kind, false, cx);
+                }
+            });
+        }
+    }
+    fn select_subscription(&mut self, key: Key, cx: &mut Context<Self>) {
+        let chrome = self
+            .rows
+            .entry(key.clone())
+            .or_insert_with(|| (AnchorSlot::default(), cx.focus_handle(), cx.focus_handle()));
+        self.anchor = chrome.0.clone();
+        self.trigger = chrome.1.clone();
+        self.refresh_focus = chrome.2.clone();
+        self.kind = key.kind;
+        self.key = key;
+        self.cache[index(self.kind)] = crate::accounts::get(cx)
+            .and_then(|center| center.read(cx).usage.get(&self.key).cloned())
+            .unwrap_or_default();
+    }
+    fn open_subscription(&mut self, key: Key, window: &mut Window, cx: &mut Context<Self>) {
+        if self.key != key {
+            if self.open {
+                self.dismiss(window, cx);
+            }
+            self.select_subscription(key, cx);
+        }
+        self.toggle(window, cx);
+    }
+    fn subscriptions(&self, cx: &App) -> Vec<(Key, String, CachedUsage)> {
+        let Some(center) = crate::accounts::get(cx) else {
+            return vec![(
+                self.key.clone(),
+                self.kind.label().into(),
+                self.cache[index(self.kind)].clone(),
+            )];
+        };
+        let center = center.read(cx);
+        let mut keys: Vec<_> = vorkspace_core::accounts::PROVIDERS
+            .into_iter()
+            .flat_map(|kind| {
+                center
+                    .book
+                    .list(kind)
+                    .into_iter()
+                    .map(move |account| Key::new(kind, center.profile(&account.id), None))
+            })
+            .collect();
+        keys.extend(
+            center
+                .usage
+                .keys()
+                .filter(|key| !keys.contains(key))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        keys.sort_by_key(|key| (index(key.kind), key.profile.id.clone(), key.billing.clone()));
+        let mut rows: Vec<_> = keys
+            .into_iter()
+            .filter_map(|key| {
+                if key.profile.id != vorkspace_core::accounts::DEFAULT
+                    && !center.book.exists(key.kind, &key.profile.id)
+                {
+                    return None;
+                }
+                let state = center.usage.get(&key).cloned().unwrap_or_default();
+                let named = key.profile.id != vorkspace_core::accounts::DEFAULT;
+                if !named
+                    && state.snapshot.is_none()
+                    && !state.fetching
+                    && state.error.as_ref().is_none_or(|error| error.unavailable)
+                    && !(self.open && key == self.key)
+                {
+                    return None;
+                }
+                let account = center
+                    .book
+                    .list(key.kind)
+                    .into_iter()
+                    .find(|account| account.id == key.profile.id);
+                let label = if key.billing.is_empty() {
+                    let multiple = center.book.list(key.kind).len() > 1;
+                    match account.filter(|account| multiple || account.label != "Default account") {
+                        Some(account) => format!("{} · {}", key.kind.label(), account.label),
+                        None => key.kind.label().into(),
+                    }
+                } else {
+                    external_billing(state.snapshot.as_ref())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            format!(
+                                "{} · {}",
+                                key.kind.label(),
+                                match key.billing.as_str() {
+                                    "anthropic" => "Claude",
+                                    "openai-codex" => "Codex",
+                                    billing => billing,
+                                }
+                            )
+                        })
+                };
+                Some((key, label, state))
+            })
+            .collect();
+        if rows.is_empty() {
+            rows.push((
+                self.context_key.clone(),
+                self.context_key.kind.label().into(),
+                center
+                    .usage
+                    .get(&self.context_key)
+                    .cloned()
+                    .unwrap_or_default(),
+            ));
+        }
+        rows
     }
     #[cfg(test)]
     pub(crate) fn provider(&mut self, kind: Kind, cx: &mut Context<Self>) {
@@ -344,7 +492,7 @@ impl UsageFooter {
             let kind = self.kind;
             let selected = self.key.profile.id.clone();
             let project = self.project.clone();
-            let session = self.session;
+            let session = self.session.filter(|_| self.kind == self.context_key.kind);
             let weak = cx.weak_entity();
             let picker = center.update(cx, |center, cx| {
                 center.picker(
@@ -740,7 +888,7 @@ impl UsageFooter {
             .suggestion(self.kind, &self.key.profile.id)?;
         let kind = self.kind;
         let project = self.project.clone();
-        let session = self.session;
+        let session = self.session.filter(|_| self.kind == self.context_key.kind);
         let (status, exhausted) = {
             let center = center.read(cx);
             (
@@ -822,140 +970,220 @@ impl UsageFooter {
 use crate::accounts::ui::bar_color as usage_color;
 impl Render for UsageFooter {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let state = &self.cache[index(self.kind)];
+        let subscriptions = self.subscriptions(cx);
+        self.rows
+            .retain(|key, _| subscriptions.iter().any(|row| &row.0 == key));
         let now = usage::now_ms();
-        let label = if let Some(snapshot) = &state.snapshot {
-            snapshot
-                .windows
-                .iter()
-                .map(|w| {
+        let mut rows = Vec::new();
+        for (key, name, state) in subscriptions {
+            let (anchor, trigger, refresh_focus) = self
+                .rows
+                .entry(key.clone())
+                .or_insert_with(|| (AnchorSlot::default(), cx.focus_handle(), cx.focus_handle()))
+                .clone();
+            let detail = state
+                .snapshot
+                .as_ref()
+                .map(|snapshot| {
+                    let windows = snapshot
+                        .windows
+                        .iter()
+                        .map(|window| {
+                            format!(
+                                "{} {}% · {}",
+                                window.label(),
+                                self.display_percent(window.used_percent).round(),
+                                window.countdown(now)
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    if windows.is_empty() {
+                        external_billing(Some(snapshot))
+                            .unwrap_or("Usage unavailable")
+                            .into()
+                    } else {
+                        windows.join("  ·  ")
+                    }
+                })
+                .unwrap_or_else(|| {
+                    if state.fetching || state.error.is_none() {
+                        "Checking…".into()
+                    } else if state.error.as_ref().is_some_and(|error| error.unavailable) {
+                        "Not connected".into()
+                    } else {
+                        "Usage unavailable".into()
+                    }
+                });
+            let summary = state
+                .snapshot
+                .as_ref()
+                .and_then(|snapshot| {
+                    snapshot
+                        .windows
+                        .iter()
+                        .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
+                })
+                .map(|window| {
                     format!(
-                        "{:.0}% {}",
-                        self.display_percent(w.used_percent),
-                        w.countdown(now)
+                        "{} · {}",
+                        self.percent_label(window.used_percent),
+                        window.countdown(now)
                     )
                 })
-                .collect::<Vec<_>>()
-                .join(" · ")
-        } else if state.fetching || state.error.is_none() {
-            "···".into()
-        } else if state.error.as_ref().is_some_and(|e| e.unavailable) {
-            "not connected".into()
-        } else {
-            "usage unavailable".into()
-        };
-        let description = state
-            .snapshot
-            .as_ref()
-            .map(|s| {
-                s.windows
-                    .iter()
-                    .map(|w| {
-                        format!(
-                            "{} · {}",
-                            self.percent_label(w.used_percent),
-                            w.reset_label(now)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" · ")
-            })
-            .or_else(|| state.error.as_ref().map(|e| e.message.clone()))
-            .unwrap_or_else(|| "Loading usage".into());
-        let fetching = state.fetching;
-        let tightest = state
-            .snapshot
-            .as_ref()
-            .and_then(|s| s.windows.iter().map(|w| w.used_percent).reduce(f64::max));
-        let weak = cx.weak_entity();
-        let classic = self.classic;
-        div()
-            .id("usage-footer")
-            .role(Role::Group)
-            .aria_label("Provider usage")
-            .h(px(if classic { 28. } else { 30. }))
-            .w_full()
-            .flex_shrink_0()
-            .when(!classic, |d| d.pb(px(2.)))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .text_size(px(11.))
-            .text_color(content(0.55))
-            .child(
+                .unwrap_or_else(|| detail.clone());
+            let picked = key.clone();
+            let refresh = key.clone();
+            let row_id = format!(
+                "subscription-{}-{}-{}",
+                key.kind.id(),
+                key.profile.id,
+                key.billing
+            );
+            rows.push(
                 div()
-                    .id("usage-provider-chip")
-                    .role(Role::Button)
-                    .aria_label(format!("{} usage details", self.kind.label()))
-                    .aria_description(description)
-                    .track_focus(&self.trigger)
-                    .key_context("UsageChip")
-                    .tab_index(0)
-                    .relative()
-                    .h(px(20.))
-                    .map(|d| {
-                        if classic {
-                            d.mx(px(-4.)).px(px(4.)).rounded_md()
-                        } else {
-                            d.px(px(8.)).rounded_full()
-                        }
-                    })
+                    .id(row_id.clone())
+                    .debug_selector(move || row_id.clone())
                     .flex_shrink_0()
+                    .min_w_0()
+                    .w_full()
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
-                    .child(self.anchor.probe())
-                    .child(provider_icon(self.kind.id(), 12.))
-                    .when_some(tightest, |d, percent| {
+                    .gap_1()
+                    .child(
+                        div()
+                            .id(gpui::SharedString::from(format!(
+                                "subscription-open-{}-{}-{}",
+                                key.kind.id(),
+                                key.profile.id,
+                                key.billing
+                            )))
+                            .role(Role::Button)
+                            .aria_label(format!("{name} usage details"))
+                            .aria_description(detail.clone())
+                            .track_focus(&trigger)
+                            .tab_index(0)
+                            .key_context("UsageChip")
+                            .relative()
+                            .min_w_0()
+                            .flex_1()
+                            .rounded_md()
+                            .px_2()
+                            .py_1p5()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                            .child(anchor.probe())
+                            .child(provider_icon(key.kind.id(), 14.))
+                            .when(!self.compact, |d| {
+                                d.child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .line_height(px(16.))
+                                                .text_color(content(0.75))
+                                                .truncate()
+                                                .child(name),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.))
+                                                .line_height(px(15.))
+                                                .text_color(content(0.5))
+                                                .truncate()
+                                                .child(summary),
+                                        ),
+                                )
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_subscription(picked.clone(), window, cx)
+                            }))
+                            .on_action(cx.listener(move |this, _: &ToggleUsage, window, cx| {
+                                this.open_subscription(key.clone(), window, cx)
+                            })),
+                    )
+                    .when(!self.compact, |d| {
                         d.child(
                             div()
-                                .w(px(32.))
-                                .h(px(4.))
-                                .rounded_full()
-                                .bg(content(0.1))
-                                .overflow_hidden()
-                                .child(
-                                    div()
-                                        .h_full()
-                                        .w(gpui::relative(percent as f32 / 100.))
-                                        .rounded_full()
-                                        .bg(usage_color(percent)),
-                                ),
+                                .id(gpui::SharedString::from(format!(
+                                    "subscription-refresh-{}-{}-{}",
+                                    refresh.kind.id(),
+                                    refresh.profile.id,
+                                    refresh.billing
+                                )))
+                                .role(Role::Button)
+                                .aria_label("Refresh usage")
+                                .track_focus(&refresh_focus)
+                                .tab_index(0)
+                                .key_context("UsageRefresh")
+                                .size(px(22.))
+                                .rounded_md()
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .opacity(if state.fetching { 0.5 } else { 1. })
+                                .hover(|s| s.bg(content(0.08)))
+                                .child(icon("refresh", 12.))
+                                .on_click(cx.listener({
+                                    let refresh = refresh.clone();
+                                    move |this, _, _, cx| {
+                                        if let Some(center) = crate::accounts::get(cx) {
+                                            center.update(cx, |center, cx| {
+                                                center.refresh(refresh.clone(), true, cx)
+                                            });
+                                        } else {
+                                            this.refresh(true, cx);
+                                        }
+                                    }
+                                }))
+                                .on_action(cx.listener(move |this, _: &RefreshUsage, _, cx| {
+                                    if let Some(center) = crate::accounts::get(cx) {
+                                        center.update(cx, |center, cx| {
+                                            center.refresh(refresh.clone(), true, cx)
+                                        });
+                                    } else {
+                                        this.refresh(true, cx);
+                                    }
+                                })),
                         )
                     })
-                    .child(label)
-                    .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx)))
-                    .on_action(
-                        cx.listener(|this, _: &ToggleUsage, window, cx| this.toggle(window, cx)),
-                    ),
-            )
+                    .into_any_element(),
+            );
+        }
+        let weak = cx.weak_entity();
+        div()
+            .id("usage-footer")
+            .debug_selector(|| "subscriptions".into())
+            .role(Role::Group)
+            .aria_label("Subscriptions")
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .text_color(content(0.55))
+            .when(!self.compact, |d| {
+                d.child(
+                    div()
+                        .px_2()
+                        .pt_2()
+                        .pb_1()
+                        .text_size(px(10.))
+                        .text_color(content(0.45))
+                        .child("Subscriptions"),
+                )
+            })
             .child(
                 div()
-                    .id("refresh-usage")
-                    .role(Role::Button)
-                    .aria_label("Refresh usage")
-                    .track_focus(&self.refresh_focus)
-                    .tab_index(0)
-                    .key_context("UsageRefresh")
-                    .map(|d| {
-                        if classic {
-                            d.size(px(18.)).rounded_md()
-                        } else {
-                            d.size(px(20.)).ml(px(-4.)).rounded_full()
-                        }
-                    })
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .opacity(if fetching { 0.5 } else { 1. })
-                    .when(!fetching, |d| d.hover(|s| s.bg(content(0.1))))
-                    .child(icon("refresh", 12.))
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh(true, cx)))
-                    .on_action(cx.listener(|this, _: &RefreshUsage, _, cx| this.refresh(true, cx))),
+                    .id("subscriptions-list")
+                    .max_h(px(220.))
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .children(rows),
             )
             .when(self.open, |d| {
                 d.child(
@@ -989,6 +1217,150 @@ fn external_billing(snapshot: Option<&usage::Snapshot>) -> Option<&'static str> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[gpui::test]
+    fn subscriptions_keep_account_usage_separate_from_the_active_conversation(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(bind);
+        let directory = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        ));
+        let work = cx.update(|cx| {
+            crate::accounts::install(store, cx);
+            crate::accounts::get(cx).unwrap().update(cx, |center, cx| {
+                let work = center.book.add(Kind::Codex, "Work").unwrap();
+                for (kind, id, percent) in [
+                    (Kind::Codex, "default", 20.),
+                    (Kind::Claude, "default", 40.),
+                    (Kind::Codex, work.id.as_str(), 90.),
+                ] {
+                    let key = Key::new(kind, center.profile(id), None);
+                    center.usage.entry(key).or_default().complete(Ok(Snapshot {
+                        windows: vec![usage::Window {
+                            used_percent: percent,
+                            minutes: 300,
+                            resets_at: None,
+                        }],
+                        updated_at: usage::now_ms(),
+                        ..Default::default()
+                    }));
+                }
+                cx.notify();
+                Key::new(Kind::Codex, center.profile(&work.id), None)
+            })
+        });
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| UsageFooter::new(Kind::Codex, cx))
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |usage, window, cx| {
+                let rows = usage.subscriptions(cx);
+                assert_eq!(rows.len(), 3);
+                assert!(
+                    rows.iter()
+                        .any(|row| row.0 == work && row.1 == "Codex · Work")
+                );
+                usage.open_subscription(work.clone(), window, cx);
+                assert_eq!(
+                    usage.cache[index(Kind::Codex)]
+                        .snapshot
+                        .as_ref()
+                        .unwrap()
+                        .windows[0]
+                        .used_percent,
+                    90.
+                );
+                usage.context(
+                    Kind::Codex,
+                    Default::default(),
+                    None,
+                    "/work".into(),
+                    Some(7),
+                    cx,
+                );
+                assert!(
+                    usage.open,
+                    "unchanged chat context must not close a different account's details"
+                );
+                assert_eq!(usage.key, work);
+            })
+            .unwrap();
+        cx.update(|cx| {
+            crate::accounts::get(cx).unwrap().update(cx, |center, cx| {
+                let key = Key::new(Kind::Codex, Default::default(), None);
+                center
+                    .usage
+                    .get_mut(&key)
+                    .unwrap()
+                    .snapshot
+                    .as_mut()
+                    .unwrap()
+                    .windows[0]
+                    .used_percent = 5.;
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |usage, _, cx| {
+                assert_eq!(
+                    usage.cache[index(Kind::Codex)]
+                        .snapshot
+                        .as_ref()
+                        .unwrap()
+                        .windows[0]
+                        .used_percent,
+                    90.
+                );
+                usage.set_remaining(true, cx);
+                assert_eq!(usage.percent_label(90.), "10% left");
+                usage.hide(cx);
+                assert!(!usage.open);
+                crate::accounts::get(cx).unwrap().update(cx, |center, cx| {
+                    center
+                        .book
+                        .accounts
+                        .retain(|account| account.id != work.profile.id);
+                    cx.notify();
+                });
+                assert_eq!(
+                    usage.subscriptions(cx).len(),
+                    2,
+                    "removed accounts cannot survive as stale usage rows"
+                );
+                let bedrock = Key::new(Kind::Claude, Default::default(), None);
+                crate::accounts::get(cx).unwrap().update(cx, |center, cx| {
+                    center
+                        .usage
+                        .get_mut(&bedrock)
+                        .unwrap()
+                        .complete(Ok(Snapshot {
+                            external_billing: Some("AWS Bedrock".into()),
+                            updated_at: usage::now_ms(),
+                            ..Default::default()
+                        }));
+                    cx.notify();
+                });
+                assert!(
+                    usage.subscriptions(cx).iter().any(|row| row.0 == bedrock),
+                    "Bedrock must remain visible without subscription limit windows"
+                );
+                usage.select_subscription(bedrock, cx);
+                let snapshot = usage.cache[index(Kind::Claude)].snapshot.as_ref();
+                assert_eq!(external_billing(snapshot), Some("AWS Bedrock"));
+                assert!(
+                    !usage.login_view(cx),
+                    "Bedrock must not prompt for Claude OAuth"
+                );
+                assert!(snapshot.unwrap().windows.is_empty());
+            })
+            .unwrap();
+    }
     #[gpui::test]
     fn details_open_with_keyboard_escape_restores_focus_and_provider_caches_stay_separate(
         cx: &mut gpui::TestAppContext,

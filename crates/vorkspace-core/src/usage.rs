@@ -1,8 +1,6 @@
 //! Subscription usage, ported from rateLimits.ts and src-tauri/rate_limits.rs.
 //! Blocking probes belong on a worker. Credentials are read only, never rotated.
 pub(crate) mod claude;
-mod devin;
-mod opencode;
 mod pi;
 
 use crate::{catalog, provider::Kind};
@@ -131,12 +129,6 @@ pub fn fetch_for(
     profile: &crate::accounts::Profile,
     model: Option<&str>,
 ) -> Result<Snapshot, FetchError> {
-    if kind == Kind::Devin {
-        return fetch_devin();
-    }
-    if kind == Kind::OpenCode {
-        return fetch_opencode();
-    }
     if kind == Kind::Pi {
         return fetch_pi(model);
     }
@@ -178,98 +170,6 @@ pub fn fetch_for(
     Ok(snapshot)
 }
 
-fn fetch_devin() -> Result<Snapshot, FetchError> {
-    let version =
-        crate::accounts::login::cli_output(Kind::Devin, &["--version"], &Default::default())
-            .map_err(FetchError::unavailable)?;
-    let version = regex::Regex::new(r"\d+(?:\.\d+)+")
-        .unwrap()
-        .find(&version)
-        .ok_or_else(|| FetchError::failed("Devin CLI version unknown"))?
-        .as_str();
-    let result =
-        devin::fetch_sync(env!("CARGO_PKG_VERSION"), version).map_err(FetchError::failed)?;
-    let Some(usage) = result.usage else {
-        let message = result
-            .error
-            .unwrap_or_else(|| "Devin usage unavailable".into());
-        return Err(if result.status == "unavailable" {
-            FetchError::unavailable(message)
-        } else {
-            FetchError::failed(message)
-        });
-    };
-    let mut windows = Vec::new();
-    for (remaining, resets_at, minutes) in [
-        (usage.daily_remaining_percent, usage.daily_resets_at, 1440),
-        (
-            usage.weekly_remaining_percent,
-            usage.weekly_resets_at,
-            10080,
-        ),
-    ] {
-        if let Some(remaining) = remaining.filter(|n| n.is_finite()) {
-            windows.push(Window {
-                used_percent: (100. - remaining).clamp(0., 100.),
-                minutes,
-                resets_at,
-            });
-        }
-    }
-    Ok(Snapshot {
-        windows,
-        updated_at: now_ms(),
-        extra_usage_balance: usage
-            .extra_usage_balance_micros
-            .map(|n| n as f64 / 1_000_000.),
-        identity: Some(crate::accounts::Identity {
-            name: usage.name,
-            email: usage.email,
-            plan: usage.plan,
-            organization: None,
-        }),
-        ..Default::default()
-    })
-}
-fn fetch_opencode() -> Result<Snapshot, FetchError> {
-    let result = opencode::fetch().map_err(FetchError::failed)?;
-    if result.status != "ok" {
-        let message = result
-            .error
-            .unwrap_or_else(|| "OpenCode Go usage unavailable".into());
-        return Err(if result.status == "unavailable" {
-            FetchError::unavailable(message)
-        } else {
-            FetchError::failed(message)
-        });
-    }
-    let value: Value = serde_json::from_str(result.body.as_deref().unwrap_or(""))
-        .map_err(|_| FetchError::failed("OpenCode Go response was not JSON"))?;
-    let snapshot = parse_opencode(&value);
-    if snapshot.windows.is_empty() {
-        return Err(FetchError::failed(
-            "OpenCode Go usage response was unexpected",
-        ));
-    }
-    Ok(snapshot)
-}
-fn parse_opencode(value: &Value) -> Snapshot {
-    let value = value.get("usage").unwrap_or(value);
-    Snapshot {
-        windows: [("rolling", 300), ("weekly", 10080), ("monthly", 43200)]
-            .into_iter()
-            .filter_map(|(key, minutes)| {
-                let raw = &value[key];
-                if !matches!(raw["status"].as_str(), Some("ok" | "rate-limited")) {
-                    return None;
-                }
-                window(raw, minutes, &["percent", "usedPercent"])
-            })
-            .collect(),
-        updated_at: now_ms(),
-        ..Default::default()
-    }
-}
 fn fetch_pi(model: Option<&str>) -> Result<Snapshot, FetchError> {
     let model = model.unwrap_or("").trim_start_matches("pi:");
     let billing = if model.starts_with("anthropic/") {
@@ -573,16 +473,6 @@ mod tests {
         assert!(Limit::from_error("429: rate limit exceeded, retry in 3 seconds").is_none());
         assert!(Limit::from_error("Network timeout").is_none());
     }
-    #[test]
-    fn opencode_go_requires_known_window_statuses() {
-        let snapshot = parse_opencode(
-            &json!({"usage":{"rolling":{"status":"ok","percent":15,"resetsAt":"1800000000"},"weekly":{"status":"rate-limited","percent":100},"monthly":{"status":"future","percent":20}}}),
-        );
-        assert_eq!(snapshot.windows.len(), 2);
-        assert_eq!(snapshot.windows[0].resets_at, Some(1_800_000_000_000));
-        assert_eq!(snapshot.windows[1].minutes, 10080);
-    }
-
     #[test]
     fn codex_classifies_swapped_and_monthly_windows() {
         let snapshot = parse_codex(&json!({"rateLimits": {

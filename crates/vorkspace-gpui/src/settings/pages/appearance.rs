@@ -87,7 +87,6 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let p = self.prefs.clone();
-        let inset = !self.ctx.classic;
         let light = p.theme == "light"
             || (p.theme == "system"
                 && matches!(
@@ -204,31 +203,13 @@ impl SettingsView {
                 ),
             ];
         page.push(self.group(None, false, "Color", None, None, color));
-        let translucency_disabled =
-            light || !cfg!(target_os = "macos") || (inset && !p.inset_glass);
-        let mut translucency = Vec::new();
-        if inset {
-            translucency.push(self.row(
-                Some("inset-glass"),
-                true,
-                "Transparent window",
-                Some("Let the desktop show through the window in dark mode.".into()),
-                vec![self.toggle(
-                    "inset-glass",
-                    "Transparent window",
-                    p.inset_glass,
-                    light || !cfg!(target_os = "macos"),
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.inset_glass = on),
-                )],
-            ));
-        }
-        translucency.extend([
+        let translucency_disabled = light || !cfg!(target_os = "macos");
+        let translucency = vec![
                 self.row(
                     Some("sidebar-opacity"),
-                    !inset,
-                    if inset { "Window opacity" } else { "Sidebar opacity" },
-                    Some("Both layouts share this opacity setting.".into()),
+                    true,
+                    "Sidebar opacity",
+                    Some("How much of the desktop shows through the project navigation and sidebar.".into()),
                     vec![self.slider(
                         SliderKind::SidebarOpacity,
                         format!("{}%", p.sidebar_opacity),
@@ -240,7 +221,7 @@ impl SettingsView {
                     Some("blur"),
                     false,
                     "Blur radius",
-                    Some("Background blur behind the window. Both layouts share this value.".into()),
+                    Some("Blur the desktop behind translucent surfaces.".into()),
                     vec![self.slider(
                         SliderKind::SidebarBlur,
                         p.sidebar_blur.to_string(),
@@ -262,7 +243,7 @@ impl SettingsView {
                         |this, on, cx| this.update(cx, |p| p.body_glass = on),
                     )],
                 ),
-            ]);
+            ];
         page.push(self.group(
             None,
             false,
@@ -288,17 +269,8 @@ impl SettingsView {
             .collect();
         let layout = vec![
             self.row(
-                Some("inset-layout"),
-                true,
-                "New layout (Experimental)",
-                Some("Try the experimental sidebar and workspace. Turn off to return to the legacy layout.".into()),
-                vec![self.toggle("inset-layout", "New layout (Experimental)", inset, false, cx, |_, on, cx| {
-                    cx.emit(SettingsEvent::NewLayout(on))
-                })],
-            ),
-            self.row(
                 Some("collapsed-project-rail"),
-                false,
+                true,
                 "Collapsed project rail",
                 Some("Keep project navigation available as a compact icon rail, or hide the rail completely.".into()),
                 vec![self.segmented(
@@ -657,7 +629,9 @@ mod continuity_tests {
     };
 
     #[gpui::test]
-    fn opacity_and_blur_controls_keep_one_value_when_switching_layouts(cx: &mut TestAppContext) {
+    fn original_translucency_controls_edit_saved_values_without_a_layout_switch(
+        cx: &mut TestAppContext,
+    ) {
         let window = cx.update(|cx| {
             cx.open_window(
                 WindowOptions {
@@ -677,10 +651,7 @@ mod continuity_tests {
                                 sidebar_blur: 57,
                                 ..Default::default()
                             },
-                            SettingsContext {
-                                classic: true,
-                                ..Default::default()
-                            },
+                            SettingsContext::default(),
                             cx,
                         )
                     })
@@ -698,23 +669,17 @@ mod continuity_tests {
         let blur = visual.debug_bounds("settings-slider-blur").unwrap();
         visual.simulate_click(blur.center(), Default::default());
         visual.run_until_parked();
-        window
-            .update(visual, |settings, _, cx| {
-                if cfg!(target_os = "macos") {
-                    assert_eq!(settings.prefs.sidebar_blur, 50);
-                }
-                settings.ctx.classic = false;
-                cx.notify();
-            })
-            .unwrap();
-        visual.run_until_parked();
         assert!(
             visual
-                .debug_bounds("settings-slider-sidebar-opacity")
+                .debug_bounds("settings-toggle-main-pane-glass")
                 .is_some()
         );
-        assert!(visual.debug_bounds("settings-slider-blur").is_some());
-        assert!(visual.debug_bounds("settings-toggle-inset-glass").is_some());
+        assert!(visual.debug_bounds("settings-toggle-inset-glass").is_none());
+        assert!(
+            visual
+                .debug_bounds("settings-toggle-inset-layout")
+                .is_none()
+        );
         window
             .update(visual, |settings, _, _| {
                 assert_eq!(settings.prefs.sidebar_opacity, 43);

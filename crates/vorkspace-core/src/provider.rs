@@ -24,32 +24,25 @@ pub use commands::{
 };
 mod attachments;
 mod compaction;
-pub(crate) mod devin;
 mod discovery;
 mod follow_up;
 mod frames;
 mod kind;
 mod lifecycle;
 mod limits;
-mod opencode;
 mod parked;
 mod pi;
 pub fn configure_idle_agents(limit: usize) {
     parked::configure(limit);
-    opencode::configure(limit);
 }
 pub fn keep_idle_agents(ids: Vec<i64>) {
     parked::keep(ids);
 }
 pub fn discard_worktree(path: &Path) {
     parked::discard_worktree(path);
-    opencode::discard_worktree(path);
 }
 pub fn forget_session(kind: Kind, provider_id: &str, account_id: &str, cwd: &Path) {
     parked::forget_session(kind, provider_id, account_id, cwd);
-    if kind == Kind::OpenCode {
-        opencode::forget_session(provider_id, account_id, cwd);
-    }
 }
 mod questions;
 mod rewind;
@@ -127,12 +120,18 @@ fn codex_error(error: &Value, fallback: &str) -> String {
 /// system install locations as harness.rs, plus Claude's versioned native install.
 /// An explicit override wins and errors at launch rather than silently falling back.
 pub fn resolve(kind: Kind) -> Option<PathBuf> {
+    if !kind.is_supported() {
+        return None;
+    }
     if let Some(path) = crate::cli::configured(kind) {
         return Some(path);
     }
     resolve_auto(kind)
 }
 pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
+    if !kind.is_supported() {
+        return None;
+    }
     let key = format!("VORKSPACE_{}_BINARY", kind.id().to_uppercase());
     if let Some(path) = std::env::var_os(key).filter(|s| !s.is_empty()) {
         return Some(path.into());
@@ -186,12 +185,8 @@ pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
     ] {
         candidates.push(Path::new(dir).join(kind.binary_name()));
     }
-    if matches!(kind, Kind::Cursor | Kind::Pi) {
-        let alias = if kind == Kind::Cursor {
-            "agent"
-        } else {
-            "pi-coding-agent"
-        };
+    if kind == Kind::Pi {
+        let alias = "pi-coding-agent";
         let paths: Vec<_> = candidates
             .iter()
             .filter_map(|p| p.parent().map(|dir| dir.join(alias)))
@@ -1341,14 +1336,14 @@ fn run_operation(
     command_probe: bool,
     mut emit: impl FnMut(Vec<Event>) -> Result<(), String>,
 ) -> Result<Option<Value>, String> {
+    if !request.kind.is_supported() {
+        return Err("This historical provider is no longer supported. Choose a supported provider for a new conversation.".into());
+    }
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped".into());
     }
     if !probe && !compact && !command_probe {
         crate::ticket_context::admit_request(&mut request, &cancel)?;
-    }
-    if request.kind == Kind::OpenCode {
-        return opencode::run(request, cancel, controls, probe, compact, emit);
     }
     if !probe && !compact && !command_probe {
         crate::ticket_context::prepare_request(&mut request, &cancel)?;
@@ -1764,8 +1759,6 @@ fn run_operation(
                 return Err("Command discovery timed out".into());
             }
             let discovery_timeout = match protocol.request.kind {
-                Kind::Cursor | Kind::Grok => Some(15),
-                Kind::Hermes => Some(30),
                 Kind::Pi | Kind::Omp => Some(45),
                 Kind::Antigravity => None,
                 _ => Some(60),
@@ -1813,6 +1806,31 @@ fn run_operation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unsupported_history_never_resolves_or_starts_a_provider() {
+        for id in [
+            "cursor", "grok", "opencode", "fx", "hermes", "devin", "unknown",
+        ] {
+            let kind = Kind::from_id(id);
+            assert!(resolve(kind).is_none());
+            assert!(resolve_auto(kind).is_none());
+            let error = run(
+                Request {
+                    kind,
+                    binary: "must-not-run".into(),
+                    cwd: "/missing-historical-project".into(),
+                    prompt: "Continue".into(),
+                    provider_id: Some("preserved-thread".into()),
+                    model: Some("preserved-model".into()),
+                    settings: Default::default(),
+                },
+                Arc::new(AtomicBool::new(false)),
+                |_| panic!("unsupported history must fail before publishing provider events"),
+            )
+            .unwrap_err();
+            assert!(error.contains("no longer supported"), "{error}");
+        }
+    }
     fn protocol(kind: Kind) -> Protocol {
         Protocol::new(Request {
             kind,
@@ -2091,20 +2109,28 @@ mod process_tests {
     #[test]
     fn cancellation_reaps_child_and_descendant_promptly() {
         for kind in Kind::ALL {
-            let (_tmp, mut request) = fixture("#!/bin/sh\nsleep 30 &\nwait\n");
+            let (_tmp, mut request) =
+                fixture("#!/bin/sh\nsleep 30 &\nprintf ready > ready\nwait\n");
             request.kind = kind;
             request.settings.access = AccessMode::ReadOnly;
+            let ready = request.cwd.join("ready");
             let cancel = Arc::new(AtomicBool::new(false));
             let stop = cancel.clone();
             let timer = thread::spawn(move || {
-                thread::sleep(Duration::from_millis(60));
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !ready.exists() && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                let started = ready.exists();
+                let stopped_at = Instant::now();
                 stop.store(true, Ordering::Relaxed);
+                (started, stopped_at)
             });
-            let start = Instant::now();
             assert_eq!(run(request, cancel, |_| Ok(())).unwrap_err(), "Stopped");
-            timer.join().unwrap();
+            let (started, stopped_at) = timer.join().unwrap();
+            assert!(started, "{} fixture did not start", kind.label());
             assert!(
-                start.elapsed() < Duration::from_secs(2),
+                stopped_at.elapsed() < Duration::from_secs(2),
                 "{} cancellation must not wait on provider output",
                 kind.label()
             );
@@ -2113,7 +2139,7 @@ mod process_tests {
     #[test]
     fn crash_preserves_coalesced_partial_text() {
         let (_tmp, request) = fixture(
-            "#!/bin/sh\nprintf '%s\\n' '{\"method\":\"item/agentMessage/delta\",\"params\":{\"itemId\":\"a\",\"delta\":\"partial\"}}'\n",
+            "#!/bin/sh\nIFS= read -r init\nprintf '%s\\n' '{\"method\":\"item/agentMessage/delta\",\"params\":{\"itemId\":\"a\",\"delta\":\"partial\"}}'\n",
         );
         let mut text = String::new();
         let result = run(request, Arc::new(AtomicBool::new(false)), |events| {
@@ -2182,7 +2208,7 @@ for line in sys.stdin:
 
     #[test]
     fn malformed_provider_json_fails() {
-        let (_tmp, request) = fixture("#!/bin/sh\nprintf '{invalid json\\n'\n");
+        let (_tmp, request) = fixture("#!/bin/sh\nIFS= read -r init\nprintf '{invalid json\\n'\n");
         let error = run(request, Arc::new(AtomicBool::new(false)), |_| Ok(())).unwrap_err();
         assert!(error.starts_with("Invalid provider JSON:"), "{error}");
     }

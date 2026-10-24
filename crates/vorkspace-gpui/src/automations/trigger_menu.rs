@@ -4,13 +4,11 @@
 use super::*;
 use crate::popover::{Menu, MenuAction, MenuEvent, MenuItem, Popover, menu_popover};
 
-const CATEGORIES: [(&str, &str, &str); 6] = [
+const CATEGORIES: [(&str, &str, &str); 4] = [
     ("time", "Scheduled", "clock"),
     ("github", "GitHub", "inbox-github"),
-    ("linear", "Linear", "inbox-linear"),
     ("jira", "Jira", "inbox-jira"),
     ("gitlab", "GitLab", "inbox-gitlab"),
-    ("azuredevops", "Azure DevOps", "inbox-azuredevops"),
 ];
 
 struct SearchHeader {
@@ -54,6 +52,9 @@ impl TriggerMenu {
             header.input.read(cx).focus_handle(cx),
         )];
         for (kind, label, mark) in CATEGORIES {
+            if kind != "time" && !connected.contains_key(kind) {
+                continue;
+            }
             if !label.to_lowercase().contains(&query) {
                 continue;
             }
@@ -182,5 +183,54 @@ impl Automations {
         self.project_picker = None;
         self.trigger_menu = Some(menu);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[gpui::test]
+    fn trigger_choices_hide_disabled_and_retired_sources_but_show_unconnected_enabled_sources(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let input =
+                cx.new(|cx| Input::field("Search triggers", "Search triggers", content(0.4), cx));
+            let search = cx.new(|_| SearchHeader { input });
+            let connections = [
+                ("github".into(), false),
+                ("gitlab".into(), true),
+                ("linear".into(), true),
+                ("azuredevops".into(), true),
+            ]
+            .into();
+            let rows = TriggerMenu::items(&search, &connections, cx);
+            let actions = rows
+                .iter()
+                .filter_map(|row| {
+                    if let MenuItem::Action(action) = row {
+                        Some(action.as_ref())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actions
+                    .iter()
+                    .map(|action| action.id.as_ref())
+                    .collect::<Vec<_>>(),
+                ["time", "github", "gitlab"]
+            );
+            assert!(actions[1].disabled);
+            assert_eq!(actions[1].value.as_deref(), Some("Not connected"));
+            assert!(!actions[2].disabled && !actions[2].submenu.is_empty());
+        });
+        let templates: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("templates.json")).unwrap();
+        assert!(templates.iter().all(|template| matches!(
+            template["trigger"]["kind"].as_str(),
+            Some("time" | "github" | "gitlab" | "jira")
+        )));
     }
 }

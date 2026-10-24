@@ -1,5 +1,7 @@
 mod host;
 #[cfg(target_os = "macos")]
+mod visibility;
+#[cfg(target_os = "macos")]
 mod web;
 use crate::{
     runtime::{Database, locked},
@@ -25,6 +27,8 @@ pub(crate) struct Vox {
     task: Option<gpui::Task<()>>,
     #[cfg(target_os = "macos")]
     web: Option<web::Web>,
+    #[cfg(target_os = "macos")]
+    visibility: Option<visibility::Watch>,
     enabled: bool,
     silent: bool,
     microphone: Value,
@@ -99,6 +103,8 @@ impl Vox {
             task: None,
             #[cfg(target_os = "macos")]
             web: None,
+            #[cfg(target_os = "macos")]
+            visibility: None,
             enabled: prefs.vox_enabled,
             silent: prefs.vox_silent,
             microphone: prefs.vox_microphone.clone(),
@@ -134,6 +140,10 @@ impl Vox {
         self.active.store(false, Ordering::Relaxed);
         #[cfg(target_os = "macos")]
         {
+            self.visibility = None;
+        }
+        #[cfg(target_os = "macos")]
+        {
             self.web = None;
         }
         if let Some(host) = &self.host {
@@ -159,6 +169,10 @@ impl Vox {
     }
     fn finish(&mut self, cx: &mut Context<Self>) {
         self.active.store(false, Ordering::Relaxed);
+        #[cfg(target_os = "macos")]
+        {
+            self.visibility = None;
+        }
         self.host = None;
         #[cfg(target_os = "macos")]
         {
@@ -168,7 +182,7 @@ impl Vox {
         self.face = "vox".into();
         cx.notify();
     }
-    fn start(&mut self, cx: &mut Context<Self>) {
+    fn start(&mut self, _window: &Window, cx: &mut Context<Self>) {
         if !self.enabled || self.host.is_some() || self.state == "connecting" {
             return;
         }
@@ -184,6 +198,28 @@ impl Vox {
         self.receipts.clear();
         self.state = "connecting".into();
         self.face = "-_-".into();
+        #[cfg(target_os = "macos")]
+        {
+            let (watch, hidden) = match visibility::Watch::new(_window, self.active.clone()) {
+                Ok(watch) => watch,
+                Err(error) => {
+                    self.error = Some(error);
+                    self.finish(cx);
+                    return;
+                }
+            };
+            self.visibility = Some(watch);
+            cx.spawn(async move |this, cx| {
+                if hidden.recv().await.is_ok() {
+                    let _ = this.update(cx, |this, cx| {
+                        if this.generation == generation && this.visibility.is_some() {
+                            this.stop(cx);
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
         let cwd = self.cwd.clone();
         let lock_path = match locked(&self.store).and_then(|db| {
             db.data_dir()
@@ -467,11 +503,11 @@ impl gpui::Render for Vox {
                     .font_family(crate::markdown::FIXED_FONT)
                     .text_color(content(0.8))
                     .child(self.face.clone())
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(|this, _, window, cx| {
                         if this.active.load(Ordering::Relaxed) {
                             this.stop(cx);
                         } else {
-                            this.start(cx);
+                            this.start(window, cx);
                         }
                     })),
             );

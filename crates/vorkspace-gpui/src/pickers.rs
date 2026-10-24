@@ -110,6 +110,31 @@ mod model_label_tests {
     use super::*;
 
     #[gpui::test]
+    fn local_inventory_hides_missing_tabs_but_preserves_current_and_successful_catalogs(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let list = cx.new(|cx| {
+                ModelList::new_for(Kind::Codex, None, "/project", Default::default(), cx)
+            });
+            list.update(cx, |list, cx| {
+                list.tab = ModelTab::Harness(Kind::Claude);
+                list.apply_installation_probe(vec![Kind::Claude, Kind::Codex], cx);
+                assert!(!list.provider_visible(Kind::Claude));
+                assert!(list.provider_visible(Kind::Codex));
+                assert!(!list.enabled(Kind::Codex));
+                assert!(matches!(list.tab, ModelTab::Harness(Kind::Codex)));
+                // A newer successful discovery wins over a slow missing-CLI probe.
+                list.catalogs.push((Kind::Pi, Vec::new()));
+                list.tab = ModelTab::Harness(Kind::Pi);
+                list.apply_installation_probe(vec![Kind::Pi], cx);
+                assert!(list.provider_visible(Kind::Pi));
+                assert!(matches!(list.tab, ModelTab::Harness(Kind::Pi)));
+            });
+        });
+    }
+
+    #[gpui::test]
     fn remote_model_availability_comes_from_the_host(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let list = cx.new(|cx| {
@@ -126,10 +151,14 @@ mod model_label_tests {
                 list.remote_providers = Some(vec![Kind::Claude]);
                 list.missing = vec![Kind::Codex];
                 list.tab = ModelTab::Harness(Kind::Claude);
+                list.apply_installation_probe(Kind::ALL.to_vec(), cx);
                 assert!(list.hidden.is_empty());
+                assert!(list.provider_visible(Kind::Claude));
+                assert!(list.provider_visible(Kind::Codex));
+                assert!(!list.provider_visible(Kind::Pi));
                 assert!(list.enabled(Kind::Claude));
                 assert!(!list.enabled(Kind::Codex));
-                assert!(!list.enabled(Kind::Cursor));
+                assert!(!list.enabled(Kind::Antigravity));
                 // Until its host catalog arrives, no local Claude aliases
                 // are advertised as available remote models.
                 let entries = list.entries(cx);
@@ -312,6 +341,7 @@ impl ModelList {
             _changed: changed,
         };
         list.highlighted = list.current_index(cx);
+        list.probe_installed(cx);
         list.discover(
             match list.tab {
                 ModelTab::Harness(kind) => kind,
@@ -338,6 +368,60 @@ impl ModelList {
         self.switch_allowed = allowed;
         self
     }
+
+    fn probe_installed(&mut self, cx: &mut Context<Self>) {
+        if cfg!(test) || self.remote_project.is_some() {
+            return;
+        }
+        let work = cx.background_executor().spawn(async move {
+            Kind::ALL
+                .into_iter()
+                .filter(|kind| vorkspace_core::provider::resolve(*kind).is_none())
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let missing = work.await;
+            let _ = this.update(cx, |this, cx| this.apply_installation_probe(missing, cx));
+        })
+        .detach();
+    }
+
+    fn apply_installation_probe(&mut self, missing: Vec<Kind>, cx: &mut Context<Self>) {
+        // A remote host owns its inventory. A completed local catalog also
+        // outranks an older filesystem probe that finished out of order.
+        if self.remote_project.is_some() {
+            return;
+        }
+        for kind in missing {
+            if !self.catalogs.iter().any(|(provider, _)| *provider == kind)
+                && !self.missing.contains(&kind)
+            {
+                self.missing.push(kind);
+            }
+        }
+        if let ModelTab::Harness(selected) = self.tab
+            && selected != self.provider
+            && !self.provider_visible(selected)
+        {
+            self.tab = ModelTab::Harness(self.provider);
+        }
+        if self.query(cx).is_empty() {
+            self.highlighted = self.current_index(cx);
+        }
+        cx.notify();
+    }
+
+    fn provider_visible(&self, kind: Kind) -> bool {
+        kind == self.provider
+            || if self.remote_project.is_some() {
+                self.remote_providers
+                    .as_ref()
+                    .is_some_and(|providers| providers.contains(&kind))
+            } else {
+                !self.hidden.iter().any(|id| id == kind.id()) && !self.missing.contains(&kind)
+            }
+    }
+
     fn discover(&mut self, kind: Kind, cx: &mut Context<Self>) {
         if cfg!(test) || self.loading.contains(&kind) {
             return;
@@ -754,18 +838,7 @@ impl Render for ModelList {
                     .children(
                         Kind::ALL
                             .into_iter()
-                            .filter(|kind| {
-                                if self.remote_project.is_some() {
-                                    *kind == self.provider
-                                        || self
-                                            .remote_providers
-                                            .as_ref()
-                                            .is_some_and(|providers| providers.contains(kind))
-                                } else {
-                                    *kind == self.provider
-                                        || !self.hidden.iter().any(|id| id == kind.id())
-                                }
-                            })
+                            .filter(|kind| self.provider_visible(*kind))
                             .map(|kind| self.tab(ModelTab::Harness(kind), cx)),
                     ),
             )

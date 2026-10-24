@@ -3,7 +3,10 @@ use gpui::{Bounds, TitlebarOptions, WindowBounds, WindowOptions, size};
 struct Floating {
     owner: Entity<Bots>,
     selected: String,
+    pending_creation: Option<String>,
     _observe: Subscription,
+    _created: Subscription,
+    _scale: Subscription,
 }
 impl gpui::Render for Floating {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -78,17 +81,14 @@ impl gpui::Render for Floating {
                                     .map(|m| m.projects.clone())
                                     .unwrap_or_default();
                                 owner.create(projects, window, cx);
-                                if let Some(id) = owner.active.clone() {
-                                    this.selected = id.clone();
-                                    if let Some(chat) = owner.chats.get(&id) {
-                                        chat.update(cx, |v, _| v.bot_floating_window(window));
-                                    }
-                                }
+                                this.pending_creation =
+                                    owner.creation.as_ref().map(|draft| draft.bot.id.clone());
                             });
                             cx.notify();
                         }),
                     )),
             )
+            .children(self.owner.read(cx).creation_surface(window))
             .child(
                 div()
                     .flex_1()
@@ -222,10 +222,23 @@ impl Bots {
                 }
                 cx.new(|cx| {
                     let observation = cx.observe(&window_owner, |_, _, cx| cx.notify());
+                    let created = cx.subscribe(
+                        &window_owner,
+                        |this: &mut Floating, _, event: &TabOpened, cx| {
+                            if this.pending_creation.as_deref() == Some(&event.0) {
+                                this.selected = event.0.clone();
+                                this.pending_creation = None;
+                                cx.notify();
+                            }
+                        },
+                    );
                     Floating {
                         owner: window_owner,
                         selected: id,
+                        pending_creation: None,
                         _observe: observation,
+                        _created: created,
+                        _scale: crate::settings::observe_window_scale(window, cx),
                     }
                 })
             });

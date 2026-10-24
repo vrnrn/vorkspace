@@ -45,12 +45,7 @@ pub(super) fn events(kind: &str) -> Vec<(String, String)> {
             ("merge_request_opened", "Merge request opened"),
             ("issue_opened", "Issue opened"),
         ],
-        "linear" => &[("issue_created", "Issue created")],
         "jira" => &[("issue_created", "Issue appeared")],
-        "azuredevops" => &[
-            ("pull_request_appeared", "Pull request appeared"),
-            ("work_item_appeared", "Work item appeared"),
-        ],
         _ => &[],
     })
 }
@@ -848,25 +843,23 @@ impl Automations {
                 .text_size(px(11.)),
             );
         }
-        if draft.harness != "fx" {
-            controls = controls.child(
-                self.select_control(
-                    "automation-access",
-                    access.into(),
-                    Choice::Access,
-                    options(&[
-                        ("supervised", "Supervised"),
-                        ("auto-accept-edits", "Auto-accept edits"),
-                        ("auto", "Auto"),
-                        ("full-access", "Full access"),
-                    ]),
-                    cx,
-                )
-                .h(px(26.))
-                .px(px(6.))
-                .text_size(px(11.)),
-            );
-        }
+        controls = controls.child(
+            self.select_control(
+                "automation-access",
+                access.into(),
+                Choice::Access,
+                options(&[
+                    ("supervised", "Supervised"),
+                    ("auto-accept-edits", "Auto-accept edits"),
+                    ("auto", "Auto"),
+                    ("full-access", "Full access"),
+                ]),
+                cx,
+            )
+            .h(px(26.))
+            .px(px(6.))
+            .text_size(px(11.)),
+        );
         let instructions = div()
             .child(section("Instructions"))
             .child(

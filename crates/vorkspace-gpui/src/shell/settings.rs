@@ -72,10 +72,55 @@ impl Shell {
                 .unwrap_or_default(),
             remote: Some(self.remote.clone()),
             quick_error: self.quick.error.clone(),
+            inbox_connectors: self
+                .inbox
+                .as_ref()
+                .map(|inbox| inbox.read(cx).connector_preferences())
+                .unwrap_or_else(|| {
+                    locked(&self.store)
+                        .map(|store| vorkspace_core::inbox::Connectors::load(&store))
+                        .unwrap_or_default()
+                }),
             inbox_connections: self
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).connection_statuses())
+                .unwrap_or_default(),
+            inbox_data_dir: locked(&self.store)
+                .ok()
+                .and_then(|store| store.data_dir().map(std::path::PathBuf::from)),
+            inbox_connection_revision: self
+                .inbox
+                .as_ref()
+                .map(|inbox| inbox.read(cx).connection_revision())
+                .unwrap_or_default(),
+            jira_filter: self
+                .inbox
+                .as_ref()
+                .map(|inbox| inbox.read(cx).jira_filter())
+                .unwrap_or_else(|| {
+                    locked(&self.store)
+                        .map(|store| vorkspace_core::inbox::JiraFilter::load(&store))
+                        .unwrap_or_default()
+                }),
+            inbox_bots: self
+                .inbox
+                .as_ref()
+                .map(|inbox| inbox.read(cx).default_bots())
+                .unwrap_or_else(|| {
+                    locked(&self.store)
+                        .map(|store| vorkspace_core::inbox::BotDefaults::load(&store))
+                        .unwrap_or_default()
+                }),
+            jira_projects: self
+                .inbox
+                .as_ref()
+                .map(|inbox| inbox.read(cx).jira_projects())
+                .unwrap_or_default(),
+            hidden_jira_projects: self
+                .inbox
+                .as_ref()
+                .map(|inbox| inbox.read(cx).hidden_jira_projects())
                 .unwrap_or_default(),
             sessions: self
                 .order
@@ -109,7 +154,6 @@ impl Shell {
                 })
                 .unwrap_or_default(),
             catalogs,
-            classic: self.workspace.classic_layout,
             cwd: self.workspace.project.clone(),
             project_label: self.project_label(&self.workspace.project),
             archived,
@@ -185,11 +229,55 @@ impl Shell {
                     }
                 }
                 SettingsEvent::Section(section) => this.select_settings(*section, cx),
+                SettingsEvent::InboxConnectorEnabled(provider, enabled) => {
+                    this.ensure_background_inbox(window, cx);
+                    if let Some(inbox) = &this.inbox
+                        && let Err(error) = inbox.update(cx, |inbox, cx| {
+                            inbox.set_connector_enabled(provider, *enabled, cx)
+                        })
+                    {
+                        this.quick.error = Some(error);
+                    }
+                    this.sync_settings(cx);
+                }
                 SettingsEvent::ManageInboxProvider(provider) => {
                     this.open_inbox(window, cx);
                     if let Some(inbox) = &this.inbox {
                         inbox.update(cx, |inbox, cx| inbox.open_connection(provider.clone(), cx));
                     }
+                }
+                SettingsEvent::JiraFilter(filter) => {
+                    this.ensure_background_inbox(window, cx);
+                    if let Some(inbox) = &this.inbox
+                        && let Err(error) =
+                            inbox.update(cx, |inbox, cx| inbox.set_jira_filter(filter.clone(), cx))
+                    {
+                        this.quick.error = Some(error);
+                    }
+                    this.sync_settings(cx);
+                }
+                SettingsEvent::RefreshInbox => {
+                    this.ensure_background_inbox(window, cx);
+                    if let Some(inbox) = &this.inbox {
+                        inbox.update(cx, |inbox, cx| inbox.refresh(cx));
+                    }
+                }
+                SettingsEvent::JiraProject(id, visible) => {
+                    this.ensure_background_inbox(window, cx);
+                    if let Some(inbox) = &this.inbox {
+                        inbox.update(cx, |inbox, cx| inbox.set_jira_project(id, *visible, cx));
+                    }
+                    this.sync_settings(cx);
+                }
+                SettingsEvent::InboxBot(source, bot) => {
+                    this.ensure_background_inbox(window, cx);
+                    if let Some(inbox) = &this.inbox
+                        && let Err(error) =
+                            inbox.update(cx, |inbox, cx| inbox.set_default_bot(source, bot, cx))
+                    {
+                        this.quick.error = Some(error);
+                    }
+                    this.sync_settings(cx);
                 }
                 SettingsEvent::WhatsNew => {
                     this.open_whats_new(env!("CARGO_PKG_VERSION").into(), cx)
@@ -201,17 +289,12 @@ impl Shell {
                         .update(cx, |notice, cx| notice.check_now(hidden, cx));
                 }
                 SettingsEvent::Changed(prefs) => {
+                    window.set_ui_scale(prefs.ui_scale.clamp(50, 200) as f32 / 100., cx);
                     this.workspace.preferences = *prefs.clone();
                     this.apply_preferences(cx);
                     this.persist(cx);
                     this.invalidate_chrome(cx);
                     cx.notify();
-                }
-                SettingsEvent::NewLayout(on) => {
-                    if this.workspace.classic_layout == *on {
-                        this.toggle_layout(cx);
-                    }
-                    this.sync_settings(cx);
                 }
                 SettingsEvent::OpenSession(id) => {
                     this.close_settings(window, cx);
@@ -341,6 +424,10 @@ impl Shell {
         self.usage_footer.update(cx, |footer, cx| {
             footer.set_remaining(self.workspace.preferences.show_remaining_usage, cx)
         });
+    }
+    pub(crate) fn observe_scale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.observations
+            .push(crate::settings::observe_window_scale(window, cx));
     }
     fn choose_chat_background(&mut self, cx: &mut Context<Self>) {
         let prompt = cx.prompt_for_paths(PathPromptOptions {
@@ -554,7 +641,8 @@ mod tests {
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_keystrokes("cmd-,");
         visual.run_until_parked();
-        let card = visual.debug_bounds("main-pane-frame").unwrap();
+        let navigation = visual.debug_bounds("settings-nav").unwrap();
+        let content = visual.debug_bounds("settings-view").unwrap();
         let header = visual.debug_bounds("settings-header").unwrap();
         let page = visual.debug_bounds("settings-page-header").unwrap();
         assert!(
@@ -562,13 +650,17 @@ mod tests {
             "breadcrumb and search live in the title bar"
         );
         assert!(
+            navigation.right() <= content.left(),
+            "settings navigation stays beside the page: navigation={navigation:?}, content={content:?}"
+        );
+        assert!(
             (page.left()
-                - card.left()
-                - (card.size.width - px(8.) - px(1024.)).max(px(0.)) / 2.
-                - px(33.))
+                - content.left()
+                - (content.size.width - px(1024.)).max(px(0.)) / 2.
+                - px(32.))
             .abs()
                 < px(1.),
-            "React's 32px page padding plus the card border: page={page:?}, frame={card:?}"
+            "the centered page keeps its 32px padding: page={page:?}, content={content:?}"
         );
         assert!(visual.debug_bounds("settings-toggle-sounds").is_some());
         assert!(visual.debug_bounds("sidebar-content").is_none());
@@ -585,6 +677,7 @@ mod tests {
             "settings-nav-inbox",
             "settings-nav-archive",
             "settings-nav-worktrees",
+            "settings-nav-vox",
         ]) {
             let bounds = visual.debug_bounds(selector).unwrap();
             visual.simulate_click(bounds.center(), Default::default());
@@ -618,30 +711,16 @@ mod tests {
         let (window, _, _) = window(cx);
         window
             .update(cx, |shell, w, cx| {
-                shell.workspace.classic_layout = true;
                 shell.open_settings(Section::Appearance, w, cx)
             })
             .unwrap();
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
-        for expected_classic in [false, true] {
-            window
-                .update(visual, |shell, _, cx| {
-                    shell.settings.as_ref().unwrap().update(cx, |_, cx| {
-                        cx.emit(SettingsEvent::NewLayout(!expected_classic))
-                    });
-                })
-                .unwrap();
-            visual.run_until_parked();
-            window
-                .update(visual, |shell, _, _| {
-                    assert_eq!(shell.workspace.classic_layout, expected_classic);
-                    let saved = shell.latest_state.lock().unwrap().clone();
-                    let restored: Workspace = serde_json::from_str(&saved).unwrap();
-                    assert_eq!(restored.classic_layout, expected_classic);
-                })
-                .unwrap();
-        }
+        assert!(
+            visual
+                .debug_bounds("settings-toggle-inset-layout")
+                .is_none()
+        );
         let light = visual.debug_bounds("settings-theme-light").unwrap();
         visual.simulate_click(light.center(), Default::default());
         visual.run_until_parked();

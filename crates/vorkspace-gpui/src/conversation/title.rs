@@ -25,7 +25,7 @@ impl Conversation {
             || self.summary.title
                 != format!(
                     "New {} session",
-                    Kind::from_id(&self.summary.provider).label()
+                    Kind::display_label(&self.summary.provider)
                 )
         {
             return;

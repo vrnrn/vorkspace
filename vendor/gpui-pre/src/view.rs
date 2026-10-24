@@ -323,6 +323,7 @@ struct ViewElementCacheKey {
     bounds: Bounds<Pixels>,
     content_mask: ContentMask<Pixels>,
     text_style: TextStyle,
+    scale_factor: f32,
 }
 
 impl<V: View> Element for ViewElement<V> {
@@ -473,7 +474,9 @@ fn request_layout_view(
     render: &mut dyn FnMut(&mut Window, &mut App) -> AnyElement,
 ) -> (LayoutId, Option<AnyElement>) {
     window.with_rendered_view(entity_id, |window| {
-        let caching_disabled = window.is_inspector_picking(cx);
+        // Accessibility nodes and action listeners are rebuilt every frame;
+        // cached prepaint/paint replay does not retain that subtree.
+        let caching_disabled = window.is_inspector_picking(cx) || window.is_a11y_active();
         match cached_style {
             Some(style) if !caching_disabled => {
                 let mut root_style = Style::default();
@@ -531,6 +534,7 @@ fn prepaint_view(
                     && element_state.cache_key.bounds == bounds
                     && element_state.cache_key.content_mask == content_mask
                     && element_state.cache_key.text_style == text_style
+                    && element_state.cache_key.scale_factor == window.scale_factor()
                     && !window.dirty_views.contains(&entity_id)
                     && !window.refreshing
                 {
@@ -566,6 +570,7 @@ fn prepaint_view(
                             bounds,
                             content_mask,
                             text_style,
+                            scale_factor: window.scale_factor(),
                         },
                     },
                 )
@@ -597,7 +602,7 @@ fn paint_view(
     cx: &mut App,
 ) {
     window.with_rendered_view(entity_id, |window| {
-        let caching_disabled = window.is_inspector_picking(cx);
+        let caching_disabled = window.is_inspector_picking(cx) || window.is_a11y_active();
         if cached && !caching_disabled {
             window.with_element_state::<ViewElementState, _>(
                 global_id.unwrap(),
@@ -636,4 +641,187 @@ fn paint_component(
     window.with_id(ElementId::Name(name.into()), |window| {
         element.as_mut().unwrap().paint(window, cx);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        AppContext, InteractiveElement, MouseButton, Role, StatefulInteractiveElement, Styled,
+        TestAppContext, div, px,
+    };
+    use std::{
+        cell::Cell,
+        rc::Rc,
+        sync::{Arc, atomic::AtomicBool, atomic::Ordering},
+    };
+
+    struct CachedRoot {
+        child: Entity<CachedAction>,
+    }
+
+    impl Render for CachedRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.child
+                .clone()
+                .cached(StyleRefinement::default().size(px(100.)))
+        }
+    }
+
+    struct CachedAction {
+        renders: Rc<Cell<usize>>,
+        clicks: Rc<Cell<usize>>,
+    }
+
+    impl Render for CachedAction {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get() + 1);
+            let clicks = self.clicks.clone();
+            div()
+                .id("cached-action")
+                .role(Role::Button)
+                .aria_label("Cached action")
+                .size(px(40.))
+                .on_a11y_action(accesskit::Action::Click, move |_, _, _| {
+                    clicks.set(clicks.get() + 1);
+                })
+        }
+    }
+
+    struct A11yMouseFallback {
+        clicks: Rc<Cell<usize>>,
+    }
+
+    impl Render for A11yMouseFallback {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let clicks = self.clicks.clone();
+            div()
+                .id("a11y-mouse-fallback")
+                .role(Role::Button)
+                .aria_label("Fallback mouse action")
+                .size(px(100.))
+                .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                    clicks.set(clicks.get() + 1);
+                })
+        }
+    }
+
+    #[gpui::test]
+    fn cached_views_keep_accessibility_nodes_and_actions_on_clean_frames(cx: &mut TestAppContext) {
+        let renders = Rc::new(Cell::new(0));
+        let clicks = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, cx| CachedRoot {
+            child: cx.new(|_| CachedAction {
+                renders: renders.clone(),
+                clicks: clicks.clone(),
+            }),
+        });
+        let active = Arc::new(AtomicBool::new(false));
+        cx.update_window(window.into(), |_, window, cx| {
+            window.a11y = crate::window::a11y::A11y::new(active.clone(), false, None);
+            window.draw(cx).clear(cx);
+            let cached_renders = renders.get();
+            for _ in 0..3 {
+                window.draw(cx).clear(cx);
+                assert_eq!(renders.get(), cached_renders);
+            }
+
+            let before_zoom = renders.get();
+            window.set_ui_scale(1.5, cx);
+            window.draw(cx).clear(cx);
+            assert_eq!(
+                renders.get(),
+                before_zoom + 1,
+                "a clean cached subtree must be rebuilt when effective pixel scale changes"
+            );
+            let zoomed_renders = renders.get();
+            for _ in 0..3 {
+                window.draw(cx).clear(cx);
+                assert_eq!(renders.get(), zoomed_renders);
+            }
+
+            let mut node_id = None;
+            for active_frames in [1, 1, 3, 1] {
+                let before_activation = renders.get();
+                let before_clicks = clicks.get();
+                active.store(true, Ordering::SeqCst);
+                for frame in 1..=active_frames {
+                    // Do not refresh or notify the child: its unchanged
+                    // visual subtree still needs nodes and actions.
+                    window.draw(cx).clear(cx);
+                    assert_eq!(renders.get(), before_activation + frame);
+                    let tree: serde_json::Value =
+                        serde_json::from_str(&window.debug_a11y_tree_json().unwrap()).unwrap();
+                    let node = tree["nodes"]
+                        .as_object()
+                        .unwrap()
+                        .values()
+                        .find(|node| node["aria"]["label"] == "Cached action")
+                        .expect("the unchanged cached button remains accessible every frame");
+                    let id =
+                        accesskit::NodeId(node["accesskit_id"].as_str().unwrap().parse().unwrap());
+                    assert_eq!(*node_id.get_or_insert(id), id);
+                    assert!(window.a11y.node_bounds.contains_key(&id));
+                    assert!(window.a11y.action_listeners.contains_key(&id));
+                    window.handle_a11y_action(
+                        accesskit::ActionRequest {
+                            action: accesskit::Action::Click,
+                            target_tree: accesskit::TreeId::ROOT,
+                            target_node: id,
+                            data: None,
+                        },
+                        cx,
+                    );
+                    assert_eq!(clicks.get(), before_clicks + frame);
+                }
+
+                active.store(false, Ordering::SeqCst);
+                window.draw(cx).clear(cx);
+                let cached_renders = renders.get();
+                for _ in 0..3 {
+                    window.draw(cx).clear(cx);
+                    assert_eq!(renders.get(), cached_renders);
+                }
+            }
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn a11y_fallback_click_maps_platform_center_back_to_logical_input(cx: &mut TestAppContext) {
+        let clicks = Rc::new(Cell::new(0));
+        let window = cx.add_window({
+            let clicks = clicks.clone();
+            move |_, _| A11yMouseFallback {
+                clicks: clicks.clone(),
+            }
+        });
+        let active = Arc::new(AtomicBool::new(true));
+        cx.update_window(window.into(), |_, window, cx| {
+            window.set_ui_scale(1.5, cx);
+            window.a11y = crate::window::a11y::A11y::new(active, false, None);
+            window.draw(cx).clear(cx);
+            let tree: serde_json::Value =
+                serde_json::from_str(&window.debug_a11y_tree_json().unwrap()).unwrap();
+            let node = tree["nodes"]
+                .as_object()
+                .unwrap()
+                .values()
+                .find(|node| node["aria"]["label"] == "Fallback mouse action")
+                .expect("the fallback target appears in the active accessibility tree");
+            let id = accesskit::NodeId(node["accesskit_id"].as_str().unwrap().parse().unwrap());
+
+            window.handle_a11y_action(
+                accesskit::ActionRequest {
+                    action: accesskit::Action::Click,
+                    target_tree: accesskit::TreeId::ROOT,
+                    target_node: id,
+                    data: None,
+                },
+                cx,
+            );
+            assert_eq!(clicks.get(), 1);
+        })
+        .unwrap();
+    }
 }

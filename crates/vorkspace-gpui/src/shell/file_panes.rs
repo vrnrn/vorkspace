@@ -131,7 +131,7 @@ mod tests {
             .update(cx, |shell, w, cx| {
                 shell
                     .bot_manager()
-                    .update(cx, |m, cx| m.create(Vec::new(), w, cx));
+                    .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
             })
             .unwrap();
         cx.run_until_parked();

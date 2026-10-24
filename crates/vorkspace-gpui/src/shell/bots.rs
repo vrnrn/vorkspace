@@ -24,7 +24,14 @@ impl Shell {
     pub(super) fn bot_active(&self, cx: &App) -> bool {
         self.bots
             .as_ref()
-            .is_some_and(|m| m.read(cx).active.is_some())
+            .is_some_and(|m| m.read(cx).active.is_some() || m.read(cx).classic_channels_open())
+    }
+    /// Channels cover the workspace too, but never own a Bot's details pane.
+    pub(super) fn bot_details_active(&self, cx: &App) -> bool {
+        self.bots.as_ref().is_some_and(|bots| {
+            let bots = bots.read(cx);
+            bots.active.is_some() && !bots.classic_channels_open()
+        })
     }
     pub(crate) fn bot_session_views(&self, cx: &App) -> Vec<BotSession> {
         self.order

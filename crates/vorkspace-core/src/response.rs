@@ -99,7 +99,7 @@ pub fn edited_files(rows: &[Row]) -> Vec<String> {
     files
 }
 pub fn second_opinion(from: &str, rows: &[Row]) -> String {
-    let title = crate::provider::Kind::from_id(from).label();
+    let title = crate::provider::Kind::display_label(from);
     let user = request(rows);
     let report = prose(rows);
     let files = edited_files(rows);
@@ -184,7 +184,7 @@ pub fn choose_handoff_brief(agent: &str, rows: &[Row]) -> String {
 }
 
 pub fn wrap_handoff_prompt(from: &str, brief: &str, user_request: &str) -> String {
-    let provider = crate::provider::Kind::from_id(from).label();
+    let provider = crate::provider::Kind::display_label(from);
     let body = strip_goal_sections(brief);
     let lead = format!(
         "You are continuing an existing conversation handed off from {provider}. This is not a new session. Do not say you have no prior context.\n\n{}",

@@ -40,6 +40,7 @@ struct Tokens {
     light: bool,
     ink: Hsla,
     accent: Hsla,
+    user_accent: Option<Hsla>,
     shell: Hsla,
     pane: Hsla,
     inset_pane: Hsla,
@@ -88,6 +89,7 @@ pub(crate) fn configure(
         light,
         ink: rgb(palette.content).into(),
         accent: rgb(custom.unwrap_or(palette.accent)).into(),
+        user_accent: custom.map(|color| rgb(color).into()),
         shell,
         pane,
         inset_pane,
@@ -129,6 +131,62 @@ pub(crate) fn content(alpha: f32) -> Hsla {
     });
     color.a = alpha;
     color
+}
+
+pub(crate) fn is_light() -> bool {
+    TOKENS.with(|tokens| tokens.borrow().as_ref().is_some_and(|tokens| tokens.light))
+}
+
+pub(crate) fn floating_fill() -> Hsla {
+    let mut fill = pane_fill();
+    if is_light() {
+        fill.l = 1.;
+    }
+    fill.a = 1.;
+    fill
+}
+
+/// Text selection follows the current accent without obscuring light-theme ink.
+pub(crate) fn text_selection() -> Hsla {
+    accent_color().opacity(if is_light() { 0.2 } else { 0.35 })
+}
+
+fn user_accent() -> Option<Hsla> {
+    TOKENS.with(|tokens| {
+        tokens
+            .borrow()
+            .as_ref()
+            .and_then(|tokens| tokens.user_accent)
+    })
+}
+
+pub(crate) fn user_bubble_fill() -> Hsla {
+    user_accent().map_or(content(0.1), |accent| accent.opacity(0.24))
+}
+
+/// Preserve neutral controls until the user explicitly chooses an accent.
+pub(crate) fn primary_action(enabled: bool) -> Option<(Hsla, Hsla)> {
+    let accent = user_accent()?;
+    if !enabled {
+        return Some((accent.opacity(0.28), content(0.35)));
+    }
+    let rgb = accent.to_rgb();
+    let linear = |value: f32| {
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b);
+    Some((
+        accent,
+        if luminance > 0.179 {
+            black(1.)
+        } else {
+            white(1.)
+        },
+    ))
 }
 
 /// `[data-composer-box]::before` uses content ink at 3% over its backdrop.
@@ -196,15 +254,6 @@ pub(crate) fn pane_fill() -> Hsla {
         rgb(CHAT).into()
     }
 }
-/// Apply to surrounding chrome, leaving the content on the window's glass.
-pub(crate) fn inset_chrome_wash() -> Hsla {
-    content(0.05)
-}
-pub(crate) fn inset_pane_fill() -> Hsla {
-    TOKENS
-        .with(|tokens| tokens.borrow().as_ref().map(|t| t.inset_pane))
-        .unwrap_or_else(pane_fill)
-}
 pub(crate) fn section_label(label: &'static str) -> Div {
     div()
         .h(px(28.))
@@ -228,15 +277,9 @@ pub(crate) fn icon(path: &'static str, side: f32) -> Svg {
 pub(crate) fn provider_icon(provider: &str, side: f32) -> Div {
     let (path, monochrome, scale) = match provider {
         "claude" => ("claude.svg", false, 1.),
-        "cursor" => ("cursor.svg", true, 1.),
-        "grok" => ("grok.svg", true, 1.),
-        "opencode" => ("opencode.svg", true, 1.),
         "antigravity" => ("antigravity.svg", false, 1.),
         "pi" => ("pi.svg", true, 1.),
         "omp" => ("omp.svg", false, 1.),
-        "fx" => ("fx.svg", true, 1.),
-        "hermes" => ("hermes.svg", true, 0.72),
-        "devin" => ("devin.svg", true, 0.88),
         _ => ("codex.svg", false, 1.),
     };
     // Like React's currentColor / CSS masks, GPUI's SVG mask follows the theme.
@@ -364,6 +407,23 @@ pub(crate) fn syntax_color(kind: &str) -> Hsla {
     )
 }
 
+/// Resolve cached Dark+ grammar colors through the live appearance palette.
+pub(crate) fn diff_syntax_color(color: u32) -> Hsla {
+    let kind = match color {
+        0x569cd6 | 0xc586c0 => "var(--syntax-keyword)",
+        0xdcdcaa => "var(--syntax-callable)",
+        0xce9178 | 0xd7ba7d => "var(--syntax-string)",
+        0x4ec9b0 | 0xb8d7a3 => "var(--syntax-type)",
+        0xb5cea8 => "var(--syntax-number)",
+        0x6a9955 | 0x608b4e => "var(--syntax-comment)",
+        0x9cdcfe => "var(--syntax-property)",
+        0xd16969 | 0x646695 => "var(--syntax-meta)",
+        0xf44747 => "var(--syntax-invalid)",
+        _ => return content(0.92),
+    };
+    syntax_color(kind)
+}
+
 fn diff_palette(name: &str, light: bool) -> [u32; 4] {
     match (name, light) {
         ("colorblind", false) => [0x388bfd, 0xdb6d28, 0x79c0ff, 0xffa657],
@@ -399,6 +459,69 @@ pub(crate) fn diff_background(add: bool, gutter: bool) -> Hsla {
 #[cfg(test)]
 mod composer_tests {
     use super::*;
+
+    #[test]
+    fn cached_diff_tokens_follow_live_light_dark_and_custom_palettes() {
+        let saved = TOKENS.with(|tokens| *tokens.borrow());
+        let mut preferences = crate::settings::Preferences::default();
+        configure(&preferences, false, true);
+        let dark = diff_syntax_color(0xd4d4d4);
+        preferences.theme = "light".into();
+        configure(&preferences, false, true);
+        let light = diff_syntax_color(0xd4d4d4);
+        assert!(dark.l > 0.6 && light.l < 0.3);
+        assert_eq!(
+            diff_syntax_color(0x569cd6),
+            syntax_color("var(--syntax-keyword)")
+        );
+        let keyword = diff_syntax_color(0x569cd6);
+        preferences.workspace_theme = "harbor".into();
+        configure(&preferences, false, true);
+        assert_ne!(keyword, diff_syntax_color(0x569cd6));
+        assert_eq!(
+            diff_syntax_color(0x6a9955),
+            syntax_color("var(--syntax-comment)")
+        );
+        TOKENS.with(|tokens| *tokens.borrow_mut() = saved);
+    }
+
+    #[test]
+    fn accent_reset_and_theme_switch_preserve_readable_controls() {
+        struct Restore(Option<Tokens>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                TOKENS.with(|tokens| *tokens.borrow_mut() = self.0);
+            }
+        }
+        let _restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
+        let mut preferences = crate::settings::Preferences::default();
+        for theme in ["dark", "light", "dark"] {
+            preferences.theme = theme.into();
+            configure(&preferences, false, true);
+            assert_eq!(user_bubble_fill(), content(0.1));
+            assert_eq!(primary_action(true), None);
+            assert_eq!(floating_fill().a, 1.);
+            assert_eq!(
+                text_selection().a,
+                if theme == "light" { 0.2 } else { 0.35 }
+            );
+            for (color, ink) in [("#ffff00", black(1.)), ("#000080", white(1.))] {
+                preferences.accent_color = Some(color.into());
+                configure(&preferences, false, true);
+                let accent = accent_color();
+                assert_eq!(primary_action(true), Some((accent, ink)));
+                assert_eq!(
+                    primary_action(false),
+                    Some((accent.opacity(0.28), content(0.35)))
+                );
+                assert_eq!(user_bubble_fill(), accent.opacity(0.24));
+            }
+            preferences.accent_color = None;
+            configure(&preferences, false, true);
+            assert_eq!(primary_action(true), None);
+            assert_eq!(user_bubble_fill(), content(0.1));
+        }
+    }
 
     #[test]
     fn both_layouts_share_opacity_and_keep_dark_glass_preferences_when_disabled() {

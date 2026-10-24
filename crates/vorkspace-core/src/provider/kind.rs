@@ -3,88 +3,75 @@
 pub enum Kind {
     Codex,
     Claude,
-    Cursor,
-    Grok,
-    OpenCode,
     Antigravity,
     Pi,
     Omp,
-    Fx,
-    Hermes,
-    Devin,
+    /// Historical or unrecognized IDs stay readable but cannot start a CLI.
+    Unsupported,
 }
 impl Kind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 5] = [
         Self::Claude,
         Self::Codex,
-        Self::Cursor,
-        Self::Grok,
-        Self::OpenCode,
         Self::Pi,
         Self::Omp,
-        Self::Fx,
-        Self::Hermes,
         Self::Antigravity,
-        Self::Devin,
     ];
     pub fn id(self) -> &'static str {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
-            Self::Cursor => "cursor",
-            Self::Grok => "grok",
-            Self::OpenCode => "opencode",
             Self::Antigravity => "antigravity",
             Self::Pi => "pi",
             Self::Omp => "omp",
-            Self::Fx => "fx",
-            Self::Hermes => "hermes",
-            Self::Devin => "devin",
+            Self::Unsupported => "unsupported",
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             Self::Codex => "Codex",
             Self::Claude => "Claude Code",
-            Self::Cursor => "Cursor",
-            Self::Grok => "Grok Build",
-            Self::OpenCode => "OpenCode",
             Self::Antigravity => "Antigravity",
             Self::Pi => "Pi",
             Self::Omp => "omp",
-            Self::Fx => "fx",
-            Self::Hermes => "Hermes Agent",
-            Self::Devin => "Devin",
+            Self::Unsupported => "Unavailable provider",
         }
     }
     pub fn parse(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|kind| kind.id() == id)
     }
     pub fn from_id(id: &str) -> Self {
-        Self::parse(id).unwrap_or(Self::Codex)
+        Self::parse(id).unwrap_or(Self::Unsupported)
+    }
+    /// Presentation of persisted identities is independent of CLI admission.
+    pub fn display_label(id: &str) -> &'static str {
+        match id {
+            "cursor" => "Cursor",
+            "grok" => "Grok Build",
+            "opencode" => "OpenCode",
+            "fx" => "fx",
+            "hermes" => "Hermes Agent",
+            "devin" => "Devin",
+            _ => Self::from_id(id).label(),
+        }
+    }
+    pub fn is_supported(self) -> bool {
+        self != Self::Unsupported
     }
     pub fn binary_name(self) -> &'static str {
         match self {
-            Self::Cursor => "cursor-agent",
             Self::Antigravity => "agy_acp_server.par",
             _ => self.id(),
         }
     }
     pub(super) fn install_dirs(self) -> &'static [&'static str] {
         match self {
-            Self::Grok => &[".grok/bin"],
-            Self::OpenCode => &[".opencode/bin"],
-            Self::Fx => &[".fx/bin"],
             Self::Antigravity => &[".local/share/agy-acp"],
-            Self::Hermes => &[
-                ".hermes/hermes-agent/venv/bin",
-                ".hermes/hermes-agent/.venv/bin",
-            ],
             _ => &[],
         }
     }
     pub fn is_acp(self) -> bool {
-        !matches!(self, Self::Codex | Self::Claude | Self::Pi | Self::Omp)
+        self == Self::Antigravity
     }
     pub fn is_pi(self) -> bool {
         matches!(self, Self::Pi | Self::Omp)
@@ -96,15 +83,10 @@ impl Kind {
         match self {
             Self::Codex => "codex login",
             Self::Claude => "claude auth login",
-            Self::Cursor => "agent login",
-            Self::Grok => "grok login",
-            Self::OpenCode => "opencode auth login",
             Self::Antigravity => "agy",
             Self::Pi => "pi",
             Self::Omp => "omp",
-            Self::Fx => "fx login",
-            Self::Hermes => "hermes model",
-            Self::Devin => "devin auth login",
+            Self::Unsupported => "a supported provider",
         }
     }
 }
@@ -113,20 +95,48 @@ impl Kind {
 mod tests {
     use super::*;
     #[test]
-    fn registry_covers_production_harnesses_and_round_trips_native_extensions() {
-        let production = ["codex", "claude", "opencode", "omp", "antigravity"];
+    fn registry_contains_only_supported_providers_and_never_rebinds_history() {
+        assert_eq!(
+            Kind::ALL.map(Kind::id),
+            ["claude", "codex", "pi", "omp", "antigravity"]
+        );
         for kind in Kind::ALL {
             assert_eq!(Kind::parse(kind.id()), Some(kind));
         }
-        // The preview brings additional upstream transports. Every production
-        // identity must still resolve without silently falling back to Codex.
-        for id in production {
-            assert!(
-                Kind::parse(id).is_some(),
-                "Missing production provider: {id}"
+        for id in [
+            "cursor", "grok", "opencode", "fx", "hermes", "devin", "unknown",
+        ] {
+            assert_eq!(Kind::parse(id), None);
+            assert_eq!(Kind::from_id(id), Kind::Unsupported);
+            assert!(!Kind::from_id(id).is_supported());
+            assert!(!Kind::from_id(id).is_acp());
+        }
+    }
+    #[test]
+    fn historical_labels_do_not_admit_retired_executables() {
+        for (id, label) in [
+            ("cursor", "Cursor"),
+            ("grok", "Grok Build"),
+            ("opencode", "OpenCode"),
+            ("fx", "fx"),
+            ("hermes", "Hermes Agent"),
+            ("devin", "Devin"),
+        ] {
+            assert_eq!(Kind::display_label(id), label);
+            assert_eq!(Kind::parse(id), None);
+            assert_eq!(Kind::from_id(id), Kind::Unsupported);
+            assert_eq!(
+                crate::session_title::display_title(&format!("New {label} session"), id),
+                "New session"
+            );
+            assert_eq!(
+                crate::session_title::display_title("My saved title", id),
+                "My saved title"
             );
         }
-        assert_eq!(Kind::parse("unknown"), None);
-        assert_eq!(Kind::Cursor.binary_name(), "cursor-agent");
+        for kind in Kind::ALL {
+            assert_eq!(Kind::display_label(kind.id()), kind.label());
+        }
+        assert_eq!(Kind::display_label("unknown"), "Unavailable provider");
     }
 }

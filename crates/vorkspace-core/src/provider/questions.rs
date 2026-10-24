@@ -129,7 +129,7 @@ impl Protocol {
                 row["custom"]
                     .as_bool()
                     .or_else(|| row["allowCustom"].as_bool())
-                    .unwrap_or(kind != "cursor" && kind != "pi")
+                    .unwrap_or(kind != "pi")
                     || options.is_empty()
             };
             items.push(QuestionItem {
@@ -295,20 +295,6 @@ pub(super) fn respond(
                 json!({"type":"control_response","response":{"subtype":"success","request_id":wire,"response":if answered {json!({"behavior":"allow","updatedInput":input})} else {json!({"behavior":"deny","message":"User skipped the question"})}}}),
             );
         }
-        "cursor" => {
-            if !answered {
-                json!({"outcome":{"outcome":"skipped","reason":"User skipped"}})
-            } else {
-                json!({"outcome":{"outcome":"answered","answers":pairs.map(|(q,a)|json!({"questionId":q.id,"selectedOptionIds":q.options.iter().filter(|o|a.contains(&o.label)).map(|o|&o.id).collect::<Vec<_>>()})).collect::<Vec<_>>()}})
-            }
-        }
-        "grok" => {
-            if !answered {
-                json!({"outcome":"skip_interview"})
-            } else {
-                json!({"outcome":"accepted","answers":pairs.map(|(q,a)|(q.prompt.clone(),if q.multiple {json!(a)} else {json!(a.first().cloned().unwrap_or_default())})).collect::<serde_json::Map<_,_>>()})
-            }
-        }
         "pi" => {
             return write_json(
                 stdin,
@@ -362,25 +348,6 @@ mod tests {
         let response = answer(&mut p, &events[0], vec![vec!["B".into()]]);
         assert_eq!(response["result"]["answers"]["q"]["answers"], json!(["B"]));
         assert!(p.questions.is_empty());
-    }
-    #[test]
-    fn cursor_answers_keep_opaque_option_ids_and_grok_uses_prompts() {
-        for (kind, method) in [
-            (Kind::Cursor, "cursor/ask_question"),
-            (Kind::Grok, "_x.ai/ask_user_question"),
-        ] {
-            let mut p = protocol(kind);
-            let events = p.frame(json!({"id":99,"method":method,"params":{"questions":[{"id":"q","question":"Choose","options":[{"id":"opaque","label":"A"}]}]}}),&mut Vec::new()).unwrap();
-            let response = answer(&mut p, &events[0], vec![vec!["A".into()]]);
-            if kind == Kind::Cursor {
-                assert_eq!(
-                    response["result"]["outcome"]["answers"][0]["selectedOptionIds"],
-                    json!(["opaque"])
-                );
-            } else {
-                assert_eq!(response["result"]["answers"]["Choose"], "A");
-            }
-        }
     }
     #[test]
     fn claude_questions_return_the_original_input_and_typed_answers() {

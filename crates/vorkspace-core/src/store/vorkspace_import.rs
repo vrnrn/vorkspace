@@ -2,7 +2,6 @@
 use super::Store;
 use crate::{
     agent::Settings,
-    provider::Kind,
     tool::{ToolCall, ToolState},
     transcript::Transcript,
 };
@@ -142,7 +141,6 @@ fn import_sessions(
         if session.get::<_, Option<bool>>(16)?.unwrap_or(false)
             || session.get::<_, Option<String>>(17)?.is_some()
             || !Path::new(&cwd).is_absolute()
-            || Kind::parse(&provider).is_none()
         {
             report.skipped += 1;
             continue;
@@ -555,7 +553,7 @@ mod tests {
             .unwrap();
         let mut store = Store::open(&dir.path().join("native.sqlite3")).unwrap();
         let report = store.import_vorkspace(&path).unwrap();
-        assert_eq!((report.imported, report.skipped), (1, 3));
+        assert_eq!((report.imported, report.skipped), (2, 2));
         assert!(!store.sessions().unwrap()[0].archived);
         source
             .execute_batch(
@@ -574,8 +572,81 @@ mod tests {
         let report = store.import_vorkspace(&path).unwrap();
         assert_eq!(
             (report.imported, report.existing, report.skipped),
-            (0, 1, 5)
+            (0, 2, 4)
         );
+    }
+
+    #[test]
+    fn unsupported_provider_history_keeps_its_identity_model_and_transcript_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vorkspace.db");
+        let source = source(&path);
+        let providers = [
+            "cursor", "grok", "opencode", "fx", "hermes", "devin", "unknown",
+        ];
+        for (index, provider) in providers.iter().enumerate() {
+            add(
+                &source,
+                provider,
+                dir.path(),
+                json!([
+                    {"role":"user","text":"Saved request"},
+                    {"role":"assistant","text":"Saved answer"}
+                ]),
+                index as i64,
+            );
+            source
+                .execute(
+                    "UPDATE sessions SET harness=?1,model=?2 WHERE id=?1",
+                    params![provider, format!("{provider}:original-model")],
+                )
+                .unwrap();
+        }
+        let native = dir.path().join("native.sqlite3");
+        let mut store = Store::open(&native).unwrap();
+        assert_eq!(
+            store.import_vorkspace(&path).unwrap().imported,
+            providers.len()
+        );
+        let before = store.sessions().unwrap();
+        for summary in &before {
+            assert!(providers.contains(&summary.provider.as_str()));
+            assert_eq!(summary.provider_id.as_deref(), Some("original-thread"));
+            assert_eq!(
+                store
+                    .agent_settings(summary.id)
+                    .unwrap()
+                    .unwrap()
+                    .model
+                    .as_deref(),
+                Some("original-model")
+            );
+            let transcript = store.load(summary.id).unwrap();
+            assert!(transcript.rows.iter().any(|row| row.text == "Saved answer"));
+            store
+                .title(summary.id, "Edited while viewing history")
+                .unwrap();
+        }
+        drop(store);
+
+        let mut reopened = Store::open(&native).unwrap();
+        let report = reopened.import_vorkspace(&path).unwrap();
+        assert_eq!((report.imported, report.existing), (0, providers.len()));
+        for summary in reopened.sessions().unwrap() {
+            let original = before.iter().find(|s| s.id == summary.id).unwrap();
+            assert_eq!(summary.provider, original.provider);
+            assert_eq!(summary.provider_id, original.provider_id);
+            assert_eq!(summary.title, "Edited while viewing history");
+            assert!(reopened
+                .load(summary.id)
+                .unwrap()
+                .rows
+                .iter()
+                .any(|r| r.text == "Saved request"));
+            assert!(reopened
+                .create(&summary.provider, dir.path().to_str().unwrap())
+                .is_err());
+        }
     }
 
     #[test]

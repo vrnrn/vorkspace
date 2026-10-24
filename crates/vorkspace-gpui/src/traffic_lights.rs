@@ -63,6 +63,14 @@ fn ns_window(window: &Window) -> Option<objc2::rc::Retained<NSWindow>> {
     let view = unsafe { &*appkit.ns_view.as_ptr().cast::<NSView>() };
     view.window()
 }
+pub(crate) fn show(window: &Window) {
+    if let Some(window) = ns_window(window) {
+        if window.isMiniaturized() {
+            window.deminiaturize(None);
+        }
+        window.makeKeyAndOrderFront(None);
+    }
+}
 /// Return keyboard input to GPUI after interacting with an embedded native view.
 pub(crate) fn focus_content(window: &Window) {
     let Ok(handle) = HasWindowHandle::window_handle(window) else {

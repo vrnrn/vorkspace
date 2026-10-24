@@ -70,35 +70,7 @@ pub(crate) fn bind(cx: &mut App) {
     ]);
 }
 pub(crate) fn menus(prefs: &crate::settings::Preferences, cx: &mut App) {
-    use gpui::{Menu, MenuItem};
-    cx.set_menus(vec![
-        Menu::new("vorkspace Native")
-            .items([MenuItem::action("Quit vorkspace Native", crate::Quit)]),
-        Menu::new("File").items([
-            MenuItem::action("Save", Save),
-            MenuItem::action("Reload file", ReloadFile),
-            MenuItem::action("Autosave", ToggleAutosave).checked(prefs.autosave),
-        ]),
-        Menu::new("Edit").items([
-            MenuItem::action("Undo", input::Undo),
-            MenuItem::action("Redo", input::Redo),
-            MenuItem::separator(),
-            MenuItem::action("Cut", input::Cut),
-            MenuItem::action("Copy", input::Copy),
-            MenuItem::action("Paste", input::Paste),
-            MenuItem::action("Select All", input::SelectAll),
-            MenuItem::separator(),
-            MenuItem::action("Find", Find),
-            MenuItem::action("Replace", Replace),
-            MenuItem::action("Format Document", Format),
-            MenuItem::action("Word wrap", ToggleWordWrap).checked(prefs.file_word_wrap),
-            MenuItem::separator(),
-            MenuItem::action("Fold", input::FoldCode),
-            MenuItem::action("Unfold", input::UnfoldCode),
-            MenuItem::action("Fold All", input::FoldAll),
-            MenuItem::action("Unfold All", input::UnfoldAll),
-        ]),
-    ]);
+    cx.set_menus(crate::app_menu::build(prefs));
 }
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
 #[action(namespace = file_editor, no_json)]
@@ -185,7 +157,6 @@ pub(crate) struct FileEditor {
     matches: Vec<crate::editor_analysis::SearchMatch>,
     autosave: Option<Task<()>>,
     formatting: Option<Task<()>>,
-    pub show_diff: bool,
     change_index: usize,
     match_index: usize,
     document: Option<TextDocument>,
@@ -319,7 +290,6 @@ impl FileEditor {
             search_task: None,
             autosave: None,
             formatting: None,
-            show_diff: false,
             change_index: 0,
             matches: Vec::new(),
             match_index: 0,
@@ -443,7 +413,7 @@ impl FileEditor {
                             input.reload_file(text, !first && !discard, cx);
                         });
                         this.dirty = false;
-                        if first && !this.show_diff && (this.is_markdown() || this.is_svg()) {
+                        if first && (this.is_markdown() || this.is_svg()) {
                             this.preview = cx
                                 .try_global::<crate::settings::Preferences>()
                                 .is_none_or(|prefs| prefs.file_view_mode != "source");
@@ -1042,9 +1012,8 @@ impl gpui::Render for FileEditor {
                 .into_any_element()
         });
         let selection_menu = self.code_selection_menu(window, cx);
-        self.input.update(cx, |i, _| {
-            i.set_editor_diff(self.show_diff, !self.git_staged)
-        });
+        self.input
+            .update(cx, |i, _| i.set_editor_diff(false, !self.git_staged));
         if ((!ready || self.preview) && self.input.focus_handle(cx).is_focused(window))
             || (!self.search_open
                 && (self.search.focus_handle(cx).is_focused(window)
@@ -1260,9 +1229,6 @@ impl gpui::Render for FileEditor {
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_match(true, cx)))
             .on_action(cx.listener(|this, _: &DismissSearch, w, cx| this.dismiss_search(w, cx)))
             .child(self.path_header(controls, cx))
-            .when(self.show_diff && ready && !self.preview, |d| {
-                d.child(self.diff_toolbar(cx))
-            })
             .when(self.search_open, |d| d.child(self.search_panel(cx)))
             .when_some(
                 self.error.clone().filter(|_| ready).or_else(|| {

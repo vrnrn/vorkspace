@@ -44,6 +44,10 @@ pub struct Bot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable_session: Option<String>,
     pub name: String,
+    /// Committed setup choices remain durable until the backing session owns
+    /// them. Publishing its session ID clears this bootstrap configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_configuration: Option<Box<InitialConfiguration>>,
     pub mascot: String,
     pub color: u32,
     pub projects: Vec<String>,
@@ -69,6 +73,7 @@ impl Default for Bot {
             session_id: None,
             unavailable_session: None,
             name: String::new(),
+            initial_configuration: None,
             mascot: MASCOTS[0].into(),
             color: COLORS_BOT[0],
             projects: Vec::new(),
@@ -85,6 +90,13 @@ impl Default for Bot {
             seen_rows: 0,
         }
     }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InitialConfiguration {
+    pub provider: String,
+    pub settings: crate::agent::Settings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soul: Option<String>,
 }
 impl Bot {
     pub fn label(&self) -> String {
@@ -231,7 +243,8 @@ impl Roster {
             &serde_json::to_string(self).map_err(|e| e.to_string())?,
         )
     }
-    pub fn create(&mut self, projects: Vec<String>) -> &Bot {
+    /// Prepare an unsaved identity without changing the roster or its storage.
+    pub fn draft(&self, projects: Vec<String>) -> Bot {
         let mut bot = Bot {
             mascot: MASCOTS
                 .iter()
@@ -246,8 +259,26 @@ impl Roster {
             ..Default::default()
         };
         bot.normalize();
+        bot
+    }
+    pub fn create(&mut self, mut bot: Bot) -> Result<&Bot, String> {
+        bot.normalize();
+        if bot.name.is_empty() {
+            return Err("Enter a name for this Bot.".into());
+        }
+        if bot.id.is_empty()
+            || !bot
+                .id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err("Invalid Bot identity.".into());
+        }
+        if self.bots.iter().any(|existing| existing.id == bot.id) {
+            return Err("This Bot already exists.".into());
+        }
         self.bots.push(bot);
-        self.bots.last().unwrap()
+        Ok(self.bots.last().unwrap())
     }
     pub fn get(&self, id: &str) -> Option<&Bot> {
         self.bots.iter().find(|m| m.id == id)
@@ -284,7 +315,11 @@ pub fn root(store: &Store) -> PathBuf {
 pub fn load_files(root: &Path, bot: &Bot) -> Result<files::AgentFiles, String> {
     let mut files = files::load(root, &bot.id, None)?;
     if files.soul.is_none() {
-        let soul = DEFAULT_SOUL;
+        let soul = bot
+            .initial_configuration
+            .as_ref()
+            .and_then(|config| config.soul.as_deref())
+            .unwrap_or(DEFAULT_SOUL);
         match files::save(root, &bot.id, None, "SOUL.md", soul, Some(&files.soul_hash)) {
             Ok(hash) => {
                 files.soul = Some(soul.into());

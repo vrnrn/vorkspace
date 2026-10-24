@@ -235,6 +235,9 @@ pub fn models(kind: Kind) -> Result<Vec<Model>, String> {
     models_for(kind, &crate::accounts::Profile::default())
 }
 pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<Model>, String> {
+    if !kind.is_supported() {
+        return Err("This provider is no longer supported".into());
+    }
     let cache = cache();
     let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, _, rows, _)) = guard.entries.iter().find(|(k, profile, _, at)| {
@@ -248,9 +251,7 @@ pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<
         .copied()
         .unwrap_or(0);
     drop(guard);
-    let value = if kind == Kind::Fx {
-        cli_json(kind, &["models", "--json"])?
-    } else if kind.is_acp() || kind.is_pi() {
+    let value = if kind.is_acp() || kind.is_pi() {
         provider::catalog_for(kind, account.clone())?
     } else {
         query_provider(kind, "model/list", json!({"limit":100}), account)?
@@ -260,11 +261,7 @@ pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<
     } else {
         &value["response"]["response"]["models"]
     };
-    let mut models: Vec<_> = if kind == Kind::Fx {
-        fx_models(&value)
-    } else if kind == Kind::Devin {
-        provider::devin::catalog_models(&value)
-    } else if kind.is_acp() {
+    let models: Vec<_> = if kind.is_acp() {
         acp_models(&value)
     } else if kind.is_pi() {
         pi_models(kind, &value)
@@ -343,15 +340,6 @@ pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<
             })
             .collect()
     };
-    if kind == Kind::Fx {
-        if let Ok(status) = cli_json(kind, &["status", "--json"]) {
-            if let Some(id) = status["model"].as_str() {
-                if !models.iter().any(|m| m.id == id) {
-                    models.insert(0, model(id, id));
-                }
-            }
-        }
-    }
     if models.is_empty() {
         return Err(format!("{} returned an empty model catalog", kind.label()));
     }
@@ -570,34 +558,6 @@ fn acp_models(value: &Value) -> Vec<Model> {
             Some(model)
         })
         .collect()
-}
-fn fx_models(value: &Value) -> Vec<Model> {
-    value
-        .as_array()
-        .or_else(|| value["models"].as_array())
-        .or_else(|| value["ids"].as_array())
-        .or_else(|| value["data"].as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|row| {
-            let id = row
-                .as_str()
-                .or_else(|| row["id"].as_str())
-                .or_else(|| row["model"].as_str())?;
-            Some(model(
-                id,
-                row["name"]
-                    .as_str()
-                    .or_else(|| row["displayName"].as_str())
-                    .unwrap_or(id),
-            ))
-        })
-        .collect()
-}
-/// Read-only CLI catalog probes bound output and clean up their processes,
-/// with an absolute deadline even for noisy children.
-fn cli_json(kind: Kind, args: &[&str]) -> Result<Value, String> {
-    cli_json_for(kind, args, &Default::default())
 }
 pub(crate) fn cli_json_for(
     kind: Kind,
@@ -905,7 +865,7 @@ mod tests {
                 {"id":"context","label":"Context window","kind":"select","value":"1m","options":[{"value":"1m","label":"1M"}]}]},
                 {"id":"codex:gpt-test","name":"Duplicate"}],
             "claude":[{"id":"claude:opus","name":"Opus","settings":[{"id":"fast","kind":"toggle"},{"id":"thinking","kind":"toggle"}]}]
-        },"errors":{"devin":"Sign in on the host"}}), vec![Kind::Codex,Kind::Claude,Kind::Devin]).unwrap();
+        },"errors":{"antigravity":"Sign in on the host"}}), vec![Kind::Codex,Kind::Claude,Kind::Antigravity]).unwrap();
         assert_eq!(catalog.models[&Kind::Codex].len(), 1);
         let model = &catalog.models[&Kind::Codex][0];
         assert_eq!(model.id, "codex:gpt-test");
@@ -917,8 +877,8 @@ mod tests {
         assert_eq!(model.controls[0].current, "1m");
         assert!(catalog.models[&Kind::Claude][0].fast);
         assert!(catalog.models[&Kind::Claude][0].thinking);
-        assert_eq!(catalog.errors[&Kind::Devin], "Sign in on the host");
-        assert!(!catalog.models.contains_key(&Kind::Cursor));
+        assert_eq!(catalog.errors[&Kind::Antigravity], "Sign in on the host");
+        assert!(!catalog.models.contains_key(&Kind::Unsupported));
     }
     #[test]
     fn acp_catalogs_accept_grouped_options_and_legacy_models() {
@@ -949,7 +909,7 @@ mod tests {
         assert!(rows.iter().all(|m| m.fast));
     }
     #[test]
-    fn parameterized_cursor_catalog_keeps_thinking_and_context_controls() {
+    fn parameterized_acp_catalog_keeps_thinking_and_context_controls() {
         let rows = acp_models(
             &json!({"models":[{"value":"opus","name":"Opus","configOptions":[
                 {"id":"thinking","category":"thought_level","name":"Thinking","currentValue":"false","options":[{"value":"false","name":"Off"},{"value":"true","name":"On"}]},

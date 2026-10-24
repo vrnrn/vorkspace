@@ -373,7 +373,7 @@ mod tests {
             .update(cx, |shell, w, cx| {
                 shell
                     .bot_manager()
-                    .update(cx, |m, cx| m.create(Vec::new(), w, cx));
+                    .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
             })
             .unwrap();
         cx.run_until_parked();
@@ -692,9 +692,9 @@ mod interaction_tests {
                         view.summary.has_messages = true;
                     });
                 }
-                shell
-                    .bot_manager()
-                    .update(cx, |m, cx| m.create(vec!["/work/vorkspace".into()], w, cx));
+                shell.bot_manager().update(cx, |m, cx| {
+                    m.create_named(vec!["/work/vorkspace".into()], w, cx)
+                });
             })
             .unwrap();
         cx.run_until_parked();
@@ -712,6 +712,17 @@ mod interaction_tests {
         };
         let bot_row = format!("bot-rail-{id}");
         let session_row = format!("sidebar-session-{session}");
+        let project_row = window
+            .update(cx, |shell, _, _| {
+                let project = shell
+                    .workspace
+                    .projects
+                    .iter()
+                    .position(|project| project == "/work/vorkspace")
+                    .unwrap();
+                format!("classic-project-{project}")
+            })
+            .unwrap();
         assert!(sidebar_highlight(window, session_row.clone(), cx));
         assert!(!sidebar_highlight(window, bot_row.clone(), cx));
         let click = |selector: &str, cx: &mut TestAppContext| {
@@ -727,15 +738,35 @@ mod interaction_tests {
         click(&bot_row, cx);
         assert!(sidebar_highlight(window, bot_row.clone(), cx));
         assert!(
-            !sidebar_highlight(window, session_row.clone(), cx),
-            "a remembered session must not look active while a Bot is visible"
+            gpui::VisualTestContext::from_window(window.into(), cx)
+                .debug_bounds(Box::leak(session_row.clone().into_boxed_str()))
+                .is_none(),
+            "the original Bot view hides the parked session pane"
         );
         window
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.workspace.active, Some(session));
+                assert_eq!(shell.workspace.project, "/work/vorkspace");
+                assert_eq!(
+                    shell.workspace.scope_focus.get(&shell.tab_scope()),
+                    Some(&bot),
+                    "the explicit project click must override the remembered Bot surface"
+                );
             })
             .unwrap();
-        click(&session_row, cx);
+        click(&project_row, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(!shell.bot_active(cx));
+                assert_eq!(shell.workspace.project, "/work/vorkspace");
+                assert_eq!(shell.workspace.active, Some(session));
+                assert_eq!(
+                    shell.workspace.project_focus.get("/work/vorkspace"),
+                    Some(&session)
+                );
+                assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(session)));
+            })
+            .unwrap();
         assert!(sidebar_highlight(window, session_row.clone(), cx));
         assert!(!sidebar_highlight(window, bot_row.clone(), cx));
         // Opening from the title strip must also clear an old bulk selection.
@@ -765,8 +796,18 @@ mod interaction_tests {
                 assert!(shell.sidebar_target.is_none());
             })
             .unwrap();
-        assert!(sidebar_highlight(window, bot_row, cx));
-        assert!(!sidebar_highlight(window, session_row, cx));
+        assert!(sidebar_highlight(window, bot_row.clone(), cx));
+        for selector in [&session_row, &format!("sidebar-session-{other}")] {
+            assert!(
+                gpui::VisualTestContext::from_window(window.into(), cx)
+                    .debug_bounds(Box::leak(selector.clone().into_boxed_str()))
+                    .is_none(),
+                "the Bot surface hides session row {selector}"
+            );
+        }
+        click(&project_row, cx);
+        assert!(sidebar_highlight(window, session_row, cx));
+        assert!(!sidebar_highlight(window, bot_row, cx));
         assert!(!sidebar_highlight(
             window,
             format!("sidebar-session-{other}"),
@@ -783,7 +824,7 @@ mod interaction_tests {
             .update(cx, |shell, w, cx| {
                 shell
                     .bot_manager()
-                    .update(cx, |m, cx| m.create(Vec::new(), w, cx));
+                    .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
             })
             .unwrap();
         cx.run_until_parked();
@@ -822,7 +863,7 @@ mod interaction_tests {
             .update(cx, |shell, w, cx| {
                 shell
                     .bot_manager()
-                    .update(cx, |m, cx| m.create(Vec::new(), w, cx));
+                    .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
             })
             .unwrap();
         cx.run_until_parked();

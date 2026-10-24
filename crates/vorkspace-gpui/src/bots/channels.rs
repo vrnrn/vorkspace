@@ -13,7 +13,124 @@ pub(super) struct ChannelUi {
     pub(super) loading: HashSet<(String, String)>,
     pub(super) starts: HashMap<String, usize>,
 }
+
 impl Bots {
+    pub(crate) fn classic_channels_open(&self) -> bool {
+        self.prefs.bots && self.channels.open
+    }
+
+    pub(crate) fn close_classic_channels(&mut self, cx: &mut Context<Self>) {
+        if self.channels.open {
+            self.channels.open = false;
+            self.channels.inspecting = None;
+            cx.notify();
+        }
+    }
+
+    /// The original rail lists Channels beside Bots, regardless of which
+    /// project's session/file pane happens to be selected.
+    pub(crate) fn classic_channels_rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if !self.prefs.bots {
+            return div().into_any_element();
+        }
+        div()
+            .id("classic-channels")
+            .debug_selector(|| "classic-channels".into())
+            .px_2()
+            .pb_3()
+            .child(
+                section_label("Channels").child(
+                    icon_button("classic-add-channel", "New channel", "plus")
+                        .debug_selector(|| "classic-add-channel".into())
+                        .focusable()
+                        .tab_stop(true)
+                        .size(px(20.))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_classic_channel(None, window, cx);
+                        })),
+                ),
+            )
+            .children(self.channels.state.channels.iter().map(|channel| {
+                let id = channel.id.clone();
+                let selector = id.clone();
+                let selected = self.channels.open
+                    && self.channels.selected.as_deref() == Some(channel.id.as_str());
+                let count = channel.member_ids.len();
+                div()
+                    .id(SharedString::from(format!("classic-channel-{id}")))
+                    .debug_selector(move || format!("classic-channel-{selector}"))
+                    .role(Role::Button)
+                    .aria_label(format!("Channel {}, {count} members", channel.name))
+                    .aria_selected(selected)
+                    .focusable()
+                    .tab_stop(true)
+                    .h(px(32.))
+                    .min_w_0()
+                    .px_2()
+                    .rounded_md()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(14.))
+                    .opacity(if selected { 1. } else { 0.65 })
+                    .when(selected, |d| d.bg(content(0.1)))
+                    .hover(|s| s.bg(content(0.08)).opacity(1.))
+                    .focus(|s| s.bg(content(0.08)).opacity(1.))
+                    .child(icon("hash", 16.))
+                    .child(
+                        div().flex().items_center().children(
+                            channel
+                                .member_ids
+                                .iter()
+                                .take(3)
+                                .filter_map(|id| self.roster.get(id))
+                                .enumerate()
+                                .map(|(ix, bot)| {
+                                    div()
+                                        .size(px(8.))
+                                        .rounded_full()
+                                        .bg(rgb(bot.color))
+                                        .when(ix > 0, |d| d.ml(px(-2.)))
+                                }),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(channel.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(content(0.5))
+                            .child(count.to_string()),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_classic_channel(Some(id.clone()), window, cx);
+                    }))
+            }))
+            .into_any_element()
+    }
+
+    fn open_classic_channel(
+        &mut self,
+        id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.channels.open = true;
+        self.channels.selected = id;
+        self.channels.inspecting = None;
+        self.changed(cx);
+        let owner = self.owner.clone();
+        window.defer(cx, move |window, cx| {
+            let _ = owner.update(cx, |shell, cx| shell.open_classic_channels(window, cx));
+        });
+    }
+
     pub(super) fn stop_channel_delivery(
         &mut self,
         channel: &str,
@@ -376,13 +493,13 @@ impl Bots {
         );
         let topic = self.field("channel-topic", "Topic", String::new(), false, cx);
         let mut body=div().size_full().flex().flex_col().p_4().gap_3().text_size(px(13.)).text_color(content(0.85))
-            .on_key_down(cx.listener(|this,event:&gpui::KeyDownEvent,_,cx|{if event.keystroke.key=="escape"{this.channels.open=false;cx.notify();}}))
-            .child(div().flex().items_center().justify_between().child("Bot Channels").child(panels::button("close-channels","Back to Bot").on_click(cx.listener(|this,_,_,cx|{this.channels.open=false;cx.notify();}))))
-            .child(div().flex().gap_2().children(self.channels.state.channels.iter().map(|c|{let id=c.id.clone();panels::button(SharedString::from(format!("channel-{id}")),format!("#{}",c.name)).on_click(cx.listener(move|this,_,_,cx|{this.channels.selected=Some(id.clone());cx.notify();}))})))
+            .on_key_down(cx.listener(|this,event:&gpui::KeyDownEvent,_,cx|{if event.keystroke.key=="escape"{this.channels.open=false;this.changed(cx);}}))
+            .child(div().flex().items_center().justify_between().child("Bot Channels").child(panels::button("close-channels",if self.active.is_some() {"Back to Bot"} else {"Back to workspace"}).debug_selector(|| "close-channels".into()).on_click(cx.listener(|this,_,_,cx|{this.channels.open=false;this.changed(cx);}))))
+            .child(div().flex().gap_2().children(self.channels.state.channels.iter().map(|c|{let id=c.id.clone();panels::button(SharedString::from(format!("channel-{id}")),format!("#{}",c.name)).on_click(cx.listener(move|this,_,_,cx|{this.channels.selected=Some(id.clone());this.changed(cx);}))})))
             .child(div().flex().gap_2().child(div().flex_1().child(name)).child(div().flex_1().child(members)).child(div().flex_1().child(topic)).child(panels::button("create-channel","Create").on_click(cx.listener(|this,_,_,cx|{
                 let field=|key:&str|this.fields[key].read(cx).content.clone();
                 let input=json!({"name":field("channel-name"),"topic":field("channel-topic"),"members":field("channel-members").split(',').map(str::trim).filter(|s|!s.is_empty()).collect::<Vec<_>>()});
-                match this.channel_action("channels.create",&input,None,&bot::new_id(),cx){Ok(v)=>this.channels.selected=v["id"].as_str().map(str::to_owned),Err(e)=>this.error=Some(e)};cx.notify();
+                match this.channel_action("channels.create",&input,None,&bot::new_id(),cx){Ok(v)=>this.channels.selected=v["id"].as_str().map(str::to_owned),Err(e)=>this.error=Some(e)};this.changed(cx);
             }))));
         if let Some(c) = self
             .channels
@@ -393,6 +510,7 @@ impl Bots {
         {
             let mut messages = div()
                 .id("channel-messages")
+                .debug_selector(|| "channel-messages".into())
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
@@ -526,5 +644,77 @@ impl Bots {
             body = body.child(error.clone());
         }
         body.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod classic_rail_tests {
+    use super::*;
+    use gpui::{TestAppContext, VisualTestContext};
+    use std::sync::{Arc, Mutex};
+    use vorkspace_core::{bot::channels::Channel, store::Store};
+
+    #[gpui::test]
+    fn rail_opens_channels_without_a_selected_bot_and_returns_to_the_workspace(
+        cx: &mut TestAppContext,
+    ) {
+        let root = std::env::temp_dir().join(format!("classic-channel-{}", bot::new_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Arc::new(Mutex::new(
+            Store::open(&root.join("native.sqlite")).unwrap(),
+        ));
+        let project = root.to_string_lossy().into_owned();
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| Shell::new(store, Vec::new(), project, None, cx))
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        let manager = window
+            .update(cx, |shell, _, _| shell.bot_manager())
+            .unwrap();
+        manager.update(cx, |manager, cx| {
+            assert!(manager.active.is_none());
+            manager.channels.state.channels.push(Channel {
+                id: "team".into(),
+                name: "team".into(),
+                ..Default::default()
+            });
+            manager.changed(cx);
+        });
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1400.), px(900.)));
+        visual.run_until_parked();
+        let channel = visual.debug_bounds("classic-channel-team").unwrap();
+        visual.simulate_click(channel.center(), Default::default());
+        visual.run_until_parked();
+        manager.read_with(visual, |manager, _| {
+            assert!(manager.classic_channels_open());
+            assert!(manager.active.is_none());
+            assert_eq!(manager.channels.selected.as_deref(), Some("team"));
+        });
+        assert!(visual.debug_bounds("channel-messages").is_some());
+        assert!(visual.debug_bounds("classic-project-rail").is_some());
+        assert!(visual.debug_bounds("sidebar-frame").is_none());
+
+        let close = visual.debug_bounds("close-channels").unwrap();
+        visual.simulate_click(close.center(), Default::default());
+        visual.run_until_parked();
+        assert!(!manager.read_with(visual, |manager, _| manager.classic_channels_open()));
+        assert!(visual.debug_bounds("sidebar-frame").is_some());
+
+        let add = visual.debug_bounds("classic-add-channel").unwrap();
+        visual.simulate_click(add.center(), Default::default());
+        visual.run_until_parked();
+        manager.read_with(visual, |manager, _| {
+            assert!(manager.classic_channels_open());
+            assert!(manager.channels.selected.is_none());
+        });
+        let project = visual.debug_bounds("classic-project-0").unwrap();
+        visual.simulate_click(project.center(), Default::default());
+        visual.run_until_parked();
+        assert!(!manager.read_with(visual, |manager, _| manager.classic_channels_open()));
+        assert!(visual.debug_bounds("sidebar-frame").is_some());
     }
 }

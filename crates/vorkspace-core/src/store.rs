@@ -1432,7 +1432,14 @@ mod tests {
             .write_rows(session.id, answer, &transcript.rows[answer..])
             .unwrap();
         let mut roster = crate::bot::Roster::default();
-        let bot = roster.create(Vec::new()).id.clone();
+        let bot = roster
+            .create(crate::bot::Bot {
+                name: "Test bot".into(),
+                ..roster.draft(Vec::new())
+            })
+            .unwrap()
+            .id
+            .clone();
         roster
             .get_mut(&bot)
             .unwrap()

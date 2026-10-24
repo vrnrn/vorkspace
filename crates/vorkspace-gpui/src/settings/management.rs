@@ -404,8 +404,6 @@ impl SettingsView {
                                     ("claude", "Claude Code"),
                                     ("claude_desktop", "Claude Desktop"),
                                     ("codex", "Codex"),
-                                    ("cursor", "Cursor"),
-                                    ("opencode", "OpenCode"),
                                 ]
                                 .into_iter()
                                 .map(|(id, label)| (id.into(), label.into(), None))
@@ -861,6 +859,7 @@ impl SettingsView {
                                     .border_0()
                                     .size_6()
                                     .p_0()
+                                    .justify_center()
                                     .child(icon("x", 14.))
                                     .on_click(cx.listener(
                                         |this, _, window, cx| this.close_management(window, cx),

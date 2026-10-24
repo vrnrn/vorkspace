@@ -87,8 +87,6 @@ impl SettingsView {
                     ("claude", "Claude Code"),
                     ("claude_desktop", "Claude Desktop"),
                     ("codex", "Codex"),
-                    ("cursor", "Cursor"),
-                    ("opencode", "OpenCode"),
                 ]
                 .into_iter()
                 .filter(|(p, _)| {

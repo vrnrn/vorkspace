@@ -1,6 +1,5 @@
-// Sidebar.tsx's peek: in the inset layout a collapsed sidebar slides out over
-// the workspace while the pointer rests on the window's left edge or on the
-// sidebar toggle, and puts itself away once the pointer leaves it.
+// A collapsed project sidebar peeks from the right edge and puts itself
+// away once the pointer leaves it.
 use super::Shell;
 use crate::{reveal::bezier, theme::*};
 use gpui::{
@@ -9,11 +8,11 @@ use gpui::{
 };
 use std::time::{Duration, Instant};
 
-/// How close to the window's left edge the pointer peeks the sidebar out.
+/// How close to the window's right edge the pointer peeks the sidebar out.
 const PEEK_EDGE: f32 = 6.;
 /// Grace before a peek closes, so the pointer can cross a gap to the panel.
 const PEEK_CLOSE_DELAY: Duration = Duration::from_millis(180);
-/// The panel's inset from the window's left and bottom edges (`left-1.5`).
+/// The panel's inset from the window's right and bottom edges (`left-1.5`).
 const PEEK_INSET: f32 = 6.;
 /// How far the panel drifts in from the edge.
 const PEEK_DRIFT: f32 = 12.;
@@ -62,12 +61,14 @@ impl SidebarPeek {
 }
 
 impl Shell {
-    /// Only the inset layout's collapsed sidebar peeks.
-    fn peek_available(&self) -> bool {
-        !self.workspace.classic_layout
-            && !self.workspace.sidebar_visible
+    /// A collapsed workspace pane peeks at the same edge as Bot details.
+    fn peek_available(&self, cx: &gpui::App) -> bool {
+        !self.workspace.sidebar_visible
+            && !self.app_view_open()
+            && self.app_search.is_none()
             && self.sidebar_slide.is_none()
             && self.settings.is_none()
+            && !self.bot_active(cx)
     }
 
     /// Whether the sidebar must paint uncached: inherited opacity is not part
@@ -82,7 +83,7 @@ impl Shell {
 
     pub(super) fn set_peek(&mut self, open: bool, cx: &mut Context<Self>) {
         self.peek_close = None;
-        if open && !self.peek_available() {
+        if open && !self.peek_available(cx) {
             return;
         }
         let current = match &self.sidebar_peek {
@@ -95,6 +96,7 @@ impl Shell {
             self.close_preview(cx);
         }
         self.sidebar_peek = Some(SidebarPeek::new(open, current, cx.reduce_motion()));
+        self.sync_right_panel(cx);
         self.peek_animating = true;
         cx.notify();
     }
@@ -127,8 +129,8 @@ impl Shell {
 
     fn peek_contains(&self, position: Point<Pixels>) -> bool {
         let (x, y) = (position.x.as_f32(), position.y.as_f32());
-        x >= PEEK_INSET
-            && x <= PEEK_INSET + self.workspace.sidebar_width
+        x >= self.viewport_width - PEEK_INSET - self.workspace.right_panel_width
+            && x <= self.viewport_width - PEEK_INSET
             && y >= TITLE_BAR_HEIGHT
             && y <= self.viewport_height - PEEK_INSET
     }
@@ -150,8 +152,9 @@ impl Shell {
     }
 
     fn peek_pointer(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let edge =
-            event.position.x.as_f32() <= PEEK_EDGE && event.position.y.as_f32() > TITLE_BAR_HEIGHT;
+        let edge = event.position.x.as_f32() >= self.viewport_width - PEEK_EDGE
+            && event.position.x.as_f32() <= self.viewport_width
+            && event.position.y.as_f32() > TITLE_BAR_HEIGHT;
         if edge && event.pressed_button.is_none() {
             self.set_peek(true, cx);
             return;
@@ -180,7 +183,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !self.peek_available() {
+        if !self.peek_available(cx) {
             if self.sidebar_peek.is_some() {
                 self.drop_peek();
             }
@@ -265,7 +268,7 @@ impl Shell {
                 .clone()
                 .cached(
                     StyleRefinement::default()
-                        .w(px(self.workspace.sidebar_width))
+                        .w(px(self.workspace.right_panel_width))
                         .h_full(),
                 )
                 .into_any_element()
@@ -276,10 +279,10 @@ impl Shell {
             // Closing, it lets the pointer through to the workspace.
             .when(self.peek_open(), |d| d.occlude())
             .absolute()
-            .left(px(PEEK_INSET - PEEK_DRIFT * (1. - progress)))
+            .right(px(PEEK_INSET - PEEK_DRIFT * (1. - progress)))
             .top(px(TITLE_BAR_HEIGHT))
             .bottom(px(PEEK_INSET))
-            .w(px(self.workspace.sidebar_width))
+            .w(px(self.workspace.right_panel_width))
             .opacity(progress)
             .rounded(px(10.))
             .overflow_hidden()

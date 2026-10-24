@@ -18,8 +18,7 @@ impl Discovery {
         provider_id: Option<&str>,
         executable: &Path,
     ) -> Result<Option<Self>, String> {
-        let fallback = matches!(kind, Kind::Pi | Kind::Omp | Kind::OpenCode)
-            || (provider_id.is_some() && matches!(kind, Kind::Grok | Kind::Fx));
+        let fallback = matches!(kind, Kind::Pi | Kind::Omp);
         if !fallback {
             return Ok(None);
         }
@@ -92,7 +91,7 @@ mod tests {
     fn existing_fallback_contexts_get_discovery_and_only_success_suppresses_retries() {
         let (_fixture, store) = fixture();
         let executable = Path::new("/Applications/vorkspace.app/Contents/MacOS/vorkspace-gpui");
-        for kind in [Kind::Pi, Kind::Omp, Kind::OpenCode, Kind::Grok, Kind::Fx] {
+        for kind in [Kind::Pi, Kind::Omp] {
             let discovery =
                 Discovery::prepare(&store, 7, kind, "default", Some("existing"), executable)
                     .unwrap()
@@ -118,7 +117,7 @@ mod tests {
     fn new_contexts_accounts_executables_and_versions_receive_discovery() {
         let (_fixture, store) = fixture();
         let executable = Path::new("/old/vorkspace-gpui");
-        for kind in [Kind::Pi, Kind::Omp, Kind::OpenCode] {
+        for kind in [Kind::Pi, Kind::Omp] {
             let discovery =
                 Discovery::prepare(&store, 8, kind, "default", Some("old-context"), executable)
                     .unwrap()
@@ -181,14 +180,7 @@ mod tests {
     fn actual_mcp_paths_never_receive_a_cli_hint() {
         let (_fixture, store) = fixture();
         let executable = Path::new("/app/vorkspace-gpui");
-        for kind in [
-            Kind::Codex,
-            Kind::Claude,
-            Kind::Cursor,
-            Kind::Antigravity,
-            Kind::Hermes,
-            Kind::Devin,
-        ] {
+        for kind in [Kind::Codex, Kind::Claude, Kind::Antigravity] {
             for provider_id in [None, Some("existing")] {
                 assert!(
                     Discovery::prepare(&store, 10, kind, "default", provider_id, executable)
@@ -196,20 +188,6 @@ mod tests {
                         .is_none()
                 );
             }
-        }
-        // Grok/fx advertise MCP configuration on new/load, but their resume
-        // requests do not refresh mcpServers.
-        for kind in [Kind::Grok, Kind::Fx] {
-            assert!(
-                Discovery::prepare(&store, 10, kind, "default", None, executable)
-                    .unwrap()
-                    .is_none()
-            );
-            assert!(
-                Discovery::prepare(&store, 10, kind, "default", Some("existing"), executable)
-                    .unwrap()
-                    .is_some()
-            );
         }
     }
 }

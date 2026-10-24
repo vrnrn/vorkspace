@@ -32,24 +32,7 @@ fn launch(value: &Value) -> Option<Value> {
     let cwd = value["cwd"].as_str()?.trim();
     let model = value["model"].as_str()?.trim();
     let harness = value["harness"].as_str()?;
-    // Match desktop HARNESSES, including providers not yet executable natively.
-    if cwd.is_empty()
-        || model.is_empty()
-        || ![
-            "codex",
-            "claude",
-            "cursor",
-            "opencode",
-            "pi",
-            "omp",
-            "fx",
-            "hermes",
-            "antigravity",
-            "devin",
-            "grok",
-        ]
-        .contains(&harness)
-    {
+    if cwd.is_empty() || model.is_empty() || crate::provider::Kind::parse(harness).is_none() {
         return None;
     }
     let title = value["title"].as_str()?.trim();

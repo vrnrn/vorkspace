@@ -3,16 +3,12 @@ use serde_json::Value;
 use std::{io::Read, path::PathBuf, time::Duration};
 
 pub(super) fn fetch_for(profile: &crate::accounts::Profile) -> Result<Snapshot, FetchError> {
-    if crate::catalog::cli_json_for(
-        crate::provider::Kind::Claude,
-        &["auth", "status", "--json"],
-        profile,
-    )
-    .ok()
-    .and_then(|v| backend_usage(&v))
-    .is_some()
+    if let Some(snapshot) =
+        crate::catalog::cli_json_for(crate::provider::Kind::Claude, &["auth", "status"], profile)
+            .ok()
+            .and_then(|v| backend_usage(&v))
     {
-        return Ok(external_usage("AWS Bedrock"));
+        return Ok(snapshot);
     }
     let config = profile
         .directory(crate::provider::Kind::Claude)
@@ -222,6 +218,52 @@ pub(super) fn external_usage(name: &str) -> Snapshot {
 #[cfg(test)]
 mod backend_tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn bedrock_probe_uses_cli_status_and_the_selected_profile_without_oauth() {
+        use std::{os::unix::fs::PermissionsExt, process::Command};
+        const CHILD: &str = "VORKSPACE_BEDROCK_PROBE_TEST_ROOT";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let profile = crate::accounts::Profile::new("bedrock-test", &PathBuf::from(root));
+            let snapshot = fetch_for(&profile).unwrap();
+            assert_eq!(snapshot.external_billing.as_deref(), Some("AWS Bedrock"));
+            assert!(snapshot.windows.is_empty());
+            return;
+        }
+        // Process-local overrides keep the real CLI, credentials, and parallel tests untouched.
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("claude");
+        std::fs::write(
+            &binary,
+            r#"#!/bin/sh
+test "$#" = 2 && test "$1" = auth && test "$2" = status || exit 1
+test "$CLAUDE_CODE_USE_BEDROCK" = 1 && test "$AWS_REGION" = us-east-1 || exit 2
+test "$CLAUDE_CONFIG_DIR" = "$VORKSPACE_BEDROCK_PROBE_TEST_ROOT/provider-accounts/claude/bedrock-test" || exit 3
+printf '%s\n' '{"apiProvider":"bedrock","loggedIn":true,"authMethod":"third_party"}'
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "usage::claude::backend_tests::bedrock_probe_uses_cli_status_and_the_selected_profile_without_oauth",
+                "--nocapture",
+            ])
+            .env(CHILD, root.path())
+            .env("VORKSPACE_CLAUDE_BINARY", binary)
+            .env("CLAUDE_CODE_USE_BEDROCK", "1")
+            .env("AWS_REGION", "us-east-1")
+            .env("SHELL", "/bin/false")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     #[test]
     fn bedrock_is_connected_without_an_oauth_subscription() {
         let snapshot =

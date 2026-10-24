@@ -102,14 +102,16 @@ pub(super) fn to_responses(body: &Value, effort: Option<&str>) -> Result<Value, 
             json!(body["system"]
                 .as_str()
                 .map(str::to_owned)
-                .unwrap_or_else(|| body["system"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|p| p["type"] == "text")
-                    .filter_map(|p| p["text"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n")));
+                .unwrap_or_else(|| {
+                    body["system"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|p| p["type"] == "text")
+                        .filter_map(|p| p["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }));
     }
     if !body["max_tokens"].is_null() {
         result["max_output_tokens"] = body["max_tokens"].clone();
@@ -268,7 +270,7 @@ impl Events {
                     .as_str()
                     .or_else(|| event["response"]["error"]["message"].as_str())
                     .unwrap_or("Copilot response failed")
-                    .into())
+                    .into());
             }
             _ => {}
         }

@@ -58,11 +58,9 @@ impl AssetSource for Assets {
    "inbox"=>include_bytes!("../assets/inbox.svg"),
    "circle-dot"=>include_bytes!("../assets/hugeicons/circle-dot.svg"),
    "inbox-github"=>include_bytes!("../assets/inbox-github.svg"),
-   "inbox-linear"=>include_bytes!("../assets/inbox-linear.svg"),
    "inbox-jira"=>include_bytes!("../assets/inbox-jira.svg"),
    "inbox-gitlab"=>include_bytes!("../assets/inbox-gitlab.svg"),
    "inbox-gitlab-color.svg"=>include_bytes!("../assets/inbox-gitlab-color.svg"),
-   "inbox-azuredevops"=>include_bytes!("../assets/inbox-azuredevops.svg"),
 
    "note"=>include_bytes!("../assets/note.svg"),
    "zap"=>include_bytes!("../assets/zap.svg"),
@@ -126,6 +124,7 @@ impl AssetSource for Assets {
    "git-branch-hi"=>include_bytes!("../assets/hugeicons/git-branch-hi.svg"),
    "git-branch-dot"=>include_bytes!("../assets/hugeicons/git-branch-dot.svg"),
    // Settings: its rail, rows and page actions (SettingsRail.tsx, SettingsView.tsx).
+   "mic"=>include_bytes!("../assets/mic.svg"),
    "internet"=>include_bytes!("../assets/hugeicons/internet.svg"),
    "palette"=>include_bytes!("../assets/hugeicons/palette.svg"),
    "keyboard"=>include_bytes!("../assets/hugeicons/keyboard.svg"),
@@ -144,15 +143,9 @@ impl AssetSource for Assets {
    "vorkspace.png"=>include_bytes!("../assets/vorkspace.png"),
    "codex.svg"=>include_bytes!("../assets/codex.svg"),
    "claude.svg"=>include_bytes!("../assets/claude.svg"),
-   "cursor.svg"=>include_bytes!("../assets/cursor.svg"),
-   "grok.svg"=>include_bytes!("../assets/grok.svg"),
-   "opencode.svg"=>include_bytes!("../assets/opencode.svg"),
    "antigravity.svg"=>include_bytes!("../assets/antigravity.svg"),
    "pi.svg"=>include_bytes!("../assets/pi.svg"),
    "omp.svg"=>include_bytes!("../assets/omp.svg"),
-   "fx.svg"=>include_bytes!("../assets/fx.svg"),
-   "hermes.svg"=>include_bytes!("../assets/hermes.svg"),
-   "devin.svg"=>include_bytes!("../assets/devin.svg"),
    _ if path.starts_with("mi/")=>return Ok(crate::file_icons::svg(path).map(Cow::Borrowed)),
    _=>return Ok(icon_body(path).map(|body|Cow::Owned(format!("<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'>{body}</svg>").into_bytes())))
   };

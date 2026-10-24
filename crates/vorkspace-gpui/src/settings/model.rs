@@ -106,7 +106,7 @@ impl Section {
             }
             Section::Connections => "Connect your machines and run agents remotely through SSH.",
             Section::Appearance => {
-                "Theme, tint, translucency, workspace layout, and conversation backgrounds."
+                "Theme, tint, translucency, interface scale, and conversation backgrounds."
             }
             Section::Keybindings => {
                 "Every shortcut the workspace handles, from the app menu and the key handler."
@@ -145,13 +145,11 @@ impl Section {
                 "account sign in login model harness claude codex gemini cli default hooks"
             }
             Section::Mcp => {
-                "tools servers connections oauth authenticate login claude codex cursor opencode"
+                "tools servers connections oauth authenticate login claude codex antigravity pi omp"
             }
             Section::Skills => "skill instructions prompt",
             Section::Bots => "bot resident agent mascot claim project title bar",
-            Section::Inbox => {
-                "github gitlab linear jira atlassian azure devops connect token integration"
-            }
+            Section::Inbox => "github gitlab jira atlassian connect token integration",
             Section::Archive => "archived restore delete hidden",
             Section::Worktrees => "git branch worktree working copy project create delete",
         }
@@ -318,22 +316,10 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "window sidebar glass translucent transparency background radius",
     ),
     (
-        "inset-glass",
-        Section::Appearance,
-        "Transparent window",
-        "glass inset translucent transparency opaque desktop layout",
-    ),
-    (
         "main-pane-glass",
         Section::Appearance,
         "Main pane glass",
         "translucent transparency body window",
-    ),
-    (
-        "inset-layout",
-        Section::Appearance,
-        "New layout (Experimental)",
-        "experimental legacy classic preview sidebar navigation tabs inset workspace card rounded floating linear frame",
     ),
     (
         "interface-scale",
@@ -405,13 +391,13 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "diff-view",
         Section::Chat,
         "Diff view",
-        "unified editor review changes working tree",
+        "unified side by side split review changes working tree",
     ),
     (
         "agent-clis",
         Section::Providers,
         "Agent CLIs",
-        "codex opencode cursor grok pi omp fx hermes antigravity devin binary path",
+        "claude codex pi omp antigravity binary path",
     ),
     (
         "provider-accounts",
@@ -462,22 +448,10 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "token self-managed merge request connect",
     ),
     (
-        "azuredevops",
-        Section::Inbox,
-        "ADO",
-        "azure devops boards repos pull request pat organization connect",
-    ),
-    (
         "jira",
         Section::Inbox,
         "Jira",
         "atlassian cloud site email api token issues projects connect",
-    ),
-    (
-        "linear",
-        Section::Inbox,
-        "Linear",
-        "api key issues teams connect",
     ),
     (
         "show-archived",
@@ -549,6 +523,36 @@ pub(crate) fn search(query: &str) -> Vec<SearchResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn every_settings_navigation_icon_renders_visible_pixels_at_its_display_size() {
+        use gpui::{AssetSource, DevicePixels, SvgRenderer, SvgSize, size};
+        let assets = std::sync::Arc::new(crate::assets::Assets);
+        let renderer = SvgRenderer::new(assets.clone());
+        for section in Section::ALL {
+            let key = section.icon();
+            let bytes = assets.load(key).unwrap().unwrap_or_else(|| {
+                panic!("{} navigation icon {key} is not bundled", section.label())
+            });
+            let parsed = renderer.parse_svg(&bytes).unwrap();
+            let image = renderer
+                .render_parsed(
+                    &parsed,
+                    SvgSize::ExactSize(size(DevicePixels(16), DevicePixels(16))),
+                )
+                .unwrap();
+            assert!(
+                image
+                    .as_bytes(0)
+                    .unwrap()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[3] != 0),
+                "{} navigation icon {key} renders no visible pixels",
+                section.label()
+            );
+        }
+    }
     #[test]
     fn rows_win_their_own_name_and_shared_appearance_rows_are_searchable() {
         let results = search("theme");

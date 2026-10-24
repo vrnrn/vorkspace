@@ -243,19 +243,20 @@ mod tests {
     #[test]
     fn cancelled_initial_delivery_replays_accepted_rows_in_the_final_update() {
         let (store, id, history) = conversation();
-        let mut summary = locked(&store).unwrap().sessions().unwrap().pop().unwrap();
-        // Even a regression in cancellation must never launch a real provider.
-        summary.provider = "invalid-test-provider".into();
+        let summary = locked(&store).unwrap().sessions().unwrap().pop().unwrap();
         let (tx, rx) = async_channel::bounded(8);
         let (_control, controls) = std::sync::mpsc::channel();
-        run_turn(
-            summary,
-            "Accepted before stopping".into(),
-            Settings::default(),
+        run_turn_using(
+            TurnInput {
+                summary,
+                prompt: "Accepted before stopping".into(),
+                settings: Settings::default(),
+            },
             controls,
             store.clone(),
             Arc::new(AtomicBool::new(true)),
             tx,
+            |_| None, // No real CLI lookup or launch, even if cancellation regresses.
         );
         let result = rx.try_recv().unwrap();
         assert!(result.finished);
@@ -336,23 +337,25 @@ mod tests {
             );
         }
         let store = Store::open(std::path::Path::new(":memory:")).unwrap();
-        let mut summary = store.create("codex", repo.to_str().unwrap()).unwrap();
-        summary.provider = "invalid-test-provider".into();
+        let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
         let id = summary.id;
         let store = Arc::new(Mutex::new(store));
         let (tx, rx) = async_channel::bounded(8);
         let (_control, controls) = std::sync::mpsc::channel();
-        run_turn(
-            summary,
-            "Create the checkout".into(),
-            Settings {
-                new_worktree: true,
-                ..Default::default()
+        run_turn_using(
+            TurnInput {
+                summary,
+                prompt: "Create the checkout".into(),
+                settings: Settings {
+                    new_worktree: true,
+                    ..Default::default()
+                },
             },
             controls,
             store.clone(),
             Arc::new(AtomicBool::new(false)),
             tx,
+            |_| None, // No real CLI lookup or launch, even if cancellation regresses.
         );
         let first = rx.try_recv().unwrap();
         assert!(!first.finished);

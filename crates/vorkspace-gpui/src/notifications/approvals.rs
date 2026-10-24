@@ -133,6 +133,7 @@ impl ApprovalNotices {
         mut allows: impl FnMut(&SessionInputs, SystemTime) -> bool,
         cx: &mut Context<Self>,
     ) {
+        let previous = self.notices.clone();
         self.track_pending(sessions);
         self.notices.clear();
         for session in sessions {
@@ -148,7 +149,9 @@ impl ApprovalNotices {
                 self.notices.push((session.clone(), input.clone()));
             }
         }
-        cx.notify();
+        if self.notices != previous {
+            cx.notify();
+        }
     }
     pub(crate) fn is_empty(&self) -> bool {
         self.notices.is_empty()
@@ -303,5 +306,52 @@ impl Render for ApprovalNotices {
                             })
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use std::{cell::Cell, rc::Rc};
+
+    #[gpui::test]
+    fn sync_notifies_only_when_visible_approval_notices_change(cx: &mut TestAppContext) {
+        let notices = cx.new(|_| ApprovalNotices::default());
+        let count = Rc::new(Cell::new(0));
+        let _observe = cx.update(|cx| {
+            let count = count.clone();
+            cx.observe(&notices, move |_, _| count.set(count.get() + 1))
+        });
+        let sessions = [SessionInputs {
+            session_id: "session".into(),
+            title: "Session".into(),
+            provider: "provider".into(),
+            harness: "harness".into(),
+            pending: vec![PendingInput {
+                request_id: "request".into(),
+                kind: InputKind::Approval,
+                label: "Approve".into(),
+            }],
+            inbox_ask: false,
+            orchestration_worker: false,
+            conversation_focused: false,
+        }];
+        notices.update(cx, |notices, cx| {
+            notices.sync(&sessions, |_, _| true, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(count.get(), 1);
+        notices.update(cx, |notices, cx| {
+            notices.sync(&sessions, |_, _| true, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(count.get(), 1);
+        notices.update(cx, |notices, cx| {
+            notices.sync(&[], |_, _| true, cx);
+            assert!(notices.is_empty());
+        });
+        cx.run_until_parked();
+        assert_eq!(count.get(), 2);
     }
 }

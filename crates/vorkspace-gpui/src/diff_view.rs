@@ -7,7 +7,7 @@ use crate::{
     file_icons::file_type_icon,
     input::{self, Input},
     popover::{AnchorSlot, Side, popover},
-    right_panel::{DIFF_ADD, DIFF_DEL, format_integer, stroke, tabular},
+    right_panel::{format_integer, stroke, tabular},
     syntax::{HighlightRequest, HighlightSpan},
     theme::*,
 };
@@ -34,7 +34,26 @@ const NOTICE: f32 = 44.;
 const CODE_SIZE: f32 = 12.5;
 const MAX_HIGHLIGHT_CHARS: usize = 250_000;
 
-actions!(diff_review, [PreviousHunk, NextHunk]);
+actions!(diff_review, [PreviousHunk, NextHunk, Unified, SideBySide]);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Layout {
+    #[default]
+    Unified,
+    Split,
+}
+impl Layout {
+    fn current(cx: &App) -> Self {
+        if cx
+            .try_global::<crate::settings::Preferences>()
+            .is_some_and(|p| p.diff_view == "split")
+        {
+            Self::Split
+        } else {
+            Self::Unified
+        }
+    }
+}
 
 pub(crate) fn bind(cx: &mut App) {
     cx.bind_keys([
@@ -97,6 +116,12 @@ pub(crate) enum DiffEvent {
 #[derive(Clone, PartialEq)]
 enum RowKind {
     File,
+    Columns,
+    Split {
+        block: usize,
+        old: Option<usize>,
+        new: Option<usize>,
+    },
     Line {
         block: usize,
         line: usize,
@@ -111,10 +136,11 @@ struct Row {
     kind: RowKind,
     height: f32,
 }
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct RowKey(SharedString, u8, usize, usize);
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct RowKey(SharedString, u8, usize, usize, Option<SharedString>);
 
 struct Body {
+    layout: Layout,
     blocks: Arc<Vec<Block>>,
     message: Option<String>,
     stageable: bool,
@@ -122,7 +148,7 @@ struct Body {
     columns: usize,
     digits: usize,
 }
-fn build_body(file: &DiffFile, message: Option<String>, stageable: bool) -> Body {
+fn build_body(file: &DiffFile, message: Option<String>, stageable: bool, layout: Layout) -> Body {
     let mut rows = Vec::new();
     let (mut columns, mut digits) = (40, 3);
     if let Some(text) = &message {
@@ -174,7 +200,15 @@ fn build_body(file: &DiffFile, message: Option<String>, stageable: bool) -> Body
             }
         }
     }
+    if layout == Layout::Split
+        && rows
+            .iter()
+            .any(|row| matches!(row.kind, RowKind::Line { .. }))
+    {
+        rows = split_rows(file, rows);
+    }
     Body {
+        layout,
         blocks: file.blocks.clone(),
         message,
         stageable,
@@ -182,6 +216,63 @@ fn build_body(file: &DiffFile, message: Option<String>, stageable: bool) -> Body
         columns,
         digits,
     }
+}
+
+fn split_rows(file: &DiffFile, rows: Vec<Row>) -> Vec<Row> {
+    let mut out = vec![Row {
+        file: 0,
+        kind: RowKind::Columns,
+        height: HUNK,
+    }];
+    let mut cursor = 0;
+    while cursor < rows.len() {
+        let RowKind::Line { block, line, .. } = rows[cursor].kind else {
+            out.push(rows[cursor].clone());
+            cursor += 1;
+            continue;
+        };
+        if file.blocks[block].lines()[line].kind == LineKind::Context {
+            out.push(Row {
+                file: 0,
+                kind: RowKind::Split {
+                    block,
+                    old: Some(line),
+                    new: Some(line),
+                },
+                height: LINE,
+            });
+            cursor += 1;
+            continue;
+        }
+        let (mut old, mut new) = (Vec::new(), Vec::new());
+        while let Some(Row {
+            kind: RowKind::Line { block: b, line, .. },
+            ..
+        }) = rows.get(cursor)
+        {
+            if *b != block {
+                break;
+            }
+            match file.blocks[block].lines()[*line].kind {
+                LineKind::Del => old.push(*line),
+                LineKind::Add => new.push(*line),
+                _ => break,
+            }
+            cursor += 1;
+        }
+        for i in 0..old.len().max(new.len()) {
+            out.push(Row {
+                file: 0,
+                kind: RowKind::Split {
+                    block,
+                    old: old.get(i).copied(),
+                    new: new.get(i).copied(),
+                },
+                height: LINE,
+            });
+        }
+    }
+    out
 }
 fn hunk_range(lines: &[Line]) -> String {
     let old: Vec<u32> = lines.iter().filter_map(|l| l.old_number).collect();
@@ -277,6 +368,8 @@ struct Comment {
 }
 
 pub(crate) struct DiffView {
+    layout: Layout,
+    _preferences: Subscription,
     files: Vec<DiffFile>,
     by_id: HashMap<SharedString, usize>,
     open: HashSet<SharedString>,
@@ -331,6 +424,17 @@ impl DiffView {
             });
         });
         Self {
+            layout: Layout::current(cx),
+            _preferences: cx.observe_global::<crate::settings::Preferences>(|this, cx| {
+                let layout = Layout::current(cx);
+                if layout != this.layout {
+                    this.layout = layout;
+                    this.thumb_drag = None;
+                    this.overview_drag = None;
+                    this.rebuild(cx);
+                }
+                cx.notify();
+            }),
             files: Vec::new(),
             by_id: HashMap::new(),
             open: HashSet::new(),
@@ -408,11 +512,31 @@ impl DiffView {
         let row = self.rows.get(ix)?;
         let id = self.files.get(row.file)?.id.clone();
         Some(match &row.kind {
-            RowKind::File => RowKey(id, 0, 0, 0),
-            RowKind::Line { block, line, .. } => RowKey(id, 1, *block, *line),
-            RowKind::Hunk(_) => RowKey(id, 2, ix, 0),
-            RowKind::Notice(_) => RowKey(id, 3, 0, 0),
+            RowKind::File => RowKey(id, 0, 0, 0, None),
+            RowKind::Columns => RowKey(id, 4, 0, 0, None),
+            RowKind::Split { block, old, new } => {
+                RowKey(id, 1, *block, old.or(*new).unwrap_or(0), None)
+            }
+            RowKind::Line { block, line, .. } => RowKey(id, 1, *block, *line, None),
+            // Pairing lines changes row offsets; the hunk's range stays stable.
+            RowKind::Hunk(text) => RowKey(id, 2, 0, 0, Some(text.clone())),
+            RowKind::Notice(_) => RowKey(id, 3, 0, 0, None),
         })
+    }
+    fn row_matches(&self, ix: usize, key: &RowKey) -> bool {
+        if let Some(Row {
+            file,
+            kind: RowKind::Split { block, old, new },
+            ..
+        }) = self.rows.get(ix)
+        {
+            key.0 == self.files[*file].id
+                && key.1 == 1
+                && key.2 == *block
+                && (old == &Some(key.3) || new == &Some(key.3))
+        } else {
+            self.row_key(ix).as_ref() == Some(key)
+        }
     }
     fn rebuild(&mut self, cx: &mut Context<Self>) {
         // Data changes above the reader stay anchored to the row they read.
@@ -438,12 +562,15 @@ impl DiffView {
             let stageable = file.can_stage_hunk;
             let stale = self.bodies.get(&file.id).is_none_or(|b| {
                 !Arc::ptr_eq(&b.blocks, &file.blocks)
+                    || b.layout != self.layout
                     || b.message != message
                     || b.stageable != stageable
             });
             if stale {
-                self.bodies
-                    .insert(file.id.clone(), build_body(file, message, stageable));
+                self.bodies.insert(
+                    file.id.clone(),
+                    build_body(file, message, stageable, self.layout),
+                );
             }
             let body = &self.bodies[&file.id];
             let expanded = self.open.contains(&file.id);
@@ -480,6 +607,33 @@ impl DiffView {
         self.total = at;
         self.hunks = hunks;
         self.file_rows = file_rows;
+        let comment_anchor = self.comment.as_ref().and_then(|comment| {
+            self.rows.iter().enumerate().find_map(|(ix, row)| {
+                let file = &self.files[row.file];
+                if file.path != comment.path {
+                    return None;
+                }
+                let matches =
+                    |block: usize, line: usize| file.blocks[block].lines()[line] == comment.line;
+                match row.kind {
+                    RowKind::Line { block, line, .. } if matches(block, line) => Some(ix * 2),
+                    RowKind::Split { block, old, new } => {
+                        if new.is_some_and(|line| matches(block, line)) {
+                            Some(ix * 2 + 1)
+                        } else if old.is_some_and(|line| matches(block, line)) {
+                            Some(ix * 2)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            })
+        });
+        if let Some(key) = comment_anchor {
+            let anchor = self.action_slots.entry(key).or_default().clone();
+            self.comment.as_mut().unwrap().anchor = anchor;
+        }
         self.max_columns = columns;
         self.number_width = (digits as f32 * 8. + 12.).max(36.);
         self.hovered = None;
@@ -487,10 +641,10 @@ impl DiffView {
         if self.pending.is_some() {
             self.apply_pending(cx);
         } else if let Some((key, offset)) = anchor {
-            let target = (0..self.rows.len()).find(|&i| self.row_key(i).as_ref() == Some(&key));
+            let target = (0..self.rows.len()).find(|&i| self.row_matches(i, &key));
             let target = target.or_else(|| self.by_id.get(&key.0).map(|&f| self.file_rows[f]));
             if let Some(item_ix) = target {
-                let offset_in_item = if self.row_key(item_ix).as_ref() == Some(&key) {
+                let offset_in_item = if self.row_matches(item_ix, &key) {
                     offset
                 } else {
                     px(0.)
@@ -670,7 +824,7 @@ impl DiffView {
     }
 
     fn gutter_width(&self) -> f32 {
-        self.number_width * 2. + 24. + 3.
+        self.number_width * if self.layout == Layout::Split { 1. } else { 2. } + 24. + 3.
     }
     fn char_width(&self, window: &mut Window) -> f32 {
         if let Some(width) = self.char_width.get() {
@@ -700,9 +854,16 @@ impl DiffView {
         (self.max_columns as f32 + 2.) * self.char_width.get().unwrap_or(7.5) + 24.
     }
     fn lane_width(&self) -> f32 {
+        self.viewport.get().map_or(0., |b| {
+            b.size.width.as_f32() / if self.layout == Layout::Split { 2. } else { 1. }
+                - self.gutter_width()
+        })
+    }
+    fn horizontal_track(&self) -> f32 {
         self.viewport
             .get()
             .map_or(0., |b| b.size.width.as_f32() - self.gutter_width())
+            .max(1.)
     }
     fn max_scroll_x(&self) -> f32 {
         (self.code_width() - self.lane_width()).max(0.)
@@ -796,12 +957,11 @@ impl DiffView {
         &mut self,
         file: usize,
         line: Line,
-        row: usize,
+        anchor: AnchorSlot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let path = self.files[file].path.clone();
-        let anchor = self.action_slots.get(&row).cloned().unwrap_or_default();
         let input = cx.new(|cx| {
             let mut input = Input::commit_message(cx);
             input.set_placeholder("Leave a comment…", cx);
@@ -848,6 +1008,46 @@ impl DiffView {
             window.focus(&self.focus, cx);
             cx.notify();
         }
+    }
+
+    fn layout_control(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .h(px(32.))
+            .flex_shrink_0()
+            .px_3()
+            .flex()
+            .items_center()
+            .gap_1()
+            .children(
+                [("Unified", false), ("Side by side", true)].map(|(label, split)| {
+                    div()
+                        .id(if split {
+                            "diff-layout-split"
+                        } else {
+                            "diff-layout-unified"
+                        })
+                        .role(Role::Button)
+                        .aria_label(label)
+                        .cursor_pointer()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .text_size(px(12.))
+                        .text_color(content(0.85))
+                        .when((self.layout == Layout::Split) == split, |d| {
+                            d.bg(content(0.1))
+                        })
+                        .hover(|d| d.bg(content(0.12)))
+                        .child(label)
+                        .on_click(cx.listener(move |_, _, window, cx| {
+                            if split {
+                                window.dispatch_action(Box::new(SideBySide), cx);
+                            } else {
+                                window.dispatch_action(Box::new(Unified), cx);
+                            }
+                        }))
+                }),
+            )
     }
 
     fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1091,9 +1291,17 @@ impl DiffView {
                         .pl(px(3.))
                         .text_size(px(9.))
                         .text_color(content(0.35))
-                        .children(["Old", "New"].map(|label| {
-                            div().w(px(number_width)).pr_2().text_right().child(label)
-                        })),
+                        .children(
+                            (if self.layout == Layout::Split {
+                                vec![]
+                            } else {
+                                vec!["Old", "New"]
+                            })
+                            .into_iter()
+                            .map(|label| {
+                                div().w(px(number_width)).pr_2().text_right().child(label)
+                            }),
+                        ),
                 )
                 .child(
                     div()
@@ -1107,190 +1315,306 @@ impl DiffView {
                 )
                 .into_any_element(),
             RowKind::Line { block, line, stage } => {
-                let file = &self.files[row.file];
-                let Some(l) = file.blocks.get(block).and_then(|b| b.lines().get(line)) else {
-                    return div().h(px(LINE)).into_any_element();
-                };
-                let (added, removed) = (l.kind == LineKind::Add, l.kind == LineKind::Del);
-                let ink: Option<Hsla> = if added {
-                    Some(rgb(DIFF_ADD).into())
-                } else if removed {
-                    Some(rgb(DIFF_DEL).into())
-                } else {
-                    None
-                };
-                let hovered = self.hovered == Some(ix);
-                let busy = self.busy_id.as_ref() == Some(&file.id);
-                let text = expand_tabs(&l.text).into_owned();
-                let styles: Vec<_> = self
-                    .tokens(file, block, line)
-                    .unwrap_or(&[])
-                    .iter()
-                    .filter(|span| span.range.end <= text.len())
-                    .map(|span| {
-                        (
-                            span.range.clone(),
-                            HighlightStyle {
-                                color: Some(rgb(span.color).into()),
-                                ..Default::default()
-                            },
-                        )
-                    })
-                    .collect();
-                let number = if removed { l.old_number } else { l.new_number };
-                let comment_line = l.clone();
-                let file_ix = row.file;
-                let file_id = file.id.clone();
-                let slot = self.action_slots.entry(ix).or_default().clone();
-                let gutter_ink = ink.unwrap_or(content(0.4));
-                let numbers = |n: Option<u32>, hide: bool| {
+                self.line_cell(ix, row.file, block, line, stage, None, window, cx)
+            }
+            RowKind::Columns => div()
+                .h(px(HUNK))
+                .w_full()
+                .flex()
+                .children(["Old", "New"].map(|label| {
                     div()
-                        .w(px(number_width))
-                        .flex_shrink_0()
-                        .pr_2()
-                        .text_right()
+                        .flex_1()
+                        .min_w_0()
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .border_b_1()
+                        .border_color(stroke())
                         .text_size(px(11.))
-                        .font_features(tabular())
-                        .when(hide, |d| d.invisible())
-                        .child(n.map(|n| n.to_string()).unwrap_or_default())
-                };
-                let scroll_x = self.scroll_x;
-                let _ = window;
+                        .text_color(content(0.65))
+                        .child(label)
+                }))
+                .into_any_element(),
+            RowKind::Split { block, old, new } => {
+                let old_stage = self.line_stage(row.file, block, old);
+                let new_stage = self.line_stage(row.file, block, new);
+                let left = old.map(|line| {
+                    self.line_cell(ix, row.file, block, line, old_stage, Some(true), window, cx)
+                });
+                let right = new.map(|line| {
+                    self.line_cell(
+                        ix,
+                        row.file,
+                        block,
+                        line,
+                        new_stage,
+                        Some(false),
+                        window,
+                        cx,
+                    )
+                });
                 div()
-                    .id(("diff-line", ix))
                     .h(px(LINE))
                     .w_full()
                     .flex()
-                    .line_height(px(LINE))
-                    .when_some(ink, |d, ink| d.bg(ink.opacity(0.06)))
-                    .on_hover(cx.listener(move |this, hovering: &bool, _, cx| {
-                        let next = if *hovering {
-                            Some(ix)
-                        } else if this.hovered == Some(ix) {
-                            None
-                        } else {
-                            this.hovered
-                        };
-                        if next != this.hovered {
-                            this.hovered = next;
-                            cx.notify();
-                        }
-                    }))
                     .child(
                         div()
-                            .relative()
-                            .w(px(gutter))
-                            .flex_shrink_0()
-                            .flex()
-                            .text_color(gutter_ink)
-                            .child(
-                                div()
-                                    .w(px(3.))
-                                    .flex_shrink_0()
-                                    .when_some(ink, |d, ink| d.bg(ink.opacity(0.55))),
-                            )
-                            .child(numbers(l.old_number, hovered))
-                            .child(numbers(l.new_number, false))
-                            .child(
-                                div()
-                                    .w(px(24.))
-                                    .flex_shrink_0()
-                                    .text_center()
-                                    .text_size(px(12.))
-                                    .when(hovered && stage.is_some(), |d| d.invisible())
-                                    .child(if added {
-                                        "+"
-                                    } else if removed {
-                                        "−"
-                                    } else {
-                                        ""
-                                    }),
-                            )
-                            .when(hovered, |d| {
-                                d.child(
-                                    div()
-                                        .id(("diff-comment", ix))
-                                        .role(Role::Button)
-                                        .aria_label(SharedString::from(format!(
-                                            "Comment on line {}",
-                                            number.map(|n| n.to_string()).unwrap_or_default()
-                                        )))
-                                        .absolute()
-                                        .top_0()
-                                        .bottom_0()
-                                        .left(px(3.))
-                                        .w(px(number_width))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(3.))
-                                        .hover(|s| s.bg(content(0.12)))
-                                        .child(slot.probe())
-                                        .child(icon("comment-add", 12.).text_color(content(1.)))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.open_comment(
-                                                file_ix,
-                                                comment_line.clone(),
-                                                ix,
-                                                window,
-                                                cx,
-                                            )
-                                        })),
-                                )
-                                .when_some(stage, |d, chunk| {
-                                    d.child(
-                                        div()
-                                            .id(("diff-stage-hunk", ix))
-                                            .role(Role::Button)
-                                            .aria_label("Stage hunk")
-                                            .absolute()
-                                            .top_0()
-                                            .bottom_0()
-                                            .right_0()
-                                            .w(px(24.))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(px(3.))
-                                            .when(busy, |d| d.opacity(0.35))
-                                            .when(!busy, |d| d.hover(|s| s.bg(content(0.12))))
-                                            .child(icon("check", 12.).text_color(content(1.)))
-                                            .when(!busy, |d| {
-                                                d.on_click(cx.listener(move |_, _, _, cx| {
-                                                    cx.emit(DiffEvent::StageHunk(
-                                                        file_id.clone(),
-                                                        chunk,
-                                                    ))
-                                                }))
-                                            }),
-                                    )
-                                })
-                            }),
+                            .id(("diff-old", ix))
+                            .debug_selector(move || format!("diff-old-{ix}"))
+                            .role(Role::Group)
+                            .aria_label("Old version")
+                            .flex_1()
+                            .min_w_0()
+                            .border_r_1()
+                            .border_color(stroke())
+                            .h_full()
+                            .when_some(left, |d, cell| d.child(cell)),
                     )
                     .child(
                         div()
-                            .relative()
+                            .id(("diff-new", ix))
+                            .debug_selector(move || format!("diff-new-{ix}"))
+                            .role(Role::Group)
+                            .aria_label("New version")
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .overflow_hidden()
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .left(px(-scroll_x))
-                                    .pl_3()
-                                    .pr_6()
-                                    .whitespace_nowrap()
-                                    .font_family(crate::markdown::FIXED_FONT)
-                                    .text_size(px(CODE_SIZE))
-                                    .text_color(content(0.92))
-                                    .child(StyledText::new(text).with_highlights(styles)),
-                            ),
+                            .when_some(right, |d, cell| d.child(cell)),
                     )
                     .into_any_element()
             }
         }
+    }
+
+    fn line_stage(&self, file: usize, block: usize, line: Option<usize>) -> Option<usize> {
+        let file = &self.files[file];
+        let b = &file.blocks[block];
+        let l = &b.lines()[line?];
+        if !file.can_stage_hunk || !matches!(l.kind, LineKind::Add | LineKind::Del) {
+            return None;
+        }
+        let chunk = match b {
+            Block::Hunk { chunk, .. } => *chunk,
+            _ => None,
+        };
+        l.chunk.or(chunk)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn line_cell(
+        &mut self,
+        ix: usize,
+        file_index: usize,
+        block: usize,
+        line: usize,
+        stage: Option<usize>,
+        side: Option<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let gutter = self.gutter_width();
+        let number_width = self.number_width;
+        let file = &self.files[file_index];
+        let Some(l) = file.blocks.get(block).and_then(|b| b.lines().get(line)) else {
+            return div().h(px(LINE)).into_any_element();
+        };
+        let (added, removed) = (l.kind == LineKind::Add, l.kind == LineKind::Del);
+        let ink: Option<Hsla> = if added {
+            Some(diff_foreground(true))
+        } else if removed {
+            Some(diff_foreground(false))
+        } else {
+            None
+        };
+        let hovered = self.hovered == Some(ix);
+        let busy = self.busy_id.as_ref() == Some(&file.id);
+        let text = expand_tabs(&l.text).into_owned();
+        let styles: Vec<_> = self
+            .tokens(file, block, line)
+            .unwrap_or(&[])
+            .iter()
+            .filter(|span| span.range.end <= text.len())
+            .map(|span| {
+                (
+                    span.range.clone(),
+                    HighlightStyle {
+                        color: Some(diff_syntax_color(span.color)),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let number = if removed { l.old_number } else { l.new_number };
+        let comment_line = l.clone();
+        let comment_here = self
+            .comment
+            .as_ref()
+            .is_some_and(|comment| comment.path == file.path && comment.line == *l);
+        let file_ix = file_index;
+        let file_id = file.id.clone();
+        let slot = self
+            .action_slots
+            .entry(ix * 2 + usize::from(side == Some(false)))
+            .or_default()
+            .clone();
+        let gutter_ink = ink.unwrap_or(content(0.4));
+        let numbers = |n: Option<u32>, hide: bool| {
+            div()
+                .w(px(number_width))
+                .flex_shrink_0()
+                .pr_2()
+                .text_right()
+                .text_size(px(11.))
+                .font_features(tabular())
+                .when(hide, |d| d.invisible())
+                .child(n.map(|n| n.to_string()).unwrap_or_default())
+        };
+        let scroll_x = self.scroll_x;
+        let _ = window;
+        div()
+            .id(("diff-line", ix))
+            .h(px(LINE))
+            .w_full()
+            .flex()
+            .line_height(px(LINE))
+            .when_some(ink, |d, ink| d.bg(ink.opacity(0.06)))
+            .on_hover(cx.listener(move |this, hovering: &bool, _, cx| {
+                let next = if *hovering {
+                    Some(ix)
+                } else if this.hovered == Some(ix) {
+                    None
+                } else {
+                    this.hovered
+                };
+                if next != this.hovered {
+                    this.hovered = next;
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .relative()
+                    .w(px(gutter))
+                    .flex_shrink_0()
+                    .flex()
+                    .text_color(gutter_ink)
+                    .child(
+                        div()
+                            .w(px(3.))
+                            .flex_shrink_0()
+                            .when_some(ink, |d, ink| d.bg(ink.opacity(0.55))),
+                    )
+                    .when(side != Some(false), |d| {
+                        d.child(numbers(l.old_number, hovered))
+                    })
+                    .when(side != Some(true), |d| {
+                        d.child(numbers(l.new_number, false))
+                    })
+                    .child(
+                        div()
+                            .w(px(24.))
+                            .flex_shrink_0()
+                            .text_center()
+                            .text_size(px(12.))
+                            .when(hovered && stage.is_some(), |d| d.invisible())
+                            .child(if added {
+                                "+"
+                            } else if removed {
+                                "−"
+                            } else {
+                                ""
+                            }),
+                    )
+                    .when(hovered || comment_here, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .left(px(3.))
+                                .w(px(number_width))
+                                .child(slot.probe()),
+                        )
+                    })
+                    .when(hovered, |d| {
+                        d.child(
+                            div()
+                                .id(("diff-comment", ix))
+                                .role(Role::Button)
+                                .aria_label(SharedString::from(format!(
+                                    "Comment on line {}",
+                                    number.map(|n| n.to_string()).unwrap_or_default()
+                                )))
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .left(px(3.))
+                                .w(px(number_width))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(3.))
+                                .hover(|s| s.bg(content(0.12)))
+                                .child(icon("comment-add", 12.).text_color(content(1.)))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_comment(
+                                        file_ix,
+                                        comment_line.clone(),
+                                        slot.clone(),
+                                        window,
+                                        cx,
+                                    )
+                                })),
+                        )
+                        .when_some(stage, |d, chunk| {
+                            d.child(
+                                div()
+                                    .id(("diff-stage-hunk", ix))
+                                    .role(Role::Button)
+                                    .aria_label("Stage hunk")
+                                    .absolute()
+                                    .top_0()
+                                    .bottom_0()
+                                    .right_0()
+                                    .w(px(24.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(3.))
+                                    .when(busy, |d| d.opacity(0.35))
+                                    .when(!busy, |d| d.hover(|s| s.bg(content(0.12))))
+                                    .child(icon("check", 12.).text_color(content(1.)))
+                                    .when(!busy, |d| {
+                                        d.on_click(cx.listener(move |_, _, _, cx| {
+                                            cx.emit(DiffEvent::StageHunk(file_id.clone(), chunk))
+                                        }))
+                                    }),
+                            )
+                        })
+                    }),
+            )
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left(px(-scroll_x))
+                            .pl_3()
+                            .pr_6()
+                            .whitespace_nowrap()
+                            .font_family(crate::markdown::FIXED_FONT)
+                            .text_size(px(CODE_SIZE))
+                            .text_color(content(0.92))
+                            .child(StyledText::new(text).with_highlights(styles)),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// The header of the file whose body is at the top, pinned until the
@@ -1330,7 +1654,7 @@ impl DiffView {
         let max = self.max_scroll_x();
         let lane = self.lane_width();
         let code = self.code_width();
-        let track = lane.max(1.);
+        let track = self.horizontal_track();
         let thumb = if code > 0. {
             (lane / code * track).max(24.)
         } else {
@@ -1409,14 +1733,14 @@ pub(crate) fn diff_counts(additions: u32, deletions: u32) -> AnyElement {
         .when(additions > 0, |d| {
             d.child(
                 div()
-                    .text_color(rgb(DIFF_ADD))
+                    .text_color(diff_foreground(true))
                     .child(format!("+{}", format_integer(additions as i64))),
             )
         })
         .when(deletions > 0, |d| {
             d.child(
                 div()
-                    .text_color(rgb(DIFF_DEL))
+                    .text_color(diff_foreground(false))
                     .child(format!("−{}", format_integer(deletions as i64))),
             )
         })
@@ -1478,7 +1802,7 @@ impl Render for DiffView {
             .partition_point(|o| *o <= self.offsets.get(top).copied().unwrap_or(0.) + height);
         let mut visible: Vec<usize> = self.rows[top.min(self.rows.len())..end.min(self.rows.len())]
             .iter()
-            .filter(|r| matches!(r.kind, RowKind::Line { .. }))
+            .filter(|r| matches!(r.kind, RowKind::Line { .. } | RowKind::Split { .. }))
             .map(|r| r.file)
             .collect();
         visible.dedup();
@@ -1540,7 +1864,7 @@ impl Render for DiffView {
                             .rounded_lg()
                             .border_1()
                             .border_color(content(0.1))
-                            .bg(rgb(crate::right_panel::BACKGROUND_BASE).opacity(0.7))
+                            .bg(floating_fill())
                             .px(px(10.))
                             .py_2()
                             .text_size(px(13.))
@@ -1628,8 +1952,9 @@ impl Render for DiffView {
                     } else {
                         let lane = this.lane_width().max(1.);
                         let code = this.code_width().max(1.);
-                        let thumb = (lane / code * lane).max(24.);
-                        let span = (lane - thumb).max(1.);
+                        let track = this.horizontal_track();
+                        let thumb = (lane / code * track).max(24.);
+                        let span = (track - thumb).max(1.);
                         let dx = (event.position.x - start).as_f32();
                         this.scroll_x =
                             (from + dx / span * this.max_scroll_x()).clamp(0., this.max_scroll_x());
@@ -1656,12 +1981,17 @@ impl Render for DiffView {
                     }
                 }),
             )
+            .child(self.layout_control(cx))
             .child(self.toolbar(cx))
             .child(
                 div()
                     .id("unified-diff")
                     .role(Role::Region)
-                    .aria_label("Unified diff")
+                    .aria_label(if self.layout == Layout::Split {
+                        "Side by side diff"
+                    } else {
+                        "Unified diff"
+                    })
                     .relative()
                     .flex_1()
                     .min_h_0()
@@ -1925,7 +2255,7 @@ mod tests {
     #[test]
     fn bodies_number_hunks_and_mark_stageable_lines() {
         let f = file("a.rs", "one\ntwo\nthree\n", "one\nTWO\nthree\n");
-        let body = build_body(&f, f.message(), true);
+        let body = build_body(&f, f.message(), true, Layout::Unified);
         assert!(
             matches!(&body.rows[0].kind, RowKind::Hunk(text) if text.as_ref() == "@@ -1,3 +1,3 @@")
         );
@@ -1943,9 +2273,222 @@ mod tests {
             ..f.clone()
         };
         assert!(
-            matches!(&build_body(&binary, binary.message(), true).rows[0].kind,
+            matches!(&build_body(&binary, binary.message(), true, Layout::Unified).rows[0].kind,
             RowKind::Notice(t) if t.as_ref() == "Binary file changed")
         );
         assert_eq!(expand_tabs("\tab\tc"), "    ab  c");
+    }
+
+    #[test]
+    fn side_by_side_pairs_changes_without_dropping_lines_or_crossing_hunks() {
+        for (before, after) in [
+            ("", "one\ntwo\n"),
+            ("one\ntwo\n", ""),
+            ("one\ntwo\nthree\n", "one\nTWO\nextra\nthree\n"),
+            ("one\ntwo\nthree\n", "one\nthree\n"),
+        ] {
+            let file = file("pair.rs", before, after);
+            let body = build_body(&file, file.message(), true, Layout::Split);
+            let mut left = Vec::new();
+            let mut right = Vec::new();
+            for row in &body.rows {
+                if let RowKind::Split { block, old, new } = row.kind {
+                    if let Some(line) = old {
+                        left.push((block, line));
+                    }
+                    if let Some(line) = new {
+                        right.push((block, line));
+                    }
+                }
+            }
+            let visible: Vec<_> = file
+                .blocks
+                .iter()
+                .enumerate()
+                .flat_map(|(b, block)| {
+                    let lines = if let Block::Hunk { lines, .. } = block {
+                        lines.as_slice()
+                    } else {
+                        &[]
+                    };
+                    lines
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, line)| line.kind != LineKind::Hunk)
+                        .map(move |(l, line)| ((b, l), line.kind))
+                })
+                .collect();
+            assert_eq!(
+                left,
+                visible
+                    .iter()
+                    .filter(|(_, kind)| *kind != LineKind::Add)
+                    .map(|(key, _)| *key)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                right,
+                visible
+                    .iter()
+                    .filter(|(_, kind)| *kind != LineKind::Del)
+                    .map(|(key, _)| *key)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn live_layout_switch_retains_hunks_folds_anchor_tokens_and_comment_draft(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+        let before: String = (0..100).map(|n| format!("line {n}\n")).collect();
+        let after = before
+            .replace("line 5\n", "changed 5\nextra\n")
+            .replace("line 80\n", "changed 80\n");
+        let model = file("switch.rs", &before, &after);
+        let blocks = model.blocks.clone();
+        let id = model.id.clone();
+        let window = cx.update(|cx| {
+            cx.open_window(
+                gpui::WindowOptions {
+                    window_bounds: Some(gpui::WindowBounds::Windowed(Bounds::new(
+                        gpui::point(px(0.), px(0.)),
+                        gpui::size(px(900.), px(240.)),
+                    ))),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(DiffView::new),
+            )
+            .unwrap()
+        });
+        let (key, draft, hunks) = window.update(cx, |view, w, cx| {
+            view.set_files(vec![model, file("closed.rs", "old\n", "new\n")], cx);
+            view.toggle(1, cx);
+            view.highlights.insert(id.clone(), (blocks.clone(), None));
+            let ix = view.rows.iter().position(|row| matches!(row.kind, RowKind::Line { block, line, .. } if view.files[row.file].blocks[block].lines()[line].kind == LineKind::Add)).unwrap();
+            let key = view.row_key(ix).unwrap();
+            let line = view.files[0].blocks[key.2].lines()[key.3].clone();
+            view.open_comment(0, line, AnchorSlot::default(), w, cx);
+            let draft = view.comment.as_ref().unwrap().input.clone();
+            draft.update(cx, |input, cx| input.set_text("keep this comment".into(), cx));
+            view.list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(3.) });
+            (key, draft, view.hunks.len())
+        }).unwrap();
+        cx.update(|cx| {
+            cx.update_global::<crate::settings::Preferences, _>(|p, _| p.diff_view = "split".into())
+        });
+        window
+            .update(cx, |view, _, _| {
+                assert_eq!(view.layout, Layout::Split);
+                assert_eq!(view.hunks.len(), hunks);
+                assert!(!view.open.contains(&SharedString::from("closed.rs")));
+                let top = view.list.logical_scroll_top();
+                assert!(view.row_matches(top.item_ix, &key));
+                assert_eq!(top.offset_in_item, px(3.));
+                assert!(Arc::ptr_eq(&view.highlights[&id].0, &blocks));
+                assert_eq!(view.comment.as_ref().unwrap().input, draft);
+                assert!(view.rows.iter().any(|row| matches!(
+                    row.kind,
+                    RowKind::Split {
+                        old: Some(_),
+                        new: Some(_),
+                        ..
+                    }
+                )));
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        let split_ix = window
+            .update(cx, |view, _, _| {
+                view.rows
+                    .iter()
+                    .position(|row| {
+                        matches!(
+                            row.kind,
+                            RowKind::Split {
+                                old: Some(_),
+                                new: Some(_),
+                                ..
+                            }
+                        )
+                    })
+                    .unwrap()
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        // Put the first changed pair on screen before measuring both lanes.
+        window
+            .update(visual, |view, _, cx| {
+                view.list.scroll_to(ListOffset {
+                    item_ix: split_ix,
+                    offset_in_item: px(0.),
+                });
+                cx.notify();
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        visual.run_until_parked();
+        let left = visual
+            .debug_bounds(Box::leak(format!("diff-old-{split_ix}").into_boxed_str()))
+            .unwrap();
+        let right = visual
+            .debug_bounds(Box::leak(format!("diff-new-{split_ix}").into_boxed_str()))
+            .unwrap();
+        assert!((left.size.width - right.size.width).abs() <= px(1.));
+        assert!((left.right() - right.left()).abs() <= px(1.));
+        let viewport = window
+            .update(visual, |view, _, _| view.viewport.get().unwrap())
+            .unwrap();
+        assert!(
+            (left.size.width + right.size.width - viewport.size.width).abs()
+                <= px(crate::editor_scrollbar::WIDTH + 1.)
+        );
+        window
+            .update(visual, |view, _, cx| {
+                assert_eq!(draft.read(cx).content.as_ref(), "keep this comment");
+                assert!(view.comment.as_ref().unwrap().anchor.get().is_some());
+                for row in &view.rows {
+                    if let RowKind::Split { block, old, new } = row.kind {
+                        for line in [old, new].into_iter().flatten() {
+                            let l = &view.files[row.file].blocks[block].lines()[line];
+                            if matches!(l.kind, LineKind::Add | LineKind::Del) {
+                                assert!(view.line_stage(row.file, block, Some(line)).is_some());
+                            }
+                        }
+                    }
+                }
+            })
+            .unwrap();
+        let hunk_key = window
+            .update(visual, |view, _, _| {
+                let ix = view
+                    .rows
+                    .iter()
+                    .rposition(|row| matches!(row.kind, RowKind::Hunk(_)))
+                    .unwrap();
+                view.list.scroll_to(ListOffset {
+                    item_ix: ix,
+                    offset_in_item: px(2.),
+                });
+                view.row_key(ix).unwrap()
+            })
+            .unwrap();
+        for mode in ["unified", "split"] {
+            visual.update(|_, cx| {
+                cx.update_global::<crate::settings::Preferences, _>(|p, _| {
+                    p.diff_view = mode.into()
+                })
+            });
+            window
+                .update(visual, |view, _, cx| {
+                    let top = view.list.logical_scroll_top();
+                    assert_eq!(view.row_key(top.item_ix).as_ref(), Some(&hunk_key));
+                    assert_eq!(top.offset_in_item, px(2.));
+                    assert_eq!(draft.read(cx).content.as_ref(), "keep this comment");
+                })
+                .unwrap();
+        }
     }
 }

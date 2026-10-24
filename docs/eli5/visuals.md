@@ -6,4 +6,5 @@ the visual’s program; reopening it resets its interactive state.
 
 The visual code has limited time and memory and cannot read files, use the
 network or start programs. An invalid visual shows an error inside its own view.
+Pi and omp receive a short command reference when needed; other supported agents use the available session tools.
 See [the visual API](../visuals.md) for examples and limits.

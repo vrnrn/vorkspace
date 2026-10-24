@@ -2,6 +2,7 @@ mod accounts;
 mod approvals;
 mod attachment_drop;
 mod bot;
+pub(crate) mod bot_settings;
 mod btw;
 mod commands;
 mod composer_draft;
@@ -517,7 +518,7 @@ impl Conversation {
         });
         let transcript = cx.new(|_| {
             let mut view = TranscriptView::new();
-            view.identity(&summary.provider, Kind::from_id(&summary.provider).label());
+            view.identity(&summary.provider, Kind::display_label(&summary.provider));
             view.file_link_base = Some(summary.cwd.clone());
             view.set_review(review.clone().into());
             view
@@ -822,7 +823,20 @@ impl Conversation {
             .update(cx, |input, cx| input.set_text(prompt, cx));
         self.send(cx);
     }
+    fn execution_provider(&self) -> Result<Kind, String> {
+        Kind::parse(&self.summary.provider).ok_or_else(|| {
+            format!(
+                "Provider {} is no longer supported. Saved history and drafts are retained.",
+                self.summary.provider
+            )
+        })
+    }
     fn send(&mut self, cx: &mut Context<Self>) {
+        if let Err(error) = self.execution_provider() {
+            self.status = error;
+            cx.notify();
+            return;
+        }
         if let Some(error) = &self.composer_draft.error {
             self.status = error.clone();
             cx.notify();
@@ -953,6 +967,14 @@ impl Conversation {
         }
     }
     fn launch_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
+        let kind = match self.execution_provider() {
+            Ok(kind) => kind,
+            Err(error) => {
+                self.status = error;
+                cx.notify();
+                return;
+            }
+        };
         if self.stopping {
             let mode = if self.settings.orchestrator {
                 Some("orchestrator")
@@ -985,7 +1007,6 @@ impl Conversation {
         if self.account_switching {
             return;
         }
-        let kind = Kind::from_id(&self.summary.provider);
         if self.settings.account.id != vorkspace_core::accounts::DEFAULT
             && crate::accounts::get(cx)
                 .is_some_and(|center| !center.read(cx).book.exists(kind, &self.settings.account.id))
@@ -2764,7 +2785,7 @@ impl Conversation {
                         .child(icon("response-handoff", 14.))
                         .child(div().min_w_0().flex_1().child(format!(
                             "Handoff from {} · Add your next instruction below",
-                            Kind::from_id(&handoff.from).label()
+                            Kind::display_label(&handoff.from)
                         )))
                         .child(
                             tool_pill("dismiss-handoff", "Dismiss handoff")
@@ -3194,6 +3215,7 @@ impl Conversation {
                 && (!self.preparing_worktree || self.busy || self.stopping)
                 && (busy || (has_value && self.loaded))
                 && (busy || !draft || (!self.busy && self.follow_ups.state.draft.is_none())));
+        let accent = primary_action(enabled);
         div()
             .id("send-or-stop")
             .role(Role::Button)
@@ -3211,13 +3233,20 @@ impl Conversation {
             .flex()
             .items_center()
             .justify_center()
-            .bg(white(if enabled { 1. } else { 0.3 }))
-            .when(enabled, |d| d.hover(|s| s.bg(white(0.9))))
+            .map(|d| match accent {
+                Some((fill, _)) => d
+                    .bg(fill)
+                    .when(enabled, |d| d.hover(|s| s.bg(fill.blend(content(0.12))))),
+                None => d
+                    .bg(white(if enabled { 1. } else { 0.3 }))
+                    .when(enabled, |d| d.hover(|s| s.bg(white(0.9)))),
+            })
             .map(|d| {
+                let ink = accent.map_or(black(if enabled { 1. } else { 0.4 }), |(_, ink)| ink);
                 if busy {
-                    d.child(div().size(px(10.)).rounded(px(2.)).bg(black(1.)))
+                    d.child(div().size(px(10.)).rounded(px(2.)).bg(ink))
                 } else {
-                    d.child(icon("send", 14.).text_color(black(if enabled { 1. } else { 0.4 })))
+                    d.child(icon("send", 14.).text_color(ink))
                 }
             })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -4359,8 +4388,9 @@ mod menu_tests {
             let window = conversation(cx);
             window
                 .update(cx, |view, _, cx| {
-                    // An unsupported synthetic provider stops before any CLI I/O.
-                    view.summary.provider = "fixture".into();
+                    // An absent directory prevents the supported CLI from starting.
+                    view.summary.provider = "codex".into();
+                    view.summary.cwd = "/missing/submitted-mode-project".into();
                     view.loaded = true;
                     view.input
                         .update(cx, |i, cx| i.set_text("check the composer".into(), cx));

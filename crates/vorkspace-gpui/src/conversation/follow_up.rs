@@ -44,6 +44,7 @@ impl Conversation {
         text: String,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        self.execution_provider()?;
         let text = self.consume_mode_command(text, cx);
         let mode = if self.settings.orchestrator {
             Some("orchestrator")
@@ -62,6 +63,7 @@ impl Conversation {
         mode: Option<String>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        self.execution_provider()?;
         if !self.history_ready()
             || self.stopping
             || self.account_switching
@@ -348,7 +350,7 @@ impl Conversation {
         }
     }
     pub(super) fn pump_follow_ups(&mut self, cx: &mut Context<Self>) {
-        if self.editing_last_turn.pending() || self.stopping {
+        if self.execution_provider().is_err() || self.editing_last_turn.pending() || self.stopping {
             return;
         }
         if !self.history_ready() {

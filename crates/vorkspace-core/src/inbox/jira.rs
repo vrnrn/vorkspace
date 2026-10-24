@@ -1,4 +1,4 @@
-//! Native adapter of the original Tauri Inbox provider. Network parsing and secret-file formats remain identical.
+//! Jira Cloud adapter using the existing local credential format.
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -161,16 +161,21 @@ pub fn jira_list_issues(
     state: String,
     project_ids: Vec<String>,
     limit: Option<u32>,
+    jql: Option<String>,
 ) -> Result<Vec<JiraIssue>, String> {
+    let query = search_jql(jql.as_deref(), assigned_to_me, &state, &project_ids)?;
     let Some(config) = read_config(&app)? else {
-        return Ok(Vec::new());
+        return if jql.is_some() {
+            Err("Connect Jira in Settings".into())
+        } else {
+            Ok(Vec::new())
+        };
     };
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, 100);
-    let jql = issue_jql(assigned_to_me, &state, &project_ids);
     let data = jira_post(
         &config,
         "/rest/api/3/search/jql",
-        &json!({ "jql": jql, "maxResults": limit, "fields": ISSUE_FIELDS }),
+        &json!({ "jql": query, "maxResults": limit, "fields": ISSUE_FIELDS }),
     )?;
     parse_jira_issues(&data, &config.site)
 }
@@ -196,7 +201,11 @@ pub fn jira_issue_thread(app: PathBuf, key: String) -> Result<JiraIssueThread, S
     parse_jira_issue_thread(&data, &config.site, key)
 }
 
-pub fn jira_issue_comment(app: PathBuf, key: String, body: String) -> Result<String, String> {
+pub fn jira_issue_comment(
+    app: PathBuf,
+    key: String,
+    body: String,
+) -> Result<super::CommentReceipt, String> {
     let config = require_config(&app)?;
     let key = require_issue_key(&key)?;
     let body = body.trim();
@@ -212,7 +221,10 @@ pub fn jira_issue_comment(app: PathBuf, key: String, body: String) -> Result<Str
     if id.is_empty() {
         return Err("Could not post Jira comment".into());
     }
-    Ok(comment_url(&config.site, key, &id))
+    Ok(super::CommentReceipt {
+        url: comment_url(&config.site, key, &id),
+        revision: string_field(&data, "created").map(|time| normalize_jira_time(&time)),
+    })
 }
 
 fn status_for(config: Option<&JiraConfig>) -> JiraStatus {
@@ -222,6 +234,19 @@ fn status_for(config: Option<&JiraConfig>) -> JiraStatus {
         email: config
             .map(|config| config.email.clone())
             .unwrap_or_default(),
+    }
+}
+
+fn search_jql(
+    custom_jql: Option<&str>,
+    assigned_to_me: bool,
+    state: &str,
+    project_ids: &[String],
+) -> Result<String, String> {
+    match custom_jql {
+        Some(jql) if jql.trim().is_empty() => Err("Enter a JQL query.".into()),
+        Some(jql) => Ok(jql.trim().into()),
+        None => Ok(issue_jql(assigned_to_me, state, project_ids)),
     }
 }
 
@@ -916,5 +941,40 @@ fn write_secret_file(path: &Path, value: &str) -> Result<(), String> {
     #[cfg(not(unix))]
     {
         fs::write(path, value).map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn custom_jql_preserves_query_ordering_and_replaces_project_constraints() {
+        let query = "project = ENG AND statusCategory != Done ORDER BY priority ASC";
+        assert_eq!(
+            search_jql(Some(&format!(" {query} ")), true, "open", &["123".into()]).unwrap(),
+            query
+        );
+        assert_eq!(
+            search_jql(Some("filter = 12345"), false, "all", &[]).unwrap(),
+            "filter = 12345"
+        );
+        assert_eq!(
+            search_jql(Some("  "), false, "all", &[]).unwrap_err(),
+            "Enter a JQL query."
+        );
+        assert_eq!(search_jql(None,true,"open",&["123".into()]).unwrap(),"assignee = currentUser() AND project in (123) AND statusCategory != Done ORDER BY updated DESC");
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            jira_list_issues(
+                directory.path().into(),
+                false,
+                "all".into(),
+                vec![],
+                Some(1),
+                Some(query.into())
+            )
+            .unwrap_err(),
+            "Connect Jira in Settings"
+        );
     }
 }

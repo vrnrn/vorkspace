@@ -1640,7 +1640,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn sidebar_header_controls_share_the_trailing_alignment(cx: &mut TestAppContext) {
+    fn original_sidebar_header_controls_follow_their_own_columns(cx: &mut TestAppContext) {
         let (window, _, _) = setup(cx);
         // The header's plus appears once this project has a Bot. The empty
         // state uses a full-width creation row instead.
@@ -1663,13 +1663,20 @@ mod tests {
         let options = visual.debug_bounds("sidebar-options").unwrap();
         let bot = visual.debug_bounds("sidebar-bot-button").unwrap();
         let filter = visual.debug_bounds("sidebar-filter-button").unwrap();
-        assert!((options.center().x - bot.center().x).abs() <= px(1.));
-        assert!((options.center().x - filter.center().x).abs() <= px(1.));
+        let rail = visual.debug_bounds("classic-project-rail").unwrap();
+        let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        assert!(
+            rail.contains(&bot.center()),
+            "Bot controls belong to the project rail"
+        );
+        assert!(rail.contains(&options.center()));
+        assert!(sidebar.contains(&filter.center()));
         let project = visual.debug_bounds("sidebar-project-button").unwrap();
         let search = visual.debug_bounds("sidebar-search-field").unwrap();
-        assert_eq!(project.left(), search.left());
+        assert!(project.left() >= sidebar.left());
+        assert!(search.right() <= rail.right());
         assert_eq!(project.size.height, px(28.));
-        assert!(project.right() < options.left());
+        assert!(project.left() > options.right());
     }
 
     #[gpui::test]

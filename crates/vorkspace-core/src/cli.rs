@@ -85,6 +85,9 @@ pub struct Inspection {
     pub version: String,
 }
 pub fn inspect(kind: Kind, path: Option<&str>) -> Result<Inspection, String> {
+    if !kind.is_supported() {
+        return Err("This provider is no longer supported.".into());
+    }
     let path = match path.filter(|s| !s.trim().is_empty()) {
         Some(p) => {
             let p = PathBuf::from(p);
@@ -109,20 +112,6 @@ pub fn inspect(kind: Kind, path: Option<&str>) -> Result<Inspection, String> {
     {
         return Err("Codex CLI returned an invalid version.".into());
     }
-    if kind == Kind::OpenCode {
-        let v = regex::Regex::new(r"(?:^|\s)v?(\d+)\.(\d+)\.(\d+)").unwrap();
-        let c = v
-            .captures(&version)
-            .ok_or("OpenCode CLI returned an invalid version.")?;
-        let major = c[1].parse::<u32>().unwrap_or(0);
-        let minor = c[2].parse::<u32>().unwrap_or(0);
-        let patch = c[3].parse::<u32>().unwrap_or(0);
-        if (major, minor, patch) < (1, 14, 19) {
-            return Err(format!(
-                "OpenCode v{major}.{minor}.{patch} is too old. Upgrade to v1.14.19 or newer."
-            ));
-        }
-    }
     Ok(Inspection { path, version })
 }
 
@@ -144,11 +133,22 @@ mod tests {
             .unwrap_err()
             .contains("absolute"));
         std::fs::write(&path, "#!/bin/sh\nprintf '1.10.3\\n'\n").unwrap();
-        assert!(inspect(Kind::OpenCode, path.to_str())
-            .unwrap_err()
-            .contains("1.14.19"));
         assert!(inspect(Kind::Codex, path.to_str())
             .unwrap_err()
             .contains("invalid version"));
+    }
+
+    #[test]
+    fn unsupported_provider_never_executes_a_configured_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("retired-cli");
+        let marker = dir.path().join("executed");
+        std::fs::write(&path, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(inspect(Kind::Unsupported, path.to_str())
+            .unwrap_err()
+            .contains("no longer supported"));
+        assert!(!marker.exists());
     }
 }

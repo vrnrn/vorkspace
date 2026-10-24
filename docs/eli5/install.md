@@ -6,6 +6,6 @@ To build your own copy, run `npm run build`, then copy `target/release/vorkspace
 
 A release copy opens saved desktop data. `npm run dev` opens separate development data. [Data storage](data-storage.md) explains those locations.
 
-The familiar legacy layout stays on by default. You can try **New layout (Experimental)** in **Settings → Appearance → Layout** and switch back there anytime. Your choice is saved; the app will not ask you to try it at startup.
+Pick a project on the left and work in the middle. Sessions, Explorer, Changes, and Bot details appear on the right. Drag the sidebar's left edge to resize it; it keeps that width when you switch between a session and a Bot. You can change the colors, transparency, and interface size in **Settings → Appearance**.
 
 Building does not publish the app. [Updates](updates.md) explains how to include the open-source updater and prepare signed downloads; paid Apple services are optional.

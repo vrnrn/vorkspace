@@ -222,7 +222,6 @@ pub(super) fn enforce_idle_limit() {
         .iter()
         .map(|entry| (entry.wire.child.id(), entry.at, entry.owner))
         .collect();
-    entries.extend(opencode::idle_entries());
     entries.sort_by_key(|(_, at, _)| *at);
     let limit = LIMIT.load(Ordering::Relaxed);
     let excess = entries.len().saturating_sub(limit);
@@ -241,7 +240,6 @@ pub(super) fn enforce_idle_limit() {
     }
     let retired = remove_matching(idle_pool(), |entry| retire.contains(&entry.wire.child.id()));
     drop(retired);
-    opencode::retire_idle(&retire);
 }
 pub(super) fn key(request: &Request) -> String {
     let mut settings = request.settings.clone();
@@ -643,6 +641,27 @@ mod tests {
 
     #[test]
     fn reuses_only_the_same_conversation_and_launch_configuration() {
+        const CHILD: &str = "VORKSPACE_PARKED_REUSE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // The idle limit and pool are process-wide. Other provider tests
+            // must not park competing children while this test checks reuse.
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "provider::parked::tests::reuses_only_the_same_conversation_and_launch_configuration",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let binary = dir.path().join("provider");
         let trace = dir.path().join("starts");

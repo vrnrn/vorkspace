@@ -5,6 +5,8 @@ use vorkspace_core::{
 };
 pub(crate) fn chat() -> Transcript {
     let mut t = Transcript::default();
+    t.begin("user");
+    t.append("Review the regression tests and summarize the changes.");
     t.begin("assistant");
     t.append("The new regression tests pass. They cover Markdown across storage chunks, repeated tool snapshots, and expanding reasoning while output changes. I also fixed a scroll issue where opening a disclosure could jump to the tail, and limited syntax highlighting to one background job at a time.");
     for (id, name, input, output, state) in [

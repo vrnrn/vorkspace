@@ -6,6 +6,10 @@ validated before credentials are saved. Create a token from
 [your Atlassian account](https://id.atlassian.com/manage-profile/security/api-tokens).
 Scoped tokens and Jira Data Center are not supported by this integration.
 
+The **Enable Jira inbox connector** switch hides Jira and stops polling while
+keeping credentials and filters. **Default Bot** preselects a chat destination;
+you can choose a different Bot or local project before sending a ticket.
+
 Select the Jira source in Inbox to browse issues, read descriptions and comments,
 post comments, ask about a ticket, or start work in a local project. Starting work
 and asking about a ticket include its description and Jira identifier.

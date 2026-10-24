@@ -202,12 +202,13 @@ impl gpui::Render for Html {
                         }
                         return;
                     }
-                    let x = f64::from(clipped.origin.x);
-                    let y = f64::from(clipped.origin.y);
-                    let clip_width = f64::from(clipped.size.width);
-                    let clip_height = f64::from(clipped.size.height);
-                    let width = f64::from(bounds.size.width);
-                    let height = f64::from(bounds.size.height);
+                    let scale = f64::from(window.ui_scale());
+                    let x = f64::from(clipped.origin.x) * scale;
+                    let y = f64::from(clipped.origin.y) * scale;
+                    let clip_width = f64::from(clipped.size.width) * scale;
+                    let clip_height = f64::from(clipped.size.height) * scale;
+                    let width = f64::from(bounds.size.width) * scale;
+                    let height = f64::from(bounds.size.height) * scale;
                     let y = if parent.isFlipped() {
                         y
                     } else {
@@ -219,8 +220,8 @@ impl gpui::Render for Html {
                     // native host follows GPUI's moving content mask.
                     let web_rect = NSRect::new(
                         NSPoint::new(
-                            f64::from(bounds.left() - clipped.left()),
-                            f64::from(bounds.top() - clipped.top()),
+                            f64::from(bounds.left() - clipped.left()) * scale,
+                            f64::from(bounds.top() - clipped.top()) * scale,
                         ),
                         NSSize::new(width, height),
                     );
@@ -280,6 +281,12 @@ impl gpui::Render for Html {
                         view.clip.ivars().set(interactive);
                         view.clip.setFrame(rect);
                         view.web.setFrame(web_rect);
+                        // The owned WebKit view is used only on the main thread.
+                        unsafe {
+                            if view.web.pageZoom() != scale {
+                                view.web.setPageZoom(scale);
+                            }
+                        }
                         view.clip.setHidden(false);
                     }
                 },

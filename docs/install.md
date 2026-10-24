@@ -8,4 +8,4 @@ Local builds are ad-hoc signed by default. Sparkle is enabled by supplying its f
 
 Release launches use existing desktop data. Development launches use isolated data. See [data continuity](data-storage.md) before choosing `--vorkspace-db` or overriding the development directory.
 
-The legacy layout is the default. Enable **New layout (Experimental)** in **Settings → Appearance → Layout** to try the redesigned sidebar and workspace, or turn it off to return to the legacy layout. The app remembers your choice and does not show a startup prompt for the experimental layout.
+The desktop keeps the familiar project rail on the left and the main workspace in the middle. Sessions, Explorer, and Changes share the right-hand sidebar with Bot details. Both use the same saved width, so resizing either keeps the size consistent when switching between sessions and Bots. Settings → Appearance controls theme, translucency, and interface scale.

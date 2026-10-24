@@ -55,17 +55,23 @@ impl View {
         desktop_alerts: bool,
         cx: &mut Context<Self>,
     ) {
+        let mut changed = self.reminders != reminders
+            || self.error != error
+            || self.desktop_alerts != desktop_alerts;
         if self.snooze.as_ref().is_some_and(|s| {
             !reminders
                 .iter()
                 .any(|r| (r.session_id, r.due_at) == s.target)
         }) {
             self.snooze = None;
+            changed = true;
         }
         self.reminders = reminders;
         self.error = error;
         self.desktop_alerts = desktop_alerts;
-        cx.notify();
+        if changed {
+            cx.notify();
+        }
     }
     pub(crate) fn is_empty(&self) -> bool {
         self.reminders.is_empty() && self.error.is_none()
@@ -330,5 +336,40 @@ impl Render for View {
                     .as_ref()
                     .map(|s| menu_popover(&s.menu, Anchor::Slot(s.anchor.clone()), cx).gap(4.)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{cell::Cell, rc::Rc};
+
+    #[gpui::test]
+    fn sync_notifies_only_when_reminders_or_status_change(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|_| View::default());
+        let count = Rc::new(Cell::new(0));
+        let _observe = cx.update(|cx| {
+            let count = count.clone();
+            cx.observe(&view, move |_, _| count.set(count.get() + 1))
+        });
+        let reminders = vec![Snapshot {
+            session_id: 1,
+            due_at: 2,
+            title: "Review".into(),
+            project: "Project".into(),
+            time_label: "soon".into(),
+        }];
+        view.update(cx, |view, cx| view.sync(reminders.clone(), None, false, cx));
+        cx.run_until_parked();
+        assert_eq!(count.get(), 1);
+        view.update(cx, |view, cx| view.sync(reminders, None, false, cx));
+        cx.run_until_parked();
+        assert_eq!(count.get(), 1);
+        view.update(cx, |view, cx| {
+            view.sync(Vec::new(), None, false, cx);
+            assert!(view.is_empty());
+        });
+        cx.run_until_parked();
+        assert_eq!(count.get(), 2);
     }
 }

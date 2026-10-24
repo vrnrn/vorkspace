@@ -5,6 +5,7 @@ pub(crate) mod cards;
 mod changes;
 mod channels;
 mod color_picker;
+mod creation;
 mod files;
 mod filters;
 mod floating;
@@ -57,6 +58,7 @@ pub(crate) use notifications::{NotificationChanged, NotificationFinished};
 #[derive(Clone, PartialEq)]
 pub(crate) struct OverviewChrome {
     active: Option<String>,
+    creating: bool,
     tab: OverviewTab,
     routed: bool,
     counts: (usize, usize, usize, usize),
@@ -90,6 +92,7 @@ pub(crate) struct Bots {
     _clock: Option<gpui::Task<()>>,
     writes: Option<gpui::Task<()>>,
     loading_chats: HashSet<String>,
+    awaiting_creation: HashSet<String>,
     work: work::Cache,
     pub(crate) error: Option<String>,
     notice_region: AnchorSlot,
@@ -99,6 +102,7 @@ pub(crate) struct Bots {
     overview_reveal: Option<crate::project_tabs::TabReveal<OverviewTab>>,
     route: Option<Route>,
     settings: Option<SettingsSection>,
+    creation: Option<creation::Creation>,
     settings_focus: gpui::FocusHandle,
     fields: HashMap<String, Entity<Input>>,
     memory_edit: Option<String>,
@@ -224,7 +228,9 @@ impl Bots {
             let run = std::rc::Rc::new(move |id: &str| {
                 let _ = entity.update(&mut *app.borrow_mut(), |this, cx| {
                     if id == "quit" {
-                        crate::quit(cx);
+                        // Use the workspace's unsaved-file guard, including
+                        // when this native menu belongs to a floating Bot.
+                        cx.defer(|cx| cx.dispatch_action(&crate::Quit));
                     } else if id == "composer" {
                         if let Some(handle) = this.parent_window {
                             let owner = this.owner.clone();
@@ -248,7 +254,12 @@ impl Bots {
                 .roster
                 .bots
                 .iter()
-                .map(|m| (m.id.clone(), m.label()))
+                .map(|m| status::MenuBot {
+                    id: m.id.clone(),
+                    name: m.label(),
+                    mascot: m.mascot.clone(),
+                    color: m.color,
+                })
                 .collect::<Vec<_>>();
             if let Some(status) = &mut self.status {
                 status.update(&bots, run);
@@ -349,6 +360,7 @@ impl Bots {
             _clock: None,
             writes: None,
             loading_chats: HashSet::new(),
+            awaiting_creation: HashSet::new(),
             work: work::Cache::default(),
             error: roster_error.or(channel_error),
             notice_region,
@@ -358,6 +370,7 @@ impl Bots {
             overview_reveal: None,
             route: None,
             settings: None,
+            creation: None,
             settings_focus: cx.focus_handle(),
             fields: HashMap::new(),
             memory_edit: None,
@@ -487,6 +500,8 @@ impl Bots {
         self.prefs = prefs;
         if was && !self.prefs.bots {
             self.active = None;
+            self.creation = None;
+            self.picker = None;
         }
         cx.notify();
     }
@@ -501,6 +516,7 @@ impl Bots {
         });
         OverviewChrome {
             active: self.active.clone(),
+            creating: self.creating(),
             tab: self.overview_tab,
             routed: self.route.is_some(),
             counts,
@@ -600,6 +616,9 @@ impl Bots {
                 }
                 Ok(()) => {
                     for (id, messages) in queued {
+                        if this.awaiting_creation.remove(&id) {
+                            this.ensure_chat(&id, cx);
+                        }
                         this.persisted_messages.extend(messages);
                         this.dispatch(&id, cx);
                     }
@@ -609,6 +628,9 @@ impl Bots {
         self.changed(cx);
     }
     fn ensure_chat(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.awaiting_creation.contains(id) {
+            return;
+        }
         if self.chats.contains_key(id) || !self.loading_chats.insert(id.into()) {
             return;
         }
@@ -618,6 +640,7 @@ impl Bots {
         let store = self.store.clone();
         let prefs = self.prefs.clone();
         let id = id.to_string();
+        let root = self.root.clone();
         let work = cx.background_executor().spawn(async move {
             let db = locked(&store)?;
             if let Some(missing) = &bot.unavailable_session {
@@ -642,19 +665,21 @@ impl Bots {
             let home = std::env::var("HOME")
                 .or_else(|_| std::env::var("USERPROFILE"))
                 .unwrap_or_else(|_| ".".into());
-            let provider = prefs
-                .default_provider
-                .as_deref()
-                .and_then(Kind::parse)
-                .unwrap_or(Kind::Codex);
+            let provider = match &bot.initial_configuration {
+                Some(config) => Kind::parse(&config.provider).ok_or("This Bot's configured provider is unavailable.")?,
+                None => prefs.default_provider.as_deref().and_then(Kind::parse).unwrap_or(Kind::Codex),
+            };
+            if bot.initial_configuration.is_some() {
+                bot::load_files(&root, &bot)?;
+            }
             let mut summary = db.create(provider.id(), &home)?;
             summary.title = bot.label();
             db.title(summary.id, &summary.title)?;
-            let settings = Settings {
+            let settings = bot.initial_configuration.as_ref().map(|config| config.settings.clone()).unwrap_or_else(|| Settings {
                 access: AccessMode::Auto,
                 model: prefs.default_models.get(provider.id()).cloned(),
                 ..Default::default()
-            };
+            });
             db.configure_agent(summary.id, provider.id(), &settings)?;
             Ok((summary, Some(settings), Vec::new()))
         });
@@ -677,6 +702,7 @@ impl Bots {
                     return;
                 };
                 bot.session_id = Some(summary.id);
+                bot.initial_configuration = None;
                 bot.outbox.retain(|q| !delivered.contains(&q.id));
                 let bot = bot.clone();
                 let view = cx.new(|cx| Conversation::new(summary, this.store.clone(), cx));
@@ -997,6 +1023,7 @@ impl Bots {
             self.memory_edit = None;
             self.settings = None;
         }
+        self.close_classic_channels(cx);
         self.active = Some(id.into());
         self.ensure_chat(id, cx);
         self.reload_files(id, cx);
@@ -1011,6 +1038,9 @@ impl Bots {
         self.save(cx);
     }
     pub(crate) fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_creation(window, cx) {
+            return;
+        }
         if self.settings.is_none()
             && let Some(chat) = self.chat()
         {
@@ -1020,6 +1050,7 @@ impl Bots {
         }
     }
     pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
+        self.close_classic_channels(cx);
         self.save_open_file(cx);
         self.pause_changes(cx);
         self.hide_html(cx);
@@ -1031,8 +1062,19 @@ impl Bots {
         }
     }
     pub(crate) fn dismiss_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self
+            .creation
+            .as_ref()
+            .is_some_and(|draft| draft.window.window_id() != window.window_handle().window_id())
+        {
+            return false;
+        }
         if self.picker.take().is_some() || self.menu.take().is_some() {
             cx.notify();
+            return true;
+        }
+        if self.creation.is_some() {
+            self.cancel_creation(window, cx);
             return true;
         }
         if self.settings.take().is_none() {
@@ -1044,19 +1086,6 @@ impl Bots {
         }
         cx.notify();
         true
-    }
-    pub(crate) fn create(
-        &mut self,
-        projects: Vec<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let id = self.roster.create(projects).id.clone();
-        self.save(cx);
-        self.open(&id, window, cx);
-        self.settings = Some(SettingsSection::General);
-        window.focus(&self.settings_focus, cx);
-        self.changed(cx);
     }
     fn reload_files(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.active.as_deref() != Some(id) {
@@ -1447,7 +1476,7 @@ impl gpui::Render for Bots {
                     .child(self.topbar(&bot, cx)),
             )
             .children(self.settings_modal(&bot, window, cx))
-            .children(self.picker_surface(cx))
+            .when(!self.creating(), |d| d.children(self.picker_surface(cx)))
             .children(self.options_surface(cx))
             .children(self.background_modal())
             .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, _| {

@@ -111,12 +111,16 @@ impl SettingsView {
             Some("diff-view"),
             true,
             "Diff view",
-            Some("Review changes in the editor or in a combined diff.".into()),
+            Some("Review changes in a unified column or side by side.".into()),
             vec![self.segmented(
                 "diff-view",
                 "Diff view",
-                &p.diff_view,
-                &[("editor", "Editor"), ("unified", "Unified")],
+                if p.diff_view == "split" {
+                    "split"
+                } else {
+                    "unified"
+                },
+                &[("unified", "Unified"), ("split", "Side by side")],
                 cx,
                 |this, v, cx| this.update(cx, |p| p.diff_view = v.into()),
             )],

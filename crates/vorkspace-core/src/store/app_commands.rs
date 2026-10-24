@@ -434,7 +434,14 @@ mod tests {
             .is_err());
         assert!(!store.bot_session(target).unwrap().unwrap().archived);
         roster.hidden_sessions.clear();
-        let bot = roster.create(vec!["/project".into()]).id.clone();
+        let bot = roster
+            .create(crate::bot::Bot {
+                name: "Test bot".into(),
+                ..roster.draft(vec!["/project".into()])
+            })
+            .unwrap()
+            .id
+            .clone();
         roster.get_mut(&bot).unwrap().habit_sessions.push(target);
         roster.save(&store).unwrap();
         assert!(store.check_app_target(caller, target, "/project").is_err());
@@ -491,7 +498,14 @@ mod tests {
             let child = store.create("codex", "/project").unwrap().id;
             let internal = store.create("codex", "/project").unwrap().id;
             let mut roster = crate::bot::Roster::default();
-            let bot = roster.create(vec!["/project".into()]).id.clone();
+            let bot = roster
+                .create(crate::bot::Bot {
+                    name: "Test bot".into(),
+                    ..roster.draft(vec!["/project".into()])
+                })
+                .unwrap()
+                .id
+                .clone();
             let bot = roster.get_mut(&bot).unwrap();
             bot.session_id = Some(caller);
             bot.show_started_sessions_in_sidebar = false;
@@ -536,7 +550,11 @@ mod tests {
         let source = store.persisted_session_id(caller).unwrap();
         let mut roster = crate::bot::Roster::default();
         let bot = roster
-            .create(vec!["/project".into(), "/assigned".into()])
+            .create(crate::bot::Bot {
+                name: "Test bot".into(),
+                ..roster.draft(vec!["/project".into(), "/assigned".into()])
+            })
+            .unwrap()
             .id
             .clone();
         roster.get_mut(&bot).unwrap().session_id = Some(caller);
@@ -567,7 +585,14 @@ mod tests {
         let internal = format!("app-{source}-internal-chat");
         store.conn.execute("INSERT INTO sessions(id,cwd,harness,model,model_settings,runtime_mode,title,blocks_json,created_at,updated_at,sidebar_hidden) VALUES(?1,'/project','codex','codex:default','{}','supervised','Internal','[]',1,1,1)",[&internal]).unwrap();
         let internal = store.resolve_session_id(&internal).unwrap();
-        let other = roster.create(vec!["/project".into()]).id.clone();
+        let other = roster
+            .create(crate::bot::Bot {
+                name: "Test bot".into(),
+                ..roster.draft(vec!["/project".into()])
+            })
+            .unwrap()
+            .id
+            .clone();
         roster.get_mut(&other).unwrap().session_id = Some(internal);
         roster.save(&store).unwrap();
         assert!(

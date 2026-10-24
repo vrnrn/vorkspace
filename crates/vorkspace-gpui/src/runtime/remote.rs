@@ -541,6 +541,12 @@ pub(crate) fn run_with_client(
             .take()
             .unwrap_or_else(|| json!({"type":"send"}));
         let attaching = action["type"] == "attach";
+        if !attaching && Kind::parse(&summary.provider).is_none() {
+            return Err(format!(
+                "Provider {} is no longer supported. Saved remote history is still available.",
+                summary.provider
+            ));
+        }
         let retrying = action["type"] == "retry";
         if !attaching
             && let Some(recovery) = binding

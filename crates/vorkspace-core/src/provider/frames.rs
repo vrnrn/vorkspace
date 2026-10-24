@@ -1,5 +1,5 @@
 //! Encoded provider frames share a byte budget while reading, queued and in use.
-use std::io::{BufRead, Read};
+use std::io::BufRead;
 use std::ops::Deref;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -182,96 +182,6 @@ fn extend_line(reader: &mut impl BufRead, frame: &mut Frame) -> Result<bool, Str
     }
 }
 
-/// Bound a complete SSE record, not just its individual data lines. Compact
-/// data fields in place so multiline events never allocate a second payload.
-pub(super) fn read_sse(
-    reader: &mut impl BufRead,
-    budget: &Budget,
-) -> Result<Option<Frame>, String> {
-    let mut frame = Frame::new(budget.clone());
-    loop {
-        let start = frame.len();
-        if !extend_line(reader, &mut frame)? {
-            return if frame.is_empty() {
-                Ok(None)
-            } else {
-                Err("OpenCode event stream ended within a frame".into())
-            };
-        }
-        if matches!(&frame[start..], b"\n" | b"\r\n") {
-            let mut input = 0;
-            let mut output = 0;
-            while input < frame.bytes.len() {
-                let next = frame.bytes[input..]
-                    .iter()
-                    .position(|byte| *byte == b'\n')
-                    .map_or(frame.bytes.len(), |position| input + position + 1);
-                let mut end = next;
-                while end > input && matches!(frame.bytes[end - 1], b'\r' | b'\n') {
-                    end -= 1;
-                }
-                if frame.bytes[input..end].starts_with(b"data:") {
-                    let mut start = input + 5;
-                    if frame.bytes.get(start) == Some(&b' ') {
-                        start += 1;
-                    }
-                    let count = end - start;
-                    frame.bytes.copy_within(start..end, output);
-                    output += count;
-                    frame.bytes[output] = b'\n';
-                    output += 1;
-                }
-                input = next;
-            }
-            frame.bytes.truncate(output);
-            return Ok(Some(frame));
-        }
-    }
-}
-
-/// Server logs are diagnostic text, not protocol frames. Retain only a bounded
-/// prefix for readiness detection and drain the rest through the fixed buffer.
-pub(super) fn read_log_line(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
-    const RETAIN: usize = 65536;
-    let mut line = Vec::new();
-    let mut consumed = false;
-    loop {
-        let available = reader.fill_buf()?;
-        if available.is_empty() {
-            return Ok(consumed.then_some(line));
-        }
-        consumed = true;
-        let count = available
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(available.len(), |position| position + 1);
-        let ended = available[count - 1] == b'\n';
-        line.extend_from_slice(&available[..count.min(RETAIN - line.len())]);
-        reader.consume(count);
-        if ended {
-            return Ok(Some(line));
-        }
-    }
-}
-
-pub(super) fn read_control_line(
-    reader: &mut impl BufRead,
-    limit: usize,
-) -> std::io::Result<String> {
-    let mut bytes = Vec::new();
-    let count = reader
-        .take((limit + 1) as u64)
-        .read_until(b'\n', &mut bytes)?;
-    if count > limit {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Provider HTTP framing line exceeds its byte limit",
-        ));
-    }
-    String::from_utf8(bytes)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
-}
-
 pub(super) struct Receiver<T> {
     receiver: Option<mpsc::Receiver<T>>,
     budget: Budget,
@@ -325,33 +235,6 @@ mod tests {
         let mut frame = Frame::new(budget.clone());
         frame.extend(data).unwrap();
         frame
-    }
-
-    #[test]
-    fn server_logs_drain_oversized_lines_with_a_bounded_retained_prefix() {
-        let mut input = vec![b'x'; 1024 * 1024];
-        input.extend_from_slice(b"\nlistening http://localhost:1234\n");
-        let mut reader = BufReader::with_capacity(8192, Cursor::new(input));
-        let prefix = read_log_line(&mut reader).unwrap().unwrap();
-        assert_eq!(prefix.len(), 65536);
-        assert!(prefix.capacity() <= 65536);
-        assert_eq!(
-            &read_log_line(&mut reader).unwrap().unwrap(),
-            b"listening http://localhost:1234\n"
-        );
-        assert!(read_log_line(&mut reader).unwrap().is_none());
-    }
-
-    #[test]
-    fn http_control_lines_fail_before_reading_an_unbounded_header() {
-        let mut reader = BufReader::with_capacity(4, Cursor::new(vec![b'x'; 1024 * 1024]));
-        assert!(read_control_line(&mut reader, 8)
-            .unwrap_err()
-            .to_string()
-            .contains("byte limit"));
-        assert!(reader.get_ref().position() <= 12);
-        let mut reader = Cursor::new(b"3\r\n".as_slice());
-        assert_eq!(read_control_line(&mut reader, 3).unwrap(), "3\r\n");
     }
 
     #[test]
@@ -492,58 +375,5 @@ mod tests {
             receive.try_recv(),
             Err(mpsc::TryRecvError::Disconnected)
         ));
-    }
-
-    #[test]
-    fn multiline_sse_uses_one_budgeted_buffer_and_preserves_json() {
-        let source = b": heartbeat\r\nevent: message\r\ndata: {\"text\":\r\ndata: \"hello\"}\r\n\r\ndata: 42\n\n";
-        let budget = Budget::with_limits(128, 256);
-        let mut reader = BufReader::with_capacity(3, Cursor::new(source));
-        let event = read_sse(&mut reader, &budget).unwrap().unwrap();
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&event).unwrap(),
-            serde_json::json!({"text":"hello"})
-        );
-        assert_eq!(budget.used(), 128);
-        drop(event);
-        let event = read_sse(&mut reader, &budget).unwrap().unwrap();
-        assert_eq!(&*event, b"42\n");
-        drop(event);
-        assert!(read_sse(&mut reader, &budget).unwrap().is_none());
-        assert_eq!(budget.used(), 0);
-    }
-
-    #[test]
-    fn sse_record_limit_applies_across_short_lines_and_comments() {
-        let budget = Budget::with_limits(32, 64);
-        for input in [
-            "data: 1\ndata: 2\ndata: 3\ndata: 4\ndata: 5\n\n",
-            ": long comment that keeps going without a delimiter",
-        ] {
-            let mut reader = BufReader::with_capacity(4, Cursor::new(input));
-            assert!(read_sse(&mut reader, &budget)
-                .err()
-                .unwrap()
-                .contains("32 byte limit"));
-            assert!(reader.get_ref().position() <= 36);
-            assert_eq!(budget.used(), 0);
-        }
-    }
-
-    #[test]
-    fn incomplete_sse_record_fails_and_empty_records_release_admission() {
-        let budget = Budget::with_limits(32, 64);
-        let mut reader = Cursor::new(b": heartbeat\n\n\ndata: {\"lost\":1}\n".as_slice());
-        for _ in 0..2 {
-            let empty = read_sse(&mut reader, &budget).unwrap().unwrap();
-            assert!(empty.is_empty());
-            drop(empty);
-            assert_eq!(budget.used(), 0);
-        }
-        assert!(read_sse(&mut reader, &budget)
-            .err()
-            .unwrap()
-            .contains("within a frame"));
-        assert_eq!(budget.used(), 0);
     }
 }

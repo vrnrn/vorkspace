@@ -133,7 +133,7 @@ impl Default for Preferences {
             autocorrect: true,
             format_on_save: true,
             autosave: false,
-            diff_view: "editor".into(),
+            diff_view: "unified".into(),
             show_remaining_usage: false,
             mask_emails: true,
             idle_agents: 3,

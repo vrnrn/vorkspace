@@ -150,6 +150,12 @@ fn run_turn_using(
         .unwrap_or_default();
     let mut usage_limit = None;
     let result = (|| {
+        let kind = Kind::parse(&summary.provider).ok_or_else(|| {
+            format!(
+                "Provider {} is no longer supported; its saved history is still available",
+                summary.provider
+            )
+        })?;
         if let Some(reason) = locked(&store)?.edit_recovery_reason(summary.id)? {
             return Err(reason);
         }
@@ -373,8 +379,6 @@ fn run_turn_using(
                 },
             )?;
         }
-        let kind = Kind::parse(&summary.provider)
-            .ok_or_else(|| format!("Unknown provider: {}", summary.provider))?;
         let binary = resolve_binary(kind).ok_or_else(|| {
             format!(
                 "{} CLI not found. Install it and sign in, or set VORKSPACE_{}_BINARY.",
@@ -385,7 +389,7 @@ fn run_turn_using(
         // These providers parse slash arguments themselves. App context before
         // the command would turn it into an ordinary message instead.
         let prompt = settings.prepared_prompt.take().unwrap_or(prompt);
-        let raw_native_command = matches!(kind, Kind::Omp | Kind::Devin)
+        let raw_native_command = kind == Kind::Omp
             && provider::native_prompt(kind, &prompt)
                 .trim_start()
                 .starts_with('/');
@@ -1062,4 +1066,67 @@ fn shlex_quote(text: &str) -> String {
             .replace('$', "\\$")
             .replace('`', "\\`")
     )
+}
+
+#[cfg(test)]
+mod unsupported_history_tests {
+    use super::*;
+
+    #[test]
+    fn retired_history_rejects_a_turn_before_resolution_or_durable_mutation() {
+        for provider in [
+            "cursor", "grok", "opencode", "fx", "hermes", "devin", "unknown",
+        ] {
+            let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+            let session = store.create("codex", "/history").unwrap();
+            store.change_provider(session.id, provider).unwrap();
+            store.provider_id(session.id, "original-thread").unwrap();
+            let settings = Settings {
+                revision: 7,
+                model: Some("original-model".into()),
+                ..Default::default()
+            };
+            store.save_agent_settings(session.id, &settings).unwrap();
+            let rows = vec![Row {
+                role: "assistant".into(),
+                text: "Retained historical work".into(),
+                first: true,
+                sent_at: Some(123),
+            }];
+            store.write_rows(session.id, 0, &rows).unwrap();
+            let summary = store.sessions().unwrap().remove(0);
+            let store = Arc::new(Mutex::new(store));
+            let (_, controls) = std::sync::mpsc::channel();
+            let (tx, rx) = async_channel::bounded(8);
+            run_turn_using(
+                TurnInput {
+                    summary: summary.clone(),
+                    prompt: "Continue".into(),
+                    settings: settings.clone(),
+                },
+                controls,
+                store.clone(),
+                Arc::new(AtomicBool::new(false)),
+                tx,
+                |_| panic!("a retired provider must never reach CLI resolution"),
+            );
+            let update = rx.recv_blocking().unwrap();
+            assert!(update.finished);
+            assert!(update.status.contains("no longer supported"));
+            assert!(update.rows.is_empty());
+            let store = locked(&store).unwrap();
+            let after = store.sessions().unwrap().remove(0);
+            assert_eq!(after.provider, provider);
+            assert_eq!(after.provider_id, Some("original-thread".into()));
+            assert_eq!(
+                serde_json::to_value(store.load(session.id).unwrap().rows).unwrap(),
+                serde_json::to_value(rows).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(store.agent_settings(session.id).unwrap().unwrap()).unwrap(),
+                serde_json::to_value(settings).unwrap()
+            );
+            assert!(store.local_submissions(session.id).unwrap().is_empty());
+        }
+    }
 }

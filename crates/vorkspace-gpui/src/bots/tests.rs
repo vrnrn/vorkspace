@@ -436,6 +436,91 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
         );
     }
 }
+#[gpui::test]
+fn a_closed_creation_window_rehomes_the_same_unsaved_bot(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    cx.update(|cx| s.manager.update(cx, |m, cx| m.open_floating(cx)));
+    cx.run_until_parked();
+    let floating = s.manager.read_with(cx, |m, _| m.floating[0]);
+    let id = floating
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.create(vec![s.project.clone()], window, cx);
+                let id = m.creation.as_ref().unwrap().bot.id.clone();
+                m.fields["bot-name"]
+                    .update(cx, |field, cx| field.set_text("Recovered bot".into(), cx));
+                m.creation.as_mut().unwrap().soul = "Keep my unsaved soul".into();
+                id
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    floating
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager
+                .update(cx, |m, cx| m.create(Vec::new(), window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                let draft = m.creation.as_ref().unwrap();
+                assert_eq!(draft.window.window_id(), window.window_handle().window_id());
+                assert_eq!(draft.bot.id, id);
+                assert_eq!(draft.bot.name, "Recovered bot");
+                assert_eq!(draft.soul, "Keep my unsaved soul");
+                assert_eq!(m.roster.bots.len(), 1);
+                assert!(m.fields["bot-name"].focus_handle(cx).is_focused(window));
+                m.confirm_creation(window, cx);
+                assert!(m.creation.is_none());
+                assert_eq!(m.roster.bots.len(), 2);
+                assert_eq!(m.roster.get(&id).unwrap().name, "Recovered bot");
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        bot::files::load(&s.root, &id, None)
+            .unwrap()
+            .soul
+            .as_deref(),
+        Some("Keep my unsaved soul")
+    );
+}
+
+#[gpui::test]
+fn floating_chats_inherit_and_update_interface_scale(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut preferences = s.manager.read_with(cx, |m, _| m.prefs.clone());
+    preferences.ui_scale = 150;
+    cx.update(|cx| cx.set_global(preferences.clone()));
+    cx.update(|cx| s.manager.update(cx, |m, cx| m.open_floating(cx)));
+    cx.run_until_parked();
+    let floating = s.manager.read_with(cx, |m, _| m.floating[0]);
+    assert_eq!(
+        floating
+            .update(cx, |_, window, _| window.ui_scale())
+            .unwrap(),
+        1.5
+    );
+    for scale in [75, 125, 100] {
+        preferences.ui_scale = scale;
+        cx.update(|cx| cx.set_global(preferences.clone()));
+        cx.run_until_parked();
+        assert_eq!(
+            floating
+                .update(cx, |_, window, _| window.ui_scale())
+                .unwrap(),
+            scale as f32 / 100.
+        );
+    }
+}
+
 fn setup(cx: &mut TestAppContext) -> Setup {
     let dir = std::env::temp_dir().join(format!("native-bots-{}", bot::new_id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -460,7 +545,7 @@ fn setup(cx: &mut TestAppContext) -> Setup {
     let handle: gpui::AnyWindowHandle = window.into();
     handle
         .update(cx, |_, w, cx| {
-            manager.update(cx, |m, cx| m.create(vec![project.clone()], w, cx))
+            manager.update(cx, |m, cx| m.create_named(vec![project.clone()], w, cx))
         })
         .unwrap();
     cx.run_until_parked();
@@ -547,7 +632,7 @@ fn settings_match_react_dialog_and_left_navigation_geometry(cx: &mut TestAppCont
     );
     assert_eq!(
         visual.debug_bounds("bot-name-field").unwrap().size,
-        gpui::size(px(256.), px(32.))
+        gpui::size(px(160.), px(32.))
     );
 }
 
@@ -725,7 +810,7 @@ fn identity_and_context_editors_survive_switches_and_save_to_their_own_files(
     handle
         .update(cx, |_, w, cx| {
             s.manager
-                .update(cx, |m, cx| m.create(vec![s.project.clone()], w, cx))
+                .update(cx, |m, cx| m.create_named(vec![s.project.clone()], w, cx))
         })
         .unwrap();
     cx.run_until_parked();
@@ -1187,7 +1272,9 @@ fn chat_composer_keeps_attach_under_the_box_and_opens_the_model_list(cx: &mut Te
 }
 
 #[gpui::test]
-fn details_tabs_share_the_session_titlebar_in_both_layouts(cx: &mut TestAppContext) {
+fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
+    cx: &mut TestAppContext,
+) {
     let s = setup(cx);
     cx.update(|cx| {
         cx.set_reduce_motion(true);
@@ -1195,82 +1282,74 @@ fn details_tabs_share_the_session_titlebar_in_both_layouts(cx: &mut TestAppConte
     });
     let session = s
         .window
-        .update(cx, |shell, w, cx| {
-            s.manager.update(cx, |m, cx| {
-                m.settings = None;
-                m.focus_active(w, cx);
+        .update(cx, |shell, window, cx| {
+            assert!(shell.workspace.classic_layout);
+            s.manager.update(cx, |manager, cx| {
+                manager.settings = None;
+                manager.focus_active(window, cx);
                 cx.notify();
             });
             shell.workspace.active.unwrap()
         })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
-    for classic in [false, true] {
-        s.window
-            .update(visual, |shell, _, cx| {
-                shell.workspace.classic_layout = classic;
-                cx.notify();
-            })
-            .unwrap();
-        visual.run_until_parked();
-        let panel = visual.debug_bounds("right-panel-frame").unwrap();
-        let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
-        let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-        let title_tabs = visual.debug_bounds("title-tab-strip").unwrap();
-        assert!((tabs.top() - title_tabs.top()).abs() <= px(0.5));
-        assert_eq!(tabs.size.height, px(TITLE_BAR_HEIGHT));
-        assert_eq!(
-            tabs.left(),
-            panel.left() + px(if classic { 6. } else { 7. })
-        );
-        let activity = visual.debug_bounds("bot-activity").unwrap();
-        let search = visual.debug_bounds("titlebar-file-search").unwrap();
-        assert_eq!(search.left() - activity.right(), px(6.));
-        assert_eq!(toggle.left() - search.right(), px(4.));
-        assert!(tabs.bottom() <= panel.top() + px(if classic { TITLE_BAR_HEIGHT } else { 0. }));
-        assert_eq!(
-            visual.debug_bounds("bot-session-list").unwrap().top(),
-            panel.top() + px(if classic { TITLE_BAR_HEIGHT } else { 0. })
-        );
-        assert!(
-            visual.debug_bounds("bot-overview-toggle").is_none(),
-            "only the shell owns the panel toggle"
-        );
-        assert!(title_tabs.right() <= tabs.left());
-        s.window
-            .update(visual, |shell, w, cx| shell.open(session, w, cx))
-            .unwrap();
-        visual.run_until_parked();
-        if !s
-            .window
-            .update(visual, |shell, _, _| shell.workspace.right_panel_open)
-            .unwrap()
-        {
-            let button = visual.debug_bounds("toggle-right-panel").unwrap();
-            visual.simulate_click(button.center(), Default::default());
-            visual.run_until_parked();
-        }
-        assert_eq!(
-            visual.debug_bounds("toggle-right-panel").unwrap(),
-            toggle,
-            "the toggle stays put when changing tab types"
-        );
-        let selector = if classic {
-            "right-panel-explorer"
-        } else {
-            "project-tabs-separator"
-        };
-        assert_eq!(
-            visual.debug_bounds(selector).unwrap().center().y,
-            tabs.center().y
-        );
-        s.window
-            .update(visual, |_, w, cx| {
-                s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
-            })
-            .unwrap();
-        visual.run_until_parked();
-    }
+    visual.run_until_parked();
+    let panel = visual.debug_bounds("right-panel-frame").unwrap();
+    let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
+    let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
+    let title_tabs = visual.debug_bounds("title-tab-strip").unwrap();
+    assert!((tabs.top() - title_tabs.top()).abs() <= px(0.5));
+    assert_eq!(tabs.size.height, px(TITLE_BAR_HEIGHT));
+    assert_eq!(tabs.left(), panel.left() + px(6.));
+    let activity = visual.debug_bounds("bot-activity").unwrap();
+    let search = visual.debug_bounds("titlebar-file-search").unwrap();
+    assert_eq!(search.left() - activity.right(), px(6.));
+    assert_eq!(toggle.left() - search.right(), px(4.));
+    assert!(tabs.bottom() <= panel.top() + px(TITLE_BAR_HEIGHT));
+    assert_eq!(
+        visual.debug_bounds("bot-session-list").unwrap().top(),
+        panel.top() + px(TITLE_BAR_HEIGHT)
+    );
+    assert!(
+        visual.debug_bounds("bot-overview-toggle").is_none(),
+        "only the shell owns the details toggle"
+    );
+    assert!(
+        visual.debug_bounds("sidebar-frame").is_none(),
+        "a Bot owns the main surface beside the project rail"
+    );
+    assert!(title_tabs.right() <= tabs.left());
+    let selector = Box::leak(format!("title-tab-{session}").into_boxed_str());
+    let tab = visual.debug_bounds(selector).unwrap();
+    visual.simulate_click(tab.center(), Default::default());
+    visual.run_until_parked();
+    let rail = visual.debug_bounds("classic-project-rail").unwrap();
+    let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+    assert_eq!(
+        sidebar.left(),
+        visual.debug_bounds("main-pane-frame").unwrap().right()
+    );
+    assert_eq!(
+        visual.debug_bounds("main-pane-frame").unwrap().left(),
+        rail.right()
+    );
+    assert!(visual.debug_bounds("classic-workspace-tabs").is_some());
+    assert!(visual.debug_bounds("right-panel-frame").is_none());
+    assert!(visual.debug_bounds("toggle-right-panel").is_none());
+    s.window
+        .update(visual, |shell, window, cx| {
+            assert_eq!(shell.workspace.active, Some(session));
+            assert!(
+                shell.workspace.right_panel_open,
+                "leaving the Bot retains its details preference"
+            );
+            s.manager
+                .update(cx, |manager, cx| manager.open(&s.id, window, cx));
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert_eq!(visual.debug_bounds("toggle-right-panel").unwrap(), toggle);
+    assert_eq!(visual.debug_bounds("right-panel-frame").unwrap(), panel);
 }
 
 #[gpui::test]
@@ -1323,17 +1402,16 @@ fn titlebar_details_tabs_switch_pages_and_keep_activity_and_habit_actions(cx: &m
 }
 
 #[gpui::test]
-fn titlebar_divider_resizes_bot_details_and_closed_panels_keep_the_corner(cx: &mut TestAppContext) {
+fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut TestAppContext) {
     let s = setup(cx);
     cx.update(|cx| cx.set_reduce_motion(true));
     s.window
         .update(cx, |shell, _, cx| {
-            // This first section exercises the experimental inset title bar.
-            shell.workspace.classic_layout = false;
-            s.manager.update(cx, |m, cx| {
-                m.settings = None;
+            assert!(shell.workspace.classic_layout);
+            s.manager.update(cx, |manager, cx| {
+                manager.settings = None;
                 cx.notify();
-            })
+            });
         })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
@@ -1346,24 +1424,18 @@ fn titlebar_divider_resizes_bot_details_and_closed_panels_keep_the_corner(cx: &m
             })
             .unwrap();
         visual.run_until_parked();
-        assert_eq!(
-            visual
-                .debug_bounds("project-tabs-separator")
-                .unwrap()
-                .left(),
-            visual.debug_bounds("right-panel-frame").unwrap().left()
-        );
+        let panel = visual.debug_bounds("right-panel-frame").unwrap();
+        let divider = visual.debug_bounds("right-panel-resize").unwrap();
+        assert!((divider.center().x - panel.left() - px(0.5)).abs() <= px(0.5));
+        assert_eq!(panel.size.width, px(width));
         let activity = visual.debug_bounds("bot-activity").unwrap();
         let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
         assert!(
             activity.right() < toggle.left(),
-            "Bot controls fit the session sidebar's minimum width"
+            "Bot header actions stay available at the minimum details width"
         );
     }
-    let start = visual
-        .debug_bounds("titlebar-right-panel-resize")
-        .unwrap()
-        .center();
+    let start = visual.debug_bounds("right-panel-resize").unwrap().center();
     let end = start - gpui::point(px(40.), px(0.));
     visual.simulate_mouse_down(start, MouseButton::Left, Default::default());
     visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
@@ -1375,20 +1447,18 @@ fn titlebar_divider_resizes_bot_details_and_closed_panels_keep_the_corner(cx: &m
         })
         .unwrap();
     assert_eq!(
-        visual
-            .debug_bounds("project-tabs-separator")
-            .unwrap()
-            .left(),
-        visual.debug_bounds("right-panel-frame").unwrap().left()
+        visual.debug_bounds("right-panel-frame").unwrap().size.width,
+        px(540.)
     );
-    for classic in [false, true] {
-        s.window
-            .update(visual, |shell, _, cx| {
-                shell.workspace.classic_layout = classic;
-                shell.git.update(cx, |g, cx| g.set_project("~".into(), cx));
-                cx.notify();
-            })
-            .unwrap();
+    s.window
+        .update(visual, |shell, _, cx| {
+            shell
+                .git
+                .update(cx, |git, cx| git.set_project("~".into(), cx));
+            cx.notify();
+        })
+        .unwrap();
+    for _ in 0..2 {
         visual.run_until_parked();
         let open = visual.debug_bounds("toggle-right-panel").unwrap();
         visual.simulate_click(open.center(), Default::default());
@@ -1396,53 +1466,112 @@ fn titlebar_divider_resizes_bot_details_and_closed_panels_keep_the_corner(cx: &m
         assert!(visual.debug_bounds("bot-overview-tabs").is_none());
         assert!(visual.debug_bounds("bot-overview-panel").is_none());
         assert_eq!(visual.debug_bounds("toggle-right-panel").unwrap(), open);
+        let saved = locked(&s.store).unwrap().ui_state().unwrap().unwrap();
+        let saved: crate::workspace::Workspace = serde_json::from_str(&saved).unwrap();
+        assert!(!saved.right_panel_open);
+        assert_eq!(saved.right_panel_width, 540.);
         visual.simulate_click(open.center(), Default::default());
         visual.run_until_parked();
         assert!(visual.debug_bounds("bot-overview-tabs").is_some());
+        assert_eq!(
+            visual.debug_bounds("right-panel-frame").unwrap().size.width,
+            px(540.)
+        );
     }
 }
 
 #[gpui::test]
-fn opening_a_session_card_uses_the_shared_sidebar_state(cx: &mut TestAppContext) {
+fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original_workspace(
+    cx: &mut TestAppContext,
+) {
     let s = setup(cx);
     cx.update(|cx| cx.set_reduce_motion(true));
-    let session = s
+    let (session, preview) = s
         .window
         .update(cx, |shell, _, cx| {
-            s.manager.update(cx, |m, cx| {
-                m.settings = None;
+            s.manager.update(cx, |manager, cx| {
+                manager.settings = None;
                 cx.notify();
             });
-            shell.workspace.active.unwrap()
+            let session = shell.workspace.active.unwrap();
+            let preview = shell.bot_ensure_session(session, cx).unwrap();
+            preview.update(cx, |session, cx| {
+                session.input.update(cx, |input, cx| {
+                    input.set_text("Keep this preview draft".into(), cx)
+                })
+            });
+            (session, preview)
         })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
+    assert!(visual.debug_bounds("sidebar-frame").is_none());
     let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
     visual.simulate_click(toggle.center(), Default::default());
     visual.run_until_parked();
     assert!(visual.debug_bounds("right-panel-frame").is_none());
-    s.window
-        .update(visual, |_, _, cx| {
-            s.manager.update(cx, |m, cx| {
-                m.card_action(&s.id, &json!({"type":"session", "sessionId":session}), cx);
-            })
-        })
-        .unwrap();
+    s.manager.update(visual, |manager, cx| {
+        manager.card_action(&s.id, &json!({"type":"session","sessionId":session}), cx)
+    });
     visual.run_until_parked();
     let details = visual.debug_bounds("right-panel-frame").unwrap();
     assert!(s.manager.read_with(
         visual,
-        |m, _| matches!(m.route, Some(Route::Session(id)) if id == session)
+        |manager, _| matches!(manager.route,Some(Route::Session(id)) if id==session)
     ));
+    let selector = Box::leak(format!("title-tab-{session}").into_boxed_str());
+    let open = visual.debug_bounds(selector).unwrap();
+    visual.simulate_click(open.center(), Default::default());
+    visual.run_until_parked();
+    let rail = visual.debug_bounds("classic-project-rail").unwrap();
+    let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+    assert_eq!(
+        sidebar.left(),
+        visual.debug_bounds("main-pane-frame").unwrap().right()
+    );
+    assert_eq!(
+        visual.debug_bounds("main-pane-frame").unwrap().left(),
+        rail.right()
+    );
+    assert!(
+        visual.debug_bounds("right-panel-frame").is_none(),
+        "ordinary sessions use the shared right-hand sidebar"
+    );
     s.window
-        .update(visual, |shell, w, cx| {
-            assert!(shell.workspace.right_panel_open);
-            shell.open(session, w, cx);
+        .update(visual, |shell, window, cx| {
+            assert_eq!(shell.workspace.active, Some(session));
+            assert!(
+                shell.workspace.right_panel_open,
+                "Bot details stay enabled for the next Bot visit"
+            );
+            let actual = shell.bot_ensure_session(session, cx).unwrap();
+            assert_eq!(actual.entity_id(), preview.entity_id());
+            assert_eq!(
+                actual.read(cx).input.read(cx).content,
+                "Keep this preview draft"
+            );
+            assert!(
+                actual
+                    .read(cx)
+                    .input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .contains_focused(window, cx)
+            );
+            s.manager
+                .update(cx, |manager, cx| manager.open(&s.id, window, cx));
         })
         .unwrap();
     visual.run_until_parked();
     assert_eq!(visual.debug_bounds("right-panel-frame").unwrap(), details);
+    assert_eq!(
+        preview.read_with(visual, |session, cx| session
+            .input
+            .read(cx)
+            .content
+            .to_string()),
+        "Keep this preview draft"
+    );
 }
 
 #[gpui::test]
@@ -1922,4 +2051,253 @@ fn sidebar_right_click_opens_bot_menu_outside_the_bot_and_edits_its_look(cx: &mu
         })
         .unwrap();
     assert!(visual.debug_bounds("bot-mascot-0").is_none());
+}
+
+#[gpui::test]
+fn new_bot_setup_focuses_name_and_cancel_keeps_storage_and_current_bot_unchanged(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    cx.update(input::bind);
+    let before = locked(&s.store).unwrap().setting("bot-roster").unwrap();
+    let sessions = locked(&s.store).unwrap().sessions().unwrap().len();
+    let original_files = bot::files::load(&s.root, &s.id, None).unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager.update(cx, |manager, cx| {
+                manager.settings = None;
+                manager.create(vec![s.project.clone()], window, cx);
+                assert_eq!(manager.active.as_deref(), Some(s.id.as_str()));
+                assert_eq!(manager.roster.bots.len(), 1);
+                assert!(
+                    manager.fields["bot-name"]
+                        .focus_handle(cx)
+                        .is_focused(window)
+                );
+                manager.confirm_creation(window, cx);
+                assert!(manager.creating());
+            })
+        })
+        .unwrap();
+    visual.run_until_parked();
+    s.window
+        .update(visual, |shell, window, cx| {
+            shell.focus_active(window, cx);
+            assert!(
+                s.manager.read(cx).fields["bot-name"]
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+        })
+        .unwrap();
+    assert!(visual.debug_bounds("bot-create").is_some());
+    assert!(visual.debug_bounds("bot-reset").is_none());
+    visual.simulate_input("   ");
+    visual.run_until_parked();
+    let create = visual.debug_bounds("bot-create").unwrap();
+    visual.simulate_click(create.center(), Default::default());
+    visual.run_until_parked();
+    let draft_id = s.manager.read_with(visual, |manager, _| {
+        assert_eq!(manager.roster.bots.len(), 1);
+        manager.creation.as_ref().unwrap().bot.id.clone()
+    });
+    let soul = visual.debug_bounds("bot-settings-Soul").unwrap();
+    visual.simulate_click(soul.center(), Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-soul-page").is_some());
+    assert!(visual.debug_bounds("bot-create").is_some());
+    s.manager.update(visual, |manager, cx| {
+        manager.fields[&format!("file:{draft_id}:SOUL.md")].update(cx, |field, cx| {
+            field.set_text("Unsaved setup soul".into(), cx)
+        });
+    });
+    assert!(visual.debug_bounds("bot-settings-Memory").is_none());
+    let general = visual.debug_bounds("bot-settings-General").unwrap();
+    visual.simulate_click(general.center(), Default::default());
+    visual.run_until_parked();
+    s.manager.read_with(visual, |manager, _| {
+        assert_eq!(
+            manager.creation.as_ref().unwrap().soul,
+            "Unsaved setup soul"
+        );
+    });
+    assert_eq!(
+        before,
+        locked(&s.store).unwrap().setting("bot-roster").unwrap()
+    );
+    assert_eq!(
+        sessions,
+        locked(&s.store).unwrap().sessions().unwrap().len()
+    );
+    assert!(!s.root.join(&draft_id).exists());
+    let general = visual.debug_bounds("bot-settings-General").unwrap();
+    visual.simulate_click(general.center(), Default::default());
+    visual.run_until_parked();
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    s.manager.read_with(visual, |manager, _| {
+        assert!(!manager.creating());
+        assert_eq!(manager.active.as_deref(), Some(s.id.as_str()));
+        assert_eq!(manager.roster.bots.len(), 1);
+    });
+    assert_eq!(
+        before,
+        locked(&s.store).unwrap().setting("bot-roster").unwrap()
+    );
+    assert_eq!(
+        sessions,
+        locked(&s.store).unwrap().sessions().unwrap().len()
+    );
+    let files = bot::files::load(&s.root, &s.id, None).unwrap();
+    assert_eq!(files.soul, original_files.soul);
+    assert_eq!(files.memory, original_files.memory);
+    assert!(!s.root.join(&draft_id).exists());
+}
+
+#[gpui::test]
+fn create_named_bot_commits_once_with_draft_choices_and_existing_settings_show_reset(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    cx.update(input::bind);
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager
+                .update(cx, |manager, cx| manager.create(Vec::new(), window, cx))
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.simulate_input("  Ada 🧭  ");
+    visual.run_until_parked();
+    let draft_id = s.manager.read_with(visual, |manager, _| {
+        manager.creation.as_ref().unwrap().bot.id.clone()
+    });
+    let soul = visual.debug_bounds("bot-settings-Soul").unwrap();
+    visual.simulate_click(soul.center(), Default::default());
+    visual.run_until_parked();
+    s.manager.update(visual, |manager, cx| {
+        manager.fields[&format!("file:{draft_id}:SOUL.md")].update(cx, |field, cx| {
+            field.set_text("# Soul\nKeep replies concise.\n".into(), cx)
+        });
+    });
+    assert!(visual.debug_bounds("bot-create").is_some());
+    assert!(!s.root.join(&draft_id).exists());
+    s.manager.update(visual, |manager, cx| {
+        let id = manager.creation.as_ref().unwrap().bot.id.clone();
+        manager.edit_settings_bot(
+            &id,
+            |bot| {
+                bot.mascot = "cat".into();
+                bot.projects.push(s.project.clone());
+                bot.show_started_sessions_in_sidebar = true;
+            },
+            cx,
+        );
+        let draft = manager.creation.as_mut().unwrap();
+        draft.provider = Kind::Claude;
+        draft.settings.model = Some("chosen-model".into());
+        draft.settings.effort = Some("high".into());
+        draft.settings.access = AccessMode::ReadOnly;
+        draft.settings.fast = true;
+        assert_eq!(draft.bot.name, "Ada 🧭");
+    });
+    visual.run_until_parked();
+    let create = visual.debug_bounds("bot-create").unwrap();
+    visual.simulate_click(create.center(), Default::default());
+    visual.run_until_parked();
+    let (id, session) = s.manager.read_with(visual, |manager, cx| {
+        assert!(!manager.creating());
+        assert_eq!(manager.roster.bots.len(), 2);
+        let bot = manager.current().unwrap();
+        assert_eq!(bot.name, "Ada 🧭");
+        assert_eq!(bot.mascot, "cat");
+        assert_eq!(bot.projects, vec![s.project.clone()]);
+        assert!(bot.show_started_sessions_in_sidebar);
+        assert!(bot.initial_configuration.is_none());
+        let view = manager.chat().unwrap();
+        assert_eq!(view.read(cx).summary.provider, "claude");
+        (bot.id.clone(), bot.session_id.unwrap())
+    });
+    let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+    assert_eq!(saved.get(&id).unwrap().name, "Ada 🧭");
+    let settings = locked(&s.store)
+        .unwrap()
+        .agent_settings(session)
+        .unwrap()
+        .unwrap();
+    assert_eq!(settings.model.as_deref(), Some("chosen-model"));
+    assert_eq!(settings.effort.as_deref(), Some("high"));
+    assert_eq!(settings.access, AccessMode::ReadOnly);
+    assert!(settings.fast);
+    let files = bot::files::load(&s.root, &id, None).unwrap();
+    assert_eq!(
+        files.soul.as_deref(),
+        Some("# Soul\nKeep replies concise.\n")
+    );
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager.update(cx, |manager, cx| {
+                manager.confirm_creation(window, cx);
+                assert_eq!(manager.roster.bots.len(), 2);
+                manager.settings = Some(SettingsSection::General);
+                cx.notify();
+            })
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-reset").is_some());
+    assert!(visual.debug_bounds("bot-create").is_none());
+    let soul = visual.debug_bounds("bot-settings-Soul").unwrap();
+    visual.simulate_click(soul.center(), Default::default());
+    visual.run_until_parked();
+    s.manager.update(visual, |manager, cx| {
+        manager.fields[&format!("file:{id}:SOUL.md")].update(cx, |field, cx| {
+            field.set_text("Updated after creation".into(), cx)
+        });
+        manager.save_open_file(cx);
+    });
+    visual.run_until_parked();
+    assert_eq!(
+        bot::files::load(&s.root, &id, None)
+            .unwrap()
+            .soul
+            .as_deref(),
+        Some("Updated after creation")
+    );
+}
+
+#[gpui::test]
+fn new_bot_footer_remains_visible_at_narrow_window_sizes(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager
+                .update(cx, |manager, cx| manager.create(Vec::new(), window, cx))
+        })
+        .unwrap();
+    for size in [
+        gpui::size(px(1100.), px(800.)),
+        gpui::size(px(640.), px(500.)),
+    ] {
+        visual.simulate_resize(size);
+        visual.run_until_parked();
+        let dialog = visual.debug_bounds("bot-settings-dialog").unwrap();
+        let footer = visual.debug_bounds("bot-settings-footer").unwrap();
+        let create = visual.debug_bounds("bot-create").unwrap();
+        assert!(create.bottom() <= dialog.bottom());
+        assert!(create.top() >= footer.top());
+        assert!(create.right() <= dialog.right());
+        let look = visual.debug_bounds("bot-look").unwrap();
+        let name = visual.debug_bounds("bot-name-field").unwrap();
+        assert!(name.top() >= look.bottom());
+        if size.width >= px(780.) {
+            let model = visual.debug_bounds("bot-model-settings").unwrap();
+            assert!(model.left() > name.right());
+            let identity_center = (look.top() + name.bottom()) / 2.;
+            assert!((identity_center - model.center().y).abs() <= px(1.));
+        }
+    }
 }

@@ -155,14 +155,9 @@ pub(crate) fn list_skills_from(
 
     for (dir, source) in [
         (".claude/skills", "claude"),
-        (".cursor/skills", "cursor"),
         (".codex/skills", "codex"),
-        (".opencode/skills", "opencode"),
         (".pi/skills", "pi"),
         (".omp/skills", "omp"),
-        (".fx/skills", "fx"),
-        (".grok/skills", "grok"),
-        (".hermes/skills", "hermes"),
     ] {
         add_root(project.join(dir), "project", source);
         if let Some(home) = home {
@@ -178,18 +173,6 @@ pub(crate) fn list_skills_from(
         if root.is_dir() {
             add_root(root, "user", "antigravity");
         }
-        add_root(home.join(".config/devin/skills"), "user", "devin");
-        // Windows keeps Devin's user config under %APPDATA% instead.
-        #[cfg(windows)]
-        add_root(
-            std::env::var_os("APPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join("AppData/Roaming"))
-                .join("devin/skills"),
-            "user",
-            "devin",
-        );
-        add_root(project.join(".devin/skills"), "project", "devin");
         for (root, scope, namespace) in claude_plugin_skill_roots(home, project) {
             add_namespaced_root(
                 &mut by_name,
@@ -773,8 +756,8 @@ mod tests {
         );
         write_skill(
             &project.0.join(".cursor/skills"),
-            "cursor-only",
-            "---\nname: cursor-only\ndescription: Cursor native\n---\n",
+            "retired-only",
+            "---\nname: retired-only\ndescription: Retired integration\n---\n",
         );
 
         let skills = list_skills_from(&project.0, Some(&home.0), None);
@@ -787,9 +770,7 @@ mod tests {
         assert_eq!(greet.scope, "user");
         assert_eq!(greet.source, "agents");
 
-        let native = skills.iter().find(|s| s.name == "cursor-only").unwrap();
-        assert_eq!(native.source, "cursor");
-        assert_eq!(native.scope, "project");
+        assert!(skills.iter().all(|skill| skill.name != "retired-only"));
     }
 
     #[test]
@@ -838,102 +819,6 @@ mod tests {
         assert_eq!(project_skill.scope, "project");
         let user_skill = skills.iter().find(|s| s.name == "pi-global").unwrap();
         assert_eq!(user_skill.source, "pi");
-        assert_eq!(user_skill.scope, "user");
-    }
-
-    #[test]
-    fn discovers_fx_project_and_user_skills() {
-        let project = tmp("proj-fx");
-        let home = tmp("home-fx");
-        write_skill(
-            &project.0.join(".fx/skills"),
-            "fx-review",
-            "---\nname: fx-review\ndescription: fx project skill\n---\n",
-        );
-        write_skill(
-            &home.0.join(".fx/skills"),
-            "fx-global",
-            "---\nname: fx-global\ndescription: fx user skill\n---\n",
-        );
-
-        let skills = list_skills_from(&project.0, Some(&home.0), None);
-        let project_skill = skills.iter().find(|s| s.name == "fx-review").unwrap();
-        assert_eq!(project_skill.source, "fx");
-        assert_eq!(project_skill.scope, "project");
-        let user_skill = skills.iter().find(|s| s.name == "fx-global").unwrap();
-        assert_eq!(user_skill.source, "fx");
-        assert_eq!(user_skill.scope, "user");
-    }
-
-    #[test]
-    fn discovers_grok_project_and_user_skills() {
-        let project = tmp("proj-grok");
-        let home = tmp("home-grok");
-        write_skill(
-            &project.0.join(".grok/skills"),
-            "grok-review",
-            "---\nname: grok-review\ndescription: grok project skill\n---\n",
-        );
-        write_skill(
-            &home.0.join(".grok/skills"),
-            "grok-global",
-            "---\nname: grok-global\ndescription: grok user skill\n---\n",
-        );
-
-        let skills = list_skills_from(&project.0, Some(&home.0), None);
-        let project_skill = skills.iter().find(|s| s.name == "grok-review").unwrap();
-        assert_eq!(project_skill.source, "grok");
-        assert_eq!(project_skill.scope, "project");
-        let user_skill = skills.iter().find(|s| s.name == "grok-global").unwrap();
-        assert_eq!(user_skill.source, "grok");
-        assert_eq!(user_skill.scope, "user");
-    }
-
-    #[test]
-    fn discovers_hermes_project_and_user_skills() {
-        let project = tmp("proj-hermes");
-        let home = tmp("home-hermes");
-        write_skill(
-            &project.0.join(".hermes/skills"),
-            "hermes-review",
-            "---\nname: hermes-review\ndescription: Hermes project skill\n---\n",
-        );
-        write_skill(
-            &home.0.join(".hermes/skills"),
-            "hermes-global",
-            "---\nname: hermes-global\ndescription: Hermes user skill\n---\n",
-        );
-
-        let skills = list_skills_from(&project.0, Some(&home.0), None);
-        let project_skill = skills.iter().find(|s| s.name == "hermes-review").unwrap();
-        assert_eq!(project_skill.source, "hermes");
-        assert_eq!(project_skill.scope, "project");
-        let user_skill = skills.iter().find(|s| s.name == "hermes-global").unwrap();
-        assert_eq!(user_skill.source, "hermes");
-        assert_eq!(user_skill.scope, "user");
-    }
-
-    #[test]
-    fn discovers_devin_project_and_user_skills() {
-        let project = tmp("proj-devin");
-        let home = tmp("home-devin");
-        write_skill(
-            &project.0.join(".devin/skills"),
-            "devin-review",
-            "---\nname: devin-review\ndescription: Devin project skill\n---\n",
-        );
-        write_skill(
-            &home.0.join(".config/devin/skills"),
-            "devin-global",
-            "---\nname: devin-global\ndescription: Devin user skill\n---\n",
-        );
-
-        let skills = list_skills_from(&project.0, Some(&home.0), None);
-        let project_skill = skills.iter().find(|s| s.name == "devin-review").unwrap();
-        assert_eq!(project_skill.source, "devin");
-        assert_eq!(project_skill.scope, "project");
-        let user_skill = skills.iter().find(|s| s.name == "devin-global").unwrap();
-        assert_eq!(user_skill.source, "devin");
         assert_eq!(user_skill.scope, "user");
     }
 
@@ -1302,5 +1187,25 @@ mod tests {
             slash_skill.is_some(),
             "distinct backslash path on Unix must not be disabled by colliding slash path"
         );
+    }
+    #[test]
+    fn retired_provider_skill_roots_are_not_discovered() {
+        let project = tmp("retired-skills-project");
+        let home = tmp("retired-skills-home");
+        for provider in ["cursor", "opencode", "grok", "fx", "hermes", "devin"] {
+            for root in [&project.0, &home.0] {
+                write_skill(
+                    &root.join(format!(".{provider}/skills")),
+                    provider,
+                    &format!("---\nname: {provider}\ndescription: retired provider\n---\n"),
+                );
+            }
+        }
+        write_skill(
+            &home.0.join(".config/devin/skills"),
+            "retired-global",
+            "---\nname: retired-global\n---\n",
+        );
+        assert!(list_skills_from(&project.0, Some(&home.0), None).is_empty());
     }
 }

@@ -47,7 +47,7 @@ impl Bots {
         hash: String,
         cx: &mut Context<Self>,
     ) -> Entity<Input> {
-        let key = format!("{}:{path}", self.active.as_deref().unwrap_or_default());
+        let key = format!("{}:{path}", self.settings_identity().unwrap_or_default());
         let field_key = format!("file:{key}");
         if let Some((old, old_hash)) = self.file_versions.get(&key)
             && old_hash != &hash
@@ -67,13 +67,20 @@ impl Bots {
         self.field(&field_key, "Markdown", text, true, cx)
     }
     pub(super) fn soul_page(&mut self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
-        let body = if let Some(files) = self.files.clone() {
-            let editor = self.file_editor(
-                "SOUL.md",
-                files.soul.unwrap_or_default(),
-                files.soul_hash,
-                cx,
-            );
+        let soul = self
+            .creation
+            .as_ref()
+            .map(|draft| (draft.soul.clone(), files::content_hash(&draft.soul)))
+            .or_else(|| {
+                self.files.as_ref().map(|files| {
+                    (
+                        files.soul.clone().unwrap_or_default(),
+                        files.soul_hash.clone(),
+                    )
+                })
+            });
+        let body = if let Some((text, hash)) = soul {
+            let editor = self.file_editor("SOUL.md", text, hash, cx);
             editor.update(cx, |v, cx| {
                 v.set_placeholder("Who it is, and what it should always keep in mind", cx)
             });
@@ -148,6 +155,12 @@ impl Bots {
         }
     }
     pub(super) fn save_open_file(&mut self, cx: &mut Context<Self>) {
+        if let Some(draft) = &mut self.creation {
+            if let Some(field) = self.fields.get(&format!("file:{}:SOUL.md", draft.bot.id)) {
+                draft.soul = field.read(cx).content.to_string();
+            }
+            return;
+        }
         let Some(id) = self.active.clone() else {
             return;
         };

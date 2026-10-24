@@ -617,9 +617,8 @@ impl Completion {
                 if id == "btw"
                     && matches!(
                         self.provider,
-                        vorkspace_core::provider::Kind::Fx
-                            | vorkspace_core::provider::Kind::Hermes
-                            | vorkspace_core::provider::Kind::Antigravity
+                        vorkspace_core::provider::Kind::Antigravity
+                            | vorkspace_core::provider::Kind::Unsupported
                     )
                 {
                     continue;

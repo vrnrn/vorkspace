@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(book.selected(Kind::Codex, "/project"), "account-work");
         assert_eq!(book.selected(Kind::Claude, "/project"), DEFAULT);
         assert_eq!(book.list(Kind::Claude)[1].label, "Claude Work");
-        assert_eq!(book.list(Kind::Devin).len(), 1);
+        assert!(book.list(Kind::from_id("devin")).is_empty());
     }
 
     #[test]

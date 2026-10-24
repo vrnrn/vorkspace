@@ -1,4 +1,5 @@
 use super::*;
+
 impl Shell {
     pub(super) fn configure_quick_composer(&mut self, cx: &mut Context<Self>) {
         if let Some(receiver) = self.quick.configure(&self.workspace.preferences) {
@@ -62,7 +63,10 @@ impl Shell {
                 let view = cx.new(|cx| {
                     crate::quick_composer::QuickComposer::new(projects, choice, store, cx)
                 });
-                view.update(cx, |v, cx| v.focus(window, cx));
+                view.update(cx, |v, cx| {
+                    v.observe_scale(window, cx);
+                    v.focus(window, cx);
+                });
                 view
             },
         );
@@ -140,5 +144,47 @@ impl Shell {
             });
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use gpui::TestAppContext;
+    #[gpui::test]
+    fn quick_composer_inherits_and_tracks_the_workspace_scale(cx: &mut TestAppContext) {
+        let (main, _, _) = crate::shell::tests::window(cx);
+        let quick = main
+            .update(cx, |shell, window, cx| {
+                shell.observe_scale(window, cx);
+                shell.workspace.preferences.ui_scale = 150;
+                shell.apply_preferences(cx);
+                shell.toggle_quick_composer(window, cx);
+                shell.quick.window.unwrap()
+            })
+            .unwrap();
+        cx.run_until_parked();
+        for scale in [150, 75, 125] {
+            main.update(cx, |shell, _, cx| {
+                shell.workspace.preferences.ui_scale = scale;
+                shell.apply_preferences(cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+            let handles: [gpui::AnyWindowHandle; 2] = [main.into(), quick.into()];
+            for handle in handles {
+                let actual = handle.update(cx, |_, window, _| window.ui_scale()).unwrap();
+                assert_eq!(actual, scale as f32 / 100.);
+            }
+        }
+        quick
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+        main.update(cx, |shell, _, cx| {
+            shell.workspace.preferences.ui_scale = 100;
+            shell.apply_preferences(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
     }
 }

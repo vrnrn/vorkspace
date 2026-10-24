@@ -520,21 +520,25 @@ fn tint() -> Hsla {
     content(0.02)
 }
 // On macOS the renderer blurs what is already drawn behind this quad.
-// Elsewhere there is no blur, so the tint becomes an opaque card.
+// Light themes and platforms without blur paint an opaque card.
 fn glass(tint: Hsla, radius: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
+            let opaque = crate::theme::floating_fill();
             #[cfg(target_os = "macos")]
-            let quad = gpui::fill(bounds, tint).border_color(
-                gpui_apple::metal_renderer::backdrop_blur_marker(BLUR * window.scale_factor()),
-            );
+            let quad = if crate::theme::is_light() {
+                gpui::fill(bounds, opaque)
+            } else {
+                gpui::fill(bounds, tint).border_color(
+                    gpui_apple::metal_renderer::backdrop_blur_marker(BLUR * window.scale_factor()),
+                )
+            };
             #[cfg(not(target_os = "macos"))]
-            let quad = gpui::fill(bounds, {
-                let mut fill = crate::theme::pane_fill();
-                fill.a = 1.;
-                fill
-            });
+            let quad = {
+                let _ = tint;
+                gpui::fill(bounds, opaque)
+            };
             window.paint_quad(quad.corner_radii(px(radius)));
         },
     )

@@ -28,8 +28,16 @@ use vorkspace_core::{
 pub(crate) enum Event {
     Close,
     OpenSession(i64),
-    StartSession { item: Box<Item>, prompt: String },
+    StartSession {
+        item: Box<Item>,
+        prompt: String,
+        bot: Option<String>,
+    },
     ItemsChanged(Vec<Item>),
+    Activity {
+        projects: Vec<model::NotificationProject>,
+        changed: Vec<Item>,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,7 +72,6 @@ pub(crate) struct Inbox {
     comments: Vec<(model::Comment, Entity<document::InboxDocument>)>,
     diff: Option<Diff>,
     diff_view: Entity<DiffView>,
-    diff_full: bool,
     checks: Option<Checks>,
     tab: Tab,
     loading: bool,
@@ -92,8 +99,12 @@ pub(crate) struct Inbox {
     connect_email: Entity<Input>,
     connect_token: Entity<Input>,
     connecting: bool,
+    connection_revision: u64,
     connect_error: Option<String>,
     start_project: PathBuf,
+    bots: Vec<(String, String)>,
+    start_bot: Option<String>,
+    destination_explicit: bool,
     project_picker: bool,
     project_anchor: AnchorSlot,
     action_menu: bool,
@@ -106,6 +117,7 @@ pub(crate) struct Inbox {
     active: bool,
     refresh_queued: bool,
     notifications: model::NotificationTracker,
+    self_activity: std::collections::HashMap<String, (i64, Instant)>,
     last_refresh: Instant,
     _subscriptions: Vec<Subscription>,
 }
@@ -239,7 +251,6 @@ impl Inbox {
             comments: vec![],
             diff: None,
             diff_view,
-            diff_full: false,
             checks: None,
             tab: Tab::Summary,
             loading: false,
@@ -267,8 +278,12 @@ impl Inbox {
             connect_email,
             connect_token,
             connecting: false,
+            connection_revision: 0,
             connect_error: None,
             start_project: cwd,
+            bots: vec![],
+            start_bot: None,
+            destination_explicit: false,
             project_picker: false,
             project_anchor: AnchorSlot::default(),
             action_menu: false,
@@ -281,6 +296,7 @@ impl Inbox {
             active: false,
             refresh_queued: false,
             notifications: model::NotificationTracker::default(),
+            self_activity: Default::default(),
             last_refresh: Instant::now(),
             _subscriptions: subscriptions,
         }
@@ -337,36 +353,156 @@ impl Inbox {
         self.snapshot
             .items
             .iter()
-            .filter(|item| self.state.seen.unseen(item))
+            .filter(|item| {
+                self.state.connectors.enabled(&item.provider) && self.state.seen.unseen(item)
+            })
             .count()
     }
 
-    pub(crate) fn connection_statuses(&self) -> std::collections::HashMap<String, (bool, String)> {
-        let mut statuses = self
-            .snapshot
-            .connections
+    pub(crate) fn connector_preferences(&self) -> model::Connectors {
+        self.state.connectors.clone()
+    }
+    pub(crate) fn jira_filter(&self) -> model::JiraFilter {
+        self.state.jira_filter.clone()
+    }
+    pub(crate) fn connection_revision(&self) -> u64 {
+        self.connection_revision
+    }
+    pub(crate) fn default_bots(&self) -> model::BotDefaults {
+        self.state.default_bots.clone()
+    }
+    pub(crate) fn jira_projects(&self) -> Vec<(String, String)> {
+        self.snapshot
+            .jira_projects
             .iter()
-            .map(|(provider, status)| {
-                let description = if !status.connected {
-                    "Not connected".into()
-                } else if !status.site.is_empty() {
-                    status.site.clone()
-                } else if !status.url.is_empty() {
-                    status.url.clone()
-                } else if !status.organization.is_empty() {
-                    status.organization.clone()
-                } else {
-                    "Connected".into()
-                };
-                (provider.clone(), (status.connected, description))
-            })
-            .collect::<std::collections::HashMap<_, _>>();
-        for (provider, error) in &self.snapshot.errors {
-            if !statuses.contains_key(provider) {
-                statuses.insert(provider.clone(), (false, error.clone()));
-            }
+            .map(|row| (row.id.clone(), format!("{} · {}", row.key, row.name)))
+            .collect()
+    }
+    pub(crate) fn hidden_jira_projects(&self) -> Vec<String> {
+        self.state.hidden_jira_projects.clone()
+    }
+    pub(crate) fn set_jira_filter(
+        &mut self,
+        filter: model::JiraFilter,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        locked(&self.store).and_then(|store| filter.save(&store))?;
+        self.state.jira_filter = filter;
+        self.refresh(cx);
+        cx.notify();
+        Ok(())
+    }
+    pub(crate) fn set_jira_project(&mut self, id: &str, visible: bool, cx: &mut Context<Self>) {
+        self.state.hidden_jira_projects.retain(|value| value != id);
+        if !visible {
+            self.state.hidden_jira_projects.push(id.into());
         }
-        statuses
+        self.filters_changed(true, cx);
+    }
+    pub(crate) fn set_default_bot(
+        &mut self,
+        source: &str,
+        bot: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let mut defaults = self.state.default_bots.clone();
+        defaults.set(source, bot)?;
+        locked(&self.store).and_then(|store| defaults.save(&store))?;
+        self.state.default_bots = defaults;
+        if !self.destination_explicit {
+            self.reset_destination();
+        }
+        cx.notify();
+        Ok(())
+    }
+    pub(crate) fn set_bots(&mut self, bots: Vec<(String, String)>, cx: &mut Context<Self>) {
+        if self.bots != bots {
+            self.bots = bots;
+            if !self.destination_explicit {
+                self.reset_destination();
+            }
+            if self
+                .start_bot
+                .as_ref()
+                .is_some_and(|id| !self.bots.iter().any(|(key, _)| key == id))
+            {
+                self.start_bot = None;
+            }
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn set_connector_enabled(
+        &mut self,
+        provider: &str,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let mut connectors = self.state.connectors.clone();
+        connectors.set(provider, enabled)?;
+        if connectors == self.state.connectors {
+            return Ok(());
+        }
+        locked(&self.store).and_then(|store| connectors.save(&store))?;
+        self.state.connectors = connectors;
+        self.state.normalize_source();
+        self.snapshot
+            .items
+            .retain(|item| self.state.connectors.enabled(&item.provider));
+        self.snapshot
+            .connections
+            .retain(|key, _| self.state.connectors.enabled(key));
+        self.snapshot
+            .errors
+            .retain(|key, _| self.state.connectors.enabled(key));
+        if self.item().is_none() {
+            self.selected = None;
+            self.details = None;
+            self.thread = None;
+            self.document = None;
+            self.comments.clear();
+            self.diff = None;
+            self.checks = None;
+            self.detail_generation += 1;
+            self.extra_request += 1;
+            self.detail_loading = false;
+            self.extra_loading = false;
+        }
+        if self
+            .connect_provider
+            .as_deref()
+            .is_some_and(|key| !self.state.connectors.enabled(key))
+        {
+            self.connect_provider = None;
+        }
+        self.save();
+        self.refresh(cx);
+        cx.notify();
+        Ok(())
+    }
+
+    pub(crate) fn connection_statuses(&self) -> std::collections::HashMap<String, (bool, String)> {
+        self.state
+            .connectors
+            .enabled_providers()
+            .map(|provider| {
+                let status = self.snapshot.connections.get(provider);
+                let connected = status.is_some_and(|status| status.connected);
+                let description =
+                    self.snapshot
+                        .errors
+                        .get(provider)
+                        .cloned()
+                        .unwrap_or_else(|| match status {
+                            Some(status) if !status.connected => "Not connected".into(),
+                            Some(status) if !status.site.is_empty() => status.site.clone(),
+                            Some(status) if !status.url.is_empty() => status.url.clone(),
+                            Some(_) => "Connected".into(),
+                            None => "Not connected".into(),
+                        });
+                (provider.into(), (connected, description))
+            })
+            .collect()
     }
 
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -391,77 +527,124 @@ impl Inbox {
             (snapshot, sessions)
         });
         cx.spawn(async move |this, cx| {
-            let (mut snapshot, sessions) = task.await;
+            let (snapshot, sessions) = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.generation != generation {
-                    return;
-                }
-                this.loading = false;
-                if scope != this.state.fetch_scope(&this.projects) {
-                    this.refresh_queued = false;
-                    this.refresh(cx);
-                    return;
-                }
-                let appeared = this.notifications.observe(&snapshot, scope);
-                // A temporary outage must not erase the last usable provider list.
-                for provider in snapshot.errors.keys() {
-                    snapshot.items.extend(
-                        this.snapshot
-                            .items
-                            .iter()
-                            .filter(|i| &i.provider == provider)
-                            .cloned(),
-                    );
-                }
-                snapshot
-                    .items
-                    .sort_by_key(|item| std::cmp::Reverse(item.updated_ms()));
-                this.state.seen.seed(&snapshot.items);
-                this.snapshot = snapshot;
-                this.sessions = sessions;
-                if this.active
-                    && let Some(item) = this.item()
-                {
-                    this.state.seen.mark(&item);
-                }
-                if !this
-                    .snapshot
-                    .connections
-                    .get(&this.state.source)
-                    .is_some_and(|s| s.connected)
-                    && let Some(source) = model::PROVIDERS.into_iter().find(|p| {
-                        this.snapshot
-                            .connections
-                            .get(*p)
-                            .is_some_and(|s| s.connected)
-                    })
-                {
-                    this.state.source = source.into();
-                }
-                this.save();
-                cx.emit(Event::ItemsChanged(appeared));
-                if this
-                    .item()
-                    .is_none_or(|item| item.provider != this.state.source)
-                {
-                    this.selected = None;
-                    this.details = None;
-                    this.document = None;
-                    this.comments.clear();
-                }
-                if this.active
-                    && this.selected.is_none()
-                    && let Some(item) = this.visible_items(cx).first()
-                {
-                    this.select(item.key(), cx);
-                }
-                if std::mem::take(&mut this.refresh_queued) {
-                    this.refresh(cx);
-                }
-                cx.notify();
+                this.finish_refresh(generation, scope, snapshot, sessions, cx)
             });
         })
         .detach();
+        cx.notify();
+    }
+
+    fn finish_refresh(
+        &mut self,
+        generation: u64,
+        scope: String,
+        mut snapshot: Snapshot,
+        sessions: Vec<Session>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.generation != generation {
+            return;
+        }
+        self.loading = false;
+        if scope != self.state.fetch_scope(&self.projects) {
+            self.refresh_queued = false;
+            self.refresh(cx);
+            return;
+        }
+        let observation = self.notifications.observe_snapshot(&snapshot, scope);
+        self.self_activity
+            .retain(|_, (_, time)| time.elapsed() < Duration::from_secs(600));
+        let changed = observation
+            .changed
+            .into_iter()
+            .filter(|item| {
+                let own_revision = self
+                    .self_activity
+                    .get(&item.key())
+                    .map(|(revision, _)| *revision);
+                // A stale poll must not consume a pending receipt; a later
+                // external revision must never be classified as our mutation.
+                if own_revision.is_some_and(|revision| item.updated_ms() >= revision) {
+                    self.self_activity.remove(&item.key());
+                }
+                if own_revision == Some(item.updated_ms()) {
+                    self.state.seen.mark(item);
+                    false
+                } else {
+                    self.state.connectors.enabled(&item.provider)
+                        && self.state.filters.matches(item, &item.provider, "")
+                }
+            })
+            .collect();
+        // A temporary outage must not erase the last usable provider list.
+        for provider in snapshot.errors.keys() {
+            snapshot.items.extend(
+                self.snapshot
+                    .items
+                    .iter()
+                    .filter(|i| &i.provider == provider)
+                    .cloned(),
+            );
+        }
+        snapshot
+            .items
+            .sort_by_key(|item| std::cmp::Reverse(item.updated_ms()));
+        self.state.seen.seed(&snapshot.items);
+        self.snapshot = snapshot;
+        self.sessions = sessions;
+        if self.active
+            && let Some(item) = self.item()
+        {
+            self.state.seen.mark(&item);
+        }
+        if !self
+            .snapshot
+            .connections
+            .get(&self.state.source)
+            .is_some_and(|s| s.connected)
+            && let Some(source) = model::PROVIDERS.into_iter().find(|p| {
+                self.snapshot
+                    .connections
+                    .get(*p)
+                    .is_some_and(|s| s.connected)
+            })
+        {
+            self.state.source = source.into();
+        }
+        self.save();
+        let projects = self
+            .snapshot
+            .items
+            .iter()
+            .map(|item| {
+                let project = item.notification_project();
+                (project.id.clone(), project)
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_values()
+            .collect();
+        cx.emit(Event::Activity { projects, changed });
+        cx.emit(Event::ItemsChanged(observation.appeared));
+        if self
+            .item()
+            .is_none_or(|item| item.provider != self.state.source)
+        {
+            self.selected = None;
+            self.details = None;
+            self.document = None;
+            self.comments.clear();
+        }
+        if self.active
+            && self.selected.is_none()
+            && let Some(item) = self.visible_items(cx).first()
+        {
+            self.select(item.key(), cx);
+        }
+        if std::mem::take(&mut self.refresh_queued) {
+            self.refresh(cx);
+        }
         cx.notify();
     }
 
@@ -475,7 +658,10 @@ impl Inbox {
         self.snapshot
             .items
             .iter()
-            .filter(|item| self.state.filters.matches(item, &self.state.source, search))
+            .filter(|item| {
+                self.state.connectors.enabled(&item.provider)
+                    && self.state.filters.matches(item, &self.state.source, search)
+            })
             .cloned()
             .collect()
     }
@@ -491,6 +677,8 @@ impl Inbox {
             return;
         }
         self.selected = Some(key);
+        self.destination_explicit = false;
+        self.reset_destination();
         self.summary_scroll = ListState::new(0, ListAlignment::Top, px(200.));
         self.activity.clear();
         self.activity_revision += 1;
@@ -498,7 +686,6 @@ impl Inbox {
         self.focus_comment = false;
         self.tab = Tab::Summary;
         self.diff = None;
-        self.diff_full = false;
         self.extra_request += 1;
         self.diff_view
             .update(cx, |view, cx| view.set_files(vec![], cx));
@@ -521,7 +708,6 @@ impl Inbox {
         self.comment
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         if let Some(item) = self.item() {
-            self.diff_full = item.kind == "pr" && item.provider == "github";
             if self.active {
                 self.state.seen.mark(&item);
                 self.save();
@@ -533,7 +719,17 @@ impl Inbox {
         self.load_detail(true, cx);
         cx.notify();
     }
+    fn reset_destination(&mut self) {
+        self.start_bot = self
+            .item()
+            .and_then(|item| self.state.default_bots.get(&item.provider))
+            .filter(|id| self.bots.iter().any(|(key, _)| key == id))
+            .map(str::to_owned);
+    }
     fn change_source(&mut self, source: String, cx: &mut Context<Self>) {
+        if !self.state.connectors.enabled(&source) {
+            return;
+        }
         self.state.source = source;
         self.selected = None;
         self.details = None;
@@ -657,11 +853,10 @@ impl Inbox {
         self.extra_request += 1;
         let request = self.extra_request;
         let key = item.key();
-        let full_context = self.diff_full;
         let service = self.service.clone();
         let task = cx.background_executor().spawn(async move {
             if tab == Tab::Code {
-                service.diff_context(&item, full_context).map(|diff| {
+                service.diff(&item).map(|diff| {
                     let files = diff::models(&diff);
                     (Some((diff, files)), None)
                 })
@@ -704,6 +899,18 @@ impl Inbox {
         .detach();
         cx.notify();
     }
+    fn record_self_activity(&mut self, key: String, revision: i64) {
+        // Some providers omit receipt metadata. Keep uncertain revisions audible
+        // rather than swallowing whichever external change happens to arrive next.
+        if revision > 0
+            && self
+                .self_activity
+                .get(&key)
+                .is_none_or(|(old, _)| revision >= *old)
+        {
+            self.self_activity.insert(key, (revision, Instant::now()));
+        }
+    }
     fn post_comment(&mut self, cx: &mut Context<Self>) {
         if self.posting {
             return;
@@ -727,6 +934,14 @@ impl Inbox {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.posting = false;
+                if let Ok(receipt) = &result {
+                    let revision = receipt
+                        .revision
+                        .as_deref()
+                        .map(model::timestamp_ms)
+                        .unwrap_or(0);
+                    this.record_self_activity(key.clone(), revision);
+                }
                 if this.selected.as_ref() != Some(&key) {
                     cx.notify();
                     return;
@@ -755,7 +970,7 @@ impl Inbox {
     }
     fn start(&mut self, cx: &mut Context<Self>) {
         if let Some(mut item) = self.item() {
-            if item.project_path.is_empty() {
+            if self.start_bot.is_none() {
                 item.project_path = self.start_project.to_string_lossy().into_owned();
             }
             let body = self.details.as_ref().map(|d| d.body.as_str()).unwrap_or("");
@@ -769,10 +984,14 @@ impl Inbox {
             cx.emit(Event::StartSession {
                 item: Box::new(item),
                 prompt,
+                bot: self.start_bot.clone(),
             });
         }
     }
     pub(crate) fn open_connection(&mut self, provider: String, cx: &mut Context<Self>) {
+        if !self.state.connectors.enabled(&provider) {
+            return;
+        }
         self.connections_open = false;
         self.connect_error = None;
         let status = self
@@ -785,8 +1004,6 @@ impl Inbox {
             status.site
         } else if !status.url.is_empty() {
             status.url
-        } else if !status.organization.is_empty() {
-            status.organization
         } else if provider == "gitlab" {
             "https://gitlab.com".into()
         } else {
@@ -821,6 +1038,7 @@ impl Inbox {
             return;
         }
         self.connecting = true;
+        self.connection_revision += 1;
         self.connect_error = None;
         let service = self.service.clone();
         let source = provider.clone();
@@ -831,6 +1049,11 @@ impl Inbox {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.connecting = false;
+                if !this.state.connectors.enabled(&provider) {
+                    this.connect_token.update(cx, |input, cx| input.set_text(String::new(), cx));
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok(status) => {
                         let connected = status.connected;
@@ -870,10 +1093,13 @@ impl Inbox {
                 this.acting = false;
                 match result {
                     Ok(item) => {
+                        this.record_self_activity(key.clone(), item.updated_ms());
                         this.action_notice = (merging
                             && !item.state.eq_ignore_ascii_case("merged"))
                         .then(|| "Merge queued or auto-merge enabled.".into());
-                        if let Some(old) = this.snapshot.items.iter_mut().find(|i| i.key() == key) {
+                        if let Some(old) = this.snapshot.items.iter_mut().find(|i| i.key() == key)
+                            && old.updated_ms() <= item.updated_ms()
+                        {
                             *old = item;
                         }
                         this.confirm_action = None;

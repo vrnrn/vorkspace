@@ -32,7 +32,13 @@ fn workspace_action(action: &dyn Action) -> bool {
             name,
             "workspace::FocusNext" | "workspace::FocusPrevious" | "workspace::DismissMenu"
         ))
-        || name == "application::Quit"
+        || matches!(
+            name,
+            "application::Quit"
+                | "image_lightbox::ZoomIn"
+                | "image_lightbox::ZoomOut"
+                | "image_lightbox::ResetZoom"
+        )
 }
 
 /// Keymap owns precedence, disabled bindings, physical-key matching and chords.
@@ -156,7 +162,9 @@ mod tests {
         cx.simulate_keystrokes(window.into(), &format!("{modifier}-b"));
         cx.run_until_parked();
         window
-            .update(cx, |shell, _, _| assert!(!shell.workspace.sidebar_visible))
+            .update(cx, |shell, _, _| {
+                assert!(!shell.workspace.project_rail_open)
+            })
             .unwrap();
         for (binding, stroke, expected) in [
             (None, format!("{modifier}-b"), false),
@@ -191,7 +199,7 @@ mod tests {
             cx.run_until_parked();
             window
                 .update(cx, |shell, _, _| {
-                    assert_eq!(shell.workspace.sidebar_visible, expected)
+                    assert_eq!(shell.workspace.project_rail_open, expected)
                 })
                 .unwrap();
         }

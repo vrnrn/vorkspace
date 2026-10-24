@@ -1,163 +1,19 @@
-// The window's body in either layout. Inset (TitleBar.tsx's inset layout):
-// tabs across the window above a rounded card, the footer below it. Classic
-// (App.tsx without `insetLayout`): a full-height sidebar behind a rule, beside
-// a full-height workspace holding its tabs, body and bordered footer.
-use super::{CORNER_BUTTONS_WIDTH, CORNER_CONTROL_GAP, Shell, titlebar_drag_area};
+// Project rail, conversation workspace, then project tools on the right.
+// Each column owns its header; subscriptions live above the rail settings.
+use super::{CORNER_BUTTONS_WIDTH, Shell};
 use crate::{
     popover::{Anchor, popover},
-    project_tabs::{TabReveal, tab_button},
     resource_pressure::SessionInfo,
-    right_panel::{RightPanel, RightTab},
+    right_panel::RightPanel,
     theme::*,
-    workspace::TitleTab,
 };
 use gpui::{
-    AnyElement, Context, CursorStyle, Entity, MouseButton, MouseDownEvent, Role, StyleRefinement,
-    Window, div, prelude::*, px,
+    AnyElement, Context, CursorStyle, Entity, MouseButton, MouseDownEvent, StyleRefinement, Window,
+    div, prelude::*, px,
 };
 use std::collections::HashMap;
 
-const CARD_RADIUS: f32 = 10.;
-
-// GPUI overflow clips rectangles. Capture outside the bordered frame so the
-// final mask includes its background, border and children at the outer radius.
-// A mask inside the frame only covers its inset content rectangle.
-fn card_corner_mask(begin: bool) -> impl IntoElement {
-    gpui::canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let r = px(CARD_RADIUS)
-                .min(bounds.size.width / 2.)
-                .min(bounds.size.height / 2.);
-            #[cfg(target_os = "macos")]
-            let corners = [
-                bounds.origin,
-                gpui::point(bounds.right() - r, bounds.top()),
-                gpui::point(bounds.right() - r, bounds.bottom() - r),
-                gpui::point(bounds.left(), bounds.bottom() - r),
-            ];
-            #[cfg(target_os = "macos")]
-            for (corner, origin) in corners.into_iter().enumerate() {
-                window.paint_quad(
-                    gpui::fill(gpui::Bounds::new(origin, gpui::size(r, r)), gpui::black())
-                        .border_color(gpui_apple::metal_renderer::corner_clip_marker(
-                            begin,
-                            corner as u8,
-                        )),
-                );
-            }
-            if !begin {
-                // The areas outside the curve belong to the surrounding
-                // chrome, just like the gutters and footer. Restoring the
-                // window's unwashed glass here leaves dark square corners.
-                #[cfg(target_os = "macos")]
-                let outside = inset_chrome_wash();
-                #[cfg(not(target_os = "macos"))]
-                let outside = shell_fill().blend(inset_chrome_wash());
-                let vertices = [
-                    (
-                        bounds.origin,
-                        gpui::point(bounds.left() + r, bounds.top()),
-                        gpui::point(bounds.left(), bounds.top() + r),
-                    ),
-                    (
-                        gpui::point(bounds.right(), bounds.top()),
-                        gpui::point(bounds.right(), bounds.top() + r),
-                        gpui::point(bounds.right() - r, bounds.top()),
-                    ),
-                    (
-                        gpui::point(bounds.right(), bounds.bottom()),
-                        gpui::point(bounds.right() - r, bounds.bottom()),
-                        gpui::point(bounds.right(), bounds.bottom() - r),
-                    ),
-                    (
-                        gpui::point(bounds.left(), bounds.bottom()),
-                        gpui::point(bounds.left(), bounds.bottom() - r),
-                        gpui::point(bounds.left() + r, bounds.bottom()),
-                    ),
-                ];
-                for (corner, start, end) in vertices {
-                    let mut path = gpui::PathBuilder::fill();
-                    path.move_to(corner);
-                    path.line_to(start);
-                    path.arc_to(gpui::point(r, r), px(0.), false, false, end);
-                    path.close();
-                    if let Ok(path) = path.build() {
-                        window.paint_path(path, outside);
-                    }
-                }
-            }
-        },
-    )
-    .absolute()
-    .top_0()
-    .left_0()
-    .size_full()
-}
-
-/// The right panel toggle: chrome_button's 24px square.
-fn panel_button(enabled: bool, dot: bool) -> gpui::Stateful<gpui::Div> {
-    let id = "toggle-right-panel";
-    div()
-        .id(id)
-        .debug_selector(move || id.into())
-        .role(Role::Button)
-        .aria_label(super::TOGGLE_RIGHT_PANEL_LABEL)
-        .group(id)
-        .cursor(CursorStyle::Arrow)
-        .size(px(24.))
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_md()
-        .when(enabled, |d| d.hover(|s| s.bg(content(0.1))))
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(
-            div()
-                .relative()
-                .size(px(14.))
-                .child(
-                    icon("sidebar-right", 14.)
-                        .text_color(content(if enabled { 0.5 } else { 0.25 }))
-                        .when(enabled, |i| {
-                            i.group_hover(id, |s| s.text_color(content(1.)))
-                        }),
-                )
-                .when(dot, |d| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .top(px(-2.))
-                            .right(px(-2.))
-                            .size(px(6.))
-                            .rounded_full()
-                            .bg(accent_color()),
-                    )
-                }),
-        )
-}
-
 impl Shell {
-    /// `Workspace: Toggle Layout` (cmd-shift-l), until the settings view lands.
-    pub(super) fn toggle_layout(&mut self, cx: &mut Context<Self>) {
-        self.workspace.classic_layout = !self.workspace.classic_layout;
-        let classic = self.workspace.classic_layout;
-        if !classic && let Some(view) = self.active_app_view {
-            self.remember_title_tab(TitleTab::App(view));
-        }
-        if let Some(search) = &self.app_search {
-            search.view.update(cx, |v, cx| v.set_classic(classic, cx));
-        }
-        self.usage_footer
-            .update(cx, |footer, cx| footer.set_classic(classic, cx));
-        self.resources
-            .update(cx, |monitor, cx| monitor.set_classic(classic, cx));
-        self.invalidate_chrome(cx);
-        self.fit_sidebar(cx);
-        self.persist(cx);
-        cx.notify();
-    }
     pub(super) fn layout_body(
         &mut self,
         sidebar_width: f32,
@@ -167,125 +23,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let classic = self.workspace.classic_layout;
-        self.usage_footer
-            .update(cx, |footer, cx| footer.set_classic(classic, cx));
         self.resources
-            .update(cx, |monitor, cx| monitor.set_classic(classic, cx));
-        if classic {
-            return vec![self.classic_body(
-                sidebar_width,
-                right_shown,
-                right_width,
-                full,
-                window,
-                cx,
-            )];
-        }
-        let card = self.workspace_content(right_shown, right_width, full, window, cx);
-        let card = div()
-            .id("rounded-main-pane")
-            .debug_selector(|| "rounded-main-pane".into())
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .flex()
-            .overflow_hidden()
-            .child(card_corner_mask(true))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .flex()
-                    .overflow_hidden()
-                    .bg(inset_pane_fill())
-                    .rounded(px(CARD_RADIUS))
-                    .border_1()
-                    .border_color(content(0.08))
-                    .child(card),
-            )
-            .child(card_corner_mask(false));
-        let footer = self.footer_row(cx);
-        vec![
-            div()
-                .h(px(TITLE_BAR_HEIGHT))
-                .flex_shrink_0()
-                .bg(inset_chrome_wash())
-                .child(self.titlebar(window, cx))
-                .into_any_element(),
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .relative()
-                .when(sidebar_width > 0., |d| {
-                    d.child(
-                        // Keep the sidebar still beneath the moving card. Clip
-                        // its covered part so text cannot bleed through the
-                        // translucent workspace or receive covered clicks.
-                        div()
-                            .id("sidebar-frame")
-                            .debug_selector(|| "sidebar-frame".into())
-                            .absolute()
-                            .left_0()
-                            .top_0()
-                            .w(px(sidebar_width))
-                            .h_full()
-                            .overflow_hidden()
-                            .bg(inset_chrome_wash())
-                            .child(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .w(px(self.workspace.sidebar_width))
-                                    .h_full()
-                                    .opacity(self.sidebar_fraction)
-                                    .child(self.sidebar_contents()),
-                            ),
-                    )
-                })
-                .child(div().w(px(sidebar_width)).h_full().flex_shrink_0())
-                .child(
-                    div()
-                        .id("main-pane-frame")
-                        .debug_selector(|| "main-pane-frame".into())
-                        .relative()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .pr_1p5()
-                        .pl(px(6. * (1. - self.sidebar_fraction)))
-                        .child(
-                            div()
-                                .absolute()
-                                .right_0()
-                                .top_0()
-                                .bottom_0()
-                                .w(px(6.))
-                                .bg(inset_chrome_wash()),
-                        )
-                        .when(self.sidebar_fraction < 1., |d| {
-                            d.child(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .bottom_0()
-                                    .w(px(6. * (1. - self.sidebar_fraction)))
-                                    .bg(inset_chrome_wash()),
-                            )
-                        })
-                        .child(card)
-                        .child(footer),
-                )
-                .children(self.sidebar_resize(cx))
-                .into_any_element(),
-        ]
+            .update(cx, |resources, cx| resources.set_classic(true, cx));
+        vec![self.classic_body(sidebar_width, right_shown, right_width, full, window, cx)]
     }
     fn classic_body(
         &mut self,
@@ -296,60 +36,35 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // The right panel runs full height beside the workspace column, so
-        // opening it pushes the tabs, body and footer together.
         let card = self.workspace_content(false, right_width, full, window, cx);
+        // Project tools and Bot details occupy the same right-hand edge and
+        // share a saved width, while retaining their own visibility and content.
         let panel = self
             .right_panel
             .clone()
             .filter(|_| right_shown && self.settings.is_none())
             .map(|panel| self.right_panel_frame(panel, right_width, full, cx));
-        let footer = self.footer_row(cx);
         let tab_bar = self.titlebar(window, cx);
         let navigation = self.navigation(cx);
+        let rail_width = self.classic_rail_width();
         let corner = self
             .settings
             .is_none()
             .then(|| self.panel_toggle(window, cx));
+        let header = self.classic_workspace_header(cx);
         div()
             .flex_1()
             .min_h_0()
             .flex()
             .relative()
-            .when(sidebar_width > 0., |d| {
+            .when(rail_width > 0., |d| {
                 d.child(
-                    div()
-                        .id("sidebar-frame")
-                        .debug_selector(|| "sidebar-frame".into())
-                        .relative()
-                        .w(px(sidebar_width))
-                        .h_full()
-                        .flex_shrink_0()
-                        .overflow_hidden()
-                        .border_r_1()
-                        .border_color(crate::right_panel::stroke())
-                        .child(
-                            // Full width while it slides; the frame clips it.
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .w(px(self.workspace.sidebar_width))
-                                .h_full()
-                                .flex()
-                                .flex_col()
-                                .opacity(self.sidebar_fraction)
-                                .child(
-                                    // The traffic lights head the sidebar, where
-                                    // the window's top is; the toggle floats
-                                    // above them (see below).
-                                    titlebar_drag_area()
-                                        .w_full()
-                                        .h(px(TITLE_BAR_HEIGHT))
-                                        .flex_shrink_0(),
-                                )
-                                .child(div().flex_1().min_h_0().child(self.sidebar_contents())),
-                        ),
+                    self.project_rail_frame.clone().cached(
+                        StyleRefinement::default()
+                            .w(px(rail_width))
+                            .h_full()
+                            .flex_shrink_0(),
+                    ),
                 )
             })
             .child(
@@ -363,174 +78,78 @@ impl Shell {
                     .flex_col()
                     .bg(pane_fill())
                     .child(tab_bar)
-                    .child(card)
-                    .child(
-                        footer
-                            .h(px(28.))
-                            .px_3()
-                            .border_t_1()
-                            .border_color(crate::right_panel::stroke()),
-                    ),
+                    .child(card),
             )
+            .when(sidebar_width > 0., |d| {
+                d.child(
+                    div()
+                        .id("sidebar-frame")
+                        .debug_selector(|| "sidebar-frame".into())
+                        .relative()
+                        .w(px(sidebar_width))
+                        .h_full()
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .border_l_1()
+                        .border_color(crate::right_panel::stroke())
+                        .child(
+                            div()
+                                .absolute()
+                                .right_0()
+                                .top_0()
+                                .w(px(self.workspace.right_panel_width))
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                .opacity(self.sidebar_fraction)
+                                .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0().child(header))
+                                .child(div().flex_1().min_h_0().child(self.sidebar_contents())),
+                        ),
+                )
+            })
             .children(self.sidebar_resize(cx))
             .children(panel.map(|panel| div().h_full().bg(pane_fill()).child(panel)))
+            .child(div().absolute().top_0().left_0().child(navigation))
             .child(
-                // The traffic lights, toggle and arrows ride above the sidebar's
-                // header as in the inset title bar: the toggle holds still, and
-                // the arrows sit at the open sidebar's edge or after the toggle.
-                div().absolute().top_0().left_0().child(navigation),
-            )
-            .child(
-                // The right panel toggle holds the window's corner too, above
-                // the strip or an open panel's tab row.
                 div()
                     .absolute()
                     .top_0()
-                    .right_0()
+                    .right(px(sidebar_width))
                     .h(px(TITLE_BAR_HEIGHT))
                     .children(corner),
             )
             .into_any_element()
     }
-    /// Classic: the corner's buttons, `pr-3` from the edge.
+    /// Bot details retain the window corner; project tools have their own header.
     pub(super) fn corner_room(&self, cx: &gpui::App) -> f32 {
-        if self.bot_active(cx) {
-            return if self.corner_tabs_shown() {
-                let minimum = if self.workspace.right_panel_width >= 312. {
-                    312.
-                } else {
-                    252.
-                };
-                self.right_drawn.max(minimum)
-            } else {
-                6. + CORNER_BUTTONS_WIDTH + 12.
-            };
+        if self.bot_details_active(cx) {
+            if self.workspace.right_panel_open && !self.app_view_open() {
+                return self
+                    .right_drawn
+                    .max(if self.workspace.right_panel_width >= 312. {
+                        312.
+                    } else {
+                        252.
+                    });
+            }
+            return 6. + CORNER_BUTTONS_WIDTH + 12.;
         }
-        if !self.git.read(cx).available() {
-            return 6. + 24. + 12.;
-        }
-        // The toggle and the compact tool tabs, including the open label's padding.
-        let tabs = if self.corner_tabs_shown() {
-            self.project_tabs_width(cx) + 6.
-        } else {
-            0.
-        };
-        6. + tabs + self.diff_stat_room(cx) + CORNER_BUTTONS_WIDTH + 12.
+        6. + self.diff_stat_room(cx) + 24. + 12.
     }
-    fn corner_tabs_shown(&self) -> bool {
-        self.workspace.right_panel_open
-            && !self.app_view_open()
-            && self.settings.is_none()
-            && self.app_search.is_none()
-    }
-    /// Classic: the panel toggle holds the corner while Explorer, Changes and
-    /// History start at the panel's left edge. The open tab names itself.
-    pub(super) fn classic_corner(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let row = div()
+    pub(super) fn classic_corner(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
             .h(px(TITLE_BAR_HEIGHT))
             .flex_shrink_0()
             .flex()
-            .items_center();
-        if !self.git.read(cx).available() {
-            return row
-                .pl_1p5()
-                .pr_3()
-                .child(self.file_search_button(cx))
-                .into_any_element();
-        }
-        let panel_off = self.app_view_open();
-        let changes = !panel_off && self.git.read(cx).has_changes();
-        let open = self.corner_tabs_shown();
-        let current = self
-            .right_panel
-            .as_ref()
-            .map_or(self.workspace.right_panel_tab, |p| p.read(cx).tab());
-        // How far the open tab's label has unfolded, and the old one folded.
-        let progress = self
-            .corner_reveal
-            .as_ref()
-            .and_then(|reveal| reveal.progress(current, window, cx));
-        let tabs = [
-            (
-                "right-panel-explorer",
-                "Explorer",
-                "file-script",
-                RightTab::Files,
-            ),
-            (
-                "right-panel-changes",
-                "Changes",
-                "git-branch",
-                RightTab::Changes,
-            ),
-            ("right-panel-history", "History", "clock", RightTab::Graph),
-        ];
-        row.pl_1p5()
+            .items_center()
+            .pl_1p5()
             .pr_3()
-            .when(open, |d| {
-                // Follow the panel's leading edge, reserving enough room for
-                // the controls while the panel is still sliding open.
-                d.w(px(self.right_drawn.max(self.corner_room(cx))))
-                    .child(
-                        div()
-                            .id("right-panel-corner-tabs")
-                            .role(Role::TabList)
-                            .aria_label("Project")
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .gap(px(2.))
-                            .mr(px(6.))
-                            .children(tabs.into_iter().map(|(id, label, path, tab)| {
-                                let selected = tab == current;
-                                let unfolded = match progress {
-                                    Some((_, p)) if selected => p,
-                                    Some((closing, p)) if tab == closing => 1. - p,
-                                    _ if selected => 1.,
-                                    _ => 0.,
-                                };
-                                tab_button(
-                                    id,
-                                    crate::project_tabs::TabLabel::from(label).max_width(
-                                        crate::right_panel::tab_label_width(
-                                            self.project_tabs_width(cx),
-                                        ),
-                                    ),
-                                    path,
-                                    selected,
-                                    tab == RightTab::Changes && changes && !selected,
-                                    unfolded,
-                                    window,
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        let Some(panel) = this.right_panel.clone() else {
-                                            return;
-                                        };
-                                        let closing = panel.read(cx).tab();
-                                        if closing == tab {
-                                            return;
-                                        }
-                                        this.corner_reveal = Some(TabReveal::new(tab, closing));
-                                        panel.update(cx, |p, cx| p.select(tab, cx));
-                                        this.invalidate_chrome(cx);
-                                        cx.notify();
-                                    },
-                                ))
-                            })),
-                    )
-                    .child(titlebar_drag_area().flex_1().min_w_0())
-            })
             .children(self.project_diff_stat(cx))
-            .child(self.file_search_button(cx).mx(px(CORNER_CONTROL_GAP)))
-            .child(
-                // Closed, the toggle carries the changes dot itself.
-                panel_button(!panel_off, !open && changes).when(!panel_off, |d| {
-                    d.on_click(
-                        cx.listener(|this, _, window, cx| this.toggle_right_panel(window, cx)),
-                    )
-                }),
-            )
+            .child(self.file_search_button(cx))
             .into_any_element()
     }
     fn sidebar_contents(&self) -> AnyElement {
@@ -544,33 +163,31 @@ impl Shell {
                 .clone()
                 .cached(
                     StyleRefinement::default()
-                        .w(px(self.workspace.sidebar_width))
+                        .w(px(self.workspace.right_panel_width))
                         .h_full(),
                 )
                 .into_any_element()
         }
     }
     fn sidebar_resize(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        (self.workspace.sidebar_visible && self.sidebar_slide.is_none()).then(|| {
-            // The classic sidebar owns its right rule; the inset workspace
-            // owns the rule just beyond the sidebar's edge.
-            let border = self.workspace.sidebar_width
-                + if self.workspace.classic_layout {
-                    -0.5
-                } else {
-                    0.5
-                };
+        (self.workspace.sidebar_visible
+            && self.sidebar_fraction > 0.
+            && self.sidebar_slide.is_none())
+        .then(|| {
+            // Drag the left separator of the shared right-hand sidebar.
+            let border = self.workspace.right_panel_width - 0.5;
             div()
                 .id("sidebar-resize")
+                .debug_selector(|| "sidebar-resize".into())
                 .absolute()
-                .left(px(border - 2.))
+                .right(px(border - 2.))
                 .w(px(4.))
                 .h_full()
                 .cursor(CursorStyle::ResizeLeftRight)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                        this.resize = Some((event.position.x, this.workspace.sidebar_width));
+                        this.resize = Some((event.position.x, this.workspace.right_panel_width));
                         cx.stop_propagation();
                     }),
                 )
@@ -623,9 +240,9 @@ impl Shell {
                         // Every project lands on a blank session, as in
                         // vorkspace; this is empty only while one is created.
                         .child({
-                            if let Some(bots) =
-                                self.bots.clone().filter(|m| m.read(cx).active.is_some())
-                            {
+                            if let Some(bots) = self.bots.clone().filter(|m| {
+                                m.read(cx).active.is_some() || m.read(cx).classic_channels_open()
+                            }) {
                                 let session = bots.read(cx).active_notification_session(cx);
                                 let linked = session.and_then(|id| self.linked_notice(id, cx));
                                 div()
@@ -652,51 +269,6 @@ impl Shell {
             .when_some(panel, |d, panel| {
                 d.child(self.right_panel_frame(panel, right_width, full, cx))
             })
-    }
-    /// The usage chips with the terminal controls at the far end.
-    fn footer_row(&mut self, cx: &mut Context<Self>) -> gpui::Div {
-        let height = if self.workspace.classic_layout {
-            28.
-        } else {
-            30.
-        };
-        div()
-            .w_full()
-            .h(px(30.))
-            .flex_shrink_0()
-            .when(!self.workspace.classic_layout, |d| {
-                d.overflow_hidden().bg(inset_chrome_wash())
-            })
-            .flex()
-            .items_center()
-            .child(
-                self.usage_footer
-                    .clone()
-                    .cached(StyleRefinement::default().flex_1().min_w_0().h(px(height))),
-            )
-            .children(self.pressure_chip(cx))
-            .children(self.terminal_footer(cx))
-    }
-    /// ResourcePressureNotice's chip, just before the terminal controls.
-    fn pressure_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.resources.read(cx).chip_shown() {
-            return None;
-        }
-        let classic = self.workspace.classic_layout;
-        // The terminal group sits 8px on; alone, the chip takes its inset margin.
-        let alone = self.app_view_open() || self.workspace.project.is_empty();
-        Some(
-            div()
-                .flex_shrink_0()
-                .map(|d| match (classic, alone) {
-                    (true, true) => d,
-                    (true, false) => d.mr(px(8.)),
-                    (false, true) => d.mr(px(6.)).pb(px(2.)),
-                    (false, false) => d.mr(px(8.)).pb(px(2.)),
-                })
-                .child(self.resources.clone())
-                .into_any_element(),
-        )
     }
     /// Modal.tsx at size `sm` with `fitViewport`: 420px, centred.
     pub(super) fn resource_modal(
@@ -769,7 +341,7 @@ mod tests {
             .update(cx, |shell, w, cx| {
                 let manager = shell.bot_manager();
                 manager.update(cx, |m, cx| {
-                    m.create(Vec::new(), w, cx);
+                    m.create_named(Vec::new(), w, cx);
                     m.dismiss_settings(w, cx);
                 });
                 let id = manager.read(cx).active.clone().unwrap();
@@ -781,209 +353,356 @@ mod tests {
     }
 
     #[gpui::test]
-    fn project_tabs_abbreviate_then_become_icons_without_losing_header_controls(
-        cx: &mut TestAppContext,
-    ) {
+    fn channels_after_bot_details_keep_a_plain_header_and_full_tab_width(cx: &mut TestAppContext) {
         cx.update(|cx| cx.set_reduce_motion(true));
-        let (window, _, _) = window(cx);
+        let (window, manager, _, _) = mixed_window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
+        visual.run_until_parked();
+        let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
+        visual.simulate_click(toggle.center(), Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("bot-overview-panel").is_some());
+        assert!(visual.debug_bounds("bot-overview-tabs").is_some());
+
+        let channels = visual.debug_bounds("classic-add-channel").unwrap();
+        visual.simulate_click(channels.center(), Default::default());
+        visual.run_until_parked();
+        assert!(manager.read_with(visual, |manager, _| manager.classic_channels_open()));
+        assert!(visual.debug_bounds("right-panel-frame").is_none());
+        assert!(visual.debug_bounds("bot-overview-tabs").is_none());
+        assert!(visual.debug_bounds("toggle-right-panel").is_none());
         window
-            .update(cx, |shell, w, cx| {
-                shell.toggle_right_panel(w, cx);
-                shell.git.update(cx, |git, cx| {
-                    git.stats = Some(vorkspace_core::scm::DiffStats {
-                        files: 550,
-                        additions: 246_137,
-                        deletions: 11_081,
-                    });
-                    cx.notify();
-                });
+            .update(visual, |shell, window, cx| {
+                assert!(
+                    shell.workspace.right_panel_open,
+                    "the Bot's remembered preference is retained"
+                );
+                assert_eq!(shell.right_drawn, 0.);
+                assert_eq!(shell.corner_room(cx), 42.);
+                assert_eq!(
+                    shell.tabs_width(window, cx),
+                    1600. - shell.classic_rail_width() - 42.
+                );
             })
             .unwrap();
-        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        for classic in [false, true] {
-            let selectors = if classic {
-                [
-                    "right-panel-explorer",
-                    "right-panel-changes",
-                    "right-panel-history",
-                ]
-            } else {
-                [
-                    "right-panel-tab-Explorer",
-                    "right-panel-tab-Changes",
-                    "right-panel-tab-History",
-                ]
-            };
-            let label_selector = Box::leak(format!("{}-label", selectors[1]).into_boxed_str());
-            let mut full_label_width = None;
-            for width in [420., 312., 280., 260., 220., 420.] {
-                window
-                    .update(visual, |shell, _, cx| {
-                        shell.workspace.classic_layout = classic;
-                        shell.workspace.right_panel_width = width;
-                        shell
-                            .right_panel
-                            .as_ref()
-                            .unwrap()
-                            .update(cx, |panel, cx| panel.select(RightTab::Changes, cx));
-                        shell.invalidate_chrome(cx);
-                        cx.notify();
-                    })
-                    .unwrap();
-                visual.run_until_parked();
-                visual.refresh().unwrap();
-                let tabs = selectors.map(|selector| visual.debug_bounds(selector).unwrap());
-                let stats = visual.debug_bounds("project-diff-stat").unwrap();
-                let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-                let search = visual.debug_bounds("titlebar-file-search").unwrap();
-                assert!(tabs[0].right() <= tabs[1].left());
-                assert!(tabs[1].right() <= tabs[2].left());
-                assert!(tabs[2].right() <= stats.left());
-                assert!(stats.right() <= search.left());
-                assert!(search.right() <= toggle.left());
-                assert_eq!(search.left() - stats.right(), px(CORNER_CONTROL_GAP));
-                assert_eq!(toggle.left() - search.right(), px(CORNER_CONTROL_GAP));
-                assert_eq!(toggle.size.width, px(24.));
-                if width == 420. {
-                    let label = visual.debug_bounds(label_selector).unwrap();
-                    if let Some(full_width) = full_label_width {
-                        assert_eq!(label.size.width, full_width);
-                    }
-                    full_label_width = Some(label.size.width);
-                } else if width == 312. {
-                    let label = visual.debug_bounds(label_selector).unwrap();
-                    assert!(label.size.width > px(0.));
-                    assert!(label.size.width < full_label_width.unwrap());
-                } else {
-                    assert!(visual.debug_bounds(label_selector).is_none());
-                    assert!(tabs.iter().all(|tab| tab.size.width == px(26.)));
-                    // The icon keeps its action after the label disappears.
-                    visual.simulate_click(tabs[2].center(), Default::default());
-                    visual.run_until_parked();
-                    window
-                        .update(visual, |shell, _, cx| {
-                            assert_eq!(
-                                shell.right_panel.as_ref().unwrap().read(cx).tab(),
-                                RightTab::Graph
-                            )
-                        })
-                        .unwrap();
-                }
-            }
-        }
     }
 
     #[gpui::test]
-    fn right_sidebar_width_and_visibility_follow_both_tab_types_and_layouts(
+    fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
         cx: &mut TestAppContext,
     ) {
         cx.update(|cx| cx.set_reduce_motion(true));
         let (window, manager, bot, session) = mixed_window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        for classic in [false, true] {
+        visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
+        window
+            .update(visual, |shell, window, cx| {
+                shell.open(session, window, cx);
+                shell.set_sidebar_visible(true, cx);
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let sash = visual.debug_bounds("sidebar-resize").unwrap().center();
+        let width = window
+            .update(visual, |shell, _, _| shell.workspace.right_panel_width)
+            .unwrap();
+        let moved = sash + gpui::point(px(20.), px(0.));
+        visual.simulate_mouse_down(sash, MouseButton::Left, Default::default());
+        visual.simulate_mouse_move(moved, MouseButton::Left, Default::default());
+        visual.simulate_mouse_up(moved, MouseButton::Left, Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                assert_eq!(shell.workspace.right_panel_width, width - 20.)
+            })
+            .unwrap();
+
+        for surface in ["Inbox", "Notes", "Search", "Bot", "Settings", "Channels"] {
             window
-                .update(visual, |shell, _, cx| {
-                    shell.workspace.classic_layout = classic;
-                    assert!(
-                        !shell.workspace.right_panel_open,
-                        "opening a Bot respects the session's closed sidebar"
-                    );
+                .update(visual, |shell, window, cx| {
+                    if shell.settings.is_some() {
+                        shell.close_settings(window, cx);
+                    }
+                    shell.open(session, window, cx);
+                    shell.set_sidebar_visible(true, cx);
+                    match surface {
+                        "Inbox" => shell.open_inbox(window, cx),
+                        "Notes" => shell.open_notes(window, cx),
+                        "Search" => shell.open_app_search(window, cx),
+                        "Bot" => manager.update(cx, |manager, cx| manager.open(&bot, window, cx)),
+                        "Settings" => {
+                            shell.open_settings(crate::settings::Section::General, window, cx)
+                        }
+                        "Channels" => (),
+                        _ => unreachable!(),
+                    }
                     cx.notify();
                 })
                 .unwrap();
             visual.run_until_parked();
-            assert!(visual.debug_bounds("right-panel-frame").is_none());
-            let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-            visual.simulate_click(toggle.center(), Default::default());
-            visual.run_until_parked();
-            assert!(visual.debug_bounds("bot-overview-panel").is_some());
-            let frame = visual.debug_bounds("right-panel-frame").unwrap();
-            let bounds = visual.debug_bounds("right-panel-resize").unwrap();
-            assert_eq!(bounds.size.width, px(6.));
-            assert!((bounds.center().x - frame.left() - px(0.5)).abs() <= px(0.5));
-            // Both halves of the transparent grab area must receive presses,
-            // including the half outside the panel's clipped contents.
-            for x in [bounds.left() + px(0.5), bounds.right() - px(0.5)] {
-                let point = gpui::point(x, bounds.center().y);
-                visual.simulate_mouse_down(point, MouseButton::Left, Default::default());
-                window
-                    .update(visual, |shell, _, _| assert!(shell.right_resize.is_some()))
-                    .unwrap();
-                visual.simulate_mouse_up(point, MouseButton::Left, Default::default());
+            if surface == "Channels" {
+                let add = visual.debug_bounds("classic-add-channel").unwrap();
+                visual.simulate_click(add.center(), Default::default());
                 visual.run_until_parked();
             }
-            let handle = visual.debug_bounds("right-panel-resize").unwrap().center();
-            let end = handle - gpui::point(px(30.), px(0.));
-            visual.simulate_mouse_down(handle, MouseButton::Left, Default::default());
-            visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
-            visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
-            visual.run_until_parked();
-            let expanded = window
-                .update(visual, |shell, _, _| shell.workspace.right_panel_width)
+            assert!(visual.debug_bounds("sidebar-frame").is_none(), "{surface}");
+            assert!(visual.debug_bounds("sidebar-resize").is_none(), "{surface}");
+            let (old_sash, before) = window
+                .update(visual, |shell, _, _| {
+                    (
+                        gpui::point(
+                            px(shell.viewport_width - shell.workspace.right_panel_width + 0.5),
+                            px(500.),
+                        ),
+                        shell.workspace.right_panel_width,
+                    )
+                })
                 .unwrap();
-            let handle = visual.debug_bounds("right-panel-resize").unwrap().center();
-            let end = handle + gpui::point(px(30.), px(0.));
-            visual.simulate_mouse_down(handle, MouseButton::Left, Default::default());
-            visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
-            // The pointer is now over a Bot detail layer that occludes mouse
-            // events. Shrinking and releasing must still reach the shell.
+            visual.simulate_mouse_down(old_sash, MouseButton::Left, Default::default());
             window
                 .update(visual, |shell, _, _| {
-                    assert_eq!(shell.workspace.right_panel_width, expanded - 30.);
+                    assert!(shell.resize.is_none(), "{surface}")
                 })
                 .unwrap();
-            visual.simulate_mouse_up(
-                end + gpui::point(px(20.), px(0.)),
-                MouseButton::Left,
-                Default::default(),
-            );
+            let moved = old_sash + gpui::point(px(30.), px(0.));
+            visual.simulate_mouse_move(moved, MouseButton::Left, Default::default());
+            visual.simulate_mouse_up(moved, MouseButton::Left, Default::default());
             visual.run_until_parked();
-            let bot_bounds = visual.debug_bounds("right-panel-frame").unwrap();
-            let width = window
-                .update(visual, |shell, w, cx| {
-                    assert!(shell.right_resize.is_none());
-                    let width = shell.workspace.right_panel_width;
-                    assert_eq!(bot_bounds.size.width, px(width));
-                    shell.open(session, w, cx);
-                    width
-                })
-                .unwrap();
-            visual.run_until_parked();
-            assert_eq!(
-                visual.debug_bounds("right-panel-frame").unwrap(),
-                bot_bounds
-            );
-            assert!(visual.debug_bounds("bot-overview-panel").is_none());
-            let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-            visual.simulate_click(toggle.center(), Default::default());
-            visual.run_until_parked();
-            window
-                .update(visual, |_, w, cx| {
-                    manager.update(cx, |m, cx| m.open(&bot, w, cx))
-                })
-                .unwrap();
-            visual.run_until_parked();
-            assert!(visual.debug_bounds("right-panel-frame").is_none());
             window
                 .update(visual, |shell, _, _| {
-                    assert_eq!(shell.workspace.right_panel_width, width);
-                    let saved = crate::runtime::locked(&shell.store)
-                        .unwrap()
-                        .ui_state()
-                        .unwrap()
-                        .unwrap();
-                    let saved: crate::workspace::Workspace = serde_json::from_str(&saved).unwrap();
-                    assert_eq!(saved.right_panel_width, width);
-                    assert!(!saved.right_panel_open);
+                    assert_eq!(shell.workspace.right_panel_width, before, "{surface}")
                 })
                 .unwrap();
         }
     }
 
     #[gpui::test]
-    fn switching_tabs_keeps_the_same_sidebar_spring_and_clipped_contents(cx: &mut TestAppContext) {
+    fn original_workspace_tabs_fit_sidebar_widths_and_keep_their_actions(cx: &mut TestAppContext) {
+        use crate::workspace::SidebarTab;
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (window, _, _) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1600.), px(900.)));
+        for width in [200., 260., 420., 560., 260.] {
+            window
+                .update(visual, |shell, _, cx| {
+                    shell.workspace.right_panel_width = width;
+                    shell.invalidate_chrome(cx);
+                    cx.notify();
+                })
+                .unwrap();
+            visual.run_until_parked();
+            let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+            let selectors = [
+                "classic-tab-sessions",
+                "classic-tab-explorer",
+                "classic-tab-changes",
+            ];
+            let tabs = selectors.map(|selector| visual.debug_bounds(selector).unwrap());
+            assert_eq!(sidebar.size.width, px(width));
+            assert!(tabs[0].left() >= sidebar.left());
+            assert!(tabs[0].right() <= tabs[1].left());
+            assert!(tabs[1].right() <= tabs[2].left());
+            assert!(tabs[2].right() <= sidebar.right());
+            assert!(tabs.iter().all(|tab| tab.size.width > px(0.)));
+            assert!(visual.debug_bounds("right-panel-frame").is_none());
+            for (index, expected) in [SidebarTab::Sessions, SidebarTab::Files, SidebarTab::Changes]
+                .into_iter()
+                .enumerate()
+            {
+                visual.simulate_click(tabs[index].center(), Default::default());
+                visual.run_until_parked();
+                window
+                    .update(visual, |shell, _, _| {
+                        assert_eq!(shell.workspace.sidebar_tab(), expected)
+                    })
+                    .unwrap();
+            }
+            let history = visual.debug_bounds("classic-source-history").unwrap();
+            visual.simulate_click(history.center(), Default::default());
+            visual.run_until_parked();
+            window
+                .update(visual, |shell, _, _| {
+                    assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Graph)
+                })
+                .unwrap();
+        }
+    }
+    #[gpui::test]
+    fn bot_and_session_sidebars_share_width_while_retaining_their_own_visibility(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::workspace::SidebarTab;
+        cx.update(|cx| cx.set_reduce_motion(true));
         let (window, manager, bot, session) = mixed_window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("right-panel-frame").is_none());
+        let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
+        visual.simulate_click(toggle.center(), Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("bot-overview-panel").is_some());
+        let frame = visual.debug_bounds("right-panel-frame").unwrap();
+        let bounds = visual.debug_bounds("right-panel-resize").unwrap();
+        assert_eq!(bounds.size.width, px(6.));
+        assert!((bounds.center().x - frame.left() - px(0.5)).abs() <= px(0.5));
+        for x in [bounds.left() + px(0.5), bounds.right() - px(0.5)] {
+            let point = gpui::point(x, bounds.center().y);
+            visual.simulate_mouse_down(point, MouseButton::Left, Default::default());
+            window
+                .update(visual, |shell, _, _| assert!(shell.right_resize.is_some()))
+                .unwrap();
+            visual.simulate_mouse_up(point, MouseButton::Left, Default::default());
+            visual.run_until_parked();
+        }
+        let handle = visual.debug_bounds("right-panel-resize").unwrap().center();
+        let end = handle - gpui::point(px(30.), px(0.));
+        visual.simulate_mouse_down(handle, MouseButton::Left, Default::default());
+        visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
+        visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
+        visual.run_until_parked();
+        let expanded = window
+            .update(visual, |shell, _, _| shell.workspace.right_panel_width)
+            .unwrap();
+        let handle = visual.debug_bounds("right-panel-resize").unwrap().center();
+        let end = handle + gpui::point(px(30.), px(0.));
+        visual.simulate_mouse_down(handle, MouseButton::Left, Default::default());
+        visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
+        window
+            .update(visual, |shell, _, _| {
+                assert_eq!(shell.workspace.right_panel_width, expanded - 30.)
+            })
+            .unwrap();
+        visual.simulate_mouse_up(
+            end + gpui::point(px(20.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        visual.run_until_parked();
+        let width = window
+            .update(visual, |shell, w, cx| {
+                assert!(shell.right_resize.is_none());
+                cx.set_reduce_motion(false);
+                let width = shell.workspace.right_panel_width;
+                shell.open(session, w, cx);
+                shell.select_classic_sidebar(SidebarTab::Files, w, cx);
+                width
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("right-panel-frame").is_none());
+        assert!(visual.debug_bounds("bot-overview-panel").is_none());
+        let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        let explorer = visual.debug_bounds("explorer-header").unwrap();
+        assert_eq!(sidebar.size.width, px(width));
+        assert_eq!(sidebar.right(), px(1600.));
+        assert!(explorer.left() >= sidebar.left() && explorer.right() <= sidebar.right());
+        let handle = visual.debug_bounds("sidebar-resize").unwrap().center();
+        let end = handle - gpui::point(px(40.), px(0.));
+        visual.simulate_mouse_down(handle, MouseButton::Left, Default::default());
+        visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
+        visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
+        visual.run_until_parked();
+        let width = width + 40.;
+        let session_sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        assert_eq!(session_sidebar.size.width, px(width));
+        window
+            .update(visual, |_, w, cx| {
+                manager.update(cx, |manager, cx| manager.open(&bot, w, cx))
+            })
+            .unwrap();
+        visual.run_until_parked();
+        for _ in 0..3 {
+            assert_eq!(
+                visual.debug_bounds("right-panel-frame").unwrap(),
+                session_sidebar
+            );
+            visual
+                .update_window(window.into(), |_, w, cx| w.simulate_next_frame(cx))
+                .unwrap();
+        }
+        visual.update(|_, cx| cx.set_reduce_motion(true));
+        // One sidebar fits at this size. Counting the hidden session sidebar
+        // alongside Bot details must not change its visibility preference.
+        visual.simulate_resize(gpui::size(px(1050.), px(1000.)));
+        window
+            .update(visual, |shell, w, cx| {
+                assert!(shell.workspace.sidebar_visible);
+                shell.open(session, w, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let session_sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        assert_eq!(session_sidebar.size.width, px(width));
+        window
+            .update(visual, |_, w, cx| {
+                manager.update(cx, |manager, cx| manager.open(&bot, w, cx));
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert_eq!(
+            visual.debug_bounds("right-panel-frame").unwrap(),
+            session_sidebar
+        );
+        let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
+        visual.simulate_click(toggle.center(), Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("right-panel-frame").is_none());
+        window
+            .update(visual, |shell, _, _| {
+                assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Files);
+                assert_eq!(shell.workspace.right_panel_width, width);
+                let saved = crate::runtime::locked(&shell.store)
+                    .unwrap()
+                    .ui_state()
+                    .unwrap()
+                    .unwrap();
+                let saved: crate::workspace::Workspace = serde_json::from_str(&saved).unwrap();
+                assert_eq!(saved.right_panel_width, width);
+                assert!(!saved.right_panel_open);
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn session_sidebar_peeks_from_the_right_and_never_over_a_bot(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (window, manager, bot, session) = mixed_window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
+        window
+            .update(visual, |shell, window, cx| {
+                shell.open(session, window, cx);
+                shell.set_sidebar_visible(false, cx);
+                shell.set_peek(true, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let peek = visual.debug_bounds("sidebar-peek").unwrap();
+        assert_eq!(peek.right(), px(1594.));
+        assert_eq!(peek.size.width, px(crate::right_panel::WIDTH_DEFAULT));
+        window
+            .update(visual, |_, window, cx| {
+                manager.update(cx, |manager, cx| manager.open(&bot, window, cx));
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("sidebar-peek").is_none());
+    }
+    #[gpui::test]
+    fn switching_bots_keeps_the_same_details_spring_and_clipped_contents(cx: &mut TestAppContext) {
+        let (window, manager, bot, _) = mixed_window(cx);
+        let other = window
+            .update(cx, |_, window, cx| {
+                manager.update(cx, |manager, cx| {
+                    manager.create_named(Vec::new(), window, cx);
+                    manager.dismiss_settings(window, cx);
+                    manager.active.clone().unwrap()
+                })
+            })
+            .unwrap();
         cx.update(|cx| cx.set_reduce_motion(false));
         window
             .update(cx, |shell, w, cx| shell.toggle_right_panel(w, cx))
@@ -992,14 +711,15 @@ mod tests {
             window
                 .update(cx, |shell, w, cx| {
                     let slide = shell.right_slide.as_ref().unwrap();
-                    slide.elapsed(Duration::from_millis(ms));
+                    slide.freeze_elapsed(Duration::from_millis(ms));
                     let now = Instant::now();
                     let before = slide.at(now);
-                    if shell.bot_active(cx) {
-                        shell.open(session, w, cx);
+                    let next = if manager.read(cx).active.as_deref() == Some(bot.as_str()) {
+                        &other
                     } else {
-                        manager.update(cx, |m, cx| m.open(&bot, w, cx));
-                    }
+                        &bot
+                    };
+                    manager.update(cx, |manager, cx| manager.open(next, w, cx));
                     assert_eq!(
                         shell.right_slide.as_ref().unwrap().at(now),
                         before,
@@ -1033,7 +753,7 @@ mod tests {
                     .as_ref()
                     .unwrap()
                     .elapsed(Duration::from_millis(45));
-                shell.open(session, w, cx);
+                manager.update(cx, |manager, cx| manager.open(&other, w, cx));
                 shell.toggle_right_panel(w, cx);
                 assert!(shell.workspace.right_panel_open);
                 assert_eq!(
