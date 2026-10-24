@@ -1,6 +1,40 @@
 // Concatenated with Clipboard.swift by the tooling test, outside the source tree.
 // No live clipboard is read or written; the deadline is controlled deterministically.
 extension ClipboardMenu {
+    fileprivate func verifyStatusClickDismissal() {
+        statusFrame = NSRect(x: 100, y: 100, width: 40, height: 24)
+        visible = true
+        let click = NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 110, y: 110), modifierFlags: [], timestamp: 1,
+            windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+        outsideClick(click) // Status icons can be hosted outside this process.
+        assert(!visible)
+        windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        assert(!acceptToggle(statusClick: true), "The forwarded status action must not reopen the menu")
+        assert(entries.isEmpty && pending.isEmpty, "Rejected toggles must leave native presentation copies released")
+        assert(acceptToggle(statusClick: true), "The next click must not be debounced")
+        assert(localEvent(click) === click, "A later click on a closed menu must reach the status button normally")
+        // Clicks inside the popup still reach its controls. Other windows close
+        // it without consuming the click intended for that window.
+        visible = true
+        let inside = NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 1,
+            windowNumber: panel.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 1)!
+        assert(localEvent(inside) === inside && visible)
+        let outside = NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 200, y: 200), modifierFlags: [], timestamp: 2,
+            windowNumber: 0, context: nil, eventNumber: 3, clickCount: 1, pressure: 1)!
+        assert(localEvent(outside) === outside && !visible)
+        assert(acceptToggle(statusClick: true), "An unrelated dismissal must not suppress the next toggle")
+        // Disabled recording uses the same dismissal path without a timer or
+        // suppressing any subsequent keyboard-triggered toggle.
+        end(message: "", enabled: false)
+        visible = true
+        assert(localEvent(click) === click && !visible)
+        assert(!acceptToggle(statusClick: true))
+        visible = true
+        outsideClick(click)
+        assert(acceptToggle(statusClick: false), "Keyboard toggles must be accepted while the status action is pending")
+        assert(!acceptToggle(statusClick: true), "A delayed status action must not undo a subsequent keyboard toggle")
+        end(message: "", enabled: true)
+    }
     fileprivate func verifyNarrowLayout() {
         visible = true
         menuFrame = NSRect(x: 500, y: 100, width: 380, height: 300)
@@ -105,6 +139,7 @@ private func verifyPlacement() {
         _ = NSApplication.shared
         verifyPlacement()
         let menu = ClipboardMenu(callback: { _, _, _, _ in }, context: nil)
+        menu.verifyStatusClickDismissal()
         menu.verifyPreviewLifecycle()
         menu.verifyNarrowLayout()
         print("Native clipboard preview lifecycle passed")

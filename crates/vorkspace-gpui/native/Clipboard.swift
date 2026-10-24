@@ -103,6 +103,8 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
     private var local: Any?
     private var menuFrame = NSRect.zero
     private var anchor: NSPoint?
+    private var statusFrame = NSRect.zero
+    private var awaitingStatusAction = false
     private var selectedID: UInt64? { entries.indices.contains(table.selectedRow) ? entries[table.selectedRow].id : nil }
     private(set) var visible = false
 
@@ -231,27 +233,50 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
         let time = ProcessInfo.processInfo.systemUptime
         if let id = hover.ready(at: time) { showPreview(id, at: time) }
     }
-    func toggle(x: Double, y: Double) {
+    func toggle(x: Double, y: Double, statusWidth: Double, statusHeight: Double, statusClick: Bool) {
         // Exit the GPUI/AppKit callback before claiming the key window.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            // Revalidate after queueing: a click may dismiss after Rust's preflight.
+            guard acceptToggle(statusClick: statusClick) else { return }
             if visible { hide(); return }
             visible = true
             search.stringValue = ""
+            statusFrame = NSRect(x: x, y: y, width: statusWidth, height: statusHeight)
             anchor = NSPoint(x: x, y: y)
             placeMenu()
             layout()
             panel.setFrame(menuFrame, display: true)
             panel.makeKeyAndOrderFront(nil)
             panel.makeFirstResponder(enabled ? search : nil)
-            outside = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in self?.hide() }
+            outside = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in self?.outsideClick(event) }
             local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
                 guard let self else { return event }
-                if event.type == .keyDown, event.keyCode == 53 { hide(); return nil }
-                if event.type != .keyDown && event.window !== panel { hide() }
-                return event
+                return localEvent(event)
             }
         }
+    }
+    private func localEvent(_ event: NSEvent) -> NSEvent? {
+        guard visible else { return event }
+        if event.type == .keyDown, event.keyCode == 53 { hide(); return nil }
+        if event.type != .keyDown && event.window !== panel { outsideClick(event) }
+        return event
+    }
+    private func outsideClick(_ event: NSEvent) {
+        guard visible else { return }
+        let point = event.window?.convertPoint(toScreen: event.locationInWindow) ?? event.locationInWindow
+        let statusClick = event.type == .leftMouseDown && statusFrame.contains(point)
+        hide()
+        // macOS observes the click globally before forwarding it to the button.
+        // Its mouse-down action completes this dismissal, rather than reopening.
+        if statusClick { awaitingStatusAction = true }
+    }
+    func acceptToggle(statusClick: Bool) -> Bool {
+        if statusClick && awaitingStatusAction {
+            awaitingStatusAction = false
+            return false
+        }
+        return true
     }
     func hide() {
         guard visible else { return }
@@ -406,8 +431,10 @@ func create(_ callback: @escaping @convention(c) (UnsafeMutableRawPointer?, UInt
 func destroy(_ pointer: UnsafeMutableRawPointer) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).release() }
 @_cdecl("vorkspace_clipboard_visible")
 func visible(_ pointer: UnsafeMutableRawPointer) -> Bool { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().visible }
+@_cdecl("vorkspace_clipboard_accept_toggle")
+func acceptToggle(_ pointer: UnsafeMutableRawPointer, _ statusClick: Bool) -> Bool { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().acceptToggle(statusClick: statusClick) }
 @_cdecl("vorkspace_clipboard_toggle")
-func toggle(_ pointer: UnsafeMutableRawPointer, _ x: Double, _ y: Double) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().toggle(x: x, y: y) }
+func toggle(_ pointer: UnsafeMutableRawPointer, _ x: Double, _ y: Double, _ width: Double, _ height: Double, _ statusClick: Bool) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().toggle(x: x, y: y, statusWidth: width, statusHeight: height, statusClick: statusClick) }
 @_cdecl("vorkspace_clipboard_hide")
 func hide(_ pointer: UnsafeMutableRawPointer) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().hide() }
 @_cdecl("vorkspace_clipboard_begin")

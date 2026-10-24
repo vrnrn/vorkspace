@@ -24,7 +24,15 @@ unsafe extern "C" {
     ) -> *mut c_void;
     fn vorkspace_clipboard_destroy(handle: *mut c_void);
     fn vorkspace_clipboard_visible(handle: *mut c_void) -> bool;
-    fn vorkspace_clipboard_toggle(handle: *mut c_void, x: f64, y: f64);
+    fn vorkspace_clipboard_accept_toggle(handle: *mut c_void, status_click: bool) -> bool;
+    fn vorkspace_clipboard_toggle(
+        handle: *mut c_void,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        status_click: bool,
+    );
     fn vorkspace_clipboard_hide(handle: *mut c_void);
     fn vorkspace_clipboard_begin(handle: *mut c_void);
     fn vorkspace_clipboard_add(
@@ -72,8 +80,20 @@ impl Menu {
     pub(super) fn visible(&self) -> bool {
         unsafe { vorkspace_clipboard_visible(self.handle) }
     }
-    pub(super) fn toggle(&self, x: f64, y: f64) {
-        unsafe { vorkspace_clipboard_toggle(self.handle, x, y) }
+    pub(super) fn accept_toggle(&self, status_click: bool) -> bool {
+        unsafe { vorkspace_clipboard_accept_toggle(self.handle, status_click) }
+    }
+    pub(super) fn toggle(&self, anchor: objc2_foundation::NSRect, status_click: bool) {
+        unsafe {
+            vorkspace_clipboard_toggle(
+                self.handle,
+                anchor.origin.x,
+                anchor.origin.y,
+                anchor.size.width,
+                anchor.size.height,
+                status_click,
+            )
+        }
     }
     pub(super) fn hide(&self) {
         unsafe { vorkspace_clipboard_hide(self.handle) }

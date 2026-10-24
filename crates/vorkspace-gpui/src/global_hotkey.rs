@@ -195,10 +195,10 @@ fn parse(shortcut: &str) -> Result<(u32, u32), String> {
         "right" => 124,
         "down" => 125,
         "up" => 126,
-        _ => return Err("This global shortcut shortcut is not supported.".into()),
+        _ => return Err("This global shortcut is not supported.".into()),
     };
     if modifiers == 0 {
-        return Err("global shortcut needs a modifier key.".into());
+        return Err("Global shortcut needs a modifier key.".into());
     }
     Ok((code, modifiers))
 }

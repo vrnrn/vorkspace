@@ -95,7 +95,7 @@ pub(crate) fn init(cx: &mut App) {
         cx.defer(move |cx| {
             let _ = target.update(cx, |root, window, cx| {
                 if let Ok(shell) = root.downcast::<shell::Shell>() {
-                    shell.update(cx, |shell, cx| shell.toggle_clipboard(window, cx));
+                    shell.update(cx, |shell, cx| shell.toggle_clipboard(false, window, cx));
                 }
             });
         });

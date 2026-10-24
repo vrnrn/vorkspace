@@ -39,7 +39,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match action {
-            Action::Clipboard => self.toggle_clipboard(window, cx),
+            Action::Clipboard { status_click } => self.toggle_clipboard(status_click, window, cx),
             Action::QuickComposer => self.toggle_quick_composer(window, cx),
             Action::Settings => {
                 cx.activate(true);
@@ -52,7 +52,12 @@ impl Shell {
             Action::Quit => cx.defer(|cx| cx.dispatch_action(&crate::Quit)),
         }
     }
-    pub(crate) fn toggle_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_clipboard(
+        &mut self,
+        status_click: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         #[cfg(all(target_os = "macos", not(test)))]
         if let Some(service) = crate::clipboard::get(cx) {
             let anchor = self
@@ -65,16 +70,19 @@ impl Shell {
                     )
                     .unwrap();
                     let frame = screen.visibleFrame();
-                    (
-                        frame.origin.x + frame.size.width - 200.,
-                        frame.origin.y + frame.size.height,
+                    objc2_foundation::NSRect::new(
+                        objc2_foundation::NSPoint::new(
+                            frame.origin.x + frame.size.width - 200.,
+                            frame.origin.y + frame.size.height,
+                        ),
+                        objc2_foundation::NSSize::ZERO,
                     )
                 });
             service.update(cx, |service, cx| {
-                service.toggle_menu(anchor.0, anchor.1, cx)
+                service.toggle_menu(anchor, status_click, cx)
             });
         }
-        let _ = (window, cx);
+        let _ = (status_click, window, cx);
     }
 }
 

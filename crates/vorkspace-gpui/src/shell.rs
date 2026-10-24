@@ -7318,7 +7318,13 @@ impl Render for Shell {
                 #[cfg(any(target_os = "macos", test))]
                 let d = d.on_action(cx.listener(
                     |this, _: &crate::clipboard::Toggle, window, cx| {
-                        this.status_menu_action(crate::status_menu::Action::Clipboard, window, cx)
+                        this.status_menu_action(
+                            crate::status_menu::Action::Clipboard {
+                                status_click: false,
+                            },
+                            window,
+                            cx,
+                        )
                     },
                 ));
                 d

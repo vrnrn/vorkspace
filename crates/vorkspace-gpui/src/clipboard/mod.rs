@@ -129,7 +129,12 @@ impl Service {
         }
     }
     #[cfg(all(target_os = "macos", not(test)))]
-    pub(crate) fn toggle_menu(&mut self, x: f64, y: f64, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_menu(
+        &mut self,
+        anchor: objc2_foundation::NSRect,
+        status_click: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.menu.is_none() {
             let (menu, rx) = menu::Menu::new();
             let events = cx.spawn(async move |this, cx| {
@@ -155,11 +160,15 @@ impl Service {
             self.menu = Some((menu, events));
         }
         let menu = &self.menu.as_ref().unwrap().0;
+        // Reject a completed dismissal before rebuilding native presentation copies.
+        if !menu.accept_toggle(status_click) {
+            return;
+        }
         if !menu.visible() {
             self.query.clear();
             menu.sync(self);
         }
-        menu.toggle(x, y);
+        menu.toggle(anchor, status_click);
     }
 
     fn admit(

@@ -1,7 +1,7 @@
 //! Native menu-bar anchor; clipboard presentation uses native AppKit controls.
 #[derive(Clone, Copy)]
 pub(crate) enum Action {
-    Clipboard,
+    Clipboard { status_click: bool },
     QuickComposer,
     Settings,
     Quit,
@@ -16,8 +16,8 @@ mod native {
         AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
         rc::Retained, sel,
     };
-    use objc2_app_kit::{NSImage, NSStatusBar, NSStatusItem};
-    use objc2_foundation::{NSData, NSObject, NSObjectProtocol, NSSize, NSString};
+    use objc2_app_kit::{NSEventMask, NSImage, NSStatusBar, NSStatusItem};
+    use objc2_foundation::{NSData, NSObject, NSObjectProtocol, NSRect, NSSize, NSString};
     use std::rc::Rc;
     define_class!(
         #[unsafe(super(NSObject))]
@@ -28,7 +28,9 @@ mod native {
         unsafe impl NSObjectProtocol for Target {}
         impl Target {
             #[unsafe(method(openClipboard:))]
-            fn open(&self, _: Option<&AnyObject>) { (self.ivars())(Action::Clipboard); }
+            fn open(&self, _: Option<&AnyObject>) {
+                (self.ivars())(Action::Clipboard { status_click: true });
+            }
         }
     );
     pub(crate) struct Status {
@@ -51,6 +53,8 @@ mod native {
                     button.setTitle(&NSString::from_str("v_"));
                 }
                 button.setToolTip(Some(&NSString::from_str("vorkspace Clipboard · ⌘⇧C")));
+                // Every physical click dispatches even if dragged out before mouse-up.
+                button.sendActionOn(NSEventMask::LeftMouseDown);
                 unsafe {
                     button.setTarget(Some(&target));
                     button.setAction(Some(sel!(openClipboard:)));
@@ -61,12 +65,11 @@ mod native {
                 _target: target,
             })
         }
-        pub(crate) fn anchor(&self) -> Option<(f64, f64)> {
+        pub(crate) fn anchor(&self) -> Option<NSRect> {
             let mtm = MainThreadMarker::new()?;
             let button = self.item.button(mtm)?;
             let window = button.window()?;
-            let rect = window.convertRectToScreen(button.convertRect_toView(button.bounds(), None));
-            Some((rect.origin.x, rect.origin.y))
+            Some(window.convertRectToScreen(button.convertRect_toView(button.bounds(), None)))
         }
     }
     impl Drop for Status {
