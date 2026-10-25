@@ -45,7 +45,7 @@ impl Shell {
             .filter(|_| right_shown && self.settings.is_none())
             .map(|panel| self.right_panel_frame(panel, right_width, full, cx));
         let tab_bar = self.titlebar(window, cx);
-        let navigation = self.navigation(cx);
+        let navigation = self.navigation(window, cx);
         let rail_width = self.classic_rail_width();
         let corner = self
             .settings

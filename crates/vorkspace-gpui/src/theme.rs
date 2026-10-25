@@ -7,6 +7,22 @@ pub(crate) const MUTED: u32 = 0x969696;
 pub(crate) const ACCENT: u32 = 0x4da3f5;
 pub(crate) const COLUMN: f32 = 832.;
 pub(crate) const TITLE_BAR_HEIGHT: f32 = 40.;
+// AppKit points, independent of GPUI UI zoom and display DPI. Keep the
+// renderer's safe inset and the native constraints on the same geometry.
+pub(crate) const TRAFFIC_LIGHT_SIZE: f32 = 14.;
+pub(crate) const TRAFFIC_LIGHT_MARGIN: f32 = 12.;
+pub(crate) const TRAFFIC_LIGHT_SPACING: f32 = 6.;
+pub(crate) const TRAFFIC_LIGHT_SAFE_INSET: f32 =
+    2. * TRAFFIC_LIGHT_MARGIN + 3. * TRAFFIC_LIGHT_SIZE + 2. * TRAFFIC_LIGHT_SPACING;
+pub(crate) const NO_TRAFFIC_LIGHTS: f32 = 10.;
+
+pub(crate) fn traffic_light_inset(ui_scale: f32, fullscreen: bool) -> f32 {
+    if cfg!(target_os = "macos") && !fullscreen {
+        TRAFFIC_LIGHT_SAFE_INSET / ui_scale
+    } else {
+        NO_TRAFFIC_LIGHTS
+    }
+}
 pub(crate) const TITLE_TAB_TEXT_SIZE: f32 = 13.;
 pub(crate) const TITLE_TAB_MAX_WIDTH: f32 = 224.;
 pub(crate) const PANE_HEADER_HEIGHT: f32 = 36.;

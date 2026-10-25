@@ -35,6 +35,8 @@ mod sidebar_peek;
 mod status_menu;
 mod terminal_dock;
 mod title_tabs;
+#[cfg(test)]
+mod titlebar_tests;
 mod vox;
 mod worktrees;
 
@@ -308,10 +310,6 @@ pub(crate) struct ShellMenu {
     menu: Entity<Menu>,
     _events: Vec<Subscription>,
 }
-/// The gap the traffic lights take in the title bar (`w-[78px]`, or `w-2.5`
-/// where the window has none, as in macOS fullscreen).
-const TRAFFIC_LIGHTS: f32 = if cfg!(target_os = "macos") { 78. } else { 10. };
-const NO_TRAFFIC_LIGHTS: f32 = 10.;
 // The tab strip's padding; the trailing side also has the 2px gap before the
 // strip's drag area.
 const STRIP_LEAD: f32 = 6.;
@@ -594,6 +592,7 @@ pub(crate) struct Shell {
     order: Vec<i64>,
     pub(crate) workspace: Workspace,
     focus: FocusHandle,
+    project_rail_toggle_focus: FocusHandle,
     sidebar_focus: FocusHandle,
     query: String,
     sidebar_hover: Option<&'static str>,
@@ -914,6 +913,7 @@ impl Shell {
             order: Vec::new(),
             workspace,
             focus: cx.focus_handle(),
+            project_rail_toggle_focus: cx.focus_handle().tab_stop(true),
             sidebar_focus: cx.focus_handle(),
             query: String::new(),
             sidebar_hover: None,
@@ -4172,48 +4172,67 @@ impl Shell {
     /// The title bar's navigation (`data-inset-title-nav`): as wide as the
     /// open sidebar, with history at its far edge; with the sidebar closed,
     /// just the traffic lights' gap and its three buttons.
-    fn traffic_lights(&self) -> f32 {
-        if self.fullscreen {
-            NO_TRAFFIC_LIGHTS
+    fn traffic_lights(&self, window: &Window) -> f32 {
+        traffic_light_inset(window.ui_scale(), self.fullscreen)
+    }
+    fn navigation_padding(&self) -> f32 {
+        if self.workspace.project_rail_open {
+            6.
         } else {
-            TRAFFIC_LIGHTS
+            0.
         }
     }
-    fn navigation_width(&self) -> f32 {
-        let closed = self.traffic_lights() + 3. * 24.;
-        self.classic_rail_width().max(closed)
+    fn navigation_button_size(window: &Window) -> f32 {
+        // All three hit areas must occupy whole device pixels. Independently
+        // rounding 24 logical units can otherwise overflow their combined budget
+        // at fractional zoom (for example, three 22px buttons at 90% on 1x).
+        let scale = window.scale_factor();
+        (24. * scale).round() / scale
+    }
+    fn navigation_width(&self, window: &Window) -> f32 {
+        let scale = window.scale_factor();
+        let minimum = self.traffic_lights(window)
+            + 3. * Self::navigation_button_size(window)
+            + self.navigation_padding();
+        let minimum = (minimum * scale).ceil() / scale;
+        self.classic_rail_width().max(minimum)
     }
     /// Room before the tabs where navigation overhangs the collapsed project rail.
-    fn strip_lead(&self) -> f32 {
-        (self.navigation_width() - self.classic_rail_width()).max(0.)
+    fn strip_lead(&self, window: &Window) -> f32 {
+        (self.navigation_width(window) - self.classic_rail_width()).max(0.)
     }
     /// The traffic lights, sidebar toggle and visit arrows, spanning the
     /// open sidebar so the arrows sit at its edge.
-    fn navigation(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn navigation(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
+        let toggle_focus = self.project_rail_toggle_focus.clone();
+        let button_size = px(Self::navigation_button_size(window));
         div()
-            .w(px(self.navigation_width()))
+            .debug_selector(|| "titlebar-navigation".into())
+            .w(px(self.navigation_width(window)))
             .h(px(TITLE_BAR_HEIGHT))
             .flex_shrink_0()
             .flex()
             .items_center()
             // Keep history aligned with the project rail in both workspace modes.
-            .pr(px(if self.workspace.project_rail_open {
-                6.
-            } else {
-                0.
-            }))
+            .pr(px(self.navigation_padding()))
             .child(
                 // Fixed, so the toggle holds still as the sidebar opens
                 // and closes.
                 titlebar_drag_area()
-                    .w(px(self.traffic_lights()))
+                    .w(px(self.traffic_lights(window)))
                     .flex_shrink_0(),
             )
             .child(
                 icon_button("toggle-sidebar", TOGGLE_SIDEBAR_LABEL, "sidebar")
                     .debug_selector(|| "toggle-sidebar".into())
+                    .size(button_size)
+                    .track_focus(&self.project_rail_toggle_focus)
+                    .focus(|s| s.bg(content(0.1)))
                     .child(self.peek_toggle_bounds.probe())
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        window.focus(&toggle_focus, cx);
+                        cx.stop_propagation();
+                    })
                     // Hovering the toggle peeks a collapsed sidebar out.
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_project_rail(cx))),
             )
@@ -4226,6 +4245,7 @@ impl Shell {
                     !self.history.back.is_empty(),
                 )
                 .debug_selector(|| "visit-back".into())
+                .size(button_size)
                 .on_click(cx.listener(|this, _, window, cx| this.visit(-1, window, cx))),
             )
             .child(
@@ -4236,6 +4256,7 @@ impl Shell {
                     !self.history.forward.is_empty(),
                 )
                 .debug_selector(|| "visit-forward".into())
+                .size(button_size)
                 .on_click(cx.listener(|this, _, window, cx| this.visit(1, window, cx))),
             )
     }
@@ -4388,9 +4409,9 @@ impl Shell {
         if let Some(settings) = self.settings.clone() {
             let classic = self.workspace.classic_layout;
             let lead = if classic {
-                (self.navigation_width() - self.classic_rail_width()).max(0.)
+                self.strip_lead(window)
             } else {
-                self.navigation_width() + 6.
+                self.navigation_width(window) + 6.
             };
             let header = settings.update(cx, |v, cx| v.header(!classic, cx));
             return div()
@@ -4400,12 +4421,14 @@ impl Shell {
                 .items_center()
                 .when(classic, |d| d.border_b_1().border_color(content(0.1)))
                 .child(if classic {
-                    titlebar_drag_area()
+                    // Covered by floating navigation, which owns gestures here.
+                    div()
+                        .h_full()
                         .w(px(lead))
                         .flex_shrink_0()
                         .into_any_element()
                 } else {
-                    self.navigation(cx).into_any_element()
+                    self.navigation(window, cx).into_any_element()
                 })
                 .child(header)
                 .children(self.vox.clone())
@@ -4429,14 +4452,15 @@ impl Shell {
                 d.border_b_1().border_color(crate::right_panel::stroke())
             })
             .child(if classic {
-                // The navigation floats over the sidebar's header
-                // (classic_body); the strip keeps only the part it uncovers.
-                titlebar_drag_area()
-                    .w(px(self.strip_lead()))
+                // Reserve the navigation's overhang without a second drag
+                // handler underneath its buttons (classic_body owns gestures).
+                div()
+                    .h_full()
+                    .w(px(self.strip_lead(window)))
                     .flex_shrink_0()
                     .into_any_element()
             } else {
-                self.navigation(cx).into_any_element()
+                self.navigation(window, cx).into_any_element()
             })
             .child(
                 self.tabs_frame.clone().cached(
@@ -6424,9 +6448,9 @@ impl Shell {
         // Tabs start beside the project rail; both right-hand sidebars consume
         // trailing space without moving the tab strip's leading edge.
         let lead = if self.workspace.classic_layout {
-            self.classic_rail_width() + self.strip_lead()
+            self.classic_rail_width() + self.strip_lead(window)
         } else {
-            self.navigation_width()
+            self.navigation_width(window)
         };
         (window.viewport_size().width.as_f32() - lead - trailing).max(0.)
     }
@@ -7038,6 +7062,11 @@ impl Render for Shell {
             self.close_preview(cx);
             self.invalidate_chrome(cx);
         }
+        // Use the scale of this frame, which can differ from a zoom preference
+        // deferred by GPUI until the next frame. This covers restored, menu,
+        // keyboard, Settings and shared-preference zoom changes alike.
+        #[cfg(target_os = "macos")]
+        crate::traffic_lights::pin(window);
         self.keep_visible_idle_agents(cx);
         self.tick_resize_settle(window);
         if let Some(id) = self.pending_composer_focus.take()
@@ -9261,7 +9290,7 @@ mod tests {
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
         let toggle = visual.debug_bounds("toggle-sidebar").unwrap();
-        assert_eq!(toggle.left(), px(TRAFFIC_LIGHTS));
+        assert_eq!(toggle.left(), px(traffic_light_inset(1., false)));
         let expanded = visual.debug_bounds("classic-project-rail").unwrap();
         assert_eq!(
             visual.debug_bounds("visit-forward").unwrap().right(),
@@ -9284,7 +9313,7 @@ mod tests {
         );
         assert_eq!(
             visual.debug_bounds("visit-forward").unwrap().right(),
-            px(TRAFFIC_LIGHTS + 72.)
+            px(traffic_light_inset(1., false) + 72.)
         );
         window
             .update(visual, |shell, _, _| {
@@ -10176,6 +10205,12 @@ mod tests {
             .unwrap();
     }
     pub(super) fn window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
+        window_with_scale(cx, 100)
+    }
+    pub(super) fn window_with_scale(
+        cx: &mut TestAppContext,
+        scale: u32,
+    ) -> (WindowHandle<Shell>, i64, i64) {
         let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
         let mut a = store.create("codex", "/work/another-project").unwrap();
         let b = store.create("claude", "/work/vorkspace").unwrap();
@@ -10194,6 +10229,7 @@ mod tests {
         a.has_messages = true;
         let ids = (a.id, b.id);
         let mut state = Workspace::default();
+        state.preferences.ui_scale = scale;
         assert!(state.classic_layout);
         state.add_project("/work/another-project");
         state.add_project("/work/vorkspace");

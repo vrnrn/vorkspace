@@ -1,24 +1,43 @@
-//! src-tauri/src/macos.rs's traffic lights: 14 pt buttons, 6 pt apart, 12 pt
+//! Native traffic lights: 14 pt buttons, 6 pt apart, 12 pt
 //! from the left edge. GPUI's `traffic_light_position` only moves the row and
 //! keeps AppKit's own spacing, which on recent macOS crowds the sidebar
 //! toggle. Auto Layout pins the buttons, so GPUI's frame updates on resize,
 //! focus and fullscreen don't move them back.
 
+use crate::theme::{
+    TITLE_BAR_HEIGHT, TRAFFIC_LIGHT_MARGIN, TRAFFIC_LIGHT_SIZE, TRAFFIC_LIGHT_SPACING,
+};
 use gpui::Window;
+use objc2::rc::Retained;
 use objc2_app_kit::{NSView, NSWindow, NSWindowButton};
+use objc2_foundation::ns_string;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-const BUTTON_SIZE: f64 = 14.;
-const LEFT_MARGIN: f64 = 12.;
-const BUTTON_SPACING: f64 = 6.;
-
-/// Pins the buttons once; AppKit can recreate them, so call again whenever
-/// the window may have rebuilt its titlebar.
-pub(crate) fn pin(window: &Window, title_bar_height: f32) {
+/// Reuse native constraints, updating their vertical offset for this frame's
+/// UI zoom. AppKit may recreate the buttons during fullscreen transitions.
+pub(crate) fn pin(window: &Window) {
+    if window.is_fullscreen() {
+        return;
+    }
     let Some(ns_window) = ns_window(window) else {
         return;
     };
-    let bottom = (title_bar_height as f64 - BUTTON_SIZE) / 2.;
+    let height = TITLE_BAR_HEIGHT * window.ui_scale();
+    if pin_buttons(&ns_window, height as f64) {
+        // GPUI owns the native titlebar container's frame as well as its
+        // position on resize/focus. Keep its stored AppKit-point offset current;
+        // constraints alone cannot center buttons in a stale-height container.
+        window.set_traffic_light_position(gpui::point(
+            gpui::px(TRAFFIC_LIGHT_MARGIN),
+            gpui::px((height - TRAFFIC_LIGHT_SIZE) / 2.),
+        ));
+    }
+}
+
+fn pin_buttons(ns_window: &NSWindow, title_bar_height_points: f64) -> bool {
+    let mut changed = false;
+    let size = TRAFFIC_LIGHT_SIZE as f64;
+    let bottom = (title_bar_height_points - size) / 2.;
     let kinds = [
         NSWindowButton::CloseButton,
         NSWindowButton::MiniaturizeButton,
@@ -28,30 +47,45 @@ pub(crate) fn pin(window: &Window, title_bar_height: f32) {
         let Some(button) = ns_window.standardWindowButton(kind) else {
             continue;
         };
-        // Already pinned: a second set of constraints would only conflict.
-        if !button.translatesAutoresizingMaskIntoConstraints() {
-            continue;
-        }
         let Some(titlebar) = (unsafe { button.superview() }) else {
             continue;
         };
-        let x = LEFT_MARGIN + i as f64 * (BUTTON_SIZE + BUTTON_SPACING);
+        // The titlebar owns constraints spanning itself and a button. Identify
+        // ours by both marker and button identity; autoresizing-mask state alone
+        // neither proves ownership nor allows a live zoom to update the offset.
+        if let Some(constraint) = titlebar.constraints().iter().find(|constraint| {
+            constraint.identifier().as_deref() == Some(ns_string!("vorkspace.traffic-light.bottom"))
+                // SAFETY: both items remain alive through the titlebar/button.
+                && unsafe { constraint.firstItem() }.is_some_and(|item| {
+                    Retained::as_ptr(&item) == Retained::as_ptr(&button).cast()
+                })
+        }) {
+            if constraint.constant() != -bottom {
+                constraint.setConstant(-bottom);
+                changed = true;
+            }
+            continue;
+        }
+        let x = TRAFFIC_LIGHT_MARGIN as f64 + i as f64 * (size + TRAFFIC_LIGHT_SPACING as f64);
+        changed = true;
         button.setTranslatesAutoresizingMaskIntoConstraints(false);
-        // Bottom, like GPUI's own origin: the titlebar view's height varies
-        // between windowed and fullscreen, the distance from its bottom does not.
+        // GPUI also positions buttons from the container's bottom, in AppKit points.
+        let vertical = button
+            .bottomAnchor()
+            .constraintEqualToAnchor_constant(&titlebar.bottomAnchor(), -bottom);
+        vertical.setIdentifier(Some(ns_string!("vorkspace.traffic-light.bottom")));
         for constraint in [
-            button.widthAnchor().constraintEqualToConstant(BUTTON_SIZE),
-            button.heightAnchor().constraintEqualToConstant(BUTTON_SIZE),
+            button.widthAnchor().constraintEqualToConstant(size),
+            button.heightAnchor().constraintEqualToConstant(size),
             button
                 .leadingAnchor()
                 .constraintEqualToAnchor_constant(&titlebar.leadingAnchor(), x),
-            button
-                .bottomAnchor()
-                .constraintEqualToAnchor_constant(&titlebar.bottomAnchor(), -bottom),
+            vertical,
         ] {
             constraint.setActive(true);
         }
     }
+    changed
 }
 
 fn ns_window(window: &Window) -> Option<objc2::rc::Retained<NSWindow>> {

@@ -449,7 +449,10 @@ fn main() {
                         traffic_light_position: if cfg!(target_os = "macos") {
                             // Original macOS chrome: 12 pt left inset, with
                             // 14 pt native buttons centered in the 40 pt bar.
-                            Some(point(px(12.), px((theme::TITLE_BAR_HEIGHT - 14.) / 2.)))
+                            Some(point(
+                                px(theme::TRAFFIC_LIGHT_MARGIN),
+                                px((theme::TITLE_BAR_HEIGHT - theme::TRAFFIC_LIGHT_SIZE) / 2.),
+                            ))
                         } else {
                             None
                         },
@@ -473,11 +476,11 @@ fn main() {
                     });
                     #[cfg(target_os = "macos")]
                     {
-                        traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT);
+                        traffic_lights::pin(window);
                         // AppKit rebuilds the buttons on some titlebar changes.
                         shell.update(cx, |_, cx| {
                             cx.observe_window_activation(window, |_, window, _| {
-                                traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT)
+                                traffic_lights::pin(window)
                             })
                             .detach();
                         });

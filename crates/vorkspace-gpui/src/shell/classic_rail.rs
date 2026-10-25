@@ -71,8 +71,21 @@ impl Shell {
             .flex_shrink_0()
             .flex()
             .flex_col()
-            .border_r_1()
-            .border_color(content(0.08))
+            // Retain the separator's column in content layout, without painting
+            // a full-height border through the native titlebar controls.
+            .pr_px()
+            // The titlebar belongs to native controls and window navigation.
+            // A narrow rail's separator must never cut through that cluster.
+            .child(
+                div()
+                    .debug_selector(|| "classic-project-rail-divider".into())
+                    .absolute()
+                    .right_0()
+                    .top(px(TITLE_BAR_HEIGHT))
+                    .bottom_0()
+                    .w_px()
+                    .bg(content(0.08)),
+            )
             .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0());
 
         self.resources.update(cx, |resources, cx| {
@@ -296,9 +309,9 @@ impl Shell {
                     .debug_selector(|| "classic-project-rail-resize".into())
                     .absolute()
                     .right(px(-2.))
-                    .top_0()
+                    .top(px(TITLE_BAR_HEIGHT))
+                    .bottom_0()
                     .w(px(4.))
-                    .h_full()
                     .cursor(CursorStyle::ResizeLeftRight)
                     .on_mouse_down(
                         MouseButton::Left,
@@ -590,14 +603,6 @@ impl Shell {
                 .flex_col()
                 .items_center()
                 .gap_1p5()
-                .child(
-                    icon_button("toggle-project-rail", "Expand project rail", "sidebar")
-                        .debug_selector(|| "toggle-project-rail".into())
-                        .focusable()
-                        .tab_stop(true)
-                        .size(px(32.))
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_project_rail(cx))),
-                )
                 .when(!pinned_bots.is_empty(), |d| {
                     d.child(div().flex().flex_col().gap_1p5().children(pinned_bots))
                         .child(div().h_px().w(px(24.)).bg(content(0.08)))
