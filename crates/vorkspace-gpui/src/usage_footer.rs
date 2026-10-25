@@ -392,6 +392,15 @@ impl UsageFooter {
     pub(crate) fn kind(&self) -> Kind {
         self.kind
     }
+    #[cfg(test)]
+    pub(crate) fn subscription_chrome(&self, key: &Key) -> (AnchorSlot, FocusHandle) {
+        let row = &self.rows[key];
+        (row.0.clone(), row.1.clone())
+    }
+    #[cfg(test)]
+    pub(crate) fn open_subscription_key(&self) -> Option<&Key> {
+        self.open.then_some(&self.key)
+    }
     fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.open {
             self.dismiss(window, cx);
@@ -1048,6 +1057,7 @@ impl Render for UsageFooter {
                     .w_full()
                     .flex()
                     .items_center()
+                    .when(self.compact, |d| d.justify_center())
                     .gap_1()
                     .child(
                         div()
@@ -1065,10 +1075,14 @@ impl Render for UsageFooter {
                             .key_context("UsageChip")
                             .relative()
                             .min_w_0()
-                            .flex_1()
                             .rounded_md()
-                            .px_2()
-                            .py_1p5()
+                            .map(|d| {
+                                if self.compact {
+                                    d.size(px(32.)).flex_shrink_0().justify_center()
+                                } else {
+                                    d.flex_1().px_2().py_1p5()
+                                }
+                            })
                             .flex()
                             .items_center()
                             .gap_2()
@@ -1170,6 +1184,7 @@ impl Render for UsageFooter {
             .child(
                 div()
                     .id("subscriptions-list")
+                    .when(self.compact, |d| d.flex().flex_col().gap_1())
                     .max_h(px(220.))
                     .min_h_0()
                     .overflow_y_scroll()
