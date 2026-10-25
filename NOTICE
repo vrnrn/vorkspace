@@ -44,7 +44,7 @@ The unused Linux notification bridge is omitted; the app owns notification deliv
 Font fallback and text tests use the underlying Lilex family directly.
 The retained framework code remains Apache-2.0.
 vendor/gpui-pre-macos contains the same snapshot and license. Its local cursor
-bridge publishes hit-test changes synchronously while the GPUI view owns the
+bridge publishes hit-test requests synchronously while the GPUI view owns the
 pointer and restores the stored style through AppKit cursor-update tracking.
 The unused screen-capture implementation and its optional dependencies are omitted.
 Unused upstream examples and their demo assets are omitted, together with four

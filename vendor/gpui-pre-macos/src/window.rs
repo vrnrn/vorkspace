@@ -415,20 +415,12 @@ pub(crate) unsafe fn set_active_window_cursor_style(style: CursorStyle) {
         };
 
         let window_state = get_window_state(&*active_window);
-        let (native_window, native_view, changed) = {
-            let mut state = window_state.lock();
-            let changed = state.cursor_style != style;
-            state.cursor_style = style;
-            (state.native_window, state.native_view.as_ptr(), changed)
-        };
-        if changed {
-            // A full-view cursor rect caches one style for many GPUI hit targets and
-            // only updates on a later AppKit pass. Publish the hit-test synchronously;
-            // cursorUpdate handles AppKit entry/re-entry using this same stored style.
-            if view_owns_cursor(native_window, native_view) {
-                let _: () = msg_send![cursor_for_style(style), set];
-            }
-        }
+        window_state.lock().cursor_style = style;
+        // The stored style is desired state, not proof of what WindowServer
+        // displays. Native cursor resets can leave even NSCursor.currentCursor
+        // unchanged. Republish each hit-test request while this view owns the
+        // pointer so an unchanged mouse move or repaint repairs that mismatch.
+        publish_cursor(&window_state);
     }
 }
 
@@ -2591,8 +2583,18 @@ extern "C" fn cursor_update(this: &Object, _: Sel, _: id) {
     // GPUI hit-test even when its style hasn't changed since the previous event.
     unsafe {
         let state = get_window_state(this);
+        publish_cursor(&state);
+    }
+}
+
+// Called only from AppKit's main-thread callbacks or the platform cursor setter.
+unsafe fn publish_cursor(state: &Arc<Mutex<MacWindowState>>) {
+    unsafe {
         let (window, view, style) = {
             let state = state.lock();
+            if state.closed.load(Ordering::Acquire) {
+                return;
+            }
             (
                 state.native_window,
                 state.native_view.as_ptr(),
@@ -2994,6 +2996,13 @@ extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
             drop(lock);
             callback(event);
             window_state.lock().event_callback = Some(callback);
+            // GPUI can reuse an unchanged hit test without another platform
+            // style request. Still restore the displayed cursor on movement.
+            if native_event_type == NSEventType::NSMouseMoved {
+                unsafe {
+                    publish_cursor(&window_state);
+                }
+            }
         }
     }
 }

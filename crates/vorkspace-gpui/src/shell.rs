@@ -7,6 +7,8 @@ pub(crate) mod bots;
 mod classic_rail;
 mod classic_sidebar;
 mod file_panes;
+#[cfg(test)]
+mod hover_cursor_tests;
 mod idle_agents;
 #[cfg(test)]
 mod image_lightbox_tests;

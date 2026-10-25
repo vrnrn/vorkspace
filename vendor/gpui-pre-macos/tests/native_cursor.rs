@@ -5,11 +5,16 @@
 mod probe {
     use gpui::{prelude::*, *};
     use objc2::{class, msg_send, runtime::AnyObject};
-    use objc2_foundation::NSPoint;
+    use objc2_foundation::{NSPoint, NSSize};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use std::time::Duration;
 
     type Id = *mut AnyObject;
+
+    #[link(name = "Carbon", kind = "framework")]
+    unsafe extern "C" {
+        fn SetThemeCursor(cursor: u32) -> i32;
+    }
 
     struct Surface {
         style: CursorStyle,
@@ -84,7 +89,49 @@ mod probe {
         }
     }
 
+    fn check_displayed(style: CursorStyle, transition: &str) {
+        unsafe {
+            // currentCursor only reports this application's AppKit stack. A
+            // native reset can change the displayed cursor without changing it.
+            let displayed: Id = msg_send![class!(NSCursor), currentSystemCursor];
+            if displayed.is_null() {
+                eprintln!("FAIL {transition}: system cursor is unavailable");
+                std::process::exit(1);
+            }
+            let expected = cursor(style);
+            let actual_hot: NSPoint = msg_send![displayed, hotSpot];
+            let expected_hot: NSPoint = msg_send![expected, hotSpot];
+            let actual_image: Id = msg_send![displayed, image];
+            let expected_image: Id = msg_send![expected, image];
+            let actual_size: NSSize = msg_send![actual_image, size];
+            let expected_size: NSSize = msg_send![expected_image, size];
+            // Arrow, I-beam, and pointing hand have distinct hotspots. Comparing
+            // the image extent as well verifies the displayed cursor signature.
+            if actual_hot != expected_hot || actual_size != expected_size {
+                eprintln!(
+                    "FAIL {transition}: expected displayed {style:?} hot={expected_hot:?} size={expected_size:?}, actual hot={actual_hot:?} size={actual_size:?}"
+                );
+                std::process::exit(1);
+            }
+            println!(
+                "PASS {transition}: displayed {style:?} hot={actual_hot:?} size={actual_size:?}"
+            );
+        }
+    }
+
+    fn reset_displayed_to_arrow() {
+        let status = unsafe { SetThemeCursor(0) }; // kThemeArrowCursor
+        if status != 0 {
+            eprintln!("FAIL native system reset: OSStatus {status}");
+            std::process::exit(1);
+        }
+    }
+
     unsafe fn mouse_move(native: Id, x: f64) {
+        unsafe { mouse_event(native, x, false) }
+    }
+
+    unsafe fn mouse_event(native: Id, x: f64, queued: bool) {
         unsafe {
             let number: isize = msg_send![native, windowNumber];
             let view: Id = msg_send![native, contentView];
@@ -100,7 +147,12 @@ mod probe {
                 modifierFlags: 0usize, timestamp: 0f64, windowNumber: number,
                 context: std::ptr::null::<AnyObject>(), eventNumber: 0isize,
                 clickCount: 0isize, pressure: 0f32];
-            let _: () = msg_send![native, sendEvent: event];
+            if queued {
+                let app: Id = msg_send![class!(NSApplication), sharedApplication];
+                let _: () = msg_send![app, postEvent: event, atStart: false];
+            } else {
+                let _: () = msg_send![native, sendEvent: event];
+            }
         }
     }
 
@@ -113,10 +165,20 @@ mod probe {
                             point(px(200.), px(200.)),
                             size(px(360.), px(240.)),
                         ))),
-                        titlebar: None,
+                        // Match the shipped application's native chrome, not only
+                        // the simpler opaque, undecorated fixture window.
+                        show: false,
+                        window_background: WindowBackgroundAppearance::Blurred,
+                        app_owns_titlebar_drag: true,
+                        titlebar: Some(TitlebarOptions {
+                            title: Some("Vorkspace cursor fixture".into()),
+                            appears_transparent: true,
+                            traffic_light_position: Some(point(px(12.), px(13.))),
+                        }),
                         ..Default::default()
                     },
-                    |_, cx| {
+                    |window, cx| {
+                        window.activate_window();
                         cx.new(|_| Surface {
                             style: CursorStyle::IBeam,
                         })
@@ -161,6 +223,17 @@ mod probe {
                     .timer(Duration::from_millis(50))
                     .await;
                 check(CursorStyle::Arrow, "initial background");
+                // Exercise NSApplication's normal event queue as well as the
+                // direct NSWindow responder calls below.
+                for (x, expected) in [
+                    (60., CursorStyle::IBeam),
+                    (180., CursorStyle::PointingHand),
+                    (300., CursorStyle::Arrow),
+                ] {
+                    unsafe { mouse_event(native, x, true); }
+                    cx.background_executor().timer(Duration::from_millis(50)).await;
+                    check(expected, "queued application mouse transition");
+                }
                 for (x, expected) in [
                     (60., CursorStyle::IBeam),
                     (180., CursorStyle::PointingHand),
@@ -190,6 +263,30 @@ mod probe {
                     let _: () = msg_send![view, cursorUpdate: std::ptr::null::<AnyObject>()];
                 }
                 check(CursorStyle::IBeam, "same-style cursorUpdate restoration");
+                for (x, style) in [
+                    (60., CursorStyle::IBeam),
+                    (180., CursorStyle::PointingHand),
+                ] {
+                    unsafe { mouse_move(native, x); }
+                    check_displayed(style, "before native system reset");
+                    // Carbon changes the system cursor without updating the
+                    // NSCursor stack, reproducing the observed live mismatch.
+                    reset_displayed_to_arrow();
+                    check(style, "AppKit style survives native system reset");
+                    check_displayed(CursorStyle::Arrow, "native system reset");
+                    cx.update_window(window.into(), |_, w, cx| {
+                        let _ = w.draw(cx);
+                    }).unwrap();
+                    check_displayed(style, "unchanged repaint restores displayed cursor");
+                    reset_displayed_to_arrow();
+                    check(style, "same-style mouse transition starts with unchanged AppKit state");
+                    check_displayed(CursorStyle::Arrow, "system reset before same-style mouse move");
+                    unsafe { mouse_move(native, x); }
+                    check_displayed(style, "same-style mouse move restores displayed cursor");
+                }
+                // The style sweep below changes the left text region; leave the
+                // physical pointer there after testing the fixed right-hand link.
+                unsafe { mouse_move(native, 60.); }
                 let styles = [
                     CursorStyle::PointingHand,
                     CursorStyle::Arrow,
