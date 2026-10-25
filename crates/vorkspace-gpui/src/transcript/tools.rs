@@ -161,6 +161,7 @@ impl TranscriptView {
             }
         };
         let chain = shown.action == "Run" && !shown.steps.is_empty();
+        let is_command = shown.action == "Run" && !chain;
         let caption = match (&shown.description, chain) {
             (Some(description), true) => description.clone(),
             _ => format!("{action} {}", shown.target),
@@ -253,6 +254,7 @@ impl TranscriptView {
                         .id(gpui::SharedString::from(format!("tool-target:{identity}")))
                         .debug_selector(move || format!("tool-target-{start}"))
                         .min_w_0()
+                        .when(is_command, |d| d.flex_1())
                         .flex()
                         .items_center()
                         .gap_1()
@@ -325,7 +327,24 @@ impl TranscriptView {
                                 })
                         })
                         .when(!is_search && !chain, |d| {
-                            d.child(div().min_w_0().truncate().child(shown.target))
+                            d.child(
+                                div()
+                                    .min_w_0()
+                                    .when(is_command, |d| {
+                                        // Constrain layout, not content: GPUI can wrap
+                                        // even unspaced tokens without changing text.
+                                        d.flex_1()
+                                            .debug_selector(move || format!("tool-command-{start}"))
+                                            .child(gpui::Text::new(
+                                                gpui::SharedString::from(format!(
+                                                    "tool-command:{identity}"
+                                                ))
+                                                .into(),
+                                                shown.target.clone().into(),
+                                            ))
+                                    })
+                                    .when(!is_command, |d| d.truncate().child(shown.target)),
+                            )
                         })
                         .when(chain, |d| {
                             let hidden = chips.len().saturating_sub(3);
@@ -480,6 +499,7 @@ impl TranscriptView {
                                     .id(gpui::SharedString::from(format!(
                                         "tool-step:{identity}:{index}"
                                     )))
+                                    .debug_selector(move || format!("tool-step-{start}-{index}"))
                                     .flex()
                                     .min_w_0()
                                     .gap_2()
@@ -495,9 +515,18 @@ impl TranscriptView {
                                     .child(
                                         div()
                                             .min_w_0()
-                                            .truncate()
+                                            .flex_1()
+                                            .debug_selector(move || {
+                                                format!("tool-step-command-{start}-{index}")
+                                            })
                                             .text_color(content(0.6))
-                                            .child(command),
+                                            .child(gpui::Text::new(
+                                                gpui::SharedString::from(format!(
+                                                    "tool-step-command:{identity}:{index}"
+                                                ))
+                                                .into(),
+                                                command.into(),
+                                            )),
                                     )
                                     .when_some(path, |d, path| {
                                         d.role(Role::Button)
@@ -533,6 +562,10 @@ impl TranscriptView {
             .into_any_element()
     }
 }
+
+#[cfg(test)]
+#[path = "tools_wrapping_tests.rs"]
+mod wrapping_tests;
 
 #[cfg(test)]
 mod tests {
