@@ -100,9 +100,12 @@ pub(crate) struct Bots {
     creation: Option<creation::Creation>,
     settings_focus: gpui::FocusHandle,
     fields: HashMap<String, Entity<Input>>,
-    memory_edit: Option<String>,
-    memory_adding: bool,
-    memory_pending: HashSet<String>,
+    memory_editor: Option<memory_ui::MemoryEditor>,
+    memory_editor_revision: u64,
+    memory_pending: HashSet<memory_ui::MemoryTarget>,
+    memory_topics: Vec<memory_ui::MemoryTopic>,
+    memory_loading: bool,
+    memory_load_error: Option<String>,
     field_blurs: HashSet<gpui::EntityId>,
     file_versions: HashMap<String, (String, String)>,
     saving_files: HashSet<String>,
@@ -345,9 +348,12 @@ impl Bots {
             creation: None,
             settings_focus: cx.focus_handle(),
             fields: HashMap::new(),
-            memory_edit: None,
-            memory_adding: false,
+            memory_editor: None,
+            memory_editor_revision: 0,
             memory_pending: HashSet::new(),
+            memory_topics: Vec::new(),
+            memory_loading: false,
+            memory_load_error: None,
             field_blurs: HashSet::new(),
             file_versions: HashMap::new(),
             saving_files: HashSet::new(),
@@ -1037,8 +1043,10 @@ impl Bots {
             self.fields
                 .retain(|k, _| k.starts_with("file:") || k.starts_with("channel-"));
             self.files = None;
-            self.memory_adding = false;
-            self.memory_edit = None;
+            self.memory_editor = None;
+            self.memory_topics.clear();
+            self.memory_loading = false;
+            self.memory_load_error = None;
             self.settings = None;
         }
         self.close_classic_channels(cx);
@@ -1116,20 +1124,34 @@ impl Bots {
         };
         let root = self.root.clone();
         let id = id.to_string();
+        let load_topics = self.settings == Some(SettingsSection::Memory);
+        if load_topics {
+            self.memory_loading = true;
+            self.memory_load_error = None;
+        }
         let work = cx.background_executor().spawn(async move {
-            Ok::<_, String>((bot::load_files(&root, &bot)?, habits::load(&root, &bot.id)?))
+            let files = bot::load_files(&root, &bot)?;
+            let topics = load_topics.then(|| files::load_memory_topics(&root, &files));
+            Ok::<_, String>((files, habits::load(&root, &bot.id)?, topics))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 if this.active.as_deref() == Some(&id) && this.file_load_revision == revision {
                     match result {
-                        Ok((files, habits)) => {
+                        Ok((files, habits, topics)) => {
                             this.files = Some(files);
                             this.habits = habits;
+                            if let Some(topics) = topics {
+                                this.publish_memory_topics(topics);
+                            }
                         }
-                        Err(error) => this.error = Some(error),
+                        Err(error) => {
+                            this.memory_load_error = Some(error.clone());
+                            this.error = Some(error);
+                        }
                     }
+                    this.memory_loading = false;
                     cx.notify();
                 }
             });

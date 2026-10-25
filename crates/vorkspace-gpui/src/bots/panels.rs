@@ -1461,6 +1461,12 @@ impl Bots {
                                                         move |this, _, window, cx| {
                                                             this.save_open_file(cx);
                                                             this.settings = Some(tab);
+                                                            if tab == SettingsSection::Memory
+                                                                && let Some(id) =
+                                                                    this.active.clone()
+                                                            {
+                                                                this.reload_files(&id, cx);
+                                                            }
                                                             window.focus(&this.settings_focus, cx);
                                                             cx.notify();
                                                         },

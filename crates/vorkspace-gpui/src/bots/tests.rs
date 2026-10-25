@@ -3,6 +3,8 @@ use gpui::{TestAppContext, WindowHandle};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, mpsc};
 use vorkspace_core::store::Store;
+#[path = "memory_tests.rs"]
+mod memory_tests;
 struct Setup {
     window: WindowHandle<Shell>,
     manager: Entity<Bots>,
@@ -1564,10 +1566,18 @@ fn memory_editor_saves_with_enter_and_stays_open_for_the_next_fact(cx: &mut Test
     let s = setup(cx);
     cx.update(input::bind);
     s.window
-        .update(cx, |_, _, cx| {
+        .update(cx, |_, window, cx| {
             s.manager.update(cx, |m, cx| {
                 m.settings = Some(SettingsSection::Memory);
-                m.memory_adding = true;
+                m.begin_memory_editor(
+                    memory_ui::MemoryTarget {
+                        bot: s.id.clone(),
+                        topic: None,
+                        original: None,
+                    },
+                    window,
+                    cx,
+                );
                 cx.notify();
             })
         })
@@ -1576,7 +1586,8 @@ fn memory_editor_saves_with_enter_and_stays_open_for_the_next_fact(cx: &mut Test
     visual.run_until_parked();
     s.window
         .update(visual, |_, w, cx| {
-            let field = s.manager.read(cx).fields["memory-fact"].clone();
+            let m = s.manager.read(cx);
+            let field = m.fields[&m.memory_editor.as_ref().unwrap().key].clone();
             w.focus(&field.focus_handle(cx), cx);
         })
         .unwrap();
@@ -1592,8 +1603,9 @@ fn memory_editor_saves_with_enter_and_stays_open_for_the_next_fact(cx: &mut Test
     );
     visual.update(|_, cx| {
         let m = s.manager.read(cx);
-        assert!(m.memory_adding);
-        assert!(m.fields["memory-fact"].read(cx).content.is_empty());
+        let editor = m.memory_editor.as_ref().unwrap();
+        assert!(editor.target.original.is_none());
+        assert!(m.fields[&editor.key].read(cx).content.is_empty());
     });
 }
 

@@ -1,6 +1,50 @@
 use super::*;
 use vorkspace_core::bot::files;
 
+// Settings reads topic bodies only on demand. Keep this separate from AgentFiles,
+// whose root memory and topic catalog are also used to build the model prompt.
+pub(super) fn load_memory_topics(
+    root: &std::path::Path,
+    snapshot: &AgentFiles,
+) -> Result<Vec<memory_ui::MemoryTopic>, String> {
+    let entries = std::fs::read_dir(std::path::Path::new(&snapshot.dir).join("memory"))
+        .map_err(|e| format!("Could not list memory topics: {e}"))?;
+    let mut topics = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Could not list memory topics: {e}"))?;
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        if !file_type.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(name) = name.strip_suffix(".md") else {
+            continue;
+        };
+        if name == "archive" || name.starts_with('.') {
+            continue;
+        }
+        // The catalog already contains stems. Do not let read/edit's friendly
+        // name normalization alias an unusual filename to a different topic.
+        let result = bot::memory::topic(name).and_then(|normalized| {
+            if normalized != name {
+                return Err("This topic filename cannot be edited safely".into());
+            }
+            bot::memory::read(root, &snapshot.id, Some(name))
+        });
+        let (text, error) = match result {
+            Ok(file) => (file.text, None),
+            Err(error) => (None, Some(error)),
+        };
+        topics.push(memory_ui::MemoryTopic {
+            name: name.into(),
+            text,
+            error,
+        });
+    }
+    topics.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(topics)
+}
+
 impl Bots {
     pub(crate) fn reset_defaults(
         &mut self,
