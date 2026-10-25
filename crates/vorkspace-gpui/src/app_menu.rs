@@ -113,6 +113,7 @@ pub(crate) fn init(cx: &mut App) {
     }
     workspace_commands!(
         crate::Quit,
+        crate::Restart,
         shell::OpenSettings,
         shell::OpenProject,
         shell::GoToFile,
@@ -195,6 +196,8 @@ pub(crate) fn build(prefs: &Preferences) -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action("Settings…", shell::OpenSettings),
             MenuItem::action("Check for Updates…", CheckUpdates),
+            MenuItem::separator(),
+            MenuItem::action("Restart vorkspace", crate::Restart),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),

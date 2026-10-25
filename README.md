@@ -16,7 +16,7 @@ Install a current stable Rust toolchain, Node.js 24 or newer, and Xcode with mac
 npm run dev -- --cwd /path/to/project
 ```
 
-Development opens isolated data. No npm dependency install is needed to compile the committed native assets. Type `r` then Enter to rebuild and restart.
+Development defaults to release performance and normal desktop data (`vorkspace.db`), installing directly to `/Applications/vorkspace.app` on macOS. Pass `--native-dev` for the development profile or `--dev-data` for isolated data. Type `r` then Enter in the dev runner to rebuild and restart. After `npm run build`, press `⌘⌥R` inside vorkspace to restart with the installed build.
 
 ```sh
 npm ci
@@ -24,7 +24,7 @@ npm test
 npm run build
 ```
 
-The macOS release bundle is `target/release/vorkspace.app`. Release builds use existing desktop data; use `--dev-data` for an isolated launch. The build does not install, publish, or update an application automatically.
+The macOS release bundle is `target/release/vorkspace.app`, which local macOS builds install directly to `/Applications/vorkspace.app`. Both release and dev runs use existing desktop data by default; use `--dev-data` for an isolated launch.
 
 ## Features and architecture
 

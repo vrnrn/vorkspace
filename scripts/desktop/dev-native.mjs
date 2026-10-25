@@ -1,9 +1,30 @@
 import { spawn } from "node:child_process";
-import { join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { delimiter, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { installAppBundle } from "./build-native.mjs";
 
 const workspace = fileURLToPath(new URL("../../", import.meta.url));
+
+export function resolveNativeEnv(base = process.env, platform = process.platform) {
+  const env = { ...base };
+  const home = homedir();
+  const cargoBin = join(home, ".cargo", "bin");
+  if (existsSync(cargoBin) && (!env.PATH || !env.PATH.includes(cargoBin))) {
+    env.PATH = `${cargoBin}${delimiter}${env.PATH || ""}`;
+  }
+  if (platform === "darwin") {
+    const rustLib = join(home, ".rustup", "toolchains", "stable-aarch64-apple-darwin", "lib");
+    if (existsSync(rustLib) && (!env.DYLD_FALLBACK_LIBRARY_PATH || !env.DYLD_FALLBACK_LIBRARY_PATH.includes(rustLib))) {
+      env.DYLD_FALLBACK_LIBRARY_PATH = env.DYLD_FALLBACK_LIBRARY_PATH
+        ? `${rustLib}${delimiter}${env.DYLD_FALLBACK_LIBRARY_PATH}`
+        : rustLib;
+    }
+  }
+  return env;
+}
 
 function track(child) {
   // Attach immediately: short-lived processes can exit before a caller awaits them.
@@ -19,12 +40,14 @@ export async function startDev({
   args = [],
   platform = process.platform,
   spawnProcess = spawn,
+  installBundle = installAppBundle,
   env = process.env,
   log = (message) => console.log(`[dev] ${message}`),
   debounce = 300,
+  profile = "release",
 } = {}) {
   const bundle = platform === "darwin";
-  const buildEnv = { ...env, CARGO_BUILD_JOBS: env.CARGO_BUILD_JOBS || "1" };
+  const buildEnv = resolveNativeEnv(env, platform);
   const launch = (command, argv, options = {}) => track(spawnProcess(command, argv, {
     cwd: root, env: buildEnv, stdio: "inherit", ...options,
   }));
@@ -42,7 +65,7 @@ export async function startDev({
     const previous = app;
     if (!previous) return;
     app = undefined;
-    // The opt-in debug hook invokes the app's normal persistence/provider cleanup.
+    // The opt-in stdin hook invokes the app's normal persistence/provider cleanup.
     previous.stdin.end("quit\n");
     const force = setTimeout(() => {
       log("App did not finish shutting down within 10s; terminating it.");
@@ -82,7 +105,8 @@ export async function startDev({
         const target = buildEnv.CARGO_BUILD_TARGET
           ? join(metadata.target_directory, buildEnv.CARGO_BUILD_TARGET)
           : metadata.target_directory;
-        const result = await run("cargo", ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", pkg.name, "--bin", pkg.name, "--profile", "native-dev"]);
+        const cargoProfile = profile === "release" ? ["--release"] : ["--profile", profile];
+        const result = await run("cargo", ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", pkg.name, "--bin", pkg.name, ...cargoProfile]);
         if (closing) return;
         if (result.code !== 0) {
           log("Build failed. Keeping the current app; type r to retry after fixing the error.");
@@ -90,21 +114,26 @@ export async function startDev({
         }
         // Another restart request during compilation gets a fresh build first.
         if (builtRevision !== revision) continue;
-        let executable = join(target, "native-dev", platform === "win32" ? "vorkspace-gpui.exe" : "vorkspace-gpui");
+        let executable = join(target, profile, platform === "win32" ? "vorkspace-gpui.exe" : "vorkspace-gpui");
         if (bundle) {
           const dataMode = args.reduce((mode, arg, index) => {
             if (["--cwd", "--vorkspace-db"].includes(args[index - 1])) return mode;
             if (arg === "--dev-data") return "dev-data";
             if (arg === "--vorkspace-data") return "vorkspace-data";
             return mode;
-          }, "dev-data");
-          const packaged = await run("bash", ["scripts/desktop/bundle-native-macos.sh", "native-dev", target, pkg.version, dataMode]);
+          }, "vorkspace-data");
+          const packaged = await run("bash", ["scripts/desktop/bundle-native-macos.sh", profile, target, pkg.version, dataMode]);
           if (closing) return;
           if (packaged.code !== 0) {
             log("App packaging failed. Fix the error, then type r to retry.");
             continue;
           }
-          executable = join(target, "native-dev", "vorkspace.app", "Contents", "MacOS", "vorkspace-gpui");
+          const bundledApp = join(target, profile, "vorkspace.app");
+          executable = join(bundledApp, "Contents", "MacOS", "vorkspace-gpui");
+          if (profile === "release" && !buildEnv.CI && buildEnv.VORKSPACE_NO_INSTALL !== "1"
+            && installBundle(bundledApp)) {
+            executable = "/Applications/vorkspace.app/Contents/MacOS/vorkspace-gpui";
+          }
         }
         if (builtRevision !== revision) continue;
         await stopApp();
@@ -166,14 +195,20 @@ export async function startDev({
 }
 
 export function parseDevArgs(argv) {
-  const options = { args: [] };
+  const options = { args: [], profile: "release" };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === "--") {
       options.args.push(...argv.slice(index + 1));
       break;
     }
-    if (["--watch", "--bundle"].includes(arg)) {
+    if (arg === "--native-dev") {
+      options.profile = "native-dev";
+    } else if (arg === "--profile" && index + 1 < argv.length) {
+      options.profile = argv[++index];
+    } else if (arg.startsWith("--profile=")) {
+      options.profile = arg.slice("--profile=".length);
+    } else if (["--watch", "--bundle"].includes(arg)) {
       throw new Error(`${arg} is not supported. Use npm run dev, then type r and Enter to rebuild and restart.`);
     } else {
       options.args.push(arg);

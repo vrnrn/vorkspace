@@ -1734,6 +1734,33 @@ impl Shell {
         })
         .detach();
     }
+    fn request_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.unsaved_files(cx) {
+            crate::restart(cx);
+            return;
+        }
+        if self.quit_prompted {
+            return;
+        }
+        self.quit_prompted = true;
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            "Restart with unsaved file edits?",
+            Some("Save your files before restarting to keep your changes."),
+            &["Restart Without Saving", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.await;
+            let _ = this.update(cx, |this, cx| {
+                this.quit_prompted = false;
+                if matches!(answer, Ok(0)) {
+                    crate::restart(cx);
+                }
+            });
+        })
+        .detach();
+    }
     fn active_review(
         &mut self,
         cx: &mut Context<Self>,
@@ -7278,6 +7305,11 @@ impl Render for Shell {
                 cx.listener(|this, _: &crate::Quit, window, cx| this.request_quit(window, cx)),
             )
             .on_action(
+                cx.listener(|this, _: &crate::Restart, window, cx| {
+                    this.request_restart(window, cx)
+                }),
+            )
+            .on_action(
                 cx.listener(|this, _: &GoToFile, window, cx| {
                     this.open_quick_open(false, window, cx)
                 }),
@@ -10428,6 +10460,12 @@ mod tests {
         // Native menu-bar and status-menu Quit enter through the application
         // action. Cancelling must retain the same dirty editor and live window.
         cx.cx.update(|cx| cx.dispatch_action(&crate::Quit));
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        // Restart also guards dirty files before tearing down the process.
+        cx.cx.update(|cx| cx.dispatch_action(&crate::Restart));
         cx.run_until_parked();
         assert!(cx.has_pending_prompt());
         cx.simulate_prompt_answer("Cancel");

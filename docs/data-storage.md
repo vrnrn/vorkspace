@@ -1,10 +1,10 @@
 # Data selection and continuity
 
-Development builds use an isolated `vorkspace.db` under `vorkspace Native Development` in the platform's application-data directory. `VORKSPACE_NATIVE_DATA_DIR` overrides that directory. Release builds use the existing desktop store.
+All desktop launches use the existing production database by default, keeping sessions and project continuity persistent across builds. Isolated development data under `vorkspace Native Development` is used only when explicitly requested with `--dev-data`. `VORKSPACE_NATIVE_DATA_DIR` overrides the development directory.
 
 ```sh
+npm run dev
 npm run dev -- --dev-data
-npm run dev -- --vorkspace-data
 npm run dev -- --vorkspace-db /absolute/path/to/store.db
 ```
 

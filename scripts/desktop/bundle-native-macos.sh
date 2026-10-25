@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Package an already-built native executable; do not build or launch the app.
-# Development bundles use separate data; release bundles use installed app data.
+# Both profiles use desktop data unless isolated development data is requested.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 if [ "$(uname -s)" != Darwin ]; then
@@ -11,11 +11,7 @@ fi
 native_profile="${1:-release}"
 native_target="${2:-${CARGO_TARGET_DIR:-target}}/$native_profile"
 native_version="${3:-$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml)}"
-if [ "$native_profile" = release ]; then
-  native_data_mode="${4:-vorkspace-data}"
-else
-  native_data_mode="${4:-dev-data}"
-fi
+native_data_mode="${4:-vorkspace-data}"
 case "$native_data_mode" in
   dev-data|vorkspace-data) ;;
   *) echo "Unknown data mode: $native_data_mode" >&2; exit 1 ;;
@@ -42,7 +38,6 @@ cp crates/vorkspace-gpui/assets/hugeicons.LICENSE \
   crates/vorkspace-gpui/assets/dark-plus.LICENSE \
   crates/vorkspace-gpui/assets/native-editor.LICENSE.txt "$native_licenses/"
 cp crates/vorkspace-gpui/assets/material/LICENSE "$native_licenses/material-icons.LICENSE"
-rm -f "$native_licenses/Geist-OFL.txt"
 # Launch the binary itself: an exec'ing launcher changes the pid version, and macOS
 # then refuses the menu bar item. The app reads VorkspaceDataMode from Info.plist.
 native_executable="vorkspace-gpui"

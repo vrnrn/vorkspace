@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
-test("Finder launches use development data for dev bundles and installed data for release bundles", {
+test("Finder launches use normal desktop data by default and honor explicit isolation in either profile", {
   skip: process.platform === "win32",
 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "vorkspace-bundle-data-"));
@@ -25,10 +25,10 @@ test("Finder launches use development data for dev bundles and installed data fo
     await chmod(join(bin, name), 0o755);
   }
   for (const [profile, override, mode] of [
-    ["native-dev", undefined, "dev-data"],
+    ["native-dev", undefined, "vorkspace-data"],
     ["release", undefined, "vorkspace-data"],
     ["release", "dev-data", "dev-data"],
-    ["native-dev", "vorkspace-data", "vorkspace-data"],
+    ["native-dev", "dev-data", "dev-data"],
   ]) {
     await t.test(`${profile}: ${override ?? "default"}`, async () => {
       const output = join(target, profile);

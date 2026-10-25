@@ -1,12 +1,23 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const buildScript = new URL("../../crates/vorkspace-gpui/build.rs", import.meta.url);
+function resolveNativeEnv(base = process.env) {
+  const env = { ...base };
+  const home = homedir();
+  const cargoBin = join(home, ".cargo", "bin");
+  if (existsSync(cargoBin) && (!env.PATH || !env.PATH.includes(cargoBin))) {
+    env.PATH = `${cargoBin}${delimiter}${env.PATH || ""}`;
+  }
+  return env;
+}
+const nativeEnv = resolveNativeEnv(process.env);
 // The first Cargo build on a fresh Windows runner can exceed one minute.
 const cargoTimeout = process.platform === "win32" ? 180_000 : 60_000;
 
@@ -32,7 +43,7 @@ edition = "2024"
   const cargo = (...args) => {
     const result = spawnSync("cargo", [...args, "--offline"], {
       cwd: root,
-      env: { ...process.env, CARGO_TARGET_DIR: join(root, "target"), CARGO_TERM_COLOR: "never" },
+      env: { ...nativeEnv, CARGO_TARGET_DIR: join(root, "target"), CARGO_TERM_COLOR: "never" },
       encoding: "utf8",
       timeout: cargoTimeout,
     });
@@ -86,7 +97,7 @@ test("GPUI refuses to enable screen capture before compiling its implementation"
   const result = spawnSync("rustc", [
     fileURLToPath(new URL("../../vendor/gpui-pre/build.rs", import.meta.url)),
     "--edition", "2024", "--cfg", 'feature="screen-capture"', "--out-dir", f.root,
-  ], { encoding: "utf8", timeout: 60_000 });
+  ], { env: nativeEnv, encoding: "utf8", timeout: 60_000 });
   assert.ifError(result.error);
   assert.notEqual(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stderr, /Screen capture is disabled in Vorkspace/);
