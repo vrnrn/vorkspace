@@ -11,6 +11,8 @@ mod links;
 mod live_phase;
 mod mascot;
 mod measurements;
+#[cfg(test)]
+mod metrics_tests;
 mod outline;
 mod peers;
 pub(crate) mod phases;
@@ -493,6 +495,8 @@ pub(crate) struct TranscriptView {
     step_queue: HashMap<usize, Instant>,
     seen_steps: HashSet<usize>,
     pub(crate) turns: HashMap<usize, vorkspace_core::agent::TurnInfo>,
+    #[cfg(test)]
+    tooltip_text: std::cell::RefCell<Vec<gpui::TextLayout>>,
     provider: String,
     model: String,
     active_provider_turn_id: Option<String>,
@@ -730,12 +734,20 @@ impl TranscriptView {
             _ if copied || pending => 1.,
             _ => 0.,
         };
-        let completed_at = self
-            .turns
+        // Group identity owns the actions, but accounting belongs to one
+        // provider run. Select from represented messages before looking up its
+        // metadata: a legacy continuation must not inherit an older receipt.
+        let info = self
+            .messages
             .iter()
-            .filter(|(run, _)| self.bot_group_start(**run) == turn)
-            .max_by_key(|(run, _)| *run)
-            .and_then(|(_, info)| info.completed_at);
+            .rev()
+            .find(|message| {
+                message.turn == turn && !matches!(message.role.as_str(), "user" | "bot-system")
+            })
+            .and_then(|message| self.turns.get(&message.run))
+            .cloned()
+            .unwrap_or_default();
+        let metrics = info.metrics.filter(|metrics| metrics.reported());
         let dot = || {
             div()
                 .size(px(3.))
@@ -743,8 +755,9 @@ impl TranscriptView {
                 .rounded_full()
                 .bg(content(0.25))
         };
+        let empty = output.is_empty();
         let mut actions = div().flex().flex_shrink_0().items_center().gap_1();
-        if output.is_empty() {
+        if empty {
             actions = actions.child(icon("check", 14.).text_color(content(0.4)));
         } else {
             let text = output.clone();
@@ -820,6 +833,13 @@ impl TranscriptView {
                     })),
                 );
         }
+        if metrics.is_some() {
+            // Reserve the complete strip so the sibling clock cannot overlap
+            // the buttons during intrinsic flex measurement.
+            actions = actions
+                .w(px(if empty { 14. } else { 74. } + 29.))
+                .child(self.response_metrics_button(turn, cx));
+        }
         div()
             .id(("bot-turn-actions", turn))
             .h(px(24.))
@@ -834,7 +854,7 @@ impl TranscriptView {
             .text_color(content(0.4))
             .opacity(opacity)
             .child(actions)
-            .when_some(completed_at, |d, time| {
+            .when_some(info.completed_at, |d, time| {
                 d.child(dot()).child(
                     div()
                         .flex_shrink_0()
@@ -842,6 +862,7 @@ impl TranscriptView {
                         .child(vorkspace_core::response::local_clock(time)),
                 )
             })
+            .children(self.response_metrics_tooltip(turn, &info))
             .into_any_element()
     }
     /// The Bot signs a group of turns; each run owns its inline work receipt.
@@ -1757,6 +1778,111 @@ impl TranscriptView {
         }
         cx.notify();
     }
+    fn response_metrics_button(
+        &mut self,
+        turn: usize,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let anchor = self
+            .action_anchors
+            .entry((turn, "metrics"))
+            .or_default()
+            .clone();
+        response_actions::button(
+            turn,
+            "response-metrics",
+            "Turn metrics",
+            "response-metrics",
+            false,
+        )
+        .role(Role::Image)
+        .debug_selector(move || format!("response-metrics-{turn}"))
+        .ml(px(3.))
+        .child(anchor.probe())
+        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+            this.action_hover(turn, "metrics", *hovered, cx)
+        }))
+    }
+    fn response_metrics_tooltip(
+        &self,
+        turn: usize,
+        info: &vorkspace_core::agent::TurnInfo,
+    ) -> Option<crate::popover::Popover> {
+        if self.hovered_action != Some((turn, "metrics")) {
+            return None;
+        }
+        let metrics = info.metrics.filter(|metrics| metrics.reported())?;
+        let mut summary = Vec::new();
+        if let Some(hit) = metrics.cache_hit_percent.filter(|hit| hit.is_finite()) {
+            summary.push(format!("Cache hit {hit:.0}%"));
+        }
+        if info.duration_ms > 0 && metrics.output_tokens > 0 {
+            summary.push(format!(
+                "Output {:.0} tok/s",
+                metrics.output_tokens as f64 / (info.duration_ms as f64 / 1000.)
+            ));
+        }
+        let headline = if summary.is_empty() {
+            "Turn tokens".into()
+        } else {
+            summary.join(" · ")
+        };
+        let detail = [
+            (metrics.input_tokens, "input"),
+            (metrics.output_tokens, "output"),
+            (metrics.cache_read_tokens, "cached"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, label)| format!("{} {label}", vorkspace_core::context::format_tokens(n)))
+        .collect::<Vec<_>>()
+        .join(" · ");
+        self.response_tooltip(turn, "metrics", headline, Some(detail))
+    }
+    fn response_tooltip(
+        &self,
+        turn: usize,
+        action: &'static str,
+        headline: String,
+        detail: Option<String>,
+    ) -> Option<crate::popover::Popover> {
+        let anchor = self.action_anchors.get(&(turn, action))?;
+        let headline = gpui::StyledText::new(headline);
+        let detail = detail.map(gpui::StyledText::new);
+        // Retain the actual laid-out text for rendered hover regressions. The
+        // test platform does not activate native accessibility callbacks.
+        #[cfg(test)]
+        {
+            let mut layouts = self.tooltip_text.borrow_mut();
+            layouts.clear();
+            layouts.push(headline.layout().clone());
+            layouts.extend(detail.as_ref().map(|text| text.layout().clone()));
+        }
+        Some(
+            popover(("response-tooltip", turn), Anchor::Slot(anchor.clone()))
+                .side(Side::Top)
+                .max_width(if action == "metrics" { 300. } else { 240. })
+                .padding(8.)
+                .child(
+                    div()
+                        .debug_selector(move || format!("response-tooltip-content-{turn}"))
+                        .flex()
+                        .flex_col()
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(content(1.))
+                        .child(headline)
+                        .when_some(detail, |d, detail| {
+                            d.child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(content(0.5))
+                                    .child(detail),
+                            )
+                        }),
+                ),
+        )
+    }
     fn response_actions(
         &mut self,
         turn: usize,
@@ -1911,26 +2037,7 @@ impl TranscriptView {
             );
         }
         if metrics.is_some() {
-            let anchor = self
-                .action_anchors
-                .entry((turn, "metrics"))
-                .or_default()
-                .clone();
-            actions = actions.child(
-                response_actions::button(
-                    turn,
-                    "response-metrics",
-                    "Turn metrics",
-                    "response-metrics",
-                    false,
-                )
-                .role(Role::Image)
-                .ml(px(3.))
-                .child(anchor.probe())
-                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    this.action_hover(turn, "metrics", *hovered, cx)
-                })),
-            );
+            actions = actions.child(self.response_metrics_button(turn, cx));
         }
         let dot = || {
             div()
@@ -1971,76 +2078,22 @@ impl TranscriptView {
         if let Some((hover_turn, action)) = self.hovered_action
             && hover_turn == turn
         {
-            let (headline, detail) = match action {
-                "copy" => (if copied { "Copied" } else { "Copy response" }.into(), None),
-                "note" => (
-                    if saved {
-                        "Saved to Notes"
-                    } else {
-                        "Save as note"
-                    }
-                    .into(),
-                    None,
-                ),
-                "handoff" => ("Handoff".into(), None),
-                "opinion" => ("Second opinion".into(), None),
-                _ => {
-                    let metrics = metrics.unwrap_or_default();
-                    let mut summary = Vec::new();
-                    if let Some(hit) = metrics.cache_hit_percent {
-                        summary.push(format!("Cache hit {hit:.0}%"));
-                    }
-                    if info.duration_ms > 0 && metrics.output_tokens > 0 {
-                        summary.push(format!(
-                            "Output {:.0} tok/s",
-                            metrics.output_tokens as f64 / (info.duration_ms as f64 / 1000.)
-                        ));
-                    }
-                    let headline = if summary.is_empty() {
-                        "Turn tokens".into()
-                    } else {
-                        summary.join(" · ")
-                    };
-                    let detail = [
-                        (metrics.input_tokens, "input"),
-                        (metrics.output_tokens, "output"),
-                        (metrics.cache_read_tokens, "cached"),
-                    ]
-                    .into_iter()
-                    .filter(|(n, _)| *n > 0)
-                    .map(|(n, label)| {
-                        format!("{} {label}", vorkspace_core::context::format_tokens(n))
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                    (headline, Some(detail))
-                }
+            let headline = match action {
+                "copy" => Some(if copied { "Copied" } else { "Copy response" }),
+                "note" => Some(if saved {
+                    "Saved to Notes"
+                } else {
+                    "Save as note"
+                }),
+                "handoff" => Some("Handoff"),
+                "opinion" => Some("Second opinion"),
+                _ => None,
             };
-            if let Some(anchor) = self.action_anchors.get(&(turn, action)) {
-                row = row.child(
-                    popover(("response-tooltip", turn), Anchor::Slot(anchor.clone()))
-                        .side(Side::Top)
-                        .max_width(if action == "metrics" { 300. } else { 240. })
-                        .padding(8.)
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .text_size(px(12.))
-                                .line_height(px(16.))
-                                .text_color(content(1.))
-                                .child(headline)
-                                .when_some(detail, |d, detail| {
-                                    d.child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .text_color(content(0.5))
-                                            .child(detail),
-                                    )
-                                }),
-                        ),
-                );
-            }
+            row = row.children(if let Some(headline) = headline {
+                self.response_tooltip(turn, action, headline.into(), None)
+            } else {
+                self.response_metrics_tooltip(turn, &info)
+            });
         }
         row.into_any_element()
     }
@@ -2135,6 +2188,8 @@ impl TranscriptView {
             step_queue: HashMap::new(),
             seen_steps: HashSet::new(),
             turns: HashMap::new(),
+            #[cfg(test)]
+            tooltip_text: Default::default(),
             provider: "codex".into(),
             model: "Codex".into(),
             active_provider_turn_id: None,
