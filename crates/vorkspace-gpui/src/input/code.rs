@@ -573,6 +573,11 @@ impl Input {
     pub(crate) fn word_wrap(&self) -> bool {
         self.code.as_ref().is_some_and(|c| c.wrap)
     }
+    pub(super) fn code_rail_hovered(&self) -> bool {
+        self.code
+            .as_ref()
+            .is_some_and(|code| code.hovered || code.drag_offset.is_some())
+    }
     pub(crate) fn editor_analysis(&self) -> &Analysis {
         &self.code.as_ref().unwrap().analysis
     }
@@ -1310,7 +1315,6 @@ pub(super) struct CodePaint {
     deleted: Vec<(f32, WrappedLine, usize)>,
     scroll: Point<Pixels>,
     text_bounds: Bounds<Pixels>,
-    text_hitbox: gpui::Hitbox,
 }
 impl IntoElement for CodeElement {
     type Element = Self;
@@ -1753,7 +1757,6 @@ impl Element for CodeElement {
             deleted,
             scroll,
             text_bounds,
-            text_hitbox: w.insert_hitbox(text_bounds, gpui::HitboxBehavior::Normal),
         }
     }
     fn paint(
@@ -1769,11 +1772,6 @@ impl Element for CodeElement {
         let i = self.input.read(cx);
         let code = i.code.as_ref().unwrap();
         let lh = i.line_height();
-        // The gutter and scrollbar are controls. Only the editable text viewport
-        // owns the I-beam, including blank space where a click can place the caret.
-        if code.drag_offset.is_none() {
-            w.set_cursor_style(CursorStyle::IBeam, &state.text_hitbox);
-        }
         let cursor = i.cursor();
         let selected = i.selection.clone();
         let focused = i.focus.is_focused(w);
