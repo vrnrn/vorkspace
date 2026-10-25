@@ -168,6 +168,9 @@ impl Conversation {
                         if let Some(head) = this.follow_ups.state.messages.first_mut() {
                             head.error = Some(this.status.clone());
                         }
+                        if error.contains("another window") {
+                            this.refresh_if_stale(cx);
+                        }
                     }
                     Err(_) => {}
                 }

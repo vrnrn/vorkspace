@@ -7167,6 +7167,10 @@ impl Render for Shell {
                     this.window_active = window.is_window_active();
                     if this.window_active {
                         crate::app_menu::remember(window, cx);
+                        let sessions: Vec<_> = this.sessions.values().cloned().collect();
+                        for view in sessions {
+                            view.update(cx, |v, cx| v.refresh_if_stale(cx));
+                        }
                     }
                     this.refresh_notification_permission();
                     cx.notify();

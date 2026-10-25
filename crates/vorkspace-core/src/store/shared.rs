@@ -112,6 +112,36 @@ impl HistoryRevision {
     fn matches(&self, blocks: &[Value]) -> bool {
         *self == Self::of(blocks)
     }
+    fn fast_forwards(&self, blocks: &[Value]) -> bool {
+        match self {
+            Self::Digest(_) => {
+                if blocks.is_empty() {
+                    return false;
+                }
+                for prefix_len in (1..blocks.len()).rev() {
+                    if *self == Self::of(&blocks[..prefix_len]) {
+                        return true;
+                    }
+                }
+                let non_draft: Vec<Value> = blocks
+                    .iter()
+                    .filter(|b| b["draft"] != true)
+                    .cloned()
+                    .collect();
+                if non_draft.is_empty() {
+                    return false;
+                }
+                for prefix_len in (1..=non_draft.len()).rev() {
+                    if *self == Self::of(&non_draft[..prefix_len]) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Self::Stored(_) => false,
+            Self::Invalidated => false,
+        }
+    }
 }
 
 fn sql<T>(result: rusqlite::Result<T>) -> Result<T, String> {
@@ -850,7 +880,7 @@ impl Store {
         self.shared_writable()?;
         let tx = sql(self.conn.unchecked_transaction())?;
         let mut blocks = self.shared_blocks(id)?;
-        self.shared_validate_history(id, &blocks)?;
+        self.shared_validate_history_or_fast_forward(id, &blocks)?;
         let (session_provider, session_model): (String, String) = sql(self.conn.query_row(
             "SELECT harness,model FROM sessions WHERE id=?1",
             [self.persisted_session_id(id)?],
@@ -1875,7 +1905,7 @@ impl Store {
             ],
         )?;
         let mut blocks = self.shared_blocks(id)?;
-        self.shared_validate_history(id, &blocks)?;
+        self.shared_validate_history_or_fast_forward(id, &blocks)?;
 
         let old_draft = blocks.iter().find(|b| b["draft"] == true).cloned();
         blocks.retain(|b| b["draft"] != true);

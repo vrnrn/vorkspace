@@ -161,6 +161,7 @@ pub(crate) struct Conversation {
     status: String,
     loaded: bool,
     history_unloaded: bool,
+    loaded_history_revision: Option<i64>,
     history_actions: std::collections::VecDeque<history::HistoryAction>,
     pending_search: Option<(usize, String)>,
     loading: bool,
@@ -595,6 +596,7 @@ impl Conversation {
             status: "Loading conversation…".into(),
             loaded: false,
             history_unloaded: false,
+            loaded_history_revision: None,
             history_actions: Default::default(),
             pending_search: None,
             loading: false,
@@ -675,7 +677,11 @@ impl Conversation {
             self.reload_history(cx);
             return;
         }
-        if self.loaded || self.loading {
+        if self.loading {
+            return;
+        }
+        if self.loaded {
+            self.refresh_if_stale(cx);
             return;
         }
         self.loading = true;
@@ -694,6 +700,9 @@ impl Conversation {
                 .and_then(|s| s.worktree_cwd.as_deref())
                 .unwrap_or(&cwd);
             let git = crate::git_cache::load(Path::new(execution_cwd)).ok();
+            let rev = locked(&store)
+                .and_then(|s| s.session_history_revision(id))
+                .unwrap_or(0);
             (
                 locked(&store)
                     .and_then(|s| s.load(id))
@@ -706,12 +715,14 @@ impl Conversation {
                     s.recover_local_submissions()?;
                     s.latest_unconfirmed_submission(id)
                 }),
+                rev,
             )
         });
         cx.spawn(async move |this, cx| {
-            let (result, git, settings, context, follow_ups, unconfirmed) = work.await;
+            let (result, git, settings, context, follow_ups, unconfirmed, rev) = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
+                this.loaded_history_revision = Some(rev);
                 this.branch = git.as_ref().and_then(|s| s.current.clone());
                 this.git = git;
                 this.context = context.ok().flatten();
@@ -788,6 +799,78 @@ impl Conversation {
                 }
                 cx.emit(SessionChanged);
                 cx.notify();
+            });
+        })
+        .detach();
+    }
+    pub(crate) fn refresh_if_stale(&mut self, cx: &mut Context<Self>) {
+        if !self.loaded {
+            self.load(cx);
+            return;
+        }
+        if self.loading || self.busy || self.stopping {
+            return;
+        }
+        if self.history_unloaded {
+            self.reload_history(cx);
+            return;
+        }
+        if self.is_remote() {
+            self.refresh_remote_snapshot(cx);
+            return;
+        }
+        let id = self.summary.id;
+        let store = self.store.clone();
+        let current_rev = self.loaded_history_revision;
+        let bot = self.settings.bot.is_some();
+        let work = cx.background_executor().spawn(async move {
+            let store = locked(&store)?;
+            let rev = store.session_history_revision(id).unwrap_or(0);
+            if current_rev == Some(rev) {
+                return Ok::<_, String>(None);
+            }
+            let history = store.load(id)?;
+            let turns = store.agent_settings(id)?.unwrap_or_default().turns;
+            Ok(Some((
+                crate::transcript::PreparedHistory::new(history.rows, bot),
+                turns,
+                rev,
+            )))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(Some((history, turns, rev))) = result {
+                    this.settings.turns = turns.clone();
+                    this.transcript.update(cx, |view, cx| {
+                        view.turns = turns;
+                        view.restore_prepared_history(history, cx);
+                    });
+                    this.loaded_history_revision = Some(rev);
+                    this.status = "Ready".into();
+                    if this.follow_ups.state.paused
+                        && this.follow_ups.state.messages.iter().any(|m| {
+                            m.error
+                                .as_deref()
+                                .is_some_and(|e| e.contains("another window"))
+                        })
+                    {
+                        this.follow_ups.state.paused = false;
+                        for message in &mut this.follow_ups.state.messages {
+                            if message
+                                .error
+                                .as_deref()
+                                .is_some_and(|e| e.contains("another window"))
+                            {
+                                message.error = None;
+                            }
+                        }
+                        this.save_follow_ups(cx);
+                    }
+                    this.sync_review(cx);
+                    cx.emit(SessionChanged);
+                    cx.notify();
+                }
             });
         })
         .detach();

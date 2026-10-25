@@ -716,6 +716,14 @@ impl Store {
             result
         }
     }
+    pub fn session_history_revision(&self, session: i64) -> Result<i64, String> {
+        if self.shared.is_some() {
+            let original = self.persisted_session_id(session)?;
+            self.history_revision(&original)
+        } else {
+            Ok(0)
+        }
+    }
     pub fn load(&self, session: i64) -> Result<Transcript, String> {
         if let Some(remote) = self.remote_session(session)? {
             let Some(id) = remote.session_id.as_deref() else {

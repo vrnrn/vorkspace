@@ -548,6 +548,42 @@ fn concurrent_desktop_changes_are_never_overwritten() {
 }
 
 #[test]
+fn fast_forward_append_in_another_window_allows_saving_drafts_and_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vorkspace.db");
+    let store = Store::open_vorkspace(&path).unwrap();
+    let (id, source) = saved(&store, json!([{"id":"u","role":"user","text":"Original"}]));
+    let _ = store.load(id).unwrap();
+    let other = Connection::open(&path).unwrap();
+    let appended = json!([
+        {"id":"u","role":"user","text":"Original"},
+        {"id":"a","role":"assistant","text":"New reply from another window"}
+    ]);
+    other
+        .execute(
+            "UPDATE sessions SET blocks_json=?2 WHERE id=?1",
+            params![source, appended.to_string()],
+        )
+        .unwrap();
+    let mut state = crate::follow_up::State::default();
+    state.draft = Some(crate::follow_up::Message {
+        id: "draft-1".into(),
+        text: "My new draft prompt".into(),
+        at: 100,
+        ..Default::default()
+    });
+    if let Err(e) = store.save_follow_ups(id, &state) {
+        panic!("save_follow_ups failed with: {e}");
+    }
+    let blocks = store.shared_blocks(id).unwrap();
+    assert_eq!(blocks.len(), 3);
+    assert_eq!(blocks[0]["text"], "Original");
+    assert_eq!(blocks[1]["text"], "New reply from another window");
+    assert_eq!(blocks[2]["draft"], true);
+    assert_eq!(blocks[2]["text"], "My new draft prompt");
+}
+
+#[test]
 fn configuring_the_same_provider_preserves_its_resume_id() {
     let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
     let (id, _) = saved(&store, json!([]));
