@@ -499,7 +499,7 @@ fn rich_inline(
         let style = &run.style;
         if style.code {
             let text = run.text.clone();
-            let file = is_file_chip(&text);
+            let file = is_file_chip(&text) || style.link.is_some();
             let styled = StyledText::new(text.clone());
             let layout = styled.layout().clone();
             let selected = selection.as_ref().map(|s| {
@@ -1043,5 +1043,85 @@ mod file_link_tests {
             Some("/project/docs/src/lib.rs")
         );
         assert_eq!(runs[2].style.link.as_deref(), Some("https://example.com"));
+    }
+
+    #[gpui::test]
+    fn markdown_link_sets_pointing_hand_cursor_on_hover(cx: &mut gpui::TestAppContext) {
+        use gpui::{Context, CursorStyle, VisualTestContext, point, px};
+
+        struct MarkdownTestView {
+            row: MarkdownRow,
+        }
+        impl gpui::Render for MarkdownTestView {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div().w(px(600.)).p(px(20.)).child(body(
+                    &self.row,
+                    "row-1".into(),
+                    Tone::Normal,
+                    None,
+                    std::time::Instant::now(),
+                ))
+            }
+        }
+
+        let runs = vec![
+            InlineRun {
+                text: "hello ".into(),
+                style: InlineStyle::default(),
+            },
+            InlineRun {
+                text: "clickable link".into(),
+                style: InlineStyle {
+                    link: Some("https://example.com".into()),
+                    ..Default::default()
+                },
+            },
+            InlineRun {
+                text: " tail".into(),
+                style: InlineStyle::default(),
+            },
+        ];
+        let row = rows(&Block::Paragraph { runs }).remove(0);
+
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|_| MarkdownTestView { row })
+            })
+            .unwrap()
+        });
+
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+
+        // Hover over the non-link word "hello" (x = 25, y = 25)
+        visual.simulate_mouse_move(point(px(25.), px(25.)), None, Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |_, window, _| {
+                assert_ne!(window.cursor_style(), Some(CursorStyle::PointingHand));
+            })
+            .unwrap();
+
+        // Hover over "clickable link" (x = 90, y = 25)
+        visual.simulate_mouse_move(point(px(90.), px(25.)), None, Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |_, window, _| {
+                assert_eq!(window.cursor_style(), Some(CursorStyle::PointingHand));
+            })
+            .unwrap();
+
+        // Move away to padding / outside link
+        visual.simulate_mouse_move(point(px(5.), px(5.)), None, Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |_, window, _| {
+                assert_ne!(window.cursor_style(), Some(CursorStyle::PointingHand));
+            })
+            .unwrap();
     }
 }

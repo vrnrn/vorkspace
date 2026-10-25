@@ -4268,6 +4268,11 @@ impl Window {
         })
     }
 
+    /// The current cursor style for this window based on the hovered hitbox.
+    pub fn cursor_style(&self) -> Option<CursorStyle> {
+        self.rendered_frame.cursor_style(self)
+    }
+
     /// Sets a tooltip to be rendered for the upcoming frame. This method should only be called
     /// during the paint phase of element drawing.
     pub fn set_tooltip(&mut self, tooltip: AnyTooltip) -> TooltipId {

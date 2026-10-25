@@ -1092,7 +1092,7 @@ impl InteractiveText {
 
 impl Element for InteractiveText {
     type RequestLayoutState = ();
-    type PrepaintState = Hitbox;
+    type PrepaintState = (Hitbox, Vec<Hitbox>);
 
     fn id(&self) -> Option<ElementId> {
         Some(self.element_id.clone())
@@ -1128,7 +1128,7 @@ impl Element for InteractiveText {
         state: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
-    ) -> Hitbox {
+    ) -> Self::PrepaintState {
         window.with_optional_element_state::<InteractiveTextState, _>(
             global_id,
             |interactive_state, window| {
@@ -1149,7 +1149,43 @@ impl Element for InteractiveText {
                 self.text
                     .prepaint(None, inspector_id, bounds, state, window, cx);
                 let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-                (hitbox, interactive_state)
+
+                let mut link_hitboxes = Vec::new();
+                if !self.clickable_ranges.is_empty() {
+                    let layout = self.text.layout();
+                    let bounds = layout.bounds();
+                    let height = layout.line_height();
+                        for range in &self.clickable_ranges {
+                            let start = range.start.min(self.text.text.len());
+                            let end = range.end.min(self.text.text.len());
+                            if start >= end {
+                                continue;
+                            }
+                            if let (Some(a), Some(b)) = (
+                                layout.position_for_index(start),
+                                layout.position_for_index(end),
+                            ) {
+                                let mut y = a.y;
+                                while y <= b.y {
+                                    let left = if y == a.y { a.x } else { bounds.left() };
+                                    let right = if y == b.y { b.x } else { bounds.right() };
+                                    if right > left {
+                                        let rect = Bounds::new(
+                                            crate::point(left, y),
+                                            crate::size(right - left, height),
+                                        );
+                                        link_hitboxes.push(window.insert_hitbox(
+                                            rect,
+                                            HitboxBehavior::Normal,
+                                        ));
+                                    }
+                                    y += height;
+                                }
+                            }
+                        }
+                    }
+
+                ((hitbox, link_hitboxes), interactive_state)
             },
         )
     }
@@ -1160,10 +1196,13 @@ impl Element for InteractiveText {
         inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        hitbox: &mut Hitbox,
+        (hitbox, link_hitboxes): &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
+        for link_hitbox in link_hitboxes {
+            window.set_cursor_style(crate::CursorStyle::PointingHand, link_hitbox);
+        }
         let current_view = window.current_view();
         let text_layout = self.text.layout().clone();
         window.with_element_state::<InteractiveTextState, _>(
@@ -1171,15 +1210,6 @@ impl Element for InteractiveText {
             |interactive_state, window| {
                 let mut interactive_state = interactive_state.unwrap_or_default();
                 if let Some(click_listener) = self.click_listener.take() {
-                    let mouse_position = window.mouse_position();
-                    if let Ok(ix) = text_layout.index_for_position(mouse_position)
-                        && self
-                            .clickable_ranges
-                            .iter()
-                            .any(|range| range.contains(&ix))
-                    {
-                        window.set_cursor_style(crate::CursorStyle::PointingHand, hitbox)
-                    }
 
                     let text_layout = text_layout.clone();
                     let mouse_down = interactive_state.mouse_down_index.clone();
