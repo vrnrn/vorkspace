@@ -6,7 +6,7 @@ use crate::settings::{
 };
 use crate::theme::*;
 use gpui::{
-    AnyElement, Context, Focusable, Role, SharedString, Window, div, img, linear_color_stop,
+    AnyElement, Context, Focusable, Role, SharedString, Window, div, linear_color_stop,
     linear_gradient, prelude::*, px, rgb,
 };
 
@@ -482,6 +482,11 @@ impl SettingsView {
             .filter(|path| std::path::Path::new(path).is_file());
         let empty = p.chat_background_empty;
         let session = p.chat_background_session;
+        let settings = image.as_ref().and_then(|_| p.chat_background_settings());
+        let preview = self.chat_background_preview.clone();
+        preview.update(cx, |preview, cx| {
+            preview.configure(settings, true, None, cx)
+        });
         let preview = div()
             .p_4()
             .child(
@@ -491,16 +496,16 @@ impl SettingsView {
                     .border_1()
                     .border_color(content(0.1))
                     .map(|d| match &image {
-                        Some(path) => d.child(
+                        Some(_) => d.child(
                             div()
                                 .relative()
                                 .h(px(144.))
-                                .child(
-                                    img(std::path::PathBuf::from(path))
-                                        .size_full()
-                                        .object_fit(gpui::ObjectFit::Cover)
-                                        .opacity(empty as f32 / 100.),
-                                )
+                                .bg(if p.chat_background_effect == "gradient-blur" {
+                                    rgb(0x171717).into()
+                                } else {
+                                    content(0.05)
+                                })
+                                .child(self.chat_background_preview.clone())
                                 .child(
                                     div()
                                         .absolute()
