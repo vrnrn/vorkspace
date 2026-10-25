@@ -95,7 +95,7 @@ Programs have no filesystem, network, process, DOM, module loading, or timer bin
 
 ## Local examples
 
-The [dashboard example](../examples/visuals/visual-dashboard.js) exercises charts, tabs, stats, sliders, switches, and tables. The [geometry example](../examples/visuals/visual-scene.js) exercises 3D primitives, orbiting, geometry controls, and 2D drawing. Both examples are checked against the real interpreter in tests.
+The [dashboard example](../crates/vorkspace-gpui/fixtures/visuals/visual-dashboard.js) exercises charts, tabs, stats, sliders, switches, and tables. The [geometry example](../crates/vorkspace-gpui/fixtures/visuals/visual-scene.js) exercises 3D primitives, orbiting, geometry controls, and 2D drawing. Both examples are checked against the real interpreter in tests.
 
 To seed them into an isolated development conversation:
 
