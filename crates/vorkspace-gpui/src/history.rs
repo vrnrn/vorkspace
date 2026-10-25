@@ -9,8 +9,8 @@ use crate::{
 };
 use gpui::{
     App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla, KeyBinding, Role,
-    ScrollStrategy, SharedString, Subscription, UniformListScrollHandle, Window, actions, canvas,
-    div, fill, point, prelude::*, px, rgb, size, uniform_list,
+    SharedString, Subscription, UniformListScrollHandle, Window, actions, canvas, div, fill, point,
+    prelude::*, px, rgb, size, uniform_list,
 };
 use std::{collections::HashMap, path::PathBuf};
 use vorkspace_core::scm::{self, HistoryCommit};
@@ -747,13 +747,6 @@ impl Render for History {
                     .min_h_0(),
                 ),
             })
-    }
-}
-
-impl History {
-    #[allow(dead_code)]
-    fn reveal(&self, ix: usize) {
-        self.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
     }
 }
 

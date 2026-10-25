@@ -222,14 +222,12 @@ pub(super) fn present(call: &ToolCall, fallback_cwd: Option<&str>) -> ToolPresen
             .as_deref()
             .map(|command| command_steps(command, cwd.as_deref()))
             .unwrap_or_default();
-        shown.target = shown
-            .command
-            .as_deref()
-            .unwrap_or(&title)
-            .lines()
-            .next()
-            .unwrap_or("")
-            .into();
+        // Raw execution rows expose the actual command, including shell quoting
+        // and newlines. The normalized script above is only for semantic intent
+        // and chain summaries; it must not shorten the readable command row.
+        shown.target = raw_command
+            .filter(|command| !command.trim().is_empty())
+            .unwrap_or(title);
         // An execution working directory is never a file target.
         shown.file_path = None;
         return shown;
@@ -809,6 +807,32 @@ mod tests {
             assert_eq!(shown.action, "Run", "{command}");
             assert_eq!(shown.target, command);
             assert_eq!(shown.file_path, None);
+        }
+    }
+    #[test]
+    fn raw_execution_targets_preserve_the_entire_original_command() {
+        for command in [
+            "cargo test --package vorkspace-core --lib tool::presentation -- --nocapture".into(),
+            format!("/private/tmp/{}", "unbrokentoken".repeat(400)),
+            "  python -c 'print(\"quoted café 🦀\")\nprint(\"second line 你好\")'\n".into(),
+            "/bin/zsh -lc 'python -c \"print(1)\"'".into(),
+        ] {
+            for name in ["Bash", "commandExecution", "exec_command"] {
+                let input = json!({"arguments": json!({"command": command}).to_string()});
+                let call = call(name, input.clone());
+                let shown = call.presentation_in(Some("/repo"));
+                assert_eq!(shown.action, "Run");
+                assert_eq!(shown.target, command, "{name}");
+                assert_eq!(call.input, input.to_string());
+            }
+        }
+        for empty in ["", " \n"] {
+            assert_eq!(
+                call("Bash", json!({"command": empty}))
+                    .presentation()
+                    .target,
+                "Bash"
+            );
         }
     }
     #[test]

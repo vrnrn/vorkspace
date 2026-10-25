@@ -14,7 +14,7 @@ The desktop has two Rust crates and one process. The remote host is a separate N
 | `scripts/checks/` | Repository/dependency validation and disposable SSH integration checks |
 | `scripts/benchmarks/` | Reproducible synthetic measurements with isolated data |
 | `scripts/assets/` | Icon generation tools |
-| `examples/visuals/` | Visual SDK examples also embedded by development fixtures |
+| `crates/vorkspace-gpui/fixtures/` | Visual SDK sample programs embedded as development fixtures |
 | `vendor/` | Patched GPUI platform dependencies |
 | `licenses/` | Third-party license texts included in the app bundle |
 | `docs/` and `docs/eli5/` | Technical guides and matching plain-English companions |

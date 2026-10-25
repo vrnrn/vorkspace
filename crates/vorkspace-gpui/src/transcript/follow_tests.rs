@@ -701,12 +701,16 @@ fn the_signature_keeps_its_opacity_and_position_when_the_reply_appears(cx: &mut 
     let born = window
         .update(cx, |view, _, cx| {
             view.patch(1, vec![row("assistant", "Here is the reply")], cx);
+            let born = view.entrances[&1];
             view.streaming(false, cx);
             assert!(
                 view.entrances.contains_key(&1),
                 "the response itself still enters"
             );
-            let born = view.entrances[&1];
+            assert_eq!(
+                view.entrances[&1], born,
+                "completion must not replay the live reply entrance"
+            );
             view.fixed_animation_time = Some(born);
             born
         })
@@ -731,7 +735,7 @@ fn the_signature_keeps_its_opacity_and_position_when_the_reply_appears(cx: &mut 
 }
 
 #[gpui::test]
-fn starting_a_request_does_not_reactivate_the_previous_turns_ticker(cx: &mut TestAppContext) {
+fn starting_a_request_does_not_reactivate_the_previous_turns_work_receipt(cx: &mut TestAppContext) {
     let window = chat(cx);
     window
         .update(cx, |view, _, cx| {
@@ -753,7 +757,7 @@ fn starting_a_request_does_not_reactivate_the_previous_turns_ticker(cx: &mut Tes
     {
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         assert!(
-            visual.debug_bounds("bot-turn-ticker").is_none(),
+            visual.debug_bounds("live-work-receipt").is_none(),
             "the completed turn stays settled while the new prompt is being delivered"
         );
     }
@@ -770,13 +774,13 @@ fn starting_a_request_does_not_reactivate_the_previous_turns_ticker(cx: &mut Tes
     render(window, cx);
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
     assert!(
-        visual.debug_bounds("bot-turn-ticker").is_some(),
-        "the new turn shows its thinking ticker"
+        visual.debug_bounds("live-work-receipt").is_some(),
+        "the new turn shows its inline work receipt"
     );
 }
 
 #[gpui::test]
-fn a_notification_continuing_a_turn_does_not_move_the_chat(cx: &mut TestAppContext) {
+fn a_notification_continuing_a_turn_adds_its_inline_receipt_once(cx: &mut TestAppContext) {
     let window = chat(cx);
     window
         .update(cx, |view, _, cx| {
@@ -791,22 +795,56 @@ fn a_notification_continuing_a_turn_does_not_move_the_chat(cx: &mut TestAppConte
         })
         .unwrap();
     render(window, cx);
-    window
-        .update(cx, |view, _, cx| {
+    let before = window
+        .update(cx, |view, window, cx| {
             assert_eq!(view.follow.offset, 0.);
+            view.follow.frame_elapsed = Some(0.);
+            let before = bubble_top(window);
             view.streaming(true, cx);
             view.patch(
                 2,
                 vec![row("bot-system", "Luna replied"), row("assistant", "")],
                 cx,
             );
+            before
         })
         .unwrap();
     render(window, cx);
-    window.update(cx, |view, _, _| {
-        assert!(view.follow.offset.abs() < 0.25,
-            "a hidden notification and replacement footer have no new height, but introduced {}px of movement", view.follow.offset);
-    }).unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    let receipt = visual
+        .debug_bounds("work-fold-3")
+        .expect("the continuation owns an inline receipt");
+    window
+        .update(visual, |view, window, _| {
+            assert!(
+                (view.follow.offset - f32::from(receipt.size.height)).abs() < 0.25,
+                "only the new receipt adds height: {}px vs {:?}",
+                view.follow.offset,
+                receipt.size.height
+            );
+            assert!(
+                (bubble_top(window) - before).abs() < 0.25,
+                "new receipt growth starts at the existing painted position"
+            );
+            assert_eq!(
+                view.rows
+                    .iter()
+                    .filter(|r| matches!(r.body, Body::BotHeader { .. }))
+                    .count(),
+                1
+            );
+            view.follow.reset();
+        })
+        .unwrap();
+    render(window, cx);
+    window
+        .update(cx, |view, _, _| {
+            assert!(
+                view.follow.offset.abs() < 0.25,
+                "the same receipt must not add its height again"
+            );
+        })
+        .unwrap();
 }
 
 #[gpui::test]
@@ -860,35 +898,45 @@ fn queued_messages_contribute_their_height_once(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn changing_hidden_work_status_does_not_move_settled_messages(cx: &mut TestAppContext) {
+fn changing_inline_tool_status_does_not_move_settled_messages(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
     let window = chat(cx);
     window
         .update(cx, |view, _, cx| {
             view.patch(0, vec![row("user", "Write a document")], cx);
             view.streaming(true, cx);
             view.patch(1, vec![row("assistant", "")], cx);
+            view.patch(2, vec![row("tool", r#"{"id":"write","name":"Write","input":"{\"file_path\":\"notes.md\"}","output":"","state":"running"}"#)], cx);
         })
         .unwrap();
     render(window, cx);
-    window.update(cx, |view, _, _| view.follow.reset()).unwrap();
-    for text in [
-        r#"{"id":"write","name":"Write","input":"{\"file_path\":\"notes.md\"}","output":"","state":"running"}"#,
-        r#"{"id":"write","name":"Write","input":"{\"file_path\":\"notes.md\"}","output":"Saved the document","state":"completed"}"#,
-    ] {
-        window
-            .update(cx, |view, _, cx| view.patch(2, vec![row("tool", text)], cx))
-            .unwrap();
-        render(window, cx);
-        window
-            .update(cx, |view, _, _| {
-                assert!(
-                    view.follow.offset.abs() < 0.25,
-                    "a ticker-only change moved the chat {}px",
-                    view.follow.offset
-                );
-            })
-            .unwrap();
-    }
+    cx.update(|cx| cx.set_reduce_motion(false));
+    window
+        .update(cx, |view, _, _| {
+            view.follow.reset();
+            view.follow.frame_elapsed = Some(0.);
+        })
+        .unwrap();
+    render(window, cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    let before = visual
+        .debug_bounds("tool-2")
+        .expect("running work is visible inline");
+    window.update(cx, |view, _, cx| {
+        view.patch(2, vec![row("tool", r#"{"id":"write","name":"Write","input":"{\"file_path\":\"notes.md\"}","output":"Saved the document","state":"completed"}"#)], cx);
+    }).unwrap();
+    render(window, cx);
+    window
+        .update(cx, |view, _, _| {
+            assert!(
+                view.follow.offset.abs() < 0.25,
+                "a tool status change moved the chat {}px",
+                view.follow.offset
+            );
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    assert_eq!(visual.debug_bounds("tool-2").unwrap(), before);
 }
 
 #[test]
@@ -1021,6 +1069,10 @@ fn a_document_and_final_reply_preserve_position_then_glide_up_without_reversing(
             let reply = "Here is another paragraph about the finished document.\n\n".repeat(100);
             view.patch(3, vec![row("assistant", &reply)], cx);
             view.streaming(false, cx);
+            // Text now streams inline as it does in sessions. Isolate the
+            // full-height follow measurement from that independent pacing.
+            view.reveals.get_mut(&3).unwrap().settle(Instant::now());
+            view.rebuild(3, cx);
             view.entrances.clear();
             view.follow.last_frame = None;
         })

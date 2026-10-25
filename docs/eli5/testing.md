@@ -1,6 +1,6 @@
 # Checking changes
 
-Run `npm ci` and `npm run check` for the automated checks. Rebuild the embedded helpers with `npm run assets`. Test launch, save, quit, and reopen using temporary development data.
+Run `npm ci` and `npm run check` for the automated checks, or `npm run check:fast` for a quick local check. Rebuild the embedded helpers with `npm run assets`. Test launch, save, quit, and reopen using temporary development data.
 
 Update tests use disposable copies of the published older app and saved data. They exercise its real installer, restart the new app, check preserved settings and drafts, and reject damaged downloads. Another native update checks Sparkle. These checks can run locally without publishing anything. Draft tests also cover typing during startup and keeping both versions when two windows edit the same unfinished message.
 

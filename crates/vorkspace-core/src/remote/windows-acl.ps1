@@ -1,4 +1,4 @@
-function Protect-VorkspaceDirectory([string] $Path) {
+function Protect-vorkspaceDirectory([string] $Path) {
   $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
   if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw 'The host data directory must not be a link or junction.'

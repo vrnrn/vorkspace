@@ -3,6 +3,8 @@ use gpui::{TestAppContext, WindowHandle};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, mpsc};
 use vorkspace_core::store::Store;
+#[path = "memory_tests.rs"]
+mod memory_tests;
 struct Setup {
     window: WindowHandle<Shell>,
     manager: Entity<Bots>,
@@ -1564,10 +1566,18 @@ fn memory_editor_saves_with_enter_and_stays_open_for_the_next_fact(cx: &mut Test
     let s = setup(cx);
     cx.update(input::bind);
     s.window
-        .update(cx, |_, _, cx| {
+        .update(cx, |_, window, cx| {
             s.manager.update(cx, |m, cx| {
                 m.settings = Some(SettingsSection::Memory);
-                m.memory_adding = true;
+                m.begin_memory_editor(
+                    memory_ui::MemoryTarget {
+                        bot: s.id.clone(),
+                        topic: None,
+                        original: None,
+                    },
+                    window,
+                    cx,
+                );
                 cx.notify();
             })
         })
@@ -1576,7 +1586,8 @@ fn memory_editor_saves_with_enter_and_stays_open_for_the_next_fact(cx: &mut Test
     visual.run_until_parked();
     s.window
         .update(visual, |_, w, cx| {
-            let field = s.manager.read(cx).fields["memory-fact"].clone();
+            let m = s.manager.read(cx);
+            let field = m.fields[&m.memory_editor.as_ref().unwrap().key].clone();
             w.focus(&field.focus_handle(cx), cx);
         })
         .unwrap();
@@ -1592,24 +1603,88 @@ fn memory_editor_saves_with_enter_and_stays_open_for_the_next_fact(cx: &mut Test
     );
     visual.update(|_, cx| {
         let m = s.manager.read(cx);
-        assert!(m.memory_adding);
-        assert!(m.fields["memory-fact"].read(cx).content.is_empty());
+        let editor = m.memory_editor.as_ref().unwrap();
+        assert!(editor.target.original.is_none());
+        assert!(m.fields[&editor.key].read(cx).content.is_empty());
     });
 }
 
 #[gpui::test]
-fn overview_activity_returns_to_its_previous_tab_and_uses_the_shared_reveal(
-    cx: &mut TestAppContext,
-) {
+fn bot_work_disclosure_stays_in_chat_and_leaves_details_on_their_page(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    s.window
+        .update(cx, |shell, window, cx| {
+            shell.workspace.right_panel_open = false;
+            s.manager.update(cx, |manager, cx| {
+                manager.settings = None;
+                manager.focus_active(window, cx);
+                manager.select_overview(OverviewTab::Documents, cx);
+                let transcript = manager.chats[&s.id].update(cx, |chat, cx| {
+                    chat.summary.has_messages = true;
+                    cx.notify();
+                    chat.transcript.clone()
+                });
+                transcript.update(cx, |view, cx| {
+                    let tool = vorkspace_core::tool::ToolCall::new("read", "Read");
+                    let row = |role: &str, text: &str| vorkspace_core::transcript::Row {
+                        role: role.into(),
+                        text: text.into(),
+                        first: true,
+                        sent_at: None,
+                    };
+                    view.replace_history(
+                        vec![
+                            row("user", "Check the files"),
+                            row("assistant", "Checking now."),
+                            row("tool", &serde_json::to_string(&tool).unwrap()),
+                            row("assistant", "All checked."),
+                        ],
+                        cx,
+                    );
+                });
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("tool-2").is_none(),
+        "completed work starts folded"
+    );
+    for open in [true, false, true] {
+        let receipt = visual
+            .debug_bounds("work-fold-1")
+            .expect("inline work receipt");
+        visual.simulate_click(receipt.center(), Default::default());
+        visual.run_until_parked();
+        assert_eq!(visual.debug_bounds("tool-2").is_some(), open);
+        assert!(visual.debug_bounds("bot-activity").is_none());
+        s.window
+            .update(visual, |shell, _, cx| {
+                assert!(
+                    !shell.workspace.right_panel_open,
+                    "disclosure must not open the sidebar"
+                );
+                let manager = s.manager.read(cx);
+                assert!(manager.overview_tab == OverviewTab::Documents);
+                assert!(manager.route.is_none());
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
+fn overview_pages_use_the_shared_reveal(cx: &mut TestAppContext) {
     let s = setup(cx);
     s.window
         .update(cx, |_, window, cx| {
             s.manager.update(cx, |m, cx| {
                 m.select_overview(OverviewTab::Documents, cx);
                 assert!(m.overview_reveal.is_some());
-                m.select_overview(OverviewTab::Activity, cx);
-                assert!(m.overview_previous == OverviewTab::Documents);
-                m.select_overview(m.overview_previous, cx);
+                m.select_overview(OverviewTab::Sessions, cx);
+                assert!(m.overview_tab == OverviewTab::Sessions);
+                m.select_overview(OverviewTab::Documents, cx);
                 assert!(m.overview_tab == OverviewTab::Documents);
                 cx.set_reduce_motion(true);
                 assert!(
@@ -2175,9 +2250,12 @@ fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
     assert!((tabs.top() - title_tabs.top()).abs() <= px(0.5));
     assert_eq!(tabs.size.height, px(TITLE_BAR_HEIGHT));
     assert_eq!(tabs.left(), panel.left() + px(6.));
-    let activity = visual.debug_bounds("bot-activity").unwrap();
+    assert!(
+        visual.debug_bounds("bot-activity").is_none(),
+        "work is disclosed in chat"
+    );
     let search = visual.debug_bounds("titlebar-file-search").unwrap();
-    assert_eq!(search.left() - activity.right(), px(6.));
+    assert_eq!(search.left() - tabs.right(), px(6.));
     assert_eq!(toggle.left() - search.right(), px(4.));
     assert!(tabs.bottom() <= panel.top() + px(TITLE_BAR_HEIGHT));
     assert_eq!(
@@ -2227,7 +2305,7 @@ fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
 }
 
 #[gpui::test]
-fn titlebar_details_tabs_switch_pages_and_keep_activity_and_habit_actions(cx: &mut TestAppContext) {
+fn titlebar_details_tabs_switch_pages_and_keep_habit_actions(cx: &mut TestAppContext) {
     let s = setup(cx);
     cx.update(|cx| cx.set_reduce_motion(true));
     s.window
@@ -2264,9 +2342,13 @@ fn titlebar_details_tabs_switch_pages_and_keep_activity_and_habit_actions(cx: &m
     visual.run_until_parked();
     assert!(s.manager.read_with(visual, |m, _| m.route.is_none()
         && m.overview_tab == OverviewTab::Sessions));
-    for expected in [OverviewTab::Activity, OverviewTab::Sessions] {
-        let activity = visual.debug_bounds("bot-activity").unwrap();
-        visual.simulate_click(activity.center(), Default::default());
+    assert!(visual.debug_bounds("bot-activity").is_none());
+    for (selector, expected) in [
+        ("bot-overview-Changes", OverviewTab::Changes),
+        ("bot-overview-Sessions", OverviewTab::Sessions),
+    ] {
+        let tab = visual.debug_bounds(selector).unwrap();
+        visual.simulate_click(tab.center(), Default::default());
         visual.run_until_parked();
         assert!(
             s.manager
@@ -2302,10 +2384,11 @@ fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut T
         let divider = visual.debug_bounds("right-panel-resize").unwrap();
         assert!((divider.center().x - panel.left() - px(0.5)).abs() <= px(0.5));
         assert_eq!(panel.size.width, px(width));
-        let activity = visual.debug_bounds("bot-activity").unwrap();
+        let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
+        let search = visual.debug_bounds("titlebar-file-search").unwrap();
         let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
         assert!(
-            activity.right() < toggle.left(),
+            tabs.right() <= search.left() && search.right() < toggle.left(),
             "Bot header actions stay available at the minimum details width"
         );
     }

@@ -18,7 +18,7 @@ impl PreparedHistory {
         } else {
             0
         };
-        let parsers = prepare_parsers(&rows[start..], start, bot);
+        let parsers = prepare_parsers(&rows[start..], start);
         Self {
             rows,
             parsers,
@@ -37,14 +37,14 @@ pub(super) fn page_start(rows: &[Row], before: usize) -> usize {
         .map_or(0, |(at, _)| at)
 }
 
-fn prepare_parsers(rows: &[Row], offset: usize, bot: bool) -> HashMap<usize, MarkdownParser> {
+fn prepare_parsers(rows: &[Row], offset: usize) -> HashMap<usize, MarkdownParser> {
     let mut parsers = HashMap::new();
     let mut at = 0;
     while at < rows.len() {
         let end = (at + 1..rows.len())
             .find(|&ix| rows[ix].first)
             .unwrap_or(rows.len());
-        if rows[at].role == "assistant" || (!bot && rows[at].role == "reasoning") {
+        if matches!(rows[at].role.as_str(), "assistant" | "reasoning") {
             let text: String = rows[at..end].iter().map(|row| row.text.as_str()).collect();
             let mut parser = MarkdownParser::new();
             parser.set_text(&text);
@@ -226,10 +226,9 @@ impl TranscriptView {
         // the long-lived conversation or parse its Markdown synchronously.
         let rows = self.source[start..previous].to_vec();
         let epoch = self.highlight_epoch;
-        let bot = self.bot;
         let work = cx
             .background_executor()
-            .spawn(async move { prepare_parsers(&rows, start, bot) });
+            .spawn(async move { prepare_parsers(&rows, start) });
         cx.spawn(async move |this, cx| {
             let parsers = work.await;
             let _ = this.update(cx, |this, cx| {

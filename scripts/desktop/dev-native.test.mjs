@@ -8,15 +8,22 @@ import { test } from "node:test";
 import { parseDevArgs, startDev } from "./dev-native.mjs";
 
 test("forwards app options and rejects the retired runner flags", () => {
-  assert.deepEqual(parseDevArgs([]), { args: [] });
+  assert.deepEqual(parseDevArgs([]), { args: [], profile: "release" });
   assert.deepEqual(parseDevArgs(["--vorkspace-data", "--cwd", "a project"]), {
     args: ["--vorkspace-data", "--cwd", "a project"],
+    profile: "release",
+  });
+  assert.deepEqual(parseDevArgs(["--native-dev", "--cwd", "a project"]), {
+    args: ["--cwd", "a project"],
+    profile: "native-dev",
   });
   assert.deepEqual(parseDevArgs(["--dev-data", "--cwd", "--watch", "--vorkspace-db", "--bundle"]), {
     args: ["--dev-data", "--cwd", "--watch", "--vorkspace-db", "--bundle"],
+    profile: "release",
   });
   assert.deepEqual(parseDevArgs(["--", "--cwd", "a project"]), {
     args: ["--cwd", "a project"],
+    profile: "release",
   });
   for (const arg of ["--watch", "--bundle"]) {
     assert.throws(() => parseDevArgs([arg]), /not supported.*rebuild and restart/);
@@ -28,6 +35,7 @@ async function fixture(t, env = {}, options = {}) {
   const messages = [];
   const children = [];
   const calls = [];
+  const installs = [];
   let dev;
   // Register cleanup before setup so failed assertions never leave child processes.
   t.after(async () => {
@@ -65,6 +73,7 @@ async function fixture(t, env = {}, options = {}) {
     platform: "linux",
     args: ["--dev-data", "--cwd", "a project with spaces"],
     debounce: 40,
+    installBundle: (source) => { installs.push(source); return false; },
     ...options,
     env: { ...process.env, ...env },
     log: (message) => messages.push(message),
@@ -89,7 +98,7 @@ async function fixture(t, env = {}, options = {}) {
     assert.fail(`Timed out. Events: ${JSON.stringify(await events())}. Logs: ${messages.join("; ")}`);
   };
   const starts = (events) => events.filter((event) => event.startsWith("start:")).length;
-  return { root, dev, calls, messages, events, until, starts };
+  return { root, dev, calls, installs, messages, events, until, starts };
 }
 
 test("file saves never rebuild, including edits during a requested build", { timeout: 20_000 }, async (t) => {
@@ -115,7 +124,7 @@ test("file saves never rebuild, including edits during a requested build", { tim
 test("manual restart keeps the app on a failed build and shuts it down after a successful retry", { timeout: 20_000 }, async (t) => {
   const f = await fixture(t);
   await f.until((events) => f.starts(events) === 1);
-  assert.deepEqual(f.calls.find((call) => call.args[0] === "build").args, ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", "vorkspace-gpui", "--bin", "vorkspace-gpui", "--profile", "native-dev"]);
+  assert.deepEqual(f.calls.find((call) => call.args[0] === "build").args, ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", "vorkspace-gpui", "--bin", "vorkspace-gpui", "--release"]);
   const launch = f.calls.find((call) => call.command !== "cargo");
   assert.ok(launch.command.startsWith(join(f.root, "custom-target")));
   assert.equal(launch.options.env.VORKSPACE_DEV_RELOAD, "1");
@@ -154,17 +163,17 @@ test("coalesces restart requests during a build without launching stale code or 
 
 test("macOS bundles automatically and preserves the selected data mode for Finder", async (t) => {
   for (const [args, mode] of [
-    [[], "dev-data"],
-    [["--vorkspace-data"], "vorkspace-data"],
+    [[], "vorkspace-data"],
+    [["--dev-data"], "dev-data"],
     [["--vorkspace-data", "--dev-data", "--cwd", "--vorkspace-data"], "dev-data"],
   ]) {
     await t.test(`${mode}: ${JSON.stringify(args)}`, async (t) => {
       const f = await fixture(t, {}, { platform: "darwin", args });
       await f.until((events) => f.starts(events) === 1);
       const packaged = f.calls.find((call) => call.command === "bash");
-      assert.deepEqual(packaged.args, ["scripts/desktop/bundle-native-macos.sh", "native-dev", join(f.root, "custom-target"), "0.15.0", mode]);
+      assert.deepEqual(packaged.args, ["scripts/desktop/bundle-native-macos.sh", "release", join(f.root, "custom-target"), "0.15.0", mode]);
       const app = f.calls.find((call) => !["cargo", "bash"].includes(call.command));
-      assert.equal(app.command, join(f.root, "custom-target/native-dev/vorkspace.app/Contents/MacOS/vorkspace-gpui"));
+      assert.equal(app.command, join(f.root, "custom-target/release/vorkspace.app/Contents/MacOS/vorkspace-gpui"));
       assert.deepEqual(app.args, args);
       const events = await f.events();
       assert.ok(events.indexOf("built") < events.indexOf("package"));
@@ -183,13 +192,81 @@ test("failed macOS packaging keeps the current app running", async (t) => {
   assert.equal((await f.events()).includes("quit"), false);
 });
 
+test("macOS launches the fresh bundle when installation fails and the installed bundle only on success", async (t) => {
+  for (const installed of [false, true]) {
+    await t.test(`installed: ${installed}`, async (t) => {
+      const installs = [];
+      const f = await fixture(t, { CI: "", VORKSPACE_NO_INSTALL: "" }, {
+        platform: "darwin",
+        installBundle: (source) => { installs.push(source); return installed; },
+      });
+      await f.until((events) => f.starts(events) === 1);
+      const bundle = join(f.root, "custom-target/release/vorkspace.app");
+      assert.deepEqual(installs, [bundle]);
+      const app = f.calls.find((call) => !["cargo", "bash"].includes(call.command));
+      assert.equal(app.command, join(installed ? "/Applications/vorkspace.app" : bundle, "Contents/MacOS/vorkspace-gpui"));
+      f.dev.requestBuild();
+      await f.until((events) => f.starts(events) === 2);
+      assert.equal(installs.length, 2);
+      assert.equal((await f.events()).filter((event) => event === "quit").length, 1);
+    });
+  }
+});
+
+test("CI, explicit no-install, and native-dev launch without attempting installation", async (t) => {
+  for (const [env, profile] of [
+    [{ CI: "1", VORKSPACE_NO_INSTALL: "" }, "release"],
+    [{ CI: "", VORKSPACE_NO_INSTALL: "1" }, "release"],
+    [{ CI: "", VORKSPACE_NO_INSTALL: "" }, "native-dev"],
+  ]) {
+    await t.test(`${profile}: ${JSON.stringify(env)}`, async (t) => {
+      const f = await fixture(t, env, { platform: "darwin", profile });
+      await f.until((events) => f.starts(events) === 1);
+      assert.deepEqual(f.installs, []);
+      const app = f.calls.find((call) => !["cargo", "bash"].includes(call.command));
+      assert.equal(app.command, join(f.root, "custom-target", profile, "vorkspace.app/Contents/MacOS/vorkspace-gpui"));
+    });
+  }
+});
+
 test("Windows launches the executable from the configured build target", async (t) => {
   const f = await fixture(t, { CARGO_BUILD_TARGET: "x86_64-pc-windows-msvc" }, { platform: "win32" });
   await f.until((events) => f.starts(events) === 1);
   assert.equal(f.calls.some((call) => call.command === "bash"), false);
   const app = f.calls.find((call) => call.command !== "cargo");
-  assert.equal(app.command, join(f.root, "custom-target/x86_64-pc-windows-msvc/native-dev/vorkspace-gpui.exe"));
+  assert.equal(app.command, join(f.root, "custom-target/x86_64-pc-windows-msvc/release/vorkspace-gpui.exe"));
   assert.equal(app.options.detached, false);
+});
+
+test("the dev profile packages and launches Cargo's debug artifacts on every platform", async (t) => {
+  assert.deepEqual(parseDevArgs(["--profile", "dev"]), { args: [], profile: "dev" });
+  assert.deepEqual(parseDevArgs(["--profile=dev"]), { args: [], profile: "dev" });
+  for (const platform of ["darwin", "linux", "win32"]) {
+    await t.test(platform, async (t) => {
+      const triple = platform === "win32" ? "x86_64-pc-windows-msvc" : "";
+      const f = await fixture(t, { CARGO_BUILD_TARGET: triple }, { platform, profile: "dev" });
+      await f.until((events) => f.starts(events) === 1);
+      const build = f.calls.find((call) => call.command === "cargo" && call.args[0] === "build");
+      assert.deepEqual(build.args.slice(-2), ["--profile", "dev"]);
+      const target = join(f.root, "custom-target", triple);
+      const executable = platform === "darwin"
+        ? "vorkspace.app/Contents/MacOS/vorkspace-gpui"
+        : platform === "win32" ? "vorkspace-gpui.exe" : "vorkspace-gpui";
+      const launches = () => f.calls.filter((call) => !["cargo", "bash"].includes(call.command));
+      assert.equal(launches()[0].command, join(target, "debug", executable));
+      if (platform === "darwin") {
+        assert.deepEqual(f.calls.find((call) => call.command === "bash").args,
+          ["scripts/desktop/bundle-native-macos.sh", "debug", target, "0.15.0", "dev-data"]);
+        assert.deepEqual(f.installs, []);
+      }
+      f.dev.requestBuild();
+      await f.until((events) => f.starts(events) === 2);
+      assert.equal(launches()[1].command, join(target, "debug", executable));
+      const events = await f.events();
+      assert.ok(events.lastIndexOf("built") < events.indexOf("quit"));
+      assert.ok(events.indexOf("quit") < events.findLastIndex((event) => event.startsWith("start:")));
+    });
+  }
 });
 
 test("closing during compilation terminates Cargo and never launches an app", { timeout: 10_000 }, async (t) => {

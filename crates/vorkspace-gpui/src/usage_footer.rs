@@ -1166,17 +1166,7 @@ impl Render for UsageFooter {
             .flex()
             .flex_col()
             .text_color(content(0.55))
-            .when(!self.compact, |d| {
-                d.child(
-                    div()
-                        .px_2()
-                        .pt_2()
-                        .pb_1()
-                        .text_size(px(10.))
-                        .text_color(content(0.45))
-                        .child("Subscriptions"),
-                )
-            })
+            .when(!self.compact, |d| d.child(section_label("Subscriptions")))
             .child(
                 div()
                     .id("subscriptions-list")

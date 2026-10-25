@@ -9,9 +9,13 @@ npm run dev -- --cwd /path/to/project
 npm run build
 ```
 
-Development uses the `native-dev` Cargo profile and isolated data. Type `r` then Enter to rebuild/restart; a failed build leaves the running app open. macOS output is `target/native-dev/vorkspace.app`. Release output is `target/release/vorkspace.app`; release builds open installed desktop data.
+Development defaults to the `release` Cargo profile and normal desktop data. Type `r` then Enter in its terminal to rebuild/restart; a failed build leaves the running app open. The runner opts into stdin-driven normal shutdown in either profile. On macOS, local release builds package `target/release/vorkspace.app` and install it at `/Applications/vorkspace.app`. If installation fails, the runner opens the freshly built bundle directly. Set `VORKSPACE_NO_INSTALL=1` to keep the generated bundle without installing it; CI also skips installation.
 
-`CARGO_TARGET_DIR` and `CARGO_BUILD_TARGET` override output placement. `CARGO_BUILD_JOBS` controls build concurrency. Build scripts do not install or launch the release bundle.
+For the development profile with isolated data, use `npm run dev -- --native-dev --dev-data`; its macOS bundle is `target/native-dev/vorkspace.app`. The profile and data selection are independent: omit `--dev-data` or pass `--vorkspace-data` to use normal desktop data.
+
+The app provides **Restart vorkspace** in its application menu and Command Palette (`⌘⌥R` on macOS, `Ctrl+Alt+R` elsewhere). When developing from inside the installed app, run `npm run build`, confirm installation succeeded, then use Restart to load it. Restart prompts about unsaved file edits and uses the normal shutdown hooks for drafts, workspace state, voice, and provider processes. Its relaunch helper waits for the old process to exit before opening the successor. On macOS it prefers `/Applications/vorkspace.app`, so use the runner's `r` for a separate development bundle. Restart does not compile code; `cargo build` alone does not update the installed app bundle.
+
+`CARGO_TARGET_DIR` and `CARGO_BUILD_TARGET` override output placement. `CARGO_BUILD_JOBS` controls build concurrency. `npm run build` packages and installs locally but does not launch the app or publish a release.
 
 The manual **Mac release** workflow runs from `main`. It selects an unused stable version at or above the checked-in version, stamps package and Cargo manifests in the runner only, and assigns the native build number from the workflow run and attempt. Draft retries retain their own reserved version; published releases are immutable. The workflow generates versioned notes before compilation, runs checks, prepares signed update formats and a disk image, verifies metadata, and then publishes. Starting this workflow is an explicit release action; ordinary pushes and pull requests do not trigger it.
 

@@ -78,12 +78,12 @@ pub(crate) fn visuals() -> Transcript {
         (
             "example-dashboard",
             "Throughput explorer",
-            include_str!("../../../examples/visuals/visual-dashboard.js"),
+            include_str!("../fixtures/visuals/visual-dashboard.js"),
         ),
         (
             "example-geometry",
             "Geometry explorer",
-            include_str!("../../../examples/visuals/visual-scene.js"),
+            include_str!("../fixtures/visuals/visual-scene.js"),
         ),
     ] {
         let document = vorkspace_core::visual::VisualDocument {

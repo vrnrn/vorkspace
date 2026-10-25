@@ -11,7 +11,6 @@ mod composer_completion;
 mod composer_motion;
 mod context_meter;
 mod conversation;
-#[cfg(debug_assertions)]
 mod dev_reload;
 mod diff_view;
 mod editor_analysis;
@@ -52,6 +51,7 @@ mod quick_open;
 mod reflow_motion;
 mod resource_pressure;
 mod response_actions;
+mod restart;
 mod reveal;
 mod review;
 mod right_panel;
@@ -92,7 +92,7 @@ use std::{
     time::Instant,
 };
 use vorkspace_core::{store::Store, transcript::Transcript};
-actions!(application, [Quit]);
+actions!(application, [Quit, Restart]);
 fn quit(cx: &mut App) {
     let voice = vox::shutdown(cx);
     cx.spawn(async move |cx| {
@@ -100,6 +100,22 @@ fn quit(cx: &mut App) {
         cx.background_executor()
             .spawn(async { vorkspace_core::process::shutdown_all() })
             .await;
+        cx.update(|cx| cx.quit());
+    })
+    .detach();
+}
+
+fn restart(cx: &mut App) {
+    let voice = vox::shutdown(cx);
+    cx.spawn(async move |cx| {
+        voice.await;
+        cx.background_executor()
+            .spawn(async { vorkspace_core::process::shutdown_all() })
+            .await;
+        if let Err(error) = restart::relaunch_self() {
+            eprintln!("Could not schedule restart: {error}");
+            return;
+        }
         cx.update(|cx| cx.quit());
     })
     .detach();
@@ -203,8 +219,8 @@ fn main() {
     let mut fixture = false;
     let mut chat_fixture = false;
     let mut visual_fixture = false;
-    // Development stays separate; release builds use the installed app's data.
-    let mut use_vorkspace = bundle_uses_vorkspace_data().unwrap_or(!cfg!(debug_assertions));
+    // Always use real release data by default so sessions remain persistent across all builds.
+    let mut use_vorkspace = bundle_uses_vorkspace_data().unwrap_or(true);
     let mut vorkspace_db = vorkspace_core::store::vorkspace_database();
     let mut check_data = false;
     let mut explicit_cwd = false;
@@ -227,7 +243,7 @@ fn main() {
             }
             "--help" | "-h" => {
                 println!(
-                    "vorkspace-gpui [--cwd PATH] [--dev-data | --vorkspace-data | --vorkspace-db PATH]\nDevelopment builds use a separate database; release builds use the installed vorkspace database.\n--dev-data opens an isolated development database using vorkspace's existing schema.\n--vorkspace-data opens the existing desktop vorkspace.db directly.\n--vorkspace-db PATH opens a specific desktop database.\n--fixture, --chat-fixture and --visual-fixture add local samples to isolated development data only.\nvisual docs prints the native visual SDK reference.\nvisual check/show --input FILE validates or publishes native session visuals.\nvisual-mcp runs the session visual tool server over standard input/output.\n--check-data validates and lists the selected store read-only, then exits."
+                    "vorkspace-gpui [--cwd PATH] [--dev-data | --vorkspace-data | --vorkspace-db PATH]\nAll build profiles use the existing desktop database by default.\n--dev-data opens an isolated development database using vorkspace's existing schema.\n--vorkspace-data opens the existing desktop vorkspace.db directly.\n--vorkspace-db PATH opens a specific desktop database.\n--fixture, --chat-fixture and --visual-fixture add local samples to isolated development data only.\nvisual docs prints the native visual SDK reference.\nvisual check/show --input FILE validates or publishes native session visuals.\nvisual-mcp runs the session visual tool server over standard input/output.\n--check-data validates and lists the selected store read-only, then exits."
                 );
                 return;
             }
@@ -384,7 +400,6 @@ fn main() {
     gpui::Application::with_platform(platform)
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
-            #[cfg(debug_assertions)]
             dev_reload::install(cx);
             updater::start(cx);
             app_menu::init(cx);
@@ -402,7 +417,10 @@ fn main() {
             } else {
                 "ctrl"
             };
-            cx.bind_keys([KeyBinding::new(&format!("{modifier}-q"), Quit, None)]);
+            cx.bind_keys([
+                KeyBinding::new(&format!("{modifier}-q"), Quit, None),
+                KeyBinding::new(&format!("{modifier}-alt-r"), Restart, None),
+            ]);
             shell::bind_keys(cx);
             usage_footer::bind(cx);
             cx.on_window_closed(|cx, _| {
@@ -431,7 +449,10 @@ fn main() {
                         traffic_light_position: if cfg!(target_os = "macos") {
                             // Original macOS chrome: 12 pt left inset, with
                             // 14 pt native buttons centered in the 40 pt bar.
-                            Some(point(px(12.), px((theme::TITLE_BAR_HEIGHT - 14.) / 2.)))
+                            Some(point(
+                                px(theme::TRAFFIC_LIGHT_MARGIN),
+                                px((theme::TITLE_BAR_HEIGHT - theme::TRAFFIC_LIGHT_SIZE) / 2.),
+                            ))
                         } else {
                             None
                         },
@@ -455,11 +476,11 @@ fn main() {
                     });
                     #[cfg(target_os = "macos")]
                     {
-                        traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT);
+                        traffic_lights::pin(window);
                         // AppKit rebuilds the buttons on some titlebar changes.
                         shell.update(cx, |_, cx| {
                             cx.observe_window_activation(window, |_, window, _| {
-                                traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT)
+                                traffic_lights::pin(window)
                             })
                             .detach();
                         });

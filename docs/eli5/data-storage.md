@@ -1,6 +1,6 @@
 # Saved data
 
-Development runs use a separate database. Release runs look for your existing desktop database and open it where it already lives. Old settings and Bot metadata are translated when read; conversation text and agent session IDs stay intact.
+All runs open your existing desktop database by default so your work and chats persist across restarts. An isolated sandbox database is used only if you pass `--dev-data`. Old settings and Bot metadata are translated when read; conversation text and agent session IDs stay intact.
 
 Use `--check-data` to check a selected database without writing to it. Unsent messages, cursor selections, attachments and MCP tags reopen from the same saved draft. Edits are saved while typing and flushed when the view closes or the app quits. If two windows edit the same draft, neither silently overwrites the other. The conflicting input stays saved separately and appears with a preview when you reopen the chat, so you can choose which version to keep. Missing attachments stay recorded so sending cannot silently drop them. Vox also keeps its saved enabled, silent and microphone choices.
 
