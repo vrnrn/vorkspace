@@ -136,6 +136,20 @@ impl ResourceMonitor {
             self.observe(high, start + Duration::from_secs(s * 3), cx);
         }
     }
+    #[cfg(test)]
+    pub(crate) fn recover(&mut self, cx: &mut Context<Self>) {
+        let start = Instant::now();
+        for s in 0..6 {
+            self.observe(
+                Sample {
+                    usage: resources::Usage::default(),
+                    stall_share: 0.,
+                },
+                start + Duration::from_secs(s * 3),
+                cx,
+            );
+        }
+    }
     pub(crate) fn set_classic(&mut self, classic: bool, cx: &mut Context<Self>) {
         if self.classic != classic {
             self.classic = classic;
@@ -692,51 +706,56 @@ impl Render for ResourceMonitor {
         let shown = self.pressure.active;
         let classic = self.classic;
         let open = self.open;
-        div().when(shown, |d| {
-            d.child(
-                div()
-                    .id("resource-pressure-chip")
-                    .debug_selector(|| "resource-pressure-chip".into())
-                    .role(Role::Button)
-                    .aria_label("High resource usage")
-                    .aria_description(format!("{} · Review running work", self.reasons()))
-                    .aria_expanded(open)
-                    .track_focus(&self.trigger)
-                    .tab_index(0)
-                    .h(px(20.))
-                    .map(|d| {
-                        if classic {
-                            d.px(px(6.)).rounded_md()
-                        } else {
-                            d.px_2().rounded_full()
-                        }
-                    })
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(6.))
-                    .whitespace_nowrap()
-                    .text_size(px(11.))
-                    .cursor_pointer()
-                    .map(|d| {
-                        if open {
-                            d.bg(content(0.08)).text_color(content(1.))
-                        } else {
-                            d.text_color(content(0.55))
-                        }
-                    })
-                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                    .child(icon("circle-alert", 14.).text_color(rgb(AMBER)))
-                    .when(!self.compact, |d| d.child("High usage"))
-                    .on_click(cx.listener(|this, _, window, cx| this.open(window, cx)))
-                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            this.open(window, cx);
-                            cx.stop_propagation();
-                        }
-                    })),
-            )
-        })
+        div()
+            .when(self.compact, |d| d.w_full().flex().justify_center())
+            .when(shown, |d| {
+                d.child(
+                    div()
+                        .id("resource-pressure-chip")
+                        .debug_selector(|| "resource-pressure-chip".into())
+                        .role(Role::Button)
+                        .aria_label("High resource usage")
+                        .aria_description(format!("{} · Review running work", self.reasons()))
+                        .aria_expanded(open)
+                        .track_focus(&self.trigger)
+                        .tab_index(0)
+                        .map(|d| {
+                            if self.compact {
+                                d.size(px(32.)).justify_center().rounded_md()
+                            } else if classic {
+                                d.h(px(20.)).px(px(6.)).rounded_md()
+                            } else {
+                                d.h(px(20.)).px_2().rounded_full()
+                            }
+                        })
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(px(6.))
+                        .whitespace_nowrap()
+                        .text_size(px(11.))
+                        .cursor_pointer()
+                        .map(|d| {
+                            if open {
+                                d.bg(content(0.08)).text_color(content(1.))
+                            } else {
+                                d.text_color(content(0.55))
+                            }
+                        })
+                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                        .child(icon("circle-alert", 14.).text_color(rgb(AMBER)))
+                        .when(!self.compact, |d| d.child("High usage"))
+                        .on_click(cx.listener(|this, _, window, cx| this.open(window, cx)))
+                        .on_key_down(cx.listener(
+                            |this, event: &gpui::KeyDownEvent, window, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.open(window, cx);
+                                    cx.stop_propagation();
+                                }
+                            },
+                        )),
+                )
+            })
     }
 }
 

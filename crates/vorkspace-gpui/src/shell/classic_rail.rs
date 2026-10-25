@@ -4,6 +4,33 @@ use serde_json::Value;
 
 const COMPACT_WIDTH: f32 = 48.;
 
+// The divider reserves one column; center footer hit areas in the remaining
+// content width, without the expanded sidebar's horizontal padding.
+fn compact_footer(
+    resources: Entity<crate::resource_pressure::ResourceMonitor>,
+    usage: Option<Entity<crate::usage_footer::UsageFooter>>,
+    settings: impl IntoElement,
+) -> gpui::Div {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_1()
+        .py_2()
+        .child(resources)
+        .children(usage)
+        .child(settings)
+}
+
+fn compact_settings_button() -> gpui::Stateful<gpui::Div> {
+    icon_button("classic-rail-settings", "Settings", "settings")
+        .debug_selector(|| "classic-rail-settings".into())
+        .focusable()
+        .tab_stop(true)
+        .size(px(32.))
+}
+
 fn metadata(workspace: &Workspace, key: &str) -> Value {
     workspace
         .desktop_preferences_metadata
@@ -756,25 +783,22 @@ impl Shell {
                     }),
                 ),
         )
-        .child(div().mx_2().child(self.resources.clone()))
-        .when(self.workspace.sidebar_subscriptions_visible, |d| {
-            d.child(div().px_2().child(self.usage_footer.clone()))
-        })
-        .child(
-            div().p_2().child(
-                icon_button("classic-rail-settings", "Settings", "settings")
-                    .debug_selector(|| "classic-rail-settings".into())
-                    .focusable()
-                    .tab_stop(true)
-                    .size(px(32.))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_settings(crate::settings::Section::General, window, cx)
-                    })),
-            ),
-        )
+        .child(compact_footer(
+            self.resources.clone(),
+            self.workspace
+                .sidebar_subscriptions_visible
+                .then(|| self.usage_footer.clone()),
+            compact_settings_button().on_click(cx.listener(|this, _, window, cx| {
+                this.open_settings(crate::settings::Section::General, window, cx)
+            })),
+        ))
         .into_any_element()
     }
 }
+
+#[cfg(test)]
+#[path = "compact_footer_tests.rs"]
+mod compact_footer_tests;
 
 #[cfg(test)]
 mod tests {
