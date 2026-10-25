@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/vorkspace-core", "crates/vorkspace-gpui"]
-exclude = ["vendor/gpui-pre", "vendor/gpui-pre-apple", "vendor/gpui-pre-linux", "vendor/gpui-pre-windows"]
+exclude = ["vendor/gpui-pre", "vendor/gpui-pre-apple", "vendor/gpui-pre-linux", "vendor/gpui-pre-windows", "vendor/gpui-pre-macos"]
 
 [workspace.package]
 version = "1.0.0"
@@ -15,10 +15,12 @@ rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-featur
 
 # Exclude the unused screen-capture dependency from all native platforms.
 # Keep the Apple renderer's alpha and font-matching fixes.
+# The macOS bridge owns immediate cursor publication and AppKit cursor updates.
 # The app owns its macOS notifications; omit the unused Linux notification bridge.
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 
