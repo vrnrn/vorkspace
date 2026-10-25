@@ -30,10 +30,12 @@ export function installAppBundle(sourceBundle, destBundle = "/Applications/vorks
   }
   try {
     const destNext = `${destBundle}.next`;
-    spawnSync("rm", ["-rf", destNext]);
+    if (spawnSync("rm", ["-rf", destNext]).status !== 0) return false;
     const cp = spawnSync("cp", ["-R", sourceBundle, destNext]);
     if (cp.status !== 0) return false;
-    spawnSync("rm", ["-rf", destBundle]);
+    // mv nests the source inside an existing destination directory. Only report
+    // a replacement after removal succeeded, so the runner can fall back safely.
+    if (spawnSync("rm", ["-rf", destBundle]).status !== 0) return false;
     const mv = spawnSync("mv", ["-f", destNext, destBundle]);
     if (mv.status === 0) {
       console.log(`Installed: ${destBundle}`);

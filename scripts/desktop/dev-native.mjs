@@ -47,6 +47,8 @@ export async function startDev({
   profile = "release",
 } = {}) {
   const bundle = platform === "darwin";
+  // Cargo's built-in dev profile writes to debug; named profiles keep their name.
+  const profileDirectory = profile === "dev" ? "debug" : profile;
   const buildEnv = resolveNativeEnv(env, platform);
   const launch = (command, argv, options = {}) => track(spawnProcess(command, argv, {
     cwd: root, env: buildEnv, stdio: "inherit", ...options,
@@ -114,7 +116,7 @@ export async function startDev({
         }
         // Another restart request during compilation gets a fresh build first.
         if (builtRevision !== revision) continue;
-        let executable = join(target, profile, platform === "win32" ? "vorkspace-gpui.exe" : "vorkspace-gpui");
+        let executable = join(target, profileDirectory, platform === "win32" ? "vorkspace-gpui.exe" : "vorkspace-gpui");
         if (bundle) {
           const dataMode = args.reduce((mode, arg, index) => {
             if (["--cwd", "--vorkspace-db"].includes(args[index - 1])) return mode;
@@ -122,13 +124,13 @@ export async function startDev({
             if (arg === "--vorkspace-data") return "vorkspace-data";
             return mode;
           }, "vorkspace-data");
-          const packaged = await run("bash", ["scripts/desktop/bundle-native-macos.sh", profile, target, pkg.version, dataMode]);
+          const packaged = await run("bash", ["scripts/desktop/bundle-native-macos.sh", profileDirectory, target, pkg.version, dataMode]);
           if (closing) return;
           if (packaged.code !== 0) {
             log("App packaging failed. Fix the error, then type r to retry.");
             continue;
           }
-          const bundledApp = join(target, profile, "vorkspace.app");
+          const bundledApp = join(target, profileDirectory, "vorkspace.app");
           executable = join(bundledApp, "Contents", "MacOS", "vorkspace-gpui");
           if (profile === "release" && !buildEnv.CI && buildEnv.VORKSPACE_NO_INSTALL !== "1"
             && installBundle(bundledApp)) {

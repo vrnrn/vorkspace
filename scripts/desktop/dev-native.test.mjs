@@ -238,6 +238,37 @@ test("Windows launches the executable from the configured build target", async (
   assert.equal(app.options.detached, false);
 });
 
+test("the dev profile packages and launches Cargo's debug artifacts on every platform", async (t) => {
+  assert.deepEqual(parseDevArgs(["--profile", "dev"]), { args: [], profile: "dev" });
+  assert.deepEqual(parseDevArgs(["--profile=dev"]), { args: [], profile: "dev" });
+  for (const platform of ["darwin", "linux", "win32"]) {
+    await t.test(platform, async (t) => {
+      const triple = platform === "win32" ? "x86_64-pc-windows-msvc" : "";
+      const f = await fixture(t, { CARGO_BUILD_TARGET: triple }, { platform, profile: "dev" });
+      await f.until((events) => f.starts(events) === 1);
+      const build = f.calls.find((call) => call.command === "cargo" && call.args[0] === "build");
+      assert.deepEqual(build.args.slice(-2), ["--profile", "dev"]);
+      const target = join(f.root, "custom-target", triple);
+      const executable = platform === "darwin"
+        ? "vorkspace.app/Contents/MacOS/vorkspace-gpui"
+        : platform === "win32" ? "vorkspace-gpui.exe" : "vorkspace-gpui";
+      const launches = () => f.calls.filter((call) => !["cargo", "bash"].includes(call.command));
+      assert.equal(launches()[0].command, join(target, "debug", executable));
+      if (platform === "darwin") {
+        assert.deepEqual(f.calls.find((call) => call.command === "bash").args,
+          ["scripts/desktop/bundle-native-macos.sh", "debug", target, "0.15.0", "dev-data"]);
+        assert.deepEqual(f.installs, []);
+      }
+      f.dev.requestBuild();
+      await f.until((events) => f.starts(events) === 2);
+      assert.equal(launches()[1].command, join(target, "debug", executable));
+      const events = await f.events();
+      assert.ok(events.lastIndexOf("built") < events.indexOf("quit"));
+      assert.ok(events.indexOf("quit") < events.findLastIndex((event) => event.startsWith("start:")));
+    });
+  }
+});
+
 test("closing during compilation terminates Cargo and never launches an app", { timeout: 10_000 }, async (t) => {
   const f = await fixture(t, { TEST_BUILD_DELAY: "5000" });
   await f.until((events) => events.includes("build"));
