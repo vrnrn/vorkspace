@@ -1,4 +1,6 @@
 pub(crate) mod attachments;
+#[cfg(test)]
+mod bot_tests;
 pub(crate) mod dates;
 mod drafts;
 #[cfg(test)]
@@ -68,12 +70,8 @@ pub(crate) enum BotResponseAction {
         text: String,
         window: gpui::AnyWindowHandle,
     },
-    Activity(usize),
     /// Retry or discard a message that was not sent.
-    Queue {
-        id: String,
-        remove: bool,
-    },
+    Queue { id: String, remove: bool },
 }
 impl gpui::EventEmitter<BotResponseAction> for TranscriptView {}
 
@@ -106,6 +104,8 @@ struct Message {
     role: String,
     parser: MarkdownParser,
     under_line: bool,
+    /// The provider run that owns this message's work receipt and phases.
+    run: usize,
     /// The turn this message belongs to, as `Body::Actions` numbers it.
     turn: usize,
     attachments: Arc<[attachments::Attachment]>,
@@ -143,6 +143,9 @@ enum Body {
     WorkLine {
         turn: usize,
         expandable: bool,
+    },
+    BotHeader {
+        turn: usize,
     },
     Reasoning,
     Actions {
@@ -345,63 +348,6 @@ pub(crate) fn bot_continues(source: &[Row], turn: usize) -> Option<usize> {
             .map_or(0, |i| i + 1),
     )
 }
-/// botWorkStatus: a short status for the turn's latest activity.
-pub(crate) fn bot_work_label(source: &[Row], group: usize) -> String {
-    let turn = source[group.min(source.len())..]
-        .iter()
-        .rposition(|r| r.is_prompt())
-        .map_or(group, |i| group + i + 1);
-    const THINKING: [&str; 4] = [
-        "Thinking…",
-        "Pondering…",
-        "Considering…",
-        "Working it through…",
-    ];
-    let end = (turn..source.len())
-        .find(|&i| source[i].is_prompt())
-        .unwrap_or(source.len());
-    let mut thought = 0usize;
-    let mut latest = None;
-    for (ix, row) in source[turn..end].iter().enumerate() {
-        if !row.first {
-            continue;
-        }
-        match row.role.as_str() {
-            "assistant" | "reasoning" => {
-                thought += 1;
-                latest = None;
-            }
-            "tool" => latest = Some(turn + ix),
-            _ => {}
-        }
-    }
-    let Some(tool) = latest.and_then(|at| {
-        let end = (at + 1..source.len())
-            .find(|&i| source[i].first)
-            .unwrap_or(source.len());
-        let text: String = source[at..end].iter().map(|r| r.text.as_str()).collect();
-        serde_json::from_str::<ToolCall>(&text).ok()
-    }) else {
-        return THINKING[thought.saturating_sub(1) % THINKING.len()].into();
-    };
-    if tool.is_compaction() {
-        return if tool.state == ToolState::Running {
-            "Compacting context…"
-        } else {
-            "Thinking…"
-        }
-        .into();
-    }
-    match tool.summary().0.as_str() {
-        "Run" => "Running command…",
-        "Edit" | "Write" => "Editing file…",
-        "Read" => "Reading file…",
-        "Find" | "List" | "Search" | "Glob" | "Grep" => "Exploring project…",
-        "Agent" | "Task" => "Running agent…",
-        _ => "Using tool…",
-    }
-    .into()
-}
 /// isEmojiOnlyMessage: up to three emoji, which read as a reaction.
 pub(crate) fn is_emoji_only(text: &str) -> bool {
     use unicode_segmentation::UnicodeSegmentation;
@@ -570,12 +516,6 @@ impl TranscriptView {
     pub(crate) fn side_question(&mut self) {
         self.side_question = true;
     }
-    pub(crate) fn activity(rows: Vec<Row>, cx: &mut Context<Self>) -> Self {
-        let mut view = Self::new();
-        view.document = true;
-        view.patch(0, rows, cx);
-        view
-    }
     /// AgentTranscript with `agentMascot`, `bottomAligned` and `inlineWork`.
     pub(crate) fn bot_mode(&mut self, mascot: &str, color: u32, name: &str) {
         self.bot_look = Some((mascot.into(), color, name.to_owned().into()));
@@ -609,24 +549,24 @@ impl TranscriptView {
             .iter()
             .rev()
             .find(|m| m.start <= row)
-            .map(|m| m.turn)
+            .map(|m| m.run)
             .unwrap_or(0);
         self.search_match = Some((start, query.to_owned()));
         self.expanded.insert(start);
         self.expanded_prompts.insert(start);
         self.work_folds.insert(turn, true);
         for message in &self.messages {
-            if message.turn == turn {
+            if message.run == turn {
                 self.phases.insert(message.start, true);
             }
         }
         self.list.pause_following_tail();
         self.rebuild(0, cx);
         let candidates = || {
-            self.rows
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| r.key.0 == start && !matches!(r.body, Body::WorkLine { .. }))
+            self.rows.iter().enumerate().filter(|(_, r)| {
+                r.key.0 == start
+                    && !matches!(r.body, Body::WorkLine { .. } | Body::BotHeader { .. })
+            })
         };
         let matching = candidates()
             .find(|(_, r)| {
@@ -772,7 +712,7 @@ impl TranscriptView {
             .detach();
         }
     }
-    /// TurnDuration with `revealOnHover`: copy, save as note and activity in
+    /// TurnDuration with `revealOnHover`: copy, save as note and quote in
     /// the turn's fixed gap, then its time, shown while the turn is hovered.
     fn bot_actions(
         &mut self,
@@ -880,16 +820,6 @@ impl TranscriptView {
                     })),
                 );
         }
-        actions = actions.child(
-            response_actions::button(
-                turn,
-                "bot-response-activity",
-                "Show activity",
-                "list-bullet",
-                false,
-            )
-            .on_click(cx.listener(move |_, _, _, cx| cx.emit(BotResponseAction::Activity(turn)))),
-        );
         div()
             .id(("bot-turn-actions", turn))
             .h(px(24.))
@@ -914,21 +844,11 @@ impl TranscriptView {
             })
             .into_any_element()
     }
-    /// BotTurnHeader: the Bot signs its turn with its mascot and name; while
-    /// it works, a ticker beside the pill says what it is doing.
-    fn bot_turn_header(&self, turn: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
+    /// The Bot signs a group of turns; each run owns its inline work receipt.
+    fn bot_turn_header(&self, turn: usize) -> gpui::AnyElement {
         let Some((mascot, color, name)) = self.bot_look.clone() else {
             return div().into_any_element();
         };
-        // Nearby completion runs continue this header; a new stretch gets its own.
-        let latest = self
-            .source
-            .iter()
-            .rposition(|r| r.is_prompt())
-            .map_or(0, |ix| ix + 1);
-        let live = self.streaming
-            && self.source.len() > self.live_start
-            && self.bot_group_start(latest) == turn;
         let pill = div()
             .debug_selector(|| "bot-signature-pill".into())
             .flex()
@@ -970,37 +890,7 @@ impl TranscriptView {
             .text_color(content(0.5))
             .child(pill)
             .children(self.peer_response_label(turn))
-            .when(live, |d| {
-                let label = self.bot_work_label(turn);
-                d.child(div().flex_shrink_0().text_color(content(0.25)).child("·"))
-                    .child(
-                        div()
-                            .id(("bot-turn-ticker", turn))
-                            .debug_selector(|| "bot-turn-ticker".into())
-                            .role(Role::Button)
-                            .aria_label("Show activity")
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .hover(|s| s.opacity(0.7))
-                            .child(if cx.reduce_motion() {
-                                div().child(label).into_any_element()
-                            } else {
-                                crate::activity::shimmer(
-                                    label,
-                                    self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
-                                )
-                            })
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.emit(BotResponseAction::Activity(turn))
-                            })),
-                    )
-            })
             .into_any_element()
-    }
-    /// botWorkStatus: a short status for the turn's latest activity.
-    fn bot_work_label(&self, group: usize) -> String {
-        bot_work_label(&self.source, group)
     }
     /// BotReactionBadge, on the top left corner of the message it answers.
     fn reaction_badge(&self, prompt: usize) -> Option<gpui::AnyElement> {
@@ -1491,19 +1381,6 @@ impl TranscriptView {
     /// The first row of the prompt block that opens `turn`.
     fn prompt_start(&self, turn: usize) -> usize {
         prompt_start(&self.source, turn)
-    }
-    /// groupBotTurnItems: prose stays in the activity trail while its run is
-    /// live, and when later work in the run follows it.
-    fn bot_prose_hidden(&self, at: usize) -> bool {
-        let end = (at + 1..self.source.len())
-            .find(|&i| self.source[i].is_prompt())
-            .unwrap_or(self.source.len());
-        // Starting a request precedes delivery of its prompt. History remains
-        // settled during that gap, even though it is still the source's tail.
-        (self.streaming && at >= self.live_start && end == self.source.len())
-            || self.source[at + 1..end]
-                .iter()
-                .any(|r| r.first && matches!(r.role.as_str(), "tool" | "reasoning"))
     }
     /// botSpawnedSessions: sessions a run's `sessions.start` calls accepted.
     fn run_launches(&self, turn: usize, end: usize) -> Vec<i64> {
@@ -2407,24 +2284,6 @@ impl TranscriptView {
                 info.completed_at = started_at.and_then(|at| at.checked_add(info.duration_ms));
             }
         }
-        if !streaming && self.bot && self.visible && !cx.reduce_motion() {
-            // The reply a Bot kept in its trail while it worked appears now.
-            let now = Instant::now();
-            let run = self
-                .source
-                .iter()
-                .rposition(|r| r.is_prompt())
-                .map_or(0, |i| i + 1);
-            for at in run..self.source.len() {
-                let row = &self.source[at];
-                if row.first
-                    && row.role == "assistant"
-                    && !row.text.trim_start().starts_with("<reaction>")
-                {
-                    self.entrances.insert(at, now);
-                }
-            }
-        }
         // Starting a normal turn must not re-open the previous turn's work or
         // rebuild it as live while the new prompt is still in transit.
         if (!streaming || self.bot) && !self.messages.is_empty() {
@@ -2589,6 +2448,20 @@ impl TranscriptView {
             let bytes = row.text.capacity().saturating_add(row.role.capacity());
             if ix < self.source.len() {
                 let old = &self.source[ix];
+                if self.bot
+                    && self.streaming
+                    && self.visible
+                    && !cx.reduce_motion()
+                    && ix >= self.live_start
+                    && row.first
+                    && row.role == "assistant"
+                    && old.text.trim().is_empty()
+                    && !row.text.trim().is_empty()
+                {
+                    // An existing empty provider placeholder gains its first
+                    // words now. Completion must not replay this entrance.
+                    self.entrances.insert(ix, Instant::now());
+                }
                 self.source_bytes = self
                     .source_bytes
                     .saturating_sub(old.text.capacity().saturating_add(old.role.capacity()));
@@ -2751,10 +2624,9 @@ impl TranscriptView {
         // Advance incoming prose before choosing the displayed block. Its
         // first visible words and the previous block's replacement must be
         // committed together, including after an empty provider placeholder.
-        if !self.bot
-            && let Some(at) = (current_turn..current_end)
-                .rev()
-                .find(|&i| self.source[i].role == "assistant" && self.source[i].first)
+        if let Some(at) = (current_turn..current_end)
+            .rev()
+            .find(|&i| self.source[i].role == "assistant" && self.source[i].first)
         {
             let end = (at + 1..current_end)
                 .find(|&i| self.source[i].first)
@@ -2816,22 +2688,20 @@ impl TranscriptView {
                 message_ix -= 1;
             }
         }
-        if !self.bot
-            && (self.source[current_turn..current_end].iter().any(|row| {
-                row.role == "tool"
-                    && row.first
-                    && serde_json::from_str::<ToolCall>(&row.text)
-                        .is_ok_and(|call| matches!(call.panel(), Some(Panel::Agent(_))))
-            }) || self.rows.iter().any(|row| {
-                self.messages
-                    .get(row.message)
-                    .is_some_and(|message| message.turn == current_turn)
-                    && matches!(
-                        &row.body,
-                        Body::Tool { call, .. } if matches!(call.panel(), Some(Panel::Agent(_)))
-                    )
-            }))
-        {
+        if self.source[current_turn..current_end].iter().any(|row| {
+            row.role == "tool"
+                && row.first
+                && serde_json::from_str::<ToolCall>(&row.text)
+                    .is_ok_and(|call| matches!(call.panel(), Some(Panel::Agent(_))))
+        }) || self.rows.iter().any(|row| {
+            self.messages
+                .get(row.message)
+                .is_some_and(|message| message.run == current_turn)
+                && matches!(
+                    &row.body,
+                    Body::Tool { call, .. } if matches!(call.panel(), Some(Panel::Agent(_)))
+                )
+        }) {
             // Pinned runs sit below the fold's work rather than at their
             // original source offset. Rebuild the whole turn so a suffix
             // update cannot cut across that reordered stack. Include the old
@@ -2841,9 +2711,8 @@ impl TranscriptView {
             }
         }
         if self.bot {
-            // A run's prose hides behind later work, and a completion run
-            // takes over the actions of the turn it continues, so rebuild from
-            // the prompt that opens the whole group.
+            // A completion run takes over the actions of the turn it
+            // continues, so rebuild from the prompt that opens the group.
             let group = self.bot_group_start(current_turn);
             let prompt = self.prompt_start(group);
             while message_ix > 0
@@ -2893,11 +2762,7 @@ impl TranscriptView {
                 thought_phase: None,
             });
         }
-        let activity = if self.bot {
-            phases::Phases::default()
-        } else {
-            phases::collect(&self.source, source_start, self.streaming)
-        };
+        let activity = phases::collect(&self.source, source_start, self.streaming);
         let mut at = source_start;
         let mut turn = 0;
         let mut turn_end = 0;
@@ -2905,6 +2770,7 @@ impl TranscriptView {
         let mut awaiting_answer = None;
         let mut has_work = false;
         let mut ready = false;
+        let mut receipt_start = None;
         while at < self.source.len() {
             let mut end = at + 1;
             while end < self.source.len() && !self.source[end].first {
@@ -2960,14 +2826,28 @@ impl TranscriptView {
                         && self.source[i].first
                         && self.answer_visible(i)
                 });
-                // A Bot's work stays in its activity panel, never folded inline.
-                has_work = !self.bot
-                    && final_answer.is_some_and(|answer| {
-                        self.source[turn..answer].iter().any(|r| r.role == "tool")
-                    });
+                has_work = final_answer.is_some_and(|answer| {
+                    self.source[turn..answer].iter().any(|r| r.role == "tool")
+                });
                 ready = final_answer.is_some_and(|answer| self.answer_visible(answer));
                 self.fold_targets
                     .insert(turn, final_answer.filter(|_| has_work && ready));
+                receipt_start = (turn..turn_end).find(|&i| {
+                    let row = &self.source[i];
+                    row.first
+                        && !matches!(
+                            row.role.as_str(),
+                            "bot-card"
+                                | "remote-plan"
+                                | "visual"
+                                | "bot-document"
+                                | "bot-note"
+                                | "bot-launch"
+                                | vorkspace_core::transcript::attachments::ROLE
+                        )
+                        && !(row.role == "error" && row.text.trim() == "Stopped")
+                        && !(self.bot && row.text.trim().starts_with("<reaction>"))
+                });
             }
             let folded = !is_prompt
                 && !activity.pinned.contains(&at)
@@ -2975,30 +2855,25 @@ impl TranscriptView {
                 && ready
                 && final_answer.is_some_and(|answer| at < answer)
                 && !self.work_folds.get(&turn).copied().unwrap_or(false);
-            if !self.document
-                && !is_prompt
-                && !stopped_notice
-                && !matches!(
-                    role.as_str(),
-                    "bot-card"
-                        | "remote-plan"
-                        | "visual"
-                        | "bot-document"
-                        | "bot-note"
-                        | "bot-launch"
-                        | vorkspace_core::transcript::attachments::ROLE
-                )
-                && !(self.bot && text.trim().starts_with("<reaction>"))
-                && (at == 0
-                    || self.source[..at]
-                        .iter()
-                        .rev()
-                        .find(|row| row.role != vorkspace_core::transcript::attachments::ROLE)
-                        .is_some_and(Row::is_prompt))
-                && !(self.bot
-                    && self.bot_group_start(turn) != turn
-                    && !(self.history_start > 0 && self.prompt_start(turn) == self.history_start))
-            {
+            if !self.document && receipt_start == Some(at) {
+                if self.bot
+                    && (self.bot_group_start(turn) == turn
+                        || (self.history_start > 0
+                            && self.prompt_start(turn) == self.history_start))
+                {
+                    self.rows.push(UiRow {
+                        key: (0, 0),
+                        body: Body::BotHeader {
+                            turn: self.bot_group_start(turn),
+                        },
+                        message,
+                        first: false,
+                        last: false,
+                        work: false,
+                        work_tail: false,
+                        thought_phase: None,
+                    });
+                }
                 self.rows.push(UiRow {
                     key: (0, 0),
                     body: Body::WorkLine {
@@ -3022,7 +2897,7 @@ impl TranscriptView {
             let phase_open = phase.is_none_or(|group| {
                 !grouped || self.phases.get(&group.start).copied().unwrap_or(active)
             });
-            if !self.bot && !folded && grouped && phase.is_some_and(|group| group.start == at) {
+            if !folded && grouped && phase.is_some_and(|group| group.start == at) {
                 let group = phase.unwrap();
                 let (title, icon) = if group.calls.is_empty() {
                     (if active { "Thinking…" } else { "Thought" }.into(), "minus")
@@ -3132,15 +3007,6 @@ impl TranscriptView {
                                 .insert(prompt, (emoji.into(), live.then_some(now)));
                         }
                     }
-                }
-            } else if self.bot
-                && (matches!(role.as_str(), "tool" | "reasoning")
-                    || (role == "assistant" && self.bot_prose_hidden(at)))
-            {
-                // groupBotTurnItems: the header carries the process, and the
-                // prose said while working stays in the activity trail.
-                if role == "tool" {
-                    self.seen_steps.insert(at);
                 }
             } else if folded || activity.hidden.contains(&at) || !phase_open {
                 if role == "tool" {
@@ -3255,9 +3121,10 @@ impl TranscriptView {
                         .map(|group| (group.start, group.last == at));
                 }
                 let ordinal = match row.body {
-                    Body::WorkLine { .. } => 0,
-                    Body::Phase { .. } => 1,
-                    Body::Tool { .. } => 2,
+                    Body::BotHeader { .. } => 0,
+                    Body::WorkLine { .. } => usize::from(self.bot),
+                    Body::Phase { .. } => 1 + usize::from(self.bot),
+                    Body::Tool { .. } => 2 + usize::from(self.bot),
                     Body::Reasoning => 4,
                     _ => {
                         let key = prose_ordinal;
@@ -3268,10 +3135,14 @@ impl TranscriptView {
                 row.key = (at, ordinal);
                 row.work = has_work
                     && ready
+                    && !is_prompt
                     && role != "visual"
                     && !activity.pinned.contains(&at)
                     && final_answer.is_some_and(|answer| at < answer)
-                    && !matches!(row.body, Body::WorkLine { .. });
+                    && !matches!(
+                        row.body,
+                        Body::WorkLine { .. } | Body::BotHeader { .. } | Body::BotCard(_)
+                    );
             }
             if let Some(row) = self.rows.get_mut(first) {
                 row.first = true;
@@ -3285,6 +3156,7 @@ impl TranscriptView {
                 role,
                 parser,
                 under_line: has_work && final_answer == Some(at),
+                run: turn,
                 turn: if self.bot {
                     self.bot_group_start(turn)
                 } else {
@@ -3404,7 +3276,7 @@ impl TranscriptView {
             for row in self.rows.drain(display_start..) {
                 let answer = self
                     .fold_targets
-                    .get(&self.messages[row.message].turn)
+                    .get(&self.messages[row.message].run)
                     .copied()
                     .flatten();
                 if activity.pinned.contains(&row.key.0)
@@ -4282,7 +4154,7 @@ impl TranscriptView {
             | Body::Review { .. }
             | Body::SavedDraft => div().into_any_element(),
             Body::Actions { turn, complete } => self.response_actions(turn, complete, cx),
-            Body::WorkLine { turn, .. } if self.bot => self.bot_turn_header(turn, cx),
+            Body::BotHeader { turn } => self.bot_turn_header(turn),
             Body::WorkLine { turn, expandable } => {
                 let live = self.streaming
                     && message_start >= self.live_start
@@ -4320,6 +4192,7 @@ impl TranscriptView {
                 };
                 div()
                     .id(("work-fold", turn))
+                    .debug_selector(move || format!("work-fold-{turn}"))
                     .role(if expandable {
                         Role::Button
                     } else {
@@ -4374,16 +4247,21 @@ impl TranscriptView {
                                 )
                             }),
                     )
-                    .child(div().min_w_0().flex_1().truncate().child(
-                        if live && !cx.reduce_motion() {
-                            crate::activity::shimmer(
-                                title,
-                                self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
-                            )
-                        } else {
-                            div().child(title).into_any_element()
-                        },
-                    ))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .when(live, |d| d.debug_selector(|| "live-work-receipt".into()))
+                            .child(if live && !cx.reduce_motion() {
+                                crate::activity::shimmer(
+                                    title,
+                                    self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
+                                )
+                            } else {
+                                div().child(title).into_any_element()
+                            }),
+                    )
                     .when(expandable, |d| d.hover(|s| s.text_color(content(0.8))))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if expandable {
@@ -5909,9 +5787,10 @@ mod scroll_tests {
     }
 
     #[gpui::test]
-    fn bot_turns_merge_follow_ups_hide_live_prose_and_queue_above_the_work(
+    fn bot_turns_merge_follow_ups_keep_inline_work_and_queue_above_the_work(
         cx: &mut TestAppContext,
     ) {
+        cx.update(|cx| cx.set_reduce_motion(true));
         let view = cx.new(|_| {
             let mut view = TranscriptView::new();
             view.bot_mode("cat", 0xe86b5f, "BotCat");
@@ -5943,7 +5822,7 @@ mod scroll_tests {
             let headers = view
                 .rows
                 .iter()
-                .filter(|r| matches!(r.body, Body::WorkLine { .. }))
+                .filter(|r| matches!(r.body, Body::BotHeader { .. }))
                 .count();
             let actions: Vec<_> = view
                 .rows
@@ -5963,10 +5842,27 @@ mod scroll_tests {
                 "one set of actions, at the end of the group"
             );
             assert!(
-                view.bot_prose_hidden(1),
-                "prose before later work stays in the trail"
+                !view.rows.iter().any(|r| r.key == (1, 16)),
+                "earlier commentary stays behind the inline receipt"
             );
-            assert!(!view.bot_prose_hidden(3));
+            assert!(view.rows.iter().any(|r| r.key == (3, 16)));
+            assert!(view.rows.iter().any(|r| r.key == (5, 16)));
+            assert_eq!(
+                view.rows
+                    .iter()
+                    .filter(|r| matches!(r.body, Body::WorkLine { .. }))
+                    .count(),
+                2,
+                "each run keeps its own work receipt under the shared signature"
+            );
+            view.work_folds.insert(1, true);
+            view.rebuild(1, cx);
+            assert!(view.rows.iter().any(|r| r.key == (1, 16) && r.work));
+            assert!(
+                view.rows
+                    .iter()
+                    .any(|r| matches!(r.body, Body::Tool { .. }))
+            );
             assert!(
                 view.rows
                     .iter()
@@ -5976,7 +5872,10 @@ mod scroll_tests {
             view.streaming(true, cx);
             view.patch(6, vec![row("user", "And another thing")], cx);
             view.patch(7, vec![row("assistant", "Working on it")], cx);
-            assert!(view.bot_prose_hidden(7), "live prose waits in the trail");
+            assert!(
+                view.rows.iter().any(|r| r.key == (7, 16)),
+                "live prose appears inline"
+            );
             view.set_pending(
                 vec![PendingMessage {
                     id: "q".into(),

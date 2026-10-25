@@ -94,7 +94,6 @@ pub(crate) struct Bots {
     notice_region: AnchorSlot,
     pub(crate) details: Entity<overview::Overview>,
     overview_tab: OverviewTab,
-    overview_previous: OverviewTab,
     overview_reveal: Option<crate::project_tabs::TabReveal<OverviewTab>>,
     route: Option<Route>,
     settings: Option<SettingsSection>,
@@ -122,8 +121,6 @@ pub(crate) struct Bots {
     html_documents: HashMap<String, Entity<html::Html>>,
     project_changes: changes::ProjectChanges,
     review: Option<Entity<crate::review::ReviewPane>>,
-    activity: Option<(String, Entity<crate::transcript::TranscriptView>)>,
-    activity_turn: Option<usize>,
     rail_ids: Vec<String>,
     running: HashMap<i64, RunningHabit>,
     active_run: Option<i64>,
@@ -342,7 +339,6 @@ impl Bots {
             notice_region,
             details,
             overview_tab: OverviewTab::Sessions,
-            overview_previous: OverviewTab::Sessions,
             overview_reveal: None,
             route: None,
             settings: None,
@@ -370,8 +366,6 @@ impl Bots {
             html_documents: HashMap::new(),
             project_changes: Default::default(),
             review: None,
-            activity: None,
-            activity_turn: None,
             rail_ids: Vec::new(),
             running: HashMap::new(),
             active_run: None,
@@ -796,13 +790,6 @@ impl Bots {
                         crate::transcript::BotResponseAction::Queue { id, remove } => {
                             this.queue_changed(&source, id, *remove, cx)
                         }
-                        crate::transcript::BotResponseAction::Activity(turn) => {
-                            this.activity_turn = Some(*turn);
-                            this.show_overview(cx);
-                            this.route = None;
-                            this.overview_tab = OverviewTab::Activity;
-                            cx.notify();
-                        }
                         crate::transcript::BotResponseAction::Quote { text, window } => {
                             let target = target.clone();
                             let text = text.clone();
@@ -1050,7 +1037,6 @@ impl Bots {
             self.fields
                 .retain(|k, _| k.starts_with("file:") || k.starts_with("channel-"));
             self.files = None;
-            self.activity_turn = None;
             self.memory_adding = false;
             self.memory_edit = None;
             self.settings = None;

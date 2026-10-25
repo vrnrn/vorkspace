@@ -12,7 +12,6 @@ pub(super) enum OverviewTab {
     Habits,
     Documents,
     Changes,
-    Activity,
 }
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum SettingsSection {
@@ -807,9 +806,6 @@ impl Bots {
         if self.overview_tab != tab {
             self.overview_reveal =
                 Some(crate::project_tabs::TabReveal::new(tab, self.overview_tab));
-            if tab != OverviewTab::Activity {
-                self.overview_previous = tab;
-            }
             self.overview_tab = tab;
             cx.notify();
         }
@@ -873,7 +869,6 @@ impl Bots {
                     OverviewTab::Documents => "bot-overview-Documents",
                     OverviewTab::Habits => "bot-overview-Habits",
                     OverviewTab::Changes => "bot-overview-Changes",
-                    OverviewTab::Activity => unreachable!(),
                 };
                 crate::project_tabs::tab_button(
                     id,
@@ -898,21 +893,6 @@ impl Bots {
                         })),
                 )
             })
-            .child(
-                icon_button("bot-activity", "Show activity", "list-bullet")
-                    .debug_selector(|| "bot-activity".into())
-                    .when(self.overview_tab == OverviewTab::Activity, |d| {
-                        d.bg(content(0.1))
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        let tab = if this.overview_tab == OverviewTab::Activity {
-                            this.overview_previous
-                        } else {
-                            OverviewTab::Activity
-                        };
-                        this.select_overview(tab, cx);
-                    })),
-            )
             .into_any_element()
     }
     pub(super) fn overview_panel(
@@ -932,7 +912,6 @@ impl Bots {
             OverviewTab::Habits => self.habits_list(bot, cx),
             OverviewTab::Documents => self.document_list(bot, cx),
             OverviewTab::Changes => self.changes_list(bot, cx),
-            OverviewTab::Activity => self.activity_view(bot, cx),
         };
         div()
             .size_full()
@@ -1286,47 +1265,6 @@ impl Bots {
             Route::Habit(id) => self.habit_page(bot, Some(&id), window, cx),
             Route::NewHabit => self.habit_page(bot, None, window, cx),
         }
-    }
-    fn activity_view(&mut self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
-        let Some(chat) = self.chat() else {
-            return empty("Loading…");
-        };
-        let source = chat.read(cx).bot_rows(cx);
-        let Some(start) = self.activity_turn.filter(|i| *i < source.len()) else {
-            return empty_state(
-                "list-bullet",
-                &format!(
-                    "Select the activity on one of {}’s messages to see each step it took.",
-                    bot.label()
-                ),
-            );
-        };
-        let end = source
-            .iter()
-            .enumerate()
-            .skip(start + 1)
-            .find(|(_, r)| r.is_prompt() && r.first)
-            .map(|(i, _)| i)
-            .unwrap_or(source.len());
-        let rows = source[start..end]
-            .iter()
-            .filter(|r| matches!(r.role.as_str(), "tool" | "reasoning"))
-            .cloned()
-            .collect::<Vec<_>>();
-        if rows.is_empty() {
-            return empty_state("list-bullet", "No activity in this turn yet.");
-        }
-        let key = bot::files::content_hash(&format!("{rows:?}"));
-        if self.activity.as_ref().is_none_or(|(old, _)| old != &key) {
-            self.activity = Some((
-                key,
-                cx.new(|cx| crate::transcript::TranscriptView::activity(rows, cx)),
-            ));
-        }
-        div()
-            .size_full()
-            .child(self.activity.as_ref().unwrap().1.clone())
-            .into_any_element()
     }
     pub(super) fn settings_modal(
         &mut self,
