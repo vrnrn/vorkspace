@@ -78,7 +78,10 @@ impl Store {
         Ok(changed != 0)
     }
 
-    fn history_revision(&self, original: &str) -> Result<i64, String> {
+    pub(in crate::store) fn history_revision(&self, original: &str) -> Result<i64, String> {
+        if !has_table(&self.conn, "session_history_revisions")? {
+            return Ok(0);
+        }
         Ok(sql(self
             .conn
             .query_row(
@@ -111,6 +114,54 @@ impl Store {
         }
     }
 
+    pub(super) fn shared_history_fast_forwards(
+        &self,
+        id: i64,
+        expected: &HistoryRevision,
+        blocks: &[Value],
+    ) -> Result<bool, String> {
+        if expected.fast_forwards(blocks) {
+            return Ok(true);
+        }
+        if let HistoryRevision::Stored(rev) = expected {
+            let schema: i64 = sql(self
+                .conn
+                .query_row("PRAGMA schema_version", [], |row| row.get(0)))?;
+            if self.shared.as_ref().unwrap().history_schema.get() != Some(schema) {
+                return Ok(false);
+            }
+            let original = self.persisted_session_id(id)?;
+            let current_rev = self.history_revision(&original)?;
+            if current_rev >= *rev {
+                let indices = self.shared.as_ref().unwrap().incremental.borrow();
+                if let Some(index) = indices.get(&id) {
+                    if index.revision == *rev {
+                        let non_draft: Vec<&Value> =
+                            blocks.iter().filter(|b| b["draft"] != true).collect();
+                        if non_draft.len() >= index.entries.len() {
+                            let kind = index.kind;
+                            let keys = sql(sql(self.conn.prepare(&format!(
+                                "SELECT {} FROM {} WHERE session_id=?1 ORDER BY {}",
+                                kind.position(),
+                                self.shared_history_table(kind, &original)?,
+                                kind.position()
+                            )))?
+                            .query_map([&original], |row| row.get::<_, i64>(0)))?
+                            .collect::<rusqlite::Result<Vec<_>>>()
+                            .map_err(|e| e.to_string())?;
+                            let index_keys: Vec<i64> =
+                                index.entries.iter().map(|e| e.key).collect();
+                            if keys.starts_with(&index_keys) {
+                                return Ok(true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
     pub(super) fn shared_validate_history(&self, id: i64, blocks: &[Value]) -> Result<(), String> {
         if let Some(expected) = self.shared.as_ref().unwrap().snapshots.borrow().get(&id) {
             if !self.shared_history_matches(id, expected, blocks)? {
@@ -118,6 +169,22 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn shared_validate_history_or_fast_forward(
+        &self,
+        id: i64,
+        blocks: &[Value],
+    ) -> Result<bool, String> {
+        if let Some(expected) = self.shared.as_ref().unwrap().snapshots.borrow().get(&id) {
+            if !self.shared_history_matches(id, expected, blocks)? {
+                if !self.shared_history_fast_forwards(id, expected, blocks)? {
+                    return Err(CHANGED.into());
+                }
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(in crate::store) fn shared_has_user_message(&self) -> Result<String, String> {
