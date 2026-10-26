@@ -371,7 +371,114 @@ fn card_save_admission_stays_responsive_and_publishes_latest_at_the_current_row(
 }
 
 #[gpui::test]
-fn card_save_completion_cannot_replace_a_new_card_or_a_new_submission(cx: &mut TestAppContext) {
+fn committed_card_refresh_survives_a_new_submission_and_the_next_refresh(cx: &mut TestAppContext) {
+    for advance_before_commit in [true, false] {
+        let (window, store, session, index, original) = card_fixture(cx);
+        let mut committed = original.clone();
+        committed["title"] = serde_json::json!("Committed");
+        let guard = locked(&store).unwrap();
+        let generation = window
+            .update(cx, |view, _, cx| {
+                let generation = view.submission_generation;
+                view.bot_patch_card(
+                    index,
+                    "refresh-card",
+                    generation,
+                    original.clone(),
+                    committed.clone(),
+                    cx,
+                )
+                .unwrap();
+                if advance_before_commit {
+                    view.submission_generation += 1;
+                }
+                generation
+            })
+            .unwrap();
+        drop(guard);
+        // Wait for the actual worker's commit without handling the UI receipt
+        // or closing the worker that must perform the following refresh.
+        cx.update(|cx| crate::runtime::card_persistence::wait_for_saves_for_test(cx));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &locked(&store).unwrap().load(session).unwrap().rows[index].text
+            )
+            .unwrap(),
+            committed
+        );
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(
+                    card_at(view.bot_rows(cx), index, "refresh-card").unwrap().1,
+                    original
+                );
+                if !advance_before_commit {
+                    view.submission_generation += 1;
+                }
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(
+                    card_at(view.bot_rows(cx), index, "refresh-card").unwrap().1,
+                    committed
+                );
+                assert!(view.bot_ui.card_versions.is_empty());
+                assert_eq!(view.input.read(cx).content, "Unsent draft");
+                // A fetch begun in the old submission is still inadmissible,
+                // even though it now happens to match the reconciled base.
+                let mut delayed = committed.clone();
+                delayed["title"] = serde_json::json!("Obsolete fetch");
+                view.bot_patch_card(
+                    index,
+                    "refresh-card",
+                    generation,
+                    committed.clone(),
+                    delayed,
+                    cx,
+                )
+                .unwrap();
+                assert!(view.bot_ui.card_versions.is_empty());
+                let mut latest = committed.clone();
+                latest["title"] = serde_json::json!("Latest");
+                let expected = card_at(view.bot_rows(cx), index, "refresh-card").unwrap().1;
+                view.bot_patch_card(
+                    index,
+                    "refresh-card",
+                    view.submission_generation,
+                    expected,
+                    latest,
+                    cx,
+                )
+                .unwrap();
+                assert!(!view.bot_ui.card_versions.is_empty());
+            })
+            .unwrap();
+        cx.update(|cx| crate::runtime::card_persistence::wait_for_saves_for_test(cx));
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(
+                    card_at(view.bot_rows(cx), index, "refresh-card").unwrap().1["title"],
+                    "Latest"
+                );
+                assert!(view.bot_ui.card_versions.is_empty());
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &locked(&store).unwrap().load(session).unwrap().rows[index].text
+            )
+            .unwrap()["title"],
+            "Latest"
+        );
+    }
+    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+}
+
+#[gpui::test]
+fn card_save_completion_keeps_replacements_and_reconciles_new_submissions(cx: &mut TestAppContext) {
     let first = card_fixture(cx);
     let second = card_fixture(cx);
     let guard1 = locked(&first.1).unwrap();
@@ -414,7 +521,7 @@ fn card_save_completion_cannot_replace_a_new_card_or_a_new_submission(cx: &mut T
             .update(cx, |view, _, cx| {
                 let visible: serde_json::Value =
                     serde_json::from_str(&view.bot_rows(cx)[*index].text).unwrap();
-                assert_eq!(visible["title"], "Old");
+                assert_eq!(visible["title"], if replacement { "Old" } else { "New" });
                 assert_eq!(
                     visible["id"],
                     if replacement {

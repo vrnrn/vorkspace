@@ -165,6 +165,8 @@ impl Worker {
                     };
                     let result = job.save();
                     work.queue.lock().unwrap().finish(job, result);
+                    #[cfg(test)]
+                    work.wake.notify_all();
                 }
                 let _ = done.try_send(());
             })
@@ -285,6 +287,17 @@ pub(crate) fn admit(
         shared: owner.worker.shared.clone(),
         receiver,
     }))
+}
+
+#[cfg(test)]
+pub(crate) fn wait_for_saves_for_test(cx: &App) {
+    if let Some(owner) = cx.try_global::<Owner>() {
+        let shared = &owner.worker.shared;
+        let mut queue = shared.queue.lock().unwrap();
+        while !queue.order.is_empty() || queue.entries.values().any(|entry| !entry.settled) {
+            queue = shared.wake.wait(queue).unwrap();
+        }
+    }
 }
 
 #[cfg(test)]

@@ -344,7 +344,10 @@ impl Conversation {
                     return;
                 }
                 this.bot_ui.card_versions.remove(&id);
-                if this.summary.id != session || this.submission_generation != generation {
+                // Generation fences fetched metadata before admission. Once
+                // committed, the row belongs to the session across new turns;
+                // version and expected-value checks still protect newer cards.
+                if this.summary.id != session {
                     return;
                 }
                 match result {
