@@ -1552,6 +1552,9 @@ impl TranscriptView {
         }
         let retry = message.id.clone();
         let discard = message.id.clone();
+        let pending_selector = format!("bot-pending-{}", message.id);
+        let retry_selector = format!("bot-pending-retry-{retry}");
+        let discard_selector = format!("bot-pending-discard-{discard}");
         let attachments = attachments::Attachment::from_paths(&message.attachments);
         let attachment_body = (!attachments.is_empty())
             .then(|| self.attachment_row(&attachments, &format!("pending-{}", message.id), cx));
@@ -1567,6 +1570,7 @@ impl TranscriptView {
             .children(self.pending_separator(ix))
             .child(
                 div()
+                    .debug_selector(move || pending_selector.clone())
                     .relative()
                     .top(px(rise))
                     .w_full()
@@ -1631,7 +1635,10 @@ impl TranscriptView {
                     .when_some(message.error.clone(), |d, error| {
                         d.child(
                             div()
+                                .w_full()
+                                .min_w_0()
                                 .flex()
+                                .flex_wrap()
                                 .items_center()
                                 .gap_2()
                                 .px_3()
@@ -1645,6 +1652,8 @@ impl TranscriptView {
                                             "bot-pending-error-{}",
                                             message.id
                                         )))
+                                        .min_w_0()
+                                        .max_w_full()
                                         .role(Role::Alert)
                                         .child(format!("Not sent · {error}")),
                                 )
@@ -1653,6 +1662,8 @@ impl TranscriptView {
                                         .id(SharedString::from(format!(
                                             "bot-pending-retry-{retry}"
                                         )))
+                                        .debug_selector(move || retry_selector.clone())
+                                        .flex_shrink_0()
                                         .role(Role::Button)
                                         .rounded(px(4.))
                                         .px_1()
@@ -1672,6 +1683,8 @@ impl TranscriptView {
                                         .id(SharedString::from(format!(
                                             "bot-pending-discard-{discard}"
                                         )))
+                                        .debug_selector(move || discard_selector.clone())
+                                        .flex_shrink_0()
                                         .role(Role::Button)
                                         .rounded(px(4.))
                                         .px_1()

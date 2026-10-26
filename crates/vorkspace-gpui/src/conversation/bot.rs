@@ -2,6 +2,9 @@ use super::*;
 use gpui::{App, EntityInputHandler};
 use std::path::PathBuf;
 use vorkspace_core::bot::{Bot, Message};
+#[cfg(test)]
+#[path = "bot_tests.rs"]
+mod tests;
 #[derive(Default)]
 pub(super) struct ChatState {
     /// Standalone Bot chats opt into identity decoration. Channels keep None;
@@ -475,12 +478,16 @@ impl Conversation {
                         self.bot_ui
                             .pending
                             .iter()
-                            .filter(|m| m.internal)
+                            // Peer messages and their recovery controls already live
+                            // in the transcript. Other automatic updates stay quiet
+                            // unless delivery needs the user's attention.
+                            .filter(|m| m.internal && m.peer.is_none() && m.error.is_some())
                             .map(|message| {
                                 let retry = message.id.clone();
                                 let remove = retry.clone();
                                 div()
                                     .id(SharedString::from(format!("bot-queued-{}", message.id)))
+                                    .debug_selector(|| "bot-background-update-error".into())
                                     .mb_1()
                                     .flex()
                                     .justify_end()
@@ -495,20 +502,13 @@ impl Conversation {
                                             .bg(content(0.04))
                                             .text_size(px(13.))
                                             .text_color(content(0.6))
-                                            .child(if message.internal {
-                                                "Completion update".into()
-                                            } else {
-                                                message.text.clone()
-                                            })
+                                            .child("Background update needs attention")
                                             .child(
                                                 div()
                                                     .text_size(px(11.))
                                                     .text_color(content(0.4))
                                                     .child(
-                                                        message
-                                                            .error
-                                                            .clone()
-                                                            .unwrap_or_else(|| "Pending".into()),
+                                                        message.error.clone().unwrap_or_default(),
                                                     ),
                                             )
                                             .when(message.error.is_some(), |d| {
@@ -522,6 +522,9 @@ impl Conversation {
                                                                 "Retry queued message",
                                                                 "refresh-cw",
                                                             )
+                                                            .debug_selector(|| {
+                                                                "bot-queue-retry".into()
+                                                            })
                                                             .on_click(cx.listener(
                                                                 move |_, _, _, cx| {
                                                                     cx.emit(QueueChanged {
@@ -537,6 +540,9 @@ impl Conversation {
                                                                 "Discard queued message",
                                                                 "close",
                                                             )
+                                                            .debug_selector(|| {
+                                                                "bot-queue-discard".into()
+                                                            })
                                                             .on_click(cx.listener(
                                                                 move |_, _, _, cx| {
                                                                     cx.emit(QueueChanged {
