@@ -13,6 +13,8 @@ mod follow_up;
 mod history;
 mod local_submissions;
 mod notifications;
+#[cfg(test)]
+mod receive_tests;
 mod remote;
 pub(crate) mod remote_plans;
 mod response_menu;
@@ -1524,6 +1526,14 @@ impl Conversation {
                 {
                     break;
                 }
+                // recv().await need not suspend: a producer can refill even a
+                // bounded channel while we patch. Return to the native event
+                // loop between atomic updates so input and frames can run.
+                // A positive timer also avoids immediately requeueing a ready
+                // continuation onto the main dispatch queue.
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1))
+                    .await;
             }
             if !completed {
                 let _ = this.update(cx, |this, cx| this.turn_updates_closed(generation, cx));
