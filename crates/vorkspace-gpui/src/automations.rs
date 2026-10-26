@@ -840,9 +840,7 @@ fn button(
     label: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
     let label: SharedString = label.into();
-    div()
-        .id(id)
-        .role(Role::Button)
+    crate::controls::button(id, label.clone(), true)
         .px(px(12.))
         .h(px(28.))
         .rounded(px(6.))

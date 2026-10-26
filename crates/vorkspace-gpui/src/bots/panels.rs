@@ -52,10 +52,7 @@ pub(super) fn button(
     label: impl Into<SharedString>,
 ) -> Stateful<Div> {
     let label = label.into();
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(label.clone())
+    crate::controls::button(id, label.clone(), true)
         .cursor(gpui::CursorStyle::Arrow)
         .flex()
         .items_center()
@@ -454,41 +451,25 @@ impl LookEditor {
                             .child("Texture"),
                     )
                     .child(
-                        div()
-                            .id(SharedString::from(toggle_id))
-                            .debug_selector(move || toggle_sel.clone())
-                            .role(Role::Switch)
-                            .aria_label("Texture")
-                            .aria_selected(textured)
-                            .w(px(36.))
-                            .h(px(20.))
-                            .flex_shrink_0()
-                            .rounded_full()
-                            .bg(if textured {
-                                accent_color()
-                            } else {
-                                content(0.2)
-                            })
-                            .child(
-                                div()
-                                    .size(px(16.))
-                                    .mt(px(2.))
-                                    .ml(px(if textured { 18. } else { 2. }))
-                                    .rounded_full()
-                                    .bg(gpui::white()),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.bot.textured = !this.bot.textured;
-                                if !this.bot.textured
-                                    && this.editing_color == Some(EditingColor::Foreground)
-                                {
-                                    this.editing_color = None;
-                                }
-                                cx.emit(LookChanged {
-                                    bot: this.bot.clone(),
-                                });
-                                cx.notify();
-                            })),
+                        crate::controls::switch(
+                            SharedString::from(toggle_id),
+                            "Texture",
+                            textured,
+                            true,
+                        )
+                        .debug_selector(move || toggle_sel.clone())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.bot.textured = !this.bot.textured;
+                            if !this.bot.textured
+                                && this.editing_color == Some(EditingColor::Foreground)
+                            {
+                                this.editing_color = None;
+                            }
+                            cx.emit(LookChanged {
+                                bot: this.bot.clone(),
+                            });
+                            cx.notify();
+                        })),
                     ),
             )
             .when(textured, |d| {
@@ -2285,42 +2266,22 @@ impl Bots {
             .child(heading("Sessions it starts",None))
             .child(card()
                 .child(switch_setting("Show sessions in sidebar","Sessions it starts appear in your project sidebar. Hidden ones stay saved and open from its overview.",false,
-                    self.switch("bot-show-started",bot.show_started_sessions_in_sidebar,false,|m,on|m.show_started_sessions_in_sidebar=on,cx)))
+                    self.switch("bot-show-started","Show sessions in sidebar",bot.show_started_sessions_in_sidebar,false,|m,on|m.show_started_sessions_in_sidebar=on,cx)))
                 .child(switch_setting("Group in a folder",&if creating && bot.name.is_empty() { "Sessions it starts go in a folder named after this Bot.".into() } else { format!("Sessions it starts go in a “{}” folder in your project sidebar.",bot.label()) },!bot.show_started_sessions_in_sidebar,
-                    self.switch("bot-group-started",bot.show_started_sessions_in_sidebar&&bot.use_sidebar_folders,!bot.show_started_sessions_in_sidebar,|m,on|m.use_sidebar_folders=on,cx))
+                    self.switch("bot-group-started","Group in a folder",bot.show_started_sessions_in_sidebar&&bot.use_sidebar_folders,!bot.show_started_sessions_in_sidebar,|m,on|m.use_sidebar_folders=on,cx))
                     .border_t_1().border_color(content(0.04))))
             .into_any_element()
     }
     fn switch(
         &self,
         id: &'static str,
+        label: &'static str,
         on: bool,
         disabled: bool,
         change: fn(&mut Bot, bool),
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        div()
-            .id(id)
-            .role(Role::Switch)
-            .aria_label(id)
-            .aria_toggled(if on {
-                gpui::Toggled::True
-            } else {
-                gpui::Toggled::False
-            })
-            .w(px(36.))
-            .h(px(20.))
-            .flex_shrink_0()
-            .rounded_full()
-            .bg(if on { accent_color() } else { content(0.2) })
-            .child(
-                div()
-                    .size(px(16.))
-                    .mt(px(2.))
-                    .ml(px(if on { 18. } else { 2. }))
-                    .rounded_full()
-                    .bg(gpui::white()),
-            )
+        crate::controls::switch(id, label, on, !disabled)
             .on_click(cx.listener(move |this, _, _, cx| {
                 if disabled {
                     return;

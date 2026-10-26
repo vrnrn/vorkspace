@@ -65,11 +65,8 @@ fn button(
 ) -> gpui::Stateful<gpui::Div> {
     let label = label.into();
     let selector = label.clone();
-    div()
-        .id(id)
+    crate::controls::button(id, label.clone(), true)
         .debug_selector(move || format!("project-settings-{selector}"))
-        .role(Role::Button)
-        .aria_label(label.clone())
         .h(px(32.))
         .px(px(10.))
         .flex()
@@ -346,38 +343,22 @@ impl Render for AppearanceControls {
                             .child("Texture"),
                     )
                     .child(
-                        div()
-                            .id("project-texture-toggle")
-                            .debug_selector(|| "project-texture-toggle".into())
-                            .role(Role::Switch)
-                            .aria_label("Texture")
-                            .aria_selected(textured)
-                            .w(px(36.))
-                            .h(px(20.))
-                            .flex_shrink_0()
-                            .rounded_full()
-                            .bg(if textured {
-                                accent_color()
-                            } else {
-                                content(0.2)
-                            })
-                            .child(
-                                div()
-                                    .size(px(16.))
-                                    .mt(px(2.))
-                                    .ml(px(if textured { 18. } else { 2. }))
-                                    .rounded_full()
-                                    .bg(gpui::white()),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.appearance.textured = !this.appearance.textured;
-                                if !this.appearance.textured
-                                    && this.editing_color == Some(EditingProjectColor::Foreground)
-                                {
-                                    this.editing_color = None;
-                                }
-                                this.save(cx);
-                            })),
+                        crate::controls::switch(
+                            "project-texture-toggle",
+                            "Texture",
+                            textured,
+                            true,
+                        )
+                        .debug_selector(|| "project-texture-toggle".into())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.appearance.textured = !this.appearance.textured;
+                            if !this.appearance.textured
+                                && this.editing_color == Some(EditingProjectColor::Foreground)
+                            {
+                                this.editing_color = None;
+                            }
+                            this.save(cx);
+                        })),
                     ),
             )
             // Grid Scale Slider (2x2..8x8) + Seed Die shown only when Texture is enabled
@@ -1252,5 +1233,68 @@ impl Render for BackgroundDialog {
                     .on_click(cx.listener(|this,_,_,cx|{this.background=Background::default();this.effect_open=false;this.error=None;this.save(cx);}))))
             )
             .children(self.effect_popup(cx))
+    }
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+    use gpui::{TestAppContext, VisualTestContext};
+
+    #[gpui::test]
+    fn texture_switch_mouse_and_keyboard_preserve_name_and_clear_foreground_editor(
+        cx: &mut TestAppContext,
+    ) {
+        let window = cx.update(|cx| {
+            crate::input::bind(cx);
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    let mut view = AppearanceControls::new(
+                        "/tmp/control-project".into(),
+                        ProjectAppearance {
+                            textured: true,
+                            ..Default::default()
+                        },
+                        cx,
+                    );
+                    view.name
+                        .update(cx, |input, cx| input.set_text("Unfinished name".into(), cx));
+                    view.editing_color = Some(EditingProjectColor::Foreground);
+                    view
+                })
+            })
+            .unwrap()
+        });
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let track = visual.debug_bounds("project-texture-toggle").unwrap();
+        assert_eq!(track.size, gpui::size(px(36.), px(20.)));
+        visual.simulate_click(track.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |view, window, cx| {
+                assert!(!view.appearance.textured);
+                assert!(view.editing_color.is_none());
+                assert_eq!(view.name.read(cx).content, "Unfinished name");
+                // The name field precedes the texture switch in this form's focus order.
+                window.focus(&view.name.focus_handle(cx), cx);
+                window.focus_next(cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        crate::controls::tests::press_key(visual, "space");
+        visual.run_until_parked();
+        window
+            .update(visual, |view, _, cx| {
+                assert!(view.appearance.textured);
+                assert_eq!(view.name.read(cx).content, "Unfinished name");
+                assert!(view.editing_color.is_none());
+            })
+            .unwrap();
+        assert_eq!(
+            visual.debug_bounds("project-texture-toggle").unwrap(),
+            track
+        );
     }
 }
