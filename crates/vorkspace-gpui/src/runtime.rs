@@ -9,6 +9,7 @@ use vorkspace_core::{
     store::{Session, Store},
     transcript::{Row, Transcript},
 };
+pub(crate) mod card_persistence;
 #[cfg(all(test, unix))]
 mod follow_up_tests;
 mod handoff;

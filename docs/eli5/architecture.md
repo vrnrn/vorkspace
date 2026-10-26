@@ -20,6 +20,8 @@ Every click of Terminal in the sidebar opens and focuses a new terminal across t
 
 As a reply arrives, only changed chat blocks are saved. The screen can show a small preview while the full tool result stays safely in the database. A stale window cannot overwrite newer saved history.
 
+Bot cards save in the background, one card at a time. Repeated updates combine, and an unchanged card needs no database work. Saving a card leaves the rest of the conversation untouched. The screen changes after the save succeeds, provided it still shows the same card and conversation. An old reply cannot replace a newer card. Closing its view does not cancel a save. Quitting waits for admitted card saves, which can delay shutdown if storage is busy. A forced stop can lose a refresh that has not yet saved or appeared on screen.
+
 Every supported agent has an output size limit before it is buffered. A fast agent waits when the app is still handling earlier output. An individual response that is too large produces a clear error rather than silently losing part of its text. Stopping the connection also releases waiting readers.
 
 Interface zoom makes the whole workspace larger or smaller, from 60% to 160%. Clicking, typing, native previews, and screen-reader controls follow the same zoom level, including after moving the window to a different display.

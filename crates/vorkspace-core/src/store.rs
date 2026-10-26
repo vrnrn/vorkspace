@@ -3,6 +3,7 @@ mod app_commands;
 pub use app_commands::AppCommandAdmission;
 mod attachments;
 mod bots;
+mod card;
 mod composer_draft;
 mod follow_up;
 pub use composer_draft::{ComposerDraft, ComposerRecovery};

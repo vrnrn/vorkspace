@@ -370,6 +370,7 @@ impl Bots {
             .filter(|(_, r)| r.role == "bot-card")
             .map(|(index, row)| (index, row.text.clone()))
             .collect::<Vec<_>>();
+        let generation = chat.read(cx).submission_generation;
         for (index, text) in cards {
             let Ok(mut value) = serde_json::from_str::<Value>(&text) else {
                 continue;
@@ -414,7 +415,7 @@ impl Bots {
                 let cwd = bot.projects.first().cloned().unwrap_or_else(|| ".".into());
                 let repo = value["repo"].as_str().map(str::to_owned);
                 let number = value["number"].as_u64().unwrap_or(0);
-                let view = chat.clone();
+                let view = chat.downgrade();
                 let work = cx
                     .background_executor()
                     .spawn(async move { bot::cards::pull_request(&cwd, repo.as_deref(), number) });
@@ -423,15 +424,17 @@ impl Bots {
                         for key in ["title", "state", "url", "isDraft", "additions", "deletions"] {
                             value[key] = metadata[key].clone();
                         }
-                        let _ = view.update(cx, |v, cx| v.bot_patch_card(index, &id, value, cx));
+                        let _ = view.update(cx, |v, cx| {
+                            v.bot_patch_card(index, &id, generation, original, value, cx)
+                        });
                     }
                 })
                 .detach();
                 continue;
             }
-            if value != original {
-                let _ = chat.update(cx, |v, cx| v.bot_patch_card(index, &id, value, cx));
-            }
+            let _ = chat.update(cx, |v, cx| {
+                v.bot_patch_card(index, &id, generation, original, value, cx)
+            });
         }
     }
 
