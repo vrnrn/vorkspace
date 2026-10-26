@@ -43,13 +43,7 @@ struct Edges {
 impl Edges {
     fn value(&self, now: Instant) -> (f32, f32) {
         let progress = self.changed.map_or(1., |at| {
-            crate::reveal::bezier(
-                (now.duration_since(at).as_secs_f32() / 0.16).min(1.),
-                0.,
-                0.,
-                0.58,
-                1.,
-            )
+            crate::reveal::ease_out((now.duration_since(at).as_secs_f32() / 0.16).min(1.))
         });
         (
             self.from.0 + (self.to.0 - self.from.0) * progress,

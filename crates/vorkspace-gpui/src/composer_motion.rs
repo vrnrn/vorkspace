@@ -55,7 +55,7 @@ impl ComposerMotion {
             return (Point::default(), false);
         }
         let t = elapsed.as_secs_f32() / DURATION.as_secs_f32();
-        let remaining = 1. - crate::reveal::bezier(t, 0.22, 1., 0.36, 1.);
+        let remaining = 1. - crate::reveal::ease_move(t);
         (delta * remaining, true)
     }
     #[cfg(test)]

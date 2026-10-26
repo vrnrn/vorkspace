@@ -7,7 +7,7 @@ use crate::{
 };
 use gpui::{
     AnyElement, Context, Div, ElementId, FontWeight, Hsla, MouseButton, MouseDownEvent, Role,
-    SharedString, Stateful, div, prelude::*, px, relative, rgb,
+    SharedString, Stateful, div, prelude::*, px, relative,
 };
 
 /// `text-[12px] leading-relaxed` and `text-[13px]` line boxes.
@@ -65,7 +65,7 @@ pub(crate) fn secondary_button(
     danger: bool,
     disabled: bool,
 ) -> Stateful<Div> {
-    button_base(id, label).map(|d| {
+    button_base(id, label, !disabled).map(|d| {
         if disabled {
             d.opacity(0.4)
                 .text_color(if danger { red(1.) } else { content(0.7) })
@@ -81,12 +81,12 @@ pub(crate) fn secondary_button(
     })
 }
 
-fn button_base(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    let label = label.into();
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(label.clone())
+fn button_base(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    enabled: bool,
+) -> Stateful<Div> {
+    crate::controls::button(id, label, enabled)
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -111,10 +111,9 @@ pub(super) fn icon_action(
     alpha: f32,
     disabled: bool,
 ) -> Stateful<Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(label.into())
+    let label = label.into();
+    crate::controls::button(id, label.clone(), !disabled)
+        .tooltip(move |_, cx| cx.new(|_| crate::controls::Tooltip(label.clone())).into())
         .group("settings-icon-action")
         .size(px(side))
         .flex_shrink_0()
@@ -144,7 +143,7 @@ pub(crate) fn primary_button(
 ) -> Stateful<Div> {
     let mut ink = shell_fill();
     ink.a = 1.;
-    button_base(id, label)
+    button_base(id, label, !disabled)
         .border_0()
         .bg(content(1.))
         .text_color(ink)
@@ -356,37 +355,19 @@ impl SettingsView {
         cx: &mut Context<Self>,
         change: impl Fn(&mut Self, bool, &mut Context<Self>) + 'static,
     ) -> AnyElement {
-        div()
-            .id(SharedString::from(format!("toggle-{id}")))
-            .debug_selector(move || format!("settings-toggle-{id}"))
-            .role(Role::Switch)
-            .aria_label(label.into())
-            .aria_toggled(if on {
-                gpui::Toggled::True
-            } else {
-                gpui::Toggled::False
-            })
-            .relative()
-            .h(px(20.))
-            .w(px(36.))
-            .flex_shrink_0()
-            .rounded_full()
-            .bg(if on { accent_color() } else { content(0.2) })
-            .when(disabled, |d| d.opacity(0.4))
-            .child(
-                div()
-                    .absolute()
-                    .top(px(2.))
-                    .left(px(if on { 18. } else { 2. }))
-                    .size(px(16.))
-                    .rounded_full()
-                    .bg(rgb(0xffffff)),
-            )
-            .when(!disabled, |d| {
-                d.cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| change(this, !on, cx)))
-            })
-            .into_any_element()
+        crate::controls::switch(
+            SharedString::from(format!("toggle-{id}")),
+            label,
+            on,
+            !disabled,
+        )
+        .debug_selector(move || format!("settings-toggle-{id}"))
+        .when(disabled, |d| d.opacity(0.4))
+        .when(!disabled, |d| {
+            d.cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| change(this, !on, cx)))
+        })
+        .into_any_element()
     }
 
     /// Segmented: equal-width options in a hairline frame.

@@ -277,7 +277,7 @@ const RADIUS: f32 = 12.;
 const BLUR: f32 = 24.;
 
 fn entrance(elapsed: f32) -> f32 {
-    crate::reveal::bezier((elapsed / MENU_IN).clamp(0., 1.), 0.16, 1., 0.3, 1.)
+    crate::reveal::ease_entrance((elapsed / MENU_IN).clamp(0., 1.))
 }
 fn entrance_offset(side: Side, progress: f32) -> Point<Pixels> {
     let remaining = px(MENU_TRAVEL * (1. - progress));

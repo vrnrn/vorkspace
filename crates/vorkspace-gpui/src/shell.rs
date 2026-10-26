@@ -455,7 +455,7 @@ impl TabShift {
         if t >= 1. {
             return (self.to, true);
         }
-        let eased = crate::reveal::bezier(t, 0.22, 1., 0.36, 1.);
+        let eased = crate::reveal::ease_move(t);
         (self.from + (self.to - self.from) * eased, false)
     }
 }
@@ -6170,7 +6170,7 @@ impl Shell {
             tick.from = None;
             return (None, 0., 1.);
         }
-        (from, tick.dir, crate::reveal::bezier(t, 0.22, 1., 0.36, 1.))
+        (from, tick.dir, crate::reveal::ease_move(t))
     }
     /// The dragged session's title, following the pointer.
     fn drag_ghost(&self, cx: &App) -> Option<AnyElement> {

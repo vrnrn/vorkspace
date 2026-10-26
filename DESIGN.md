@@ -182,10 +182,13 @@ old call sites at it, instead of copying it.
 | Need | Primitive |
 |---|---|
 | Icon-only chrome button | `theme::icon_button`, `icon_button_hover`, `icon_button_enabled` (24px, 14px icon) |
-| Text button | `settings::widgets::secondary_button` (danger and disabled variants) |
+| Shared button behavior | `controls::button` (role, name, keyboard focus and pointer focus retention); wrappers keep their surface-specific styling |
+| Compact icon frame | `controls::icon_button` (24px; includes a visible tooltip) |
+| Settings text button | `settings::widgets::secondary_button` (danger and disabled variants) |
 | Primary button | `settings::widgets::primary_button` |
 | Compact icon action | `settings::widgets::icon_action` (20 or 24px) |
-| Switch | `SettingsView::toggle` (36×20, `Role::Switch`, `aria_toggled`) |
+| Switch | `controls::switch` (36×20) or `controls::compact_switch` (28×16); Settings uses `SettingsView::toggle` |
+| Compact icon hint | `controls::Tooltip`; it supplements the accessible name |
 | Segmented choice | `SettingsView::segmented` (`RadioGroup`/`RadioButton`) |
 | Text input | `input::Input::field` and its variants (`multiline_field`, `commit_message`, `channel_message`) |
 | Menu, dropdown, flyout | `popover::popover` with `MenuAction` items; pick the closest `MenuStyle` |
@@ -212,10 +215,9 @@ Behavior rules for controls:
 
 ## 7. Motion
 
-- Easing comes from `reveal::bezier`. Use the established curves:
-  - `(0.16, 1, 0.3, 1)`: entrances (popovers, reveals).
-  - `(0.22, 1, 0.36, 1)`: content moving into place.
-  - `(0, 0, 0.58, 1)`: simple fades and ease-out.
+- Use the named curves in `reveal.rs`: `ease_entrance` for entrances,
+  `ease_move` for content moving into place, and `ease_out` for simple fades.
+  Keep `bezier` for transitions with genuinely different curves.
 - Durations: 120–200ms for state changes and small entrances, 200–320ms for
   panels, rails and word reveal. Name a duration as a constant beside its owner.
 - Physical motion (pane slides, resize settle) uses the springs in
@@ -235,7 +237,10 @@ Behavior rules for controls:
 - State uses the matching attribute: `aria_toggled` for switches and checkboxes,
   `aria_selected` for tabs and list selection, `aria_expanded` for disclosures.
 - Keyboard: menus and popovers support arrows, Return and Escape. Controls that
-  can be reached by keyboard show a visible focus state.
+  can be reached by keyboard show a visible focus state. Shared buttons and
+  switches use GPUI's Return/Space click path, exclude disabled controls from
+  tab traversal, and keep input focus on pointer clicks. Hover-hidden actions
+  also appear on keyboard focus.
 - Contrast: body text uses ink ≥ 0.7; never put meaning only in color; check
   both light and dark themes, glass and solid surfaces.
 

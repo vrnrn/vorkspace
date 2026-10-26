@@ -33,7 +33,6 @@ use crate::{
         menu_popover, popover,
     },
     response_actions::{Request as ResponseRequest, Transfer},
-    right_panel::AMBER_400,
     runtime::{Database, locked, run_turn},
     theme::*,
     transcript::TranscriptView,
@@ -3087,7 +3086,7 @@ impl Conversation {
                                                     if self.settings.access
                                                         == AccessMode::FullAccess
                                                     {
-                                                        tint(AMBER_400, 0.9)
+                                                        status(StatusColor::Warning, 1.)
                                                     } else {
                                                         content(1.)
                                                     },

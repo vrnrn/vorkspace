@@ -161,13 +161,7 @@ impl ImageLightbox {
         let Some((from, born)) = self.transition else {
             return self.view;
         };
-        let t = crate::reveal::bezier(
-            (born.elapsed().as_secs_f32() / 0.06).min(1.),
-            0.,
-            0.,
-            0.58,
-            1.,
-        );
+        let t = crate::reveal::ease_out((born.elapsed().as_secs_f32() / 0.06).min(1.));
         View {
             scale: from.scale + (self.view.scale - from.scale) * t,
             x: from.x + (self.view.x - from.x) * t,

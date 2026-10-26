@@ -354,7 +354,7 @@ impl History {
                         .px_3()
                         .py_2()
                         .text_size(px(11.))
-                        .text_color(rgb(RED_400))
+                        .text_color(status(StatusColor::Danger, 1.))
                         .child(error),
                 )
             })

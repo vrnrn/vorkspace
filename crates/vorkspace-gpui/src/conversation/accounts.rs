@@ -477,7 +477,7 @@ impl Conversation {
                 .child(
                     icon(if waiting { "clock" } else { "play" }, 14.)
                         .text_color(if waiting && armed {
-                            gpui::rgb(AMBER_400).into()
+                            status(StatusColor::Warning, 1.)
                         } else {
                             content(if bot { 0.6 } else { 0.55 })
                         })
@@ -526,7 +526,7 @@ impl Conversation {
             .items_center()
             .gap(px(8.))
             .whitespace_nowrap()
-            .child(icon("gauge", 14.).text_color(gpui::rgb(AMBER_400)))
+            .child(icon("gauge", 14.).text_color(status(StatusColor::Warning, 1.)))
             .child(
                 div()
                     .text_size(px(12.))
@@ -546,7 +546,7 @@ impl Conversation {
             .line_height(px(16.))
             .text_color(content(if bot { 0.6 } else { 0.55 }));
         Some(if bot {
-            notice.mx(px(6.)).mb(px(8.)).rounded(px(8.)).border_1().border_color(tint(AMBER_400,0.2)).bg(tint(AMBER_400,0.06))
+            notice.mx(px(6.)).mb(px(8.)).rounded(px(8.)).border_1().border_color(status(StatusColor::Warning,0.2)).bg(status(StatusColor::Warning,0.06))
                 .px(px(12.)).py(px(10.)).child(heading)
                 .child(div().pl(px(22.))
                     .child(div().mt(px(4.)).text_size(px(12.)).line_height(px(19.5)).text_color(content(0.6))
@@ -568,8 +568,8 @@ impl Conversation {
                         .rounded_t(px(10.))
                         .border_1()
                         .border_b_0()
-                        .border_color(tint(AMBER_400, 0.25))
-                        .bg(tint(AMBER_400, 0.1))
+                        .border_color(status(StatusColor::Warning, 0.25))
+                        .bg(status(StatusColor::Warning, 0.1))
                         .px(px(8.))
                         .child(heading)
                         .child(
@@ -610,7 +610,7 @@ fn usage_button(
         .line_height(px(16.))
         .whitespace_nowrap()
         .text_color(if primary {
-            gpui::rgb(AMBER_400).into()
+            status(StatusColor::Warning, 1.)
         } else {
             content(0.55)
         })

@@ -182,8 +182,18 @@ pub(crate) fn word_opacity(born: Option<&Instant>, now: Instant) -> f32 {
     born.map_or(1., |born| {
         let t = (now.duration_since(*born).as_secs_f32() / WORD_FADE.as_secs_f32()).clamp(0., 1.);
         // CSS ease-out (0,0,.58,1), rather than a linear opacity ramp.
-        bezier(t, 0., 0., 0.58, 1.)
+        ease_out(t)
     })
+}
+/// Shared motion curves; the general solver remains for distinct transitions.
+pub(crate) fn ease_entrance(t: f32) -> f32 {
+    bezier(t, 0.16, 1., 0.3, 1.)
+}
+pub(crate) fn ease_move(t: f32) -> f32 {
+    bezier(t, 0.22, 1., 0.36, 1.)
+}
+pub(crate) fn ease_out(t: f32) -> f32 {
+    bezier(t, 0., 0., 0.58, 1.)
 }
 pub(crate) fn bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
     if t <= 0. {
@@ -248,11 +258,11 @@ impl Motion {
             / self.duration.as_secs_f32())
         .clamp(0., 1.);
         if self.step {
-            let height = bezier((t / 0.4).min(1.), 0.22, 1., 0.36, 1.);
-            let opacity = bezier(((t - 0.5) / 0.5).clamp(0., 1.), 0.16, 1., 0.3, 1.);
+            let height = ease_move((t / 0.4).min(1.));
+            let opacity = ease_entrance(((t - 0.5) / 0.5).clamp(0., 1.));
             (height, opacity)
         } else {
-            let value = bezier(t, 0.22, 1., 0.36, 1.);
+            let value = ease_move(t);
             let fade = if self.group.is_some() {
                 let t = (now.saturating_duration_since(self.start).as_secs_f32()
                     / self.opacity_duration.as_secs_f32())
@@ -318,6 +328,15 @@ impl Motion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn named_curves_preserve_the_established_bezier_values() {
+        for step in 0..=1000 {
+            let t = step as f32 / 1000.;
+            assert_eq!(ease_entrance(t), bezier(t, 0.16, 1., 0.3, 1.));
+            assert_eq!(ease_move(t), bezier(t, 0.22, 1., 0.36, 1.));
+            assert_eq!(ease_out(t), bezier(t, 0., 0., 0.58, 1.));
+        }
+    }
     #[test]
     fn phase_matches_react_height_fade_and_chevron_timings_in_both_directions() {
         let start = Instant::now();

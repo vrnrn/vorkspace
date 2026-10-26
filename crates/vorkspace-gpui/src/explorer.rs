@@ -1262,7 +1262,14 @@ impl Explorer {
                 .pb_1()
                 .text_size(px(12.))
                 .line_height(px(16.))
-                .text_color(rgb(if error { RED_400 } else { AMBER_400 }))
+                .text_color(status(
+                    if error {
+                        StatusColor::Danger
+                    } else {
+                        StatusColor::Warning
+                    },
+                    1.,
+                ))
                 .child(
                     div()
                         .flex()
