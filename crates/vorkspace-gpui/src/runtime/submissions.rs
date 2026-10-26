@@ -115,17 +115,32 @@ impl Submissions {
         }
         Ok(())
     }
-    pub(super) fn finish(&mut self, result: &Result<(), String>) -> Result<(), String> {
+    pub(super) fn finish(
+        &mut self,
+        result: &Result<(), String>,
+        provider_completed: bool,
+    ) -> Result<(), String> {
         let mut errors = Vec::new();
         if let Some(attempt) = self.initial.as_ref() {
-            let outcome = if result.is_ok() {
+            let confirmed = result.is_ok() || provider_completed;
+            let outcome = if confirmed {
                 "completed"
             } else if self.dispatched {
                 "uncertain"
             } else {
                 "failed"
             };
-            let error=result.as_ref().err().map(|error|if self.dispatched { format!("{error}. Provider completion could not be confirmed; this send was not replayed.") } else { error.clone() });
+            let error = if confirmed {
+                None
+            } else {
+                result.as_ref().err().map(|error| {
+                    if self.dispatched {
+                        format!("{error}. Provider completion could not be confirmed; this send was not replayed.")
+                    } else {
+                        error.clone()
+                    }
+                })
+            };
             match locked(&self.store)
                 .and_then(|store| store.settle_local_submission(attempt, outcome, error))
             {
@@ -191,7 +206,7 @@ mod tests {
         };
         let mut failed = Submissions::new(store.clone(), session);
         failed.reserve_initial("hello", &settings).unwrap();
-        failed.finish(&Err("CLI missing".into())).unwrap();
+        failed.finish(&Err("CLI missing".into()), false).unwrap();
         assert_eq!(
             locked(&store).unwrap().local_submissions(session).unwrap()[0]
                 .outcome
@@ -201,7 +216,9 @@ mod tests {
         let mut interrupted = Submissions::new(store.clone(), session);
         interrupted.reserve_initial("hello", &settings).unwrap();
         interrupted.dispatch_initial().unwrap();
-        interrupted.finish(&Err("Disconnected".into())).unwrap();
+        interrupted
+            .finish(&Err("Disconnected".into()), false)
+            .unwrap();
         let recovery = locked(&store)
             .unwrap()
             .latest_unconfirmed_submission(session)
