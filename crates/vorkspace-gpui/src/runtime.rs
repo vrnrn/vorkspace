@@ -131,6 +131,7 @@ fn run_turn_using(
         .unwrap_or(false);
     let mut pending = PendingSave::new(shared, std::time::Instant::now());
     let mut submissions = submissions::Submissions::new(store.clone(), summary.id);
+    let mut provider_completion_confirmed = false;
     pending.own_context(&summary.provider, &source_account);
     let mut initial_delivery = None;
     let mut accepted_messages = Vec::new();
@@ -542,8 +543,12 @@ fn run_turn_using(
         let result = vorkspace_core::process::owned_by(summary.id, || {
             provider::run_with_controls(request, cancel.clone(), Some(controls), |events| {
                 // Cancellation freezes the transcript, even while the native
-                // provider drains its interrupt acknowledgement.
-                if cancel.load(Ordering::Relaxed) {
+                // provider drains its interrupt acknowledgement. A provider
+                // completion already received in this batch must still be
+                // durably recorded if Stop races with its final publication.
+                let completion_already_received =
+                    events.iter().any(|event| matches!(event, Event::Done));
+                if cancel.load(Ordering::Relaxed) && !completion_already_received {
                     return Err("Stopped".into());
                 }
                 let publications = visual_bridge
@@ -567,6 +572,7 @@ fn run_turn_using(
                 let mut questions_resolved = Vec::new();
                 let mut handoff = None;
                 let mut turn_ready = false;
+                let mut completed_batch = false;
                 let mut follow_up_delivered = Vec::new();
                 let mut follow_up_errors = Vec::new();
                 let mut boundary = false;
@@ -790,6 +796,7 @@ fn run_turn_using(
                         Event::Status(text) => status = text,
                         Event::UsageLimited(limit) => usage_limit = Some(limit),
                         Event::Done => {
+                            completed_batch = true;
                             status = "Ready".into();
                             boundary = true;
                         }
@@ -808,6 +815,12 @@ fn run_turn_using(
                 let publication_result = (|| {
                     if pending.due(boundary, now) {
                         pending.flush(&store, summary.id, &transcript, &context, now)?;
+                    }
+                    // The provider's terminal signal is authoritative once its
+                    // accompanying transcript changes are durable. A later UI
+                    // publication failure must not turn this send uncertain.
+                    if completed_batch {
+                        provider_completion_confirmed = true;
                     }
                     publish(
                         &tx,
@@ -851,6 +864,9 @@ fn run_turn_using(
                 publication_result
             })
         });
+        if result.is_ok() {
+            provider_completion_confirmed = true;
+        }
         if result.is_ok()
             && let Some(fingerprint) = &bot_fingerprint
         {
@@ -867,7 +883,7 @@ fn run_turn_using(
         }
         result
     })();
-    let submission_save = submissions.finish(&result);
+    let submission_save = submissions.finish(&result, provider_completion_confirmed);
     drop(submissions);
     let cancelled =
         cancel.load(Ordering::Relaxed) || result.as_ref().is_err_and(|error| error == "Stopped");
