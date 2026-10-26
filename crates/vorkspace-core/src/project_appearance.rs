@@ -1045,6 +1045,8 @@ pub struct BotAnimState {
     pub hop_y: f32,
     pub wide: f32,
     pub tex_rot: f32,
+    /// Transient expression for destructive-action hover; never saved as a face style.
+    pub crossed_eyes: bool,
 }
 impl Default for BotAnimState {
     fn default() -> Self {
@@ -1057,6 +1059,7 @@ impl Default for BotAnimState {
             hop_y: 0.0,
             wide: 1.0,
             tex_rot: 0.0,
+            crossed_eyes: false,
         }
     }
 }
@@ -1217,7 +1220,23 @@ pub fn render_badge_or_bot(
 
                 // 3D curved face (Bots only)
                 if is_bot {
-                    match face_id {
+                    match if anim.crossed_eyes {
+                        "crossed"
+                    } else {
+                        face_id
+                    } {
+                        "crossed" => {
+                            let r = s * 0.085;
+                            let half_w = s * 0.025;
+                            for eye in [eye_left, eye_right] {
+                                let (lx, ly) = eye.to_local(sx, sy);
+                                let d1 = sd_segment(lx, ly, -r, -r, r, r);
+                                let d2 = sd_segment(lx, ly, -r, r, r, -r);
+                                let d = (d1.min(d2) - half_w) * eye.scale_avg;
+                                let a = (0.5 - d).clamp(0.0, 1.0);
+                                col = lerp_rgb(col, face_rgb, a);
+                            }
+                        }
                         "pills" => {
                             let ew = s * 0.118 * 0.5;
                             let eh = (s * 0.26 * anim.blink).max(s * 0.118 * 0.35) * 0.5;
@@ -1361,6 +1380,42 @@ pub fn render_badge_or_bot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delete_hover_renders_crossed_eyes_without_changing_the_badge() {
+        let render = |crossed_eyes| {
+            render_badge_or_bot(
+                true,
+                "squircle",
+                "dots",
+                false,
+                false,
+                12345,
+                4,
+                0x222222,
+                0xffffff,
+                200,
+                BotAnimState {
+                    crossed_eyes,
+                    ..Default::default()
+                },
+            )
+        };
+        let normal = render(false);
+        let crossed = render(true);
+        // Two diagonal strokes meet at the left eye; the side of the former
+        // round eye is now clear. These are artwork coordinates at 200px.
+        for (x, y) in [(77, 99), (87, 109), (87, 89)] {
+            assert!(crossed.get_pixel(x, y).0[0] > 200);
+        }
+        assert!(crossed.get_pixel(87, 99).0[0] < 100);
+        assert!(normal.get_pixel(87, 99).0[0] > 200);
+        assert_eq!(normal.get_pixel(40, 40), crossed.get_pixel(40, 40));
+        for (normal, crossed) in normal.pixels().zip(crossed.pixels()) {
+            assert_eq!(normal.0[3], crossed.0[3]);
+        }
+    }
+
     #[test]
     fn dither_matches_the_react_workers_palette_and_two_pixel_bayer_cells() {
         let source = RgbaImage::from_pixel(9, 9, image::Rgba([130, 180, 210, 127]));

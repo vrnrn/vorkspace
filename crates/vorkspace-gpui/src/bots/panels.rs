@@ -1678,8 +1678,11 @@ impl Bots {
         let width = 880f32.min(size.width.as_f32() - 24.);
         let navigation_width = if width < 660. { 140. } else { 192. };
         let height = 680f32.min(size.height.as_f32() - 32.);
+        let delete_anchor = AnchorSlot::default();
         let body = match section {
-            SettingsSection::General => self.general_settings(bot, window, cx),
+            SettingsSection::General => {
+                self.general_settings(bot, delete_anchor.clone(), window, cx)
+            }
             SettingsSection::Soul => self.soul_page(bot, cx),
             SettingsSection::Memory => self.memory_page(bot, window, cx),
         };
@@ -1868,6 +1871,7 @@ impl Bots {
                                                 .debug_selector(|| "bot-delete".into())
                                                 .role(Role::Button)
                                                 .aria_label("Delete bot")
+                                                .relative()
                                                 .w_full()
                                                 .h(px(32.))
                                                 .flex_shrink_0()
@@ -1880,6 +1884,7 @@ impl Bots {
                                                 .line_height(px(20.))
                                                 .text_color(rgb(0xff6467))
                                                 .hover(|d| d.bg(rgb(0xff6467).opacity(0.08)))
+                                                .child(delete_anchor.probe())
                                                 .child(icon("trash", 14.).text_color(rgb(0xff6467)))
                                                 .child("Delete bot…")
                                                 .on_click(cx.listener(
@@ -2005,6 +2010,7 @@ impl Bots {
     fn general_settings(
         &mut self,
         bot: &Bot,
+        delete_anchor: AnchorSlot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -2102,7 +2108,7 @@ impl Bots {
                     .role(Role::Button)
                     .aria_label("Change mascot and color")
                     .relative()
-                    .size(px(80.))
+                    .size(px(144.))
                     .flex_shrink_0()
                     .flex()
                     .items_center()
@@ -2113,7 +2119,13 @@ impl Bots {
                     .bg(content(0.04))
                     .hover(|s| s.bg(content(0.08)))
                     .child(self.settings_anchor.probe())
-                    .child(avatar::bot_avatar(bot, "idle", 48., false))
+                    .child(avatar::settings_preview(
+                        bot,
+                        128.,
+                        delete_anchor,
+                        window,
+                        cx,
+                    ))
                     .on_click(
                         cx.listener(move |this, _, w, cx| this.open_settings_look(&look, w, cx)),
                     ),

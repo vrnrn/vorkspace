@@ -490,6 +490,9 @@ impl Popover {
                     .relative()
                     .m(px(1.))
                     .min_h_0()
+                    // Fixed-height surfaces must give percentage-height children
+                    // the full interior, even when their content is short.
+                    .when(self.options.min_height.is_some(), |d| d.flex_1())
                     .flex()
                     .flex_col()
                     .p(px(self.padding))
