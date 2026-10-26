@@ -4,13 +4,13 @@
 //! of physical shortcuts.
 use super::*;
 use gpui::{Action, KeyContext, Keystroke, WeakEntity};
+use std::time::Instant;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-#[cfg(target_os = "macos")]
 mod macos;
 
 #[derive(Default)]
@@ -21,7 +21,6 @@ struct Forwarding {
 }
 pub(super) struct Shortcuts {
     _keys: Subscription,
-    #[cfg(target_os = "macos")]
     _native: Option<macos::NativeKeys>,
 }
 
@@ -58,7 +57,6 @@ fn candidates(keys: &[Keystroke], cx: &App) -> Vec<KeyBinding> {
 pub(super) fn install(owner: WeakEntity<Shell>, window: &Window, cx: &mut App) -> Shortcuts {
     let window_id = window.window_handle().window_id();
     let forwarding = Rc::new(Forwarding::default());
-    #[cfg(target_os = "macos")]
     let native = macos::NativeKeys::new(window, forwarding.clone());
     let pending = RefCell::new(Vec::<Keystroke>::new());
     let keys = cx.intercept_keystrokes(move |event, window, cx| {
@@ -129,7 +127,6 @@ pub(super) fn install(owner: WeakEntity<Shell>, window: &Window, cx: &mut App) -
     });
     Shortcuts {
         _keys: keys,
-        #[cfg(target_os = "macos")]
         _native: native,
     }
 }
@@ -143,7 +140,7 @@ mod tests {
         cx.update(|cx| {
             crate::input::bind(cx);
             super::super::bind_keys(cx);
-            cx.set_reduce_motion(true);
+            crate::clock::use_test_clock(cx);
         });
         let (window, _, _) = super::super::tests::window(cx);
         cx.refresh().unwrap();
@@ -154,11 +151,7 @@ mod tests {
                 orphan
             })
             .unwrap();
-        let modifier = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
+        let modifier = "cmd";
         cx.simulate_keystrokes(window.into(), &format!("{modifier}-b"));
         cx.run_until_parked();
         window

@@ -162,7 +162,7 @@ mod tests {
         let (window, _, _) = super::super::tests::window(cx);
         cx.update(|cx| {
             bind_keys(cx);
-            cx.set_reduce_motion(true);
+            crate::clock::use_test_clock(cx);
         });
         let (tab, terminal) = window
             .update(cx, |shell, w, cx| {
@@ -244,11 +244,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        visual.simulate_keystrokes(if cfg!(target_os = "macos") {
-            "cmd-w"
-        } else {
-            "ctrl-w"
-        });
+        visual.simulate_keystrokes("cmd-w");
         visual.run_until_parked();
         window
             .update(visual, |shell, _, _| {
@@ -268,7 +264,7 @@ mod tests {
         cx.update(|cx| {
             bind_keys(cx);
             crate::terminal::bind(cx);
-            cx.set_reduce_motion(true);
+            crate::clock::use_test_clock(cx);
         });
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         let mut opened: Vec<(TitleTab, Entity<Terminal>)> = Vec::new();
@@ -364,11 +360,7 @@ mod tests {
             })
             .unwrap();
         let closed = opened.pop().unwrap().0;
-        visual.simulate_keystrokes(if cfg!(target_os = "macos") {
-            "cmd-w"
-        } else {
-            "ctrl-w"
-        });
+        visual.simulate_keystrokes("cmd-w");
         visual.run_until_parked();
         window
             .update(visual, |shell, _, cx| {
@@ -401,7 +393,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (window, _, session) = super::super::tests::window(cx);
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let (original_tab, terminal) = window
             .update(cx, |shell, w, cx| {
                 shell.open_terminal_tab(w, cx);
@@ -709,7 +701,6 @@ mod tests {
     }
 }
 
-#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "Requires Metal and VOKKY_TERMINAL_TAB_CAPTURE_PATH"]
 fn native_terminal_tab_capture() {
@@ -745,7 +736,7 @@ fn native_terminal_tab_capture() {
             )))
         },
     );
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(&cx);
     let window = cx
         .open_window(gpui::size(px(1200.), px(800.)), |_, cx| {
             cx.new(|cx| Shell::new(store, Vec::new(), cwd.clone(), Some(saved), cx))
@@ -765,6 +756,7 @@ fn native_terminal_tab_capture() {
     })
     .unwrap();
     cx.run_until_parked();
+    crate::clock::settle_headless_animations(window, &mut cx);
     cx.capture_screenshot(window.into())
         .unwrap()
         .save(output)

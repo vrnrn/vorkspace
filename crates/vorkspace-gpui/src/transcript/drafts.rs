@@ -12,7 +12,7 @@ impl TranscriptView {
         if self.anchor_prompts && !self.bot {
             self.anchor_turn = Some(SAVED_DRAFT_START);
             self.show_jump = false;
-            if self.visible && self.chat_layout && !cx.reduce_motion() {
+            if self.visible && self.chat_layout {
                 self.prompt_rise = Some((SAVED_DRAFT_START, Instant::now()));
                 self.prompt_rise_pending = true;
             }
@@ -76,9 +76,7 @@ impl TranscriptView {
             return div().into_any_element();
         };
         let (mut rise, mut opacity) = (0., 1.);
-        if let Some((SAVED_DRAFT_START, born)) = self.prompt_rise
-            && !cx.reduce_motion()
-        {
+        if let Some((SAVED_DRAFT_START, born)) = self.prompt_rise {
             let elapsed = born.elapsed().as_secs_f32();
             let progress = crate::reveal::bezier((elapsed / 0.56).min(1.), 0.22, 1., 0.36, 1.);
             rise =

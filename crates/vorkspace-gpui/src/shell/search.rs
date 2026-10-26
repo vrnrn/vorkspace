@@ -358,7 +358,7 @@ mod tests {
         cx.update(|cx| {
             input::bind(cx);
             super::super::bind_keys(cx);
-            cx.set_reduce_motion(true);
+            crate::clock::use_test_clock(cx);
         });
         let (window, a, b) = crate::shell::tests::window(cx);
         window
@@ -413,7 +413,7 @@ mod tests {
         cx.update(|cx| {
             input::bind(cx);
             super::super::bind_keys(cx);
-            cx.set_reduce_motion(true);
+            crate::clock::use_test_clock(cx);
         });
         let (window, _, _) = crate::shell::tests::window(cx);
         window

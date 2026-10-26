@@ -7,7 +7,7 @@ fn image_lightbox_opens_from_composer_and_sent_images_and_restores_focus(cx: &mu
     cx.update(|cx| {
         crate::input::bind(cx);
         crate::image_lightbox::bind(cx);
-        cx.set_reduce_motion(true);
+        crate::clock::use_test_clock(cx);
     });
     let (window, _, active) = super::tests::window(cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
@@ -35,11 +35,7 @@ fn image_lightbox_opens_from_composer_and_sent_images_and_restores_focus(cx: &mu
             ))],
         })
     });
-    let modifier = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl"
-    };
+    let modifier = "cmd";
     visual.simulate_keystrokes(&format!("{modifier}-v"));
     visual.run_until_parked();
     visual.refresh().unwrap();

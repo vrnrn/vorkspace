@@ -2270,11 +2270,7 @@ mod tests {
                 assert_eq!(input.cursor_location(), (1, 1));
             })
             .unwrap();
-        let m = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
+        let m = "cmd";
         cx.simulate_keystrokes(window.into(), "tab enter");
         window
             .update(cx, |i, _, _| assert!(i.content.starts_with("  \n  line 0")))

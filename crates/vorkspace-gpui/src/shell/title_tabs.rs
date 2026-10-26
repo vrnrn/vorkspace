@@ -416,7 +416,6 @@ mod tests {
             .unwrap()
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "Requires Metal and VOKKY_CONNECTOR_CAPTURE_DIR"]
     fn connector_native_navigation_capture() {
@@ -442,7 +441,7 @@ mod tests {
                 )))
             },
         );
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(&cx);
         let window = cx
             .open_window(gpui::size(px(1280.), px(800.)), |_, cx| {
                 cx.new(|cx| {
@@ -473,6 +472,7 @@ mod tests {
                 })
                 .unwrap();
             cx.run_until_parked();
+            crate::clock::settle_headless_animations(window, &mut cx);
             cx.capture_screenshot(window.into())
                 .unwrap()
                 .save(output.join(format!("connectors-{name}.png")))
@@ -484,6 +484,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
+        crate::clock::settle_headless_animations(window, &mut cx);
         cx.capture_screenshot(window.into())
             .unwrap()
             .save(output.join("connectors-settings.png"))
@@ -707,7 +708,7 @@ mod tests {
         cx.update(|cx| {
             bind_keys(cx);
             input::bind(cx);
-            cx.set_reduce_motion(true);
+            crate::clock::use_test_clock(cx);
         });
         let bot = add_bot(window, cx);
         let second = window.update(cx, add_session).unwrap();
@@ -736,11 +737,7 @@ mod tests {
             })
             .unwrap();
         let bot = add_bot(window, visual);
-        let modifier = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
+        let modifier = "cmd";
         visual.simulate_keystrokes(&format!("{modifier}-w"));
         visual.run_until_parked();
         window

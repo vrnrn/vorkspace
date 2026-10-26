@@ -203,7 +203,7 @@ impl SettingsView {
                 ),
             ];
         page.push(self.group(None, false, "Color", None, None, color));
-        let translucency_disabled = light || !cfg!(target_os = "macos");
+        let translucency_disabled = light;
         let translucency = vec![
                 self.row(
                     Some("sidebar-opacity"),
@@ -688,10 +688,7 @@ mod continuity_tests {
         window
             .update(visual, |settings, _, _| {
                 assert_eq!(settings.prefs.sidebar_opacity, 43);
-                assert_eq!(
-                    settings.prefs.sidebar_blur,
-                    if cfg!(target_os = "macos") { 50 } else { 57 }
-                );
+                assert_eq!(settings.prefs.sidebar_blur, 50);
             })
             .unwrap();
     }

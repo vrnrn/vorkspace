@@ -1,4 +1,5 @@
 //! Flowing Inbox prose. The detail page owns scrolling; this is never a chat.
+use crate::clock::Instant;
 use crate::{
     markdown::{self, MarkdownRow, Part, Tone},
     markdown_model,
@@ -10,7 +11,7 @@ use gpui::{
     Style, TextStyle, Window, div, img, point, prelude::*, px, size,
 };
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::{path::PathBuf, sync::Arc};
 
 enum Row {
     Markdown(MarkdownRow, Pixels),

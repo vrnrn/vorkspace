@@ -194,11 +194,9 @@ impl Conversation {
             .is_none_or(|prefs| prefs.follow_up == "steer")
             && Kind::from_id(&self.summary.provider).can_steer()
             && message.can_steer();
-        self.follow_ups.motion.insert(
-            &message.id,
-            self.follow_ups.state.messages.is_empty(),
-            !cx.reduce_motion(),
-        );
+        self.follow_ups
+            .motion
+            .insert(&message.id, self.follow_ups.state.messages.is_empty(), true);
         self.follow_ups.state.messages.push(message);
         self.save_follow_ups(cx);
     }
@@ -293,7 +291,7 @@ impl Conversation {
             self.follow_ups.motion.insert(
                 &message.id,
                 self.follow_ups.state.messages.is_empty(),
-                !cx.reduce_motion(),
+                true,
             );
             self.follow_ups.state.messages.push(message);
         }
@@ -576,7 +574,7 @@ impl Conversation {
                 .messages
                 .iter()
                 .map(|message| message.id.as_str()),
-            !cx.reduce_motion() && width.is_some(),
+            width.is_some(),
         );
         if self.follow_ups.state.messages.is_empty() {
             return div().into_any_element();
@@ -768,20 +766,6 @@ mod tests {
             assert!(queue_top - settled >= if index == 0 { 60. } else { 30. });
             queue_top = settled;
         }
-        cx.update(|cx| cx.set_reduce_motion(true));
-        window
-            .update(cx, |view, _, cx| {
-                view.enqueue_follow_up("Reduced motion".into(), None, cx);
-                cx.notify();
-            })
-            .unwrap();
-        cx.refresh().unwrap();
-        let (settled, composer) = bounds(window, cx);
-        assert!((composer - input_top).abs() < 1.);
-        assert!(
-            queue_top - settled >= 30.,
-            "Reduce Motion must reveal the full row immediately"
-        );
     }
 
     #[gpui::test]

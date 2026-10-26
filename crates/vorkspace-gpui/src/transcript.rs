@@ -22,6 +22,7 @@ pub(crate) mod tasks;
 mod tools;
 mod visuals;
 
+use crate::clock::Instant;
 use crate::markdown_model::MarkdownParser;
 use crate::popover::{Anchor, AnchorSlot, Side, popover};
 use crate::response_actions::{self, Request as ResponseRequest};
@@ -39,7 +40,6 @@ use gpui::{
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
-    time::Instant,
 };
 use vorkspace_core::tool::{ToolCall, ToolState, tasks::Panel};
 use vorkspace_core::transcript::Row;
@@ -500,7 +500,7 @@ pub(crate) struct TranscriptView {
     provider: String,
     model: String,
     active_provider_turn_id: Option<String>,
-    started: Option<std::time::Instant>,
+    started: Option<crate::clock::Instant>,
     elapsed: HashMap<usize, std::time::Duration>,
     outline: outline::Outline,
     pub(crate) list: ListState,
@@ -510,6 +510,17 @@ pub(crate) struct TranscriptView {
     rebuild_passes: usize,
 }
 impl TranscriptView {
+    /// Drive ordinary callbacks for projection-only tests with no window.
+    /// GPUI advancement also runs queued work, so it must be outside App borrows.
+    #[cfg(test)]
+    fn settle_animation_frames(view: &gpui::Entity<Self>, cx: &mut gpui::TestAppContext) {
+        for _ in 0..3 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_secs(1));
+            view.update(cx, |view, cx| view.animate_frame(cx));
+        }
+    }
+
     fn animation_now(&self) -> Instant {
         #[cfg(test)]
         if let Some(now) = self.fixed_animation_time {
@@ -648,6 +659,13 @@ impl TranscriptView {
         self.turns.entry(turn).or_default().provider_turn_id = Some(id);
     }
     pub(crate) fn response_rows(&self, turn: usize) -> (Vec<Row>, Vec<Row>) {
+        let (rows, through) = self.response_slices(turn);
+        (rows.to_vec(), through.to_vec())
+    }
+
+    // Rendering needs only a borrowed response. Own history only when an
+    // explicit transfer leaves this view, never for each action-strip repaint.
+    fn response_slices(&self, turn: usize) -> (&[Row], &[Row]) {
         let end = (turn..self.source.len())
             .find(|&i| self.source[i].is_prompt())
             .unwrap_or(self.source.len());
@@ -658,10 +676,7 @@ impl TranscriptView {
         while start > 0 && !self.source[start].first {
             start -= 1;
         }
-        (
-            self.source[start..end].to_vec(),
-            self.source[..end].to_vec(),
-        )
+        (&self.source[start..end], &self.source[..end])
     }
     pub(crate) fn note_result(
         &mut self,
@@ -1062,7 +1077,7 @@ impl TranscriptView {
     fn update_follow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = self.frame_now;
         let animated = self.streaming || self.follow.until.is_some_and(|until| now < until);
-        if self.document || !self.visible || cx.reduce_motion() {
+        if self.document || !self.visible {
             self.follow = Follow::default();
             return;
         }
@@ -1292,7 +1307,7 @@ impl TranscriptView {
             return;
         }
         let now = Instant::now();
-        let animate = self.visible && !cx.reduce_motion();
+        let animate = self.visible;
         for old in &self.pending {
             if !pending.iter().any(|p| p.id == old.id) {
                 self.taken.push(TakenMessage {
@@ -1537,9 +1552,7 @@ impl TranscriptView {
             .get(ix + 1)
             .is_some_and(|next| !dates::opens_stretch(next.sent_at, message.sent_at));
         let (mut opacity, mut rise) = (1., 0.);
-        if let Some(born) = self.pending_entrances.get(&message.id)
-            && !cx.reduce_motion()
-        {
+        if let Some(born) = self.pending_entrances.get(&message.id) {
             let t = crate::reveal::bezier(
                 (born.elapsed().as_secs_f32() / 0.36).min(1.),
                 0.22,
@@ -1877,8 +1890,8 @@ impl TranscriptView {
                 .h(px(if self.bot { 28. } else { 38. }))
                 .into_any_element();
         }
-        let (rows, _) = self.response_rows(turn);
-        let output = vorkspace_core::response::prose(&rows);
+        let (rows, _) = self.response_slices(turn);
+        let output = vorkspace_core::response::prose(rows);
         if self.bot {
             return self.bot_actions(turn, output, cx);
         }
@@ -2301,7 +2314,7 @@ impl TranscriptView {
                 self.show_jump = false;
                 self.list.set_follow_mode(FollowMode::Tail);
             }
-            self.started = Some(std::time::Instant::now());
+            self.started = Some(crate::clock::Instant::now());
         } else {
             self.follow.until = Some(Instant::now() + std::time::Duration::from_millis(1200));
             if let Some(started) = self.started.take()
@@ -2487,7 +2500,6 @@ impl TranscriptView {
                 if self.bot
                     && self.streaming
                     && self.visible
-                    && !cx.reduce_motion()
                     && ix >= self.live_start
                     && row.first
                     && row.role == "assistant"
@@ -2584,14 +2596,14 @@ impl TranscriptView {
             && start <= prompt
         {
             self.introduced_prompt = Some(prompt);
-            if self.visible && !cx.reduce_motion() {
+            if self.visible {
                 self.prompt_rise = Some((prompt, Instant::now()));
                 self.prompt_rise_pending = true;
             }
         }
         // Messages that arrive while the chat is open slide and fade in;
         // history that loads or replays does not.
-        if self.bot && self.streaming && self.visible && !cx.reduce_motion() {
+        if self.bot && self.streaming && self.visible {
             let now = Instant::now();
             for ix in start.max(known)..self.source.len() {
                 let row = &self.source[ix];
@@ -2671,7 +2683,7 @@ impl TranscriptView {
                 .iter()
                 .map(|r| r.text.as_str())
                 .collect();
-            self.prepare_reveal(at, end, &text, true, now, cx.reduce_motion());
+            self.prepare_reveal(at, end, &text, true, now);
         }
         let candidate = (current_turn..current_end).rev().find(|&i| {
             self.source[i].role == "assistant" && self.source[i].first && self.answer_visible(i)
@@ -3079,7 +3091,7 @@ impl TranscriptView {
                         thought_phase: None,
                     });
                 }
-                self.prepare_reveal(at, end, &text, role == "assistant", now, cx.reduce_motion());
+                self.prepare_reveal(at, end, &text, role == "assistant", now);
                 let paced = self.reveals.get_mut(&at).unwrap();
                 parser.set_text(paced.text());
                 let tree = if paced.behind() || (self.streaming && end == self.source.len()) {
@@ -3353,7 +3365,7 @@ impl TranscriptView {
             }
         }
         let target = self.rows.split_off(display_start);
-        let merged = if self.visible && !cx.reduce_motion() {
+        let merged = if self.visible {
             let replaced_work = self
                 .fold_targets
                 .get(&current_turn)
@@ -3429,21 +3441,12 @@ impl TranscriptView {
         }
         cx.notify();
     }
-    fn prepare_reveal(
-        &mut self,
-        at: usize,
-        end: usize,
-        text: &str,
-        assistant: bool,
-        now: Instant,
-        reduced: bool,
-    ) {
+    fn prepare_reveal(&mut self, at: usize, end: usize, text: &str, assistant: bool, now: Instant) {
         let paced = self.reveals.entry(at).or_insert_with(|| {
             PacedText::new(
                 text,
                 self.visible
                     && self.smooth_reveal
-                    && !reduced
                     && self.streaming
                     && at >= self.live_start
                     && assistant,
@@ -3451,7 +3454,7 @@ impl TranscriptView {
             )
         });
         paced.update(text, now);
-        if !self.visible || !self.smooth_reveal || reduced {
+        if !self.visible || !self.smooth_reveal {
             paced.settle(now);
         }
         paced.step(now, self.streaming && end == self.source.len());
@@ -3628,9 +3631,8 @@ impl TranscriptView {
     fn schedule_frame(&mut self, resized: bool, window: &mut Window, cx: &mut Context<Self>) {
         let now = self.frame_now;
         if self.visible
-            && !cx.reduce_motion()
             && (resized
-                || self.streaming
+                || (self.streaming && !crate::clock::suppress_endless_animation_frames())
                 || !self.motions.is_empty()
                 || self.agent_panels.animating()
                 || self.prompt_rise.is_some_and(|(_, born)| {
@@ -4289,7 +4291,7 @@ impl TranscriptView {
                             .flex_1()
                             .truncate()
                             .when(live, |d| d.debug_selector(|| "live-work-receipt".into()))
-                            .child(if live && !cx.reduce_motion() {
+                            .child(if live {
                                 crate::activity::shimmer(
                                     title,
                                     self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
@@ -4341,7 +4343,7 @@ impl TranscriptView {
                             .relative()
                             .size(px(14.))
                             .flex_shrink_0()
-                            .child(if active && !cx.reduce_motion() {
+                            .child(if active {
                                 // The compaction step's dots stand in for the
                                 // group's icon until its work settles.
                                 div()
@@ -4381,16 +4383,14 @@ impl TranscriptView {
                                     .group_hover("activity-phase", |s| s.opacity(1.)),
                             ),
                     )
-                    .child(div().min_w_0().flex_1().truncate().child(
-                        if active && !cx.reduce_motion() {
-                            crate::activity::shimmer(
-                                title,
-                                self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
-                            )
-                        } else {
-                            div().child(title).into_any_element()
-                        },
-                    ))
+                    .child(div().min_w_0().flex_1().truncate().child(if active {
+                        crate::activity::shimmer(
+                            title,
+                            self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
+                        )
+                    } else {
+                        div().child(title).into_any_element()
+                    }))
                     .hover(|s| s.text_color(content(0.8)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.toggle_phase(group, !open, cx);
@@ -4821,7 +4821,6 @@ impl TranscriptView {
         }
         if let Some((prompt, born)) = self.prompt_rise
             && message_start >= prompt
-            && !cx.reduce_motion()
         {
             let elapsed = self.frame_now.saturating_duration_since(born).as_secs_f32();
             if message_start == prompt {
@@ -4839,7 +4838,6 @@ impl TranscriptView {
         }
         if matches!(self.rows[ix].body, Body::Plain(_) | Body::Markdown(_))
             && let Some(born) = self.entrances.get(&message_start)
-            && !cx.reduce_motion()
         {
             // The identity line and footer persist while only the message body
             // enters, matching React's data-chat-message boundary.
@@ -5000,7 +4998,7 @@ impl Render for TranscriptView {
         self.selection.begin_frame();
         self.phase_max_height = live_phase::max_height(window);
         self.frame_now = self.animation_now();
-        self.begin_measurements(window, cx);
+        self.begin_measurements(window);
         if !self.scroll_bound {
             self.scroll_bound = true;
             self.list
@@ -5099,11 +5097,8 @@ impl Render for TranscriptView {
                         .text_size(px(12.)).line_height(px(16.)).text_color(content(0.8))
                         .hover(|s| s.text_color(content(1.)).bg(content(0.04)))
                         .child(canvas(|_, _, _| {}, |bounds, _, window, _| {
-                            #[cfg(target_os = "macos")]
                             window.paint_quad(gpui::fill(bounds, content(0.04)).corner_radii(px(15.)).border_color(
                                 gpui_apple::metal_renderer::backdrop_blur_marker(12. * window.scale_factor())));
-                            #[cfg(not(target_os = "macos"))]
-                            window.paint_quad(gpui::fill(bounds, rgb(CHAT)).corner_radii(px(15.)));
                         }).absolute().top_0().left_0().size_full())
                         .child(icon("arrow-down", 14.).text_color(content(0.5)))
                         .child("Scroll to bottom")
@@ -5115,7 +5110,6 @@ impl Render for TranscriptView {
 }
 
 fn paint_edge_fade(bounds: Bounds<Pixels>, begin: bool, window: &mut Window) {
-    #[cfg(target_os = "macos")]
     window.paint_quad(gpui::fill(bounds, gpui::black()).border_color(
         gpui_apple::metal_renderer::edge_fade_marker(
             begin,
@@ -5123,28 +5117,6 @@ fn paint_edge_fade(bounds: Bounds<Pixels>, begin: bool, window: &mut Window) {
             BOTTOM_INSET * window.scale_factor(),
         ),
     ));
-    #[cfg(not(target_os = "macos"))]
-    if !begin {
-        // Other native backends use an opaque chat pane.
-        for (top, height) in [(true, TOP_FADE as usize), (false, BOTTOM_INSET as usize)] {
-            for y in 0..height {
-                let mut color: gpui::Hsla = rgb(CHAT).into();
-                color.a = 1. - (y as f32 + 0.5) / height as f32;
-                let origin = gpui::point(
-                    bounds.left(),
-                    if top {
-                        bounds.top() + px(y as f32)
-                    } else {
-                        bounds.bottom() - px(y as f32 + 1.)
-                    },
-                );
-                window.paint_quad(gpui::fill(
-                    Bounds::new(origin, size(bounds.size.width, px(1.))),
-                    color,
-                ));
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -5826,7 +5798,7 @@ mod scroll_tests {
     fn bot_turns_merge_follow_ups_keep_inline_work_and_queue_above_the_work(
         cx: &mut TestAppContext,
     ) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let view = cx.new(|_| {
             let mut view = TranscriptView::new();
             view.bot_mode("cat", 0xe86b5f, "BotCat");
@@ -5908,6 +5880,9 @@ mod scroll_tests {
             view.streaming(true, cx);
             view.patch(6, vec![row("user", "And another thing")], cx);
             view.patch(7, vec![row("assistant", "Working on it")], cx);
+        });
+        TranscriptView::settle_animation_frames(&view, cx);
+        view.update(cx, |view, cx| {
             assert!(
                 view.rows.iter().any(|r| r.key == (7, 16)),
                 "live prose appears inline"
@@ -5968,7 +5943,7 @@ mod scroll_tests {
 
     #[gpui::test]
     fn bot_document_and_session_cards_are_one_line_like_react(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let start = serde_json::to_string(&ToolCall {
             id: "t".into(),
             name: "Bash".into(),
@@ -6407,7 +6382,6 @@ mod scroll_tests {
         cx.run_until_parked();
         window
             .update(cx, |view, w, cx| {
-                #[cfg(target_os = "macos")]
                 {
                     let markers: Vec<_> = w
                         .painted_quads()
@@ -6501,5 +6475,80 @@ mod scroll_tests {
                 assert!(!view.show_jump && view.list.is_following_tail());
             })
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod response_render_tests {
+    use super::*;
+    fn row(role: &str, text: &str, first: bool) -> Row {
+        Row {
+            role: role.into(),
+            text: text.into(),
+            first,
+            sent_at: None,
+        }
+    }
+
+    #[test]
+    fn borrowed_responses_match_owned_transfers_through_mutations_and_continuations() {
+        let mut view = TranscriptView::new();
+        view.source = vec![
+            row("user", "prompt", true),
+            row("user", "prompt fragment", false),
+            row("assistant", "answer", true),
+            row("tool", "result", true),
+            row("bot-system", "continue", true),
+            row("assistant", "continued", true),
+            row("user", "next", true),
+            row("assistant", "latest", true),
+        ];
+        for replacement in ["latest", "streamed replacement", ""] {
+            view.source[7].text = replacement.into();
+            for (turn, start, end) in [(2, 0, 4), (5, 4, 6), (7, 6, 8)] {
+                let (rows, through) = view.response_slices(turn);
+                assert_eq!(rows, &view.source[start..end]);
+                assert_eq!(through, &view.source[..end]);
+                assert!(std::ptr::eq(rows.as_ptr(), view.source[start..].as_ptr()));
+                let (owned, history) = view.response_rows(turn);
+                assert_eq!(rows, owned);
+                assert_eq!(through, history);
+                assert_eq!(
+                    vorkspace_core::response::prose(rows),
+                    vorkspace_core::response::prose(&owned)
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "explicit response construction CPU benchmark"]
+    fn response_render_benchmark() {
+        use std::{hint::black_box, time::Instant};
+        let mut view = TranscriptView::new();
+        view.source = (0..256)
+            .map(|_| row("tool", &"x".repeat(128 * 1024), true))
+            .collect();
+        view.source.push(row("user", "prompt", true));
+        view.source.push(row("assistant", "answer", true));
+        for _ in 0..5 {
+            let start = Instant::now();
+            for _ in 0..30 {
+                let (rows, _) = view.response_rows(257);
+                black_box(vorkspace_core::response::prose(&rows));
+            }
+            let baseline = start.elapsed();
+            let start = Instant::now();
+            for _ in 0..30 {
+                let (rows, _) = view.response_slices(257);
+                black_box(vorkspace_core::response::prose(rows));
+            }
+            eprintln!(
+                "response history_bytes={} samples=30 baseline_us={} borrowed_us={}",
+                256 * 128 * 1024,
+                baseline.as_micros(),
+                start.elapsed().as_micros()
+            );
+        }
     }
 }

@@ -5,8 +5,8 @@ mod assets;
 mod automations;
 mod bots;
 mod changes;
-#[cfg(any(target_os = "macos", test))]
 mod clipboard;
+mod clock;
 mod composer_completion;
 mod composer_motion;
 mod context_meter;
@@ -25,7 +25,7 @@ mod git_cache;
 mod git_graph;
 mod git_picker;
 mod git_status;
-#[cfg(all(target_os = "macos", not(test)))]
+#[cfg(not(test))]
 mod global_hotkey;
 mod history;
 mod image_lightbox;
@@ -33,7 +33,7 @@ mod inbox;
 mod input;
 mod markdown;
 mod markdown_model;
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod metal_tests;
 mod notes;
 mod notifications;
@@ -62,21 +62,18 @@ mod session_review;
 mod settings;
 mod shell;
 mod sound;
-#[cfg(any(target_os = "macos", test))]
 mod status_menu;
 mod syntax;
 mod tab_label;
 mod tab_motion;
 mod terminal;
 mod theme;
-#[cfg(target_os = "macos")]
 mod traffic_lights;
 mod transcript;
 mod updater;
 mod usage_footer;
 mod visuals;
 mod vox;
-#[cfg(target_os = "macos")]
 mod webkit;
 mod window_appearance;
 mod workspace;
@@ -86,10 +83,10 @@ use gpui::{
     App, Bounds, KeyBinding, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
     WindowOptions, actions, point, prelude::*, px, size,
 };
+use std::time::Instant;
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::Instant,
 };
 use vorkspace_core::{store::Store, transcript::Transcript};
 actions!(application, [Quit, Restart]);
@@ -125,17 +122,8 @@ fn data_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("VORKSPACE_NATIVE_DATA_DIR") {
         return path.into();
     }
-    #[cfg(target_os = "macos")]
     let base = PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
         .join("Library/Application Support");
-    #[cfg(windows)]
-    let base = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default());
-    #[cfg(not(any(target_os = "macos", windows)))]
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
-        });
     base.join("vorkspace Native Development")
 }
 // The packaged app runs this binary directly: a launcher that execs it changes the
@@ -163,14 +151,11 @@ fn plist_data_mode(plist: &str) -> Option<bool> {
 /// animates after creation, which exposes a small window before maximization.
 fn launch_bounds(cx: &App) -> WindowBounds {
     let restore = Bounds::centered(None, size(px(1180.), px(800.)), cx);
-    #[cfg(target_os = "macos")]
-    return WindowBounds::Windowed(
+    WindowBounds::Windowed(
         cx.primary_display()
             .map(|display| display.visible_bounds())
             .unwrap_or(restore),
-    );
-    #[cfg(not(target_os = "macos"))]
-    WindowBounds::Maximized(restore)
+    )
 }
 
 fn main() {
@@ -412,11 +397,7 @@ fn main() {
             history::bind(cx);
             diff_view::bind(cx);
             terminal::bind(cx);
-            let modifier = if cfg!(target_os = "macos") {
-                "cmd"
-            } else {
-                "ctrl"
-            };
+            let modifier = "cmd";
             cx.bind_keys([
                 KeyBinding::new(&format!("{modifier}-q"), Quit, None),
                 KeyBinding::new(&format!("{modifier}-alt-r"), Restart, None),
@@ -435,27 +416,19 @@ fn main() {
                     window_bounds: Some(bounds),
                     show: false,
                     window_min_size: Some(size(px(820.), px(520.))),
-                    window_background: if cfg!(target_os = "macos") {
-                        WindowBackgroundAppearance::Blurred
-                    } else {
-                        WindowBackgroundAppearance::Opaque
-                    },
+                    window_background: WindowBackgroundAppearance::Blurred,
                     // GPUI owns the custom chrome. AppKit must not reinterpret
                     // its controls as native titlebar double-click/drag gestures.
-                    app_owns_titlebar_drag: cfg!(target_os = "macos"),
+                    app_owns_titlebar_drag: true,
                     titlebar: Some(TitlebarOptions {
                         title: Some("vorkspace".into()),
-                        appears_transparent: cfg!(target_os = "macos"),
-                        traffic_light_position: if cfg!(target_os = "macos") {
-                            // Original macOS chrome: 12 pt left inset, with
+                        appears_transparent: true,
+                        traffic_light_position: // Original macOS chrome: 12 pt left inset, with
                             // 14 pt native buttons centered in the 40 pt bar.
                             Some(point(
                                 px(theme::TRAFFIC_LIGHT_MARGIN),
                                 px((theme::TITLE_BAR_HEIGHT - theme::TRAFFIC_LIGHT_SIZE) / 2.),
-                            ))
-                        } else {
-                            None
-                        },
+                            )),
                     }),
                     ..Default::default()
                 },
@@ -474,7 +447,6 @@ fn main() {
                         shell.observe_scale(window, cx);
                         shell.focus_active(window, cx);
                     });
-                    #[cfg(target_os = "macos")]
                     {
                         traffic_lights::pin(window);
                         // AppKit rebuilds the buttons on some titlebar changes.
@@ -529,13 +501,10 @@ mod native_tests {
     fn launch_uses_the_visible_display_frame_without_a_deferred_zoom(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let bounds = launch_bounds(cx);
-            #[cfg(target_os = "macos")]
             assert_eq!(
                 bounds,
                 WindowBounds::Windowed(cx.primary_display().unwrap().visible_bounds())
             );
-            #[cfg(not(target_os = "macos"))]
-            assert!(matches!(bounds, WindowBounds::Maximized(_)));
         });
     }
     #[test]

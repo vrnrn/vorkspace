@@ -2,7 +2,7 @@
 
 The desktop app window is drawn by GPUI. Rust keeps track of conversations, files, Bots, and running agents in the same desktop process. Saved history lives in SQLite, with extra window settings beside it.
 
-A Bot's face and name stay at the top of its chat as messages scroll. Its face shows whether it is idle, working or needs you, without following the mouse. On Mac, messages fade gently around the face to reveal the chat's own background colors and picture. You can still select, click and scroll the chat there, and the fade stays above the typing box. Reduced motion turns off the animation, and an empty chat shows help instead of a second face.
+A Bot's face and name stay at the top of its chat as messages scroll. Its face shows whether it is idle, working or needs you, without following the mouse. On Mac, messages fade gently around the face to reveal the chat's own background colors and picture. You can still select, click and scroll the chat there, and the fade stays above the typing box. Hidden or covered faces stop animating, and an empty chat shows help instead of a second face.
 
 Open Bots in the main app window. Click the macOS menu bar icon or press ⌘⇧C to find recently copied text and images. Search finds text; image thumbnails show what you copied. Hover over an image for one second to show its larger preview; moving away hides that pane. Choosing an item puts its original contents back on the clipboard, ready for your usual Paste command. Settings and Quick Composer are also in this menu.
 

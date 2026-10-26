@@ -32,7 +32,7 @@ fn peer_message() -> Message {
 
 fn chat(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     cx.update(|cx| {
-        cx.set_reduce_motion(true);
+        crate::clock::use_test_clock(cx);
         input::bind(cx);
         let store = Store::open(Path::new(":memory:")).unwrap();
         let summary = store.create("codex", "/private/tmp/bot-queue-ui").unwrap();
@@ -163,6 +163,7 @@ fn background_and_peer_errors_show_recovery_controls_once(cx: &mut TestAppContex
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.simulate_resize(size(px(360.), px(600.)));
     visual.run_until_parked();
+    crate::clock::settle_animations(window, visual);
     assert!(visual.debug_bounds("bot-background-update-error").is_some());
     assert!(visual.debug_bounds("bot-pending-peer").is_some());
     for selector in [
@@ -180,6 +181,7 @@ fn background_and_peer_errors_show_recovery_controls_once(cx: &mut TestAppContex
         );
         visual.simulate_click(button.center(), Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
     }
     assert_eq!(
         *events.borrow(),
@@ -198,6 +200,7 @@ fn background_and_peer_errors_show_recovery_controls_once(cx: &mut TestAppContex
         })
         .unwrap();
     visual.run_until_parked();
+    crate::clock::settle_animations(window, visual);
     assert!(visual.debug_bounds("bot-background-update-error").is_none());
     assert!(visual.debug_bounds("bot-pending-retry-peer").is_some());
     assert!(visual.debug_bounds("bot-pending-discard-peer").is_some());

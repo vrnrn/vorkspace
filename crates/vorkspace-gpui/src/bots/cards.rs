@@ -75,7 +75,7 @@ pub(crate) fn launch(
         None => ("", "chatting", content(0.45)),
     };
     let mark = icon(glyph, 16.).text_color(color);
-    let mark = if glyph == "loader-03" && !cx.reduce_motion() {
+    let mark = if glyph == "loader-03" {
         mark.with_transformation(gpui::Transformation::rotate(gpui::percentage(spin.fract())))
     } else {
         mark

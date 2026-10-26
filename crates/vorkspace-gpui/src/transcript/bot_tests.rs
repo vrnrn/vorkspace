@@ -46,7 +46,7 @@ fn projection(view: &TranscriptView) -> Vec<(usize, String, bool, bool, Option<u
 
 #[gpui::test]
 fn bot_work_matches_sessions_while_streaming_settled_and_reloaded(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     let session = cx.new(|_| TranscriptView::new());
     let bot = cx.new(|_| {
         let mut view = TranscriptView::new();
@@ -74,6 +74,9 @@ fn bot_work_matches_sessions_while_streaming_settled_and_reloaded(cx: &mut TestA
                 ],
                 cx,
             );
+        });
+        TranscriptView::settle_animation_frames(view, cx);
+        view.update(cx, |view, cx| {
             assert!(
                 view.rows
                     .iter()
@@ -96,9 +99,15 @@ fn bot_work_matches_sessions_while_streaming_settled_and_reloaded(cx: &mut TestA
                 }
             )));
             view.toggle_phase(2, false, cx);
+        });
+        TranscriptView::settle_animation_frames(view, cx);
+        view.update(cx, |view, cx| {
             assert!(!view.rows.iter().any(|r| r.in_phase()));
             view.toggle_phase(2, true, cx);
             view.patch(5, vec![row("assistant", "")], cx);
+        });
+        TranscriptView::settle_animation_frames(view, cx);
+        view.update(cx, |view, _| {
             assert_eq!(
                 view.rows
                     .iter()
@@ -116,6 +125,9 @@ fn bot_work_matches_sessions_while_streaming_settled_and_reloaded(cx: &mut TestA
     for view in [&session, &bot] {
         view.update(cx, |view, cx| {
             view.patch(5, vec![row("assistant", "Everything checks out.")], cx);
+        });
+        TranscriptView::settle_animation_frames(view, cx);
+        view.update(cx, |view, cx| {
             assert!(view.streaming, "the receipt is available before completion");
             assert!(view.rows.iter().any(|r| matches!(
                 r.body,
@@ -137,6 +149,9 @@ fn bot_work_matches_sessions_while_streaming_settled_and_reloaded(cx: &mut TestA
             );
             view.work_folds.insert(1, true);
             view.rebuild(1, cx);
+        });
+        TranscriptView::settle_animation_frames(view, cx);
+        view.update(cx, |view, cx| {
             assert!(view.rows.iter().any(|r| r.key.0 == 1 && r.work));
             assert_eq!(
                 view.rows
@@ -182,6 +197,7 @@ fn bot_work_matches_sessions_while_streaming_settled_and_reloaded(cx: &mut TestA
         view.rebuild(3, cx);
         view
     });
+    TranscriptView::settle_animation_frames(&reloaded, cx);
     assert_eq!(
         reloaded.read_with(cx, |view, _| projection(view)),
         bot.read_with(cx, |view, _| projection(view))
@@ -190,7 +206,7 @@ fn bot_work_matches_sessions_while_streaming_settled_and_reloaded(cx: &mut TestA
 
 #[gpui::test]
 fn bot_inline_disclosures_preserve_reaction_final_reply_and_saved_work(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     let source = vec![
         row("user", "Write the report"),
         row("assistant", "<reaction>👍</reaction>"),
@@ -210,9 +226,14 @@ fn bot_inline_disclosures_preserve_reaction_final_reply_and_saved_work(cx: &mut 
     view.update(cx, |view, cx| {
         view.bot_mode("cat", 0xe86b5f, "BotCat");
         view.install_prepared_history(PreparedHistory::new(source.clone(), true), cx);
-        for open in [false, true, false] {
+    });
+    for open in [false, true, false] {
+        view.update(cx, |view, cx| {
             view.work_folds.insert(1, open);
             view.rebuild(1, cx);
+        });
+        TranscriptView::settle_animation_frames(&view, cx);
+        view.update(cx, |view, _| {
             assert!(
                 view.rows.iter().any(|r| matches!(
                     r.body,
@@ -272,13 +293,13 @@ fn bot_inline_disclosures_preserve_reaction_final_reply_and_saved_work(cx: &mut 
                 "the user's prompt stays outside the work trail"
             );
             assert_eq!(view.source, source);
-        }
-    });
+        });
+    }
 }
 
 #[gpui::test]
 fn bot_continuation_search_and_pinned_reports_use_their_own_run(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     let mut failed = ToolCall::new("agent", "Agent");
     failed.state = ToolState::Failed;
     failed.panel = Some(Panel::Agent(Default::default()));

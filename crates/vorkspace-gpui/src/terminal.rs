@@ -39,11 +39,7 @@ actions!(
 );
 
 pub(crate) fn bind(cx: &mut App) {
-    let m = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl-shift"
-    };
+    let m = "cmd";
     let c = Some("Terminal");
     // The shell owns these keys while a terminal has focus.
     cx.bind_keys([
@@ -194,8 +190,6 @@ fn spawn(cwd: &str, size: GridSize, id: u64) -> Spawned {
         working_directory: Some(workdir),
         drain_on_exit: false,
         env,
-        #[cfg(target_os = "windows")]
-        escape_args: true,
     };
     let window = WindowSize {
         num_lines: size.lines as u16,
@@ -207,7 +201,6 @@ fn spawn(cwd: &str, size: GridSize, id: u64) -> Spawned {
     let mut shell_pid = 0;
     let sender = match tty::new(&options, window, id) {
         Ok(pty) => {
-            #[cfg(unix)]
             {
                 use std::os::fd::AsRawFd;
                 master_fd = pty.file().as_raw_fd();
@@ -676,7 +669,6 @@ impl Drop for Terminal {
             let _ = sender.send(Msg::Shutdown);
         }
         // The hangup a closing shell expects, for it and its job.
-        #[cfg(unix)]
         if self.shell_pid > 1 && !self.exited {
             let pid = self.shell_pid as i32;
             unsafe {
@@ -1294,13 +1286,7 @@ fn default_shell() -> (String, Vec<String>) {
     let shell = std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            if cfg!(target_os = "macos") {
-                "/bin/zsh".into()
-            } else {
-                "/bin/bash".into()
-            }
-        });
+        .unwrap_or_else(|| "/bin/zsh".into());
     let stem = std::path::Path::new(&shell)
         .file_stem()
         .and_then(|n| n.to_str())
@@ -1315,7 +1301,6 @@ fn default_shell() -> (String, Vec<String>) {
 
 /// pty.rs's foreground_label: the command holding the terminal, unless it
 /// is the shell itself.
-#[cfg(unix)]
 fn foreground_label(master_fd: i32, shell_pid: u32) -> Option<String> {
     if master_fd < 0 {
         return None;
@@ -1333,10 +1318,6 @@ fn foreground_label(master_fd: i32, shell_pid: u32) -> Option<String> {
     }
     let label = command_label(String::from_utf8_lossy(&output.stdout).trim())?;
     (!is_shell_name(&label)).then_some(label)
-}
-#[cfg(not(unix))]
-fn foreground_label(_: i32, _: u32) -> Option<String> {
-    None
 }
 /// Interpreters name the script they run: `node vite.js` reads `vite.js`.
 pub(crate) fn command_label(args: &str) -> Option<String> {

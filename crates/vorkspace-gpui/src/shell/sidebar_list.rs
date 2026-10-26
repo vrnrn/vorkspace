@@ -125,7 +125,6 @@ fn sidebar_edge_mask(state: ListState, inset: bool, begin: bool) -> impl IntoEle
                     ),
                     gpui::size(bounds.size.width, height),
                 );
-                #[cfg(target_os = "macos")]
                 window.paint_quad(gpui::fill(band, gpui::black()).border_color(
                     gpui_apple::metal_renderer::edge_fade_marker(
                         begin,
@@ -141,30 +140,6 @@ fn sidebar_edge_mask(state: ListState, inset: bool, begin: bool) -> impl IntoEle
                         },
                     ),
                 ));
-                #[cfg(not(target_os = "macos"))]
-                if !begin {
-                    let background = if inset {
-                        shell_fill().blend(inset_chrome_wash())
-                    } else {
-                        shell_fill()
-                    };
-                    for y in 0..height.as_f32().ceil() as usize {
-                        let mut color = background;
-                        color.a = (1. - (y as f32 + 0.5) / height.as_f32()).clamp(0., 1.);
-                        let y = if at_top {
-                            band.top() + px(y as f32)
-                        } else {
-                            band.bottom() - px(y as f32 + 1.)
-                        };
-                        window.paint_quad(gpui::fill(
-                            gpui::Bounds::new(
-                                gpui::point(band.left(), y),
-                                gpui::size(band.size.width, px(1.)),
-                            ),
-                            color,
-                        ));
-                    }
-                }
             }
         },
     )
@@ -577,11 +552,7 @@ impl Shell {
                             .text_size(px(11.))
                             .font_weight(FontWeight::NORMAL)
                             .text_color(content(0.4))
-                            .child(if cfg!(target_os = "macos") {
-                                "⌘K"
-                            } else {
-                                "Ctrl K"
-                            }),
+                            .child("⌘K"),
                     ),
             )
             .children(
@@ -1082,7 +1053,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "Requires Metal and VOKKY_SIDEBAR_CAPTURE_DIR"]
     fn sidebar_settings_native_capture() {
@@ -1109,7 +1079,7 @@ mod tests {
                 )))
             },
         );
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(&cx);
         let window = cx
             .open_window(gpui::size(px(1280.), px(800.)), |_, cx| {
                 cx.new(|cx| {
@@ -1135,6 +1105,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
+        crate::clock::settle_headless_animations(window, &mut cx);
         cx.capture_screenshot(window.into())
             .unwrap()
             .save(output.join("sidebar-options.png"))
@@ -1162,6 +1133,7 @@ mod tests {
                 })
                 .unwrap();
             cx.run_until_parked();
+            crate::clock::settle_headless_animations(window, &mut cx);
             cx.capture_screenshot(window.into())
                 .unwrap()
                 .save(output.join(format!("sidebar-reordered-{name}.png")))
@@ -1173,6 +1145,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
+        crate::clock::settle_headless_animations(window, &mut cx);
         cx.capture_screenshot(window.into())
             .unwrap()
             .save(output.join("settings-app-group.png"))

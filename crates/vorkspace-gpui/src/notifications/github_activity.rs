@@ -3,11 +3,8 @@
 use gpui::{Context, EventEmitter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::time::Instant;
+use std::{collections::HashMap, path::Path, time::Duration};
 use vorkspace_core::{
     session_groups::WorkItem,
     store::{Session, Store},

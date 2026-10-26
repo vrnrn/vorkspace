@@ -48,7 +48,6 @@ fn workspace_fallback<A: Action>(cx: &mut App) {
                 }
                 cx.activate(true);
                 window.activate_window();
-                #[cfg(target_os = "macos")]
                 crate::traffic_lights::show(window);
                 window.focus(&focus, cx);
                 focus.dispatch_action(action.as_ref(), window, cx);
@@ -71,7 +70,6 @@ actions!(
     ]
 );
 
-#[cfg(any(target_os = "macos", test))]
 pub(crate) fn clipboard_route(action: crate::status_menu::Action, cx: &mut App) {
     let Some(target) = workspace_target(cx) else {
         return;
@@ -86,7 +84,6 @@ pub(crate) fn clipboard_route(action: crate::status_menu::Action, cx: &mut App) 
 }
 
 pub(crate) fn init(cx: &mut App) {
-    #[cfg(any(target_os = "macos", test))]
     cx.on_action(|_: &crate::clipboard::Toggle, cx| {
         let Some(target) = workspace_target(cx) else {
             return;
@@ -100,11 +97,9 @@ pub(crate) fn init(cx: &mut App) {
             });
         });
     });
-    #[cfg(any(target_os = "macos", test))]
     cx.on_action(|_: &crate::clipboard::Settings, cx| {
         clipboard_route(crate::status_menu::Action::Settings, cx)
     });
-    #[cfg(any(target_os = "macos", test))]
     cx.on_action(|_: &crate::clipboard::Composer, cx| {
         clipboard_route(crate::status_menu::Action::QuickComposer, cx)
     });
@@ -158,7 +153,6 @@ pub(crate) fn init(cx: &mut App) {
         window_command(cx, |window| window.toggle_fullscreen())
     });
     cx.on_action(|_: &About, _cx| {
-        #[cfg(target_os = "macos")]
         if let Some(main) = objc2::MainThreadMarker::new() {
             objc2_app_kit::NSApplication::sharedApplication(main)
                 .orderFrontStandardAboutPanel(None);
@@ -175,7 +169,6 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &RequestFeature, cx| {
         cx.open_url("https://github.com/vrnrn/vorkspace/issues/new?template=feature_request.yml")
     });
-    #[cfg(target_os = "macos")]
     cx.bind_keys([
         KeyBinding::new("cmd-h", Hide, None),
         KeyBinding::new("cmd-alt-h", HideOthers, None),

@@ -121,8 +121,7 @@ fn project_mascot(name: &str, active: bool) -> AnyElement {
     let index = hash as usize % REST.len();
     let slot = div().size(px(12.)).flex_shrink_0();
     if active {
-        // AnimationExt freezes repeating animations at phase zero and stops
-        // requesting frames when the platform's reduced-motion setting is on.
+        // AnimationExt drives the repeating frame requests.
         slot.with_animation(
             "subagent-mascot",
             Animation::new(Duration::from_millis(460)).repeat(),

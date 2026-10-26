@@ -55,13 +55,7 @@ impl Target {
                 MenuAction::new("copy-link", "Copy Link Address").into(),
             ],
             Self::File { base, .. } => {
-                let reveal = if cfg!(target_os = "macos") {
-                    "Reveal in Finder"
-                } else if cfg!(target_os = "windows") {
-                    "Reveal in File Explorer"
-                } else {
-                    "Open Containing Folder"
-                };
+                let reveal = "Reveal in Finder";
                 let mut items = vec![
                     MenuAction::new("open-vorkspace", "Open in vorkspace").into(),
                     MenuAction::new("open-default", "Open in Default App").into(),

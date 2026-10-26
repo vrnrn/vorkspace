@@ -4,16 +4,12 @@
 //! new layout, so the column flows while it wraps instead of ticking.
 //! The chat's follow offset shares this prepaint scope, moving each row's
 //! clipping and hitboxes together with its content.
+use crate::clock::Instant;
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
     LayoutId, Pixels, Window, point, px,
 };
-use std::{
-    cell::RefCell,
-    collections::BTreeMap,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Duration};
 
 type Key = (usize, usize);
 /// Exponential time constant: steps arriving every frame blend into a glide
@@ -43,12 +39,8 @@ impl ReflowMotion {
         }
         .into_any_element()
     }
-    fn offset(&self, key: Key, bounds: Bounds<Pixels>, now: Instant, reduced: bool) -> f32 {
+    fn offset(&self, key: Key, bounds: Bounds<Pixels>, now: Instant) -> f32 {
         let mut tracks = self.0.borrow_mut();
-        if reduced {
-            tracks.clear();
-            return 0.;
-        }
         let (top, width) = (bounds.top(), bounds.size.width);
         let fresh = |t: &Track| now.saturating_duration_since(t.seen) < STALE;
         let offset = match tracks.get(&key).filter(|t| fresh(t)) {
@@ -126,9 +118,7 @@ impl Element for Glide {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let reflow = self
-            .motion
-            .offset(self.key, bounds, Instant::now(), cx.reduce_motion());
+        let reflow = self.motion.offset(self.key, bounds, Instant::now());
         if reflow != 0. {
             // Notifies the transcript, so its cached view keeps painting.
             window.request_animation_frame();
@@ -167,15 +157,15 @@ mod tests {
     fn rewrap_keeps_the_painted_position_then_eases_into_layout() {
         let motion = ReflowMotion::default();
         let start = Instant::now();
-        assert_eq!(motion.offset((0, 0), at(300., 600.), start, false), 0.);
+        assert_eq!(motion.offset((0, 0), at(300., 600.), start), 0.);
         // Narrower: a paragraph above gained a line and pushed this row down.
         let frame = start + Duration::from_millis(16);
-        assert_eq!(motion.offset((0, 0), at(324., 590.), frame, false), -24.);
+        assert_eq!(motion.offset((0, 0), at(324., 590.), frame), -24.);
         let mut previous = 24.;
         let mut now = frame;
         for _ in 0..40 {
             now += Duration::from_millis(16);
-            let offset = motion.offset((0, 0), at(324., 590.), now, false);
+            let offset = motion.offset((0, 0), at(324., 590.), now);
             assert!(offset <= 0. && (-offset < previous || offset == 0.));
             previous = -offset;
         }
@@ -186,30 +176,28 @@ mod tests {
     fn scrolling_at_a_fixed_width_is_never_smoothed() {
         let motion = ReflowMotion::default();
         let start = Instant::now();
-        motion.offset((0, 0), at(300., 600.), start, false);
+        motion.offset((0, 0), at(300., 600.), start);
         let frame = start + Duration::from_millis(16);
-        assert_eq!(motion.offset((0, 0), at(180., 600.), frame, false), 0.);
+        assert_eq!(motion.offset((0, 0), at(180., 600.), frame), 0.);
     }
 
     #[test]
-    fn stale_rows_reduced_motion_and_scrolled_in_neighbours() {
+    fn stale_rows_and_scrolled_in_neighbours() {
         let motion = ReflowMotion::default();
         let start = Instant::now();
-        motion.offset((0, 1), at(300., 600.), start, false);
+        motion.offset((0, 1), at(300., 600.), start);
         let late = start + STALE + Duration::from_millis(1);
-        assert_eq!(motion.offset((0, 1), at(200., 590.), late, false), 0.);
+        assert_eq!(motion.offset((0, 1), at(200., 590.), late), 0.);
         let frame = late + Duration::from_millis(16);
-        let offset = motion.offset((0, 1), at(260., 580.), frame, false);
+        let offset = motion.offset((0, 1), at(260., 580.), frame);
         assert_eq!(offset, -60.);
         // A row entering above joins the motion of the row it borders.
-        assert_eq!(motion.offset((0, 0), at(200., 580.), frame, false), -60.);
-        assert_eq!(motion.offset((0, 1), at(0., 300.), frame, true), 0.);
+        assert_eq!(motion.offset((0, 0), at(200., 580.), frame), -60.);
         assert_eq!(
             motion.offset(
                 (0, 1),
                 at(600., 600.),
-                frame + Duration::from_millis(16),
-                false
+                frame + STALE + Duration::from_millis(1)
             ),
             0.
         );

@@ -7,7 +7,7 @@ pub(crate) enum Cue {
     LinkedActivity,
 }
 pub(crate) fn play(cue: Cue) {
-    #[cfg(all(target_os = "macos", not(test)))]
+    #[cfg(not(test))]
     std::thread::spawn(move || {
         let directory = crate::data_dir().join("sounds");
         if std::fs::create_dir_all(&directory).is_err() {
@@ -30,10 +30,9 @@ pub(crate) fn play(cue: Cue) {
         vorkspace_core::process::configure_child(&mut command);
         let _ = command.status();
     });
-    #[cfg(any(not(target_os = "macos"), test))]
+    #[cfg(test)]
     let _ = cue;
 }
-#[cfg(any(target_os = "macos", test))]
 fn wave(cue: Cue) -> Vec<u8> {
     type Layer = (f32, f32, f32, f32, f32, f32);
     type Recipe = (f32, &'static [Layer], f32, f32, f32);

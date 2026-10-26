@@ -2,7 +2,8 @@
 //! per checkout. Only the selected checkout owns a live Git poller.
 use super::*;
 use crate::popover::{MenuAction, MenuItem};
-use std::{path::Path, time::Instant};
+use std::path::Path;
+use std::time::Instant;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Checkout {

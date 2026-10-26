@@ -22,30 +22,10 @@ pub(crate) fn tab_label(text: impl Into<SharedString>) -> impl IntoElement {
                 None,
             );
             let overflow = line.width() > bounds.size.width && bounds.size.width > px(0.);
-            #[cfg(not(target_os = "macos"))]
-            let line = if overflow {
-                // Other backends use the same measured ramp at glyph centres.
-                let runs = text
-                    .char_indices()
-                    .map(|(ix, ch)| {
-                        let mut run = run.clone();
-                        let x = (line.x_for_index(ix) + line.x_for_index(ix + ch.len_utf8())) / 2.;
-                        run.len = ch.len_utf8();
-                        run.color.a *= ((bounds.size.width - x) / px(40.)).clamp(0., 1.);
-                        run
-                    })
-                    .collect::<Vec<_>>();
-                window
-                    .text_system()
-                    .shape_line(text.clone(), font_size, &runs, None)
-            } else {
-                line
-            };
             (line, overflow)
         },
         |bounds, (line, overflow), window, cx| {
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                #[cfg(target_os = "macos")]
                 let marker = |begin, window: &mut gpui::Window| {
                     if overflow {
                         window.paint_layer(bounds, |window| {
@@ -58,9 +38,6 @@ pub(crate) fn tab_label(text: impl Into<SharedString>) -> impl IntoElement {
                         });
                     }
                 };
-                #[cfg(not(target_os = "macos"))]
-                let _ = overflow;
-                #[cfg(target_os = "macos")]
                 marker(true, window);
                 // Keep both marker quads on separate layers from the glyphs:
                 // GPUI otherwise batches a layer's quads before its text.
@@ -74,7 +51,6 @@ pub(crate) fn tab_label(text: impl Into<SharedString>) -> impl IntoElement {
                         cx,
                     );
                 });
-                #[cfg(target_os = "macos")]
                 marker(false, window);
             });
         },
@@ -82,7 +58,7 @@ pub(crate) fn tab_label(text: impl Into<SharedString>) -> impl IntoElement {
     .size_full()
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use gpui::{App, Context, Render, TestAppContext, Window, div};

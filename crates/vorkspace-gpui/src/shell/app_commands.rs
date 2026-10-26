@@ -147,7 +147,7 @@ impl Shell {
         if let Some((target, edge)) = placement {
             let before = self.active_leaves();
             self.workspace.place(id, target, edge);
-            self.begin_pane_motion(before, cx);
+            self.begin_pane_motion(before);
             self.fit_sidebar(cx);
             self.activate_session(id, window, cx);
         } else if reveal {

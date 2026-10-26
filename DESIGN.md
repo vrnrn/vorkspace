@@ -18,10 +18,10 @@ Paths are relative to `crates/vorkspace-gpui/src/`.
    your file. Copies drift.
 3. **Color means something.** Accent marks focus, selection and the primary
    action. Status hues mark state. Anything decorative stays neutral.
-4. **Native first.** Match macOS behavior: system font, arrow cursor on window
+4. **Native first.** Vorkspace is macOS-only. Match macOS behavior: system font, arrow cursor on window
    chrome, instant dismissal, glass only where the platform provides it.
-5. **Calm motion.** Animation explains a change of place or state, is short,
-   and always has a reduced-motion end state.
+5. **Calm motion.** Animation explains a change of place or state and is
+   short. There is no reduced-motion mode; animations always run.
 6. **Every intermediate frame counts.** No flashes, jumps, re-played entrances
    or layout collapse during a transition (see AGENTS.md).
 
@@ -132,8 +132,7 @@ From back to front:
 | Toast | `notifications/surface.rs` glass frame | 12 | `content(0.1)` | `shadow_lg` |
 | Modal | `popover().modal_surface()` | 16 | `content(0.07)` | popover pair |
 
-- **Glass** is macOS-only and dark-only (`window_glass`). Light themes and other
-  platforms paint opaque surfaces. Never stack a second tint on glass.
+- **Glass** is dark-only (`window_glass`). Light themes paint opaque surfaces. Never stack a second tint on glass.
 - **Floating UI** goes through `popover::popover` (placement, flipping,
   outside-press dismissal, glass and shadow). Don't hand-build floating frames.
 - **Dividers** are 1px: `content(0.1)` for chrome rules, `content(0.04)–0.05`
@@ -213,8 +212,8 @@ Behavior rules for controls:
   `pane_motion.rs` so a retarget keeps its velocity.
 - Popovers and menus animate in (170ms, 8px from the anchor) and **dismiss
   instantly**.
-- Every animation checks `cx.reduce_motion()` and renders its end state when it
-  is set. Tests run with `cx.set_reduce_motion(true)`.
+- There is no reduced-motion mode and no code reads `cx.reduce_motion()`.
+  Tests that depend on timing advance the clock past the animation duration.
 - Hover feedback is immediate, or at most a short fade.
 
 ---
@@ -241,4 +240,4 @@ Behavior rules for controls:
 3. Check narrow and wide windows and long, localized or empty content.
 4. Check the full transition, not only the end state.
 5. Cover geometry and state with a GPUI test (`debug_selector` and
-   `debug_bounds` are the usual hooks) and run with reduced motion.
+   `debug_bounds` are the usual hooks); advance the clock past any animation.

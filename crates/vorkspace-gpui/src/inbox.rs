@@ -16,10 +16,8 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, ListAlignment,
     ListState, Pixels, ScrollHandle, Subscription, WeakEntity, px,
 };
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::time::Instant;
+use std::{path::PathBuf, time::Duration};
 use vorkspace_core::{
     inbox::{self as model, Checks, Details, Diff, Item, Service, Snapshot, Thread, ViewState},
     store::Session,

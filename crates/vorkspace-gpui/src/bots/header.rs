@@ -53,12 +53,9 @@ fn backdrop_mask(begin: bool) -> AnyElement {
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
-                    #[cfg(target_os = "macos")]
                     window.paint_quad(gpui::fill(bounds, gpui::black()).border_color(
                         gpui_apple::metal_renderer::radial_cutout_marker(begin, 0.2),
                     ));
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = (bounds, window, begin);
                 },
             )
             .size_full(),

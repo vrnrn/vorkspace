@@ -132,11 +132,7 @@ impl QuickOpen {
                             score,
                             Row {
                                 label: (*label).into(),
-                                detail: if cfg!(target_os = "macos") {
-                                    (*hint).into()
-                                } else {
-                                    hint.replace('⌘', "Ctrl+").replace('⇧', "Shift+")
-                                },
+                                detail: (*hint).into(),
                                 path: None,
                                 command: Some(*command),
                             },

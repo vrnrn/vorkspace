@@ -56,7 +56,7 @@ fn assert_titlebar(
         .update(visual, |_, w, _| 1. / w.platform_scale_factor())
         .unwrap();
     let near = |a: Pixels, b: f32| assert!((a.as_f32() - b).abs() <= pixel, "{a:?} != {b}");
-    let native = cfg!(target_os = "macos") && !fullscreen;
+    let native = !fullscreen;
     let safe = if native { 78. } else { 10. * scale };
     near(toggle.left(), safe);
     for button in [toggle, back, forward] {
@@ -137,7 +137,7 @@ fn assert_titlebar(
 
 #[gpui::test]
 fn zoomed_titlebar_keeps_native_controls_navigation_and_tabs_separate(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     let (window, _, _) = tests::window(cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     // A minimum-width rail exercises navigation's padding budget at low zoom;
@@ -202,7 +202,7 @@ impl Render for InsetTitlebar {
 
 #[gpui::test]
 fn inset_titlebar_uses_the_same_native_inset_and_navigation_budget(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     let (window, _, _) = tests::window(cx);
     let shell = window
         .update(cx, |_, w, cx| {
@@ -247,11 +247,7 @@ fn inset_titlebar_uses_the_same_native_inset_and_navigation_budget(cx: &mut Test
                 assert!(new_tab.left() >= nav.right());
                 visual.update(|w, _| {
                     let toggle = w.logical_to_platform_bounds(toggle);
-                    let expected = if cfg!(target_os = "macos") && !fullscreen {
-                        78.
-                    } else {
-                        10. * w.ui_scale()
-                    };
+                    let expected = if !fullscreen { 78. } else { 10. * w.ui_scale() };
                     assert!((toggle.left().as_f32() - expected).abs() < 0.02);
                     assert!(
                         (toggle.center().y.as_f32() - 20. * w.ui_scale()).abs()
@@ -265,7 +261,7 @@ fn inset_titlebar_uses_the_same_native_inset_and_navigation_budget(cx: &mut Test
 
 #[gpui::test]
 fn titlebar_bot_and_app_views_keep_the_same_zoomed_navigation(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     let (window, _, _) = tests::window(cx);
     let (manager, bot) = window
         .update(cx, |shell, w, cx| {
@@ -313,7 +309,7 @@ fn titlebar_bot_and_app_views_keep_the_same_zoomed_navigation(cx: &mut TestAppCo
 #[gpui::test]
 fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        cx.set_reduce_motion(true);
+        crate::clock::use_test_clock(cx);
         bind_keys(cx);
         crate::app_menu::init(cx);
     });
@@ -336,11 +332,7 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
     visual.simulate_resize(size(px(1800.), px(1000.)));
     settle(visual);
     assert_titlebar(window, visual, 160, false);
-    let modifier = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl"
-    };
+    let modifier = "cmd";
     for percent in SCALES {
         window
             .update(visual, |shell, w, cx| {
@@ -497,15 +489,6 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
         let header = platform_bounds(window, visual, "settings-header");
         assert!(header.left() + px(0.02) >= nav.right());
         let toggle = platform_bounds(window, visual, "toggle-sidebar");
-        assert!(
-            (toggle.left().as_f32()
-                - if cfg!(target_os = "macos") {
-                    78.
-                } else {
-                    10. * percent as f32 / 100.
-                })
-            .abs()
-                < 0.02
-        );
+        assert!((toggle.left().as_f32() - 78.).abs() < 0.02);
     }
 }

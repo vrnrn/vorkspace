@@ -28,7 +28,7 @@ fn info() -> TurnInfo {
 }
 
 fn fixture(cx: &mut TestAppContext, bot: bool) -> WindowHandle<TranscriptView> {
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
             cx.new(|cx| {
@@ -78,14 +78,14 @@ fn hover_metrics(
     visual: &mut VisualTestContext,
     turn: usize,
 ) -> Bounds<Pixels> {
+    crate::clock::settle_animations(window, visual);
     let anchor = window
         .update(visual, |view, _, _| {
             view.action_anchors[&(turn, "metrics")].get().unwrap()
         })
         .unwrap();
     visual.simulate_mouse_move(anchor.center(), None, Default::default());
-    // Finish only the reveal's wall-clock fade; hit testing and hover dispatch
-    // above are the real test-platform interaction, not a direct action call.
+    // Hover through the real hit target, then advance its finite reveal.
     window
         .update(visual, |view, _, cx| {
             if view.bot {
@@ -99,6 +99,7 @@ fn hover_metrics(
         .unwrap();
     visual.run_until_parked();
     visual.refresh().unwrap();
+    crate::clock::settle_animations(window, visual);
     anchor
 }
 
@@ -294,6 +295,8 @@ fn metrics_with_zero_or_legacy_duration_keep_tokens_without_a_made_up_rate(
 #[gpui::test]
 fn streamed_bot_metrics_survive_save_reopen_and_history_install(cx: &mut TestAppContext) {
     let window = fixture(cx, true);
+    // The shown output rate divides by elapsed time, so this test reads real time.
+    crate::clock::use_test_clock(cx);
     window
         .update(cx, |view, _, cx| {
             view.streaming(true, cx);
@@ -440,7 +443,6 @@ fn bot_metrics_preserve_copy_note_and_quote_actions(cx: &mut TestAppContext) {
 
 // Uses GPUI's existing offscreen native capture path; never opens the shell,
 // a provider, or a database. Kept opt-in like the other Metal regressions.
-#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "Requires a Metal device and VOKKY_METRICS_CAPTURE_DIR"]
 fn native_metrics_hover_capture() {
@@ -465,7 +467,7 @@ fn native_metrics_hover_capture() {
             )))
         },
     );
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(&cx);
     for bot in [false, true] {
         for width in [900., 320.] {
             let window = cx
@@ -504,6 +506,7 @@ fn native_metrics_hover_capture() {
             })
             .unwrap();
             cx.run_until_parked();
+            crate::clock::settle_headless_animations(window, &mut cx);
             cx.capture_screenshot(window.into())
                 .unwrap()
                 .save(output.join(format!(

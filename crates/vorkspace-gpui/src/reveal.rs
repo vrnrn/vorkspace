@@ -1,10 +1,11 @@
 //! Native port of wordFade.tsx: 90 cps floor, 220ms catch-up, 150ms
 //! partial-word hold, 30ms commits and a 320ms opacity fade per word.
+use crate::clock::Instant;
 use gpui::{
     AnyElement, App, AvailableSpace, Bounds, Element, ElementId, GlobalElementId,
     InspectorElementId, IntoElement, LayoutId, Pixels, Style, Window, size,
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Measure the expanded child at the current width before interpolating height.
 /// Estimates or heights from an earlier width cause a snap when motion finishes.

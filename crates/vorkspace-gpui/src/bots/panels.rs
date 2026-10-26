@@ -1208,7 +1208,7 @@ impl Bots {
         let progress = self
             .overview_reveal
             .as_ref()
-            .and_then(|r| r.progress(self.overview_tab, window, cx));
+            .and_then(|r| r.progress(self.overview_tab, window));
         let tabs = [
             (
                 OverviewTab::Sessions,
@@ -2303,7 +2303,11 @@ impl Bots {
             .id(id)
             .role(Role::Switch)
             .aria_label(id)
-            .aria_selected(on)
+            .aria_toggled(if on {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
             .w(px(36.))
             .h(px(20.))
             .flex_shrink_0()

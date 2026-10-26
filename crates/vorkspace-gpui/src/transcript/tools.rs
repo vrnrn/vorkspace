@@ -576,7 +576,7 @@ mod tests {
 
     #[gpui::test]
     fn search_pills_and_overflow_count_share_a_single_compact_row(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| TranscriptView::new())
@@ -627,7 +627,7 @@ mod tests {
 
     #[gpui::test]
     fn chained_commands_show_step_chips_and_expand_into_steps(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| TranscriptView::new())
@@ -679,7 +679,7 @@ mod tests {
 
     #[gpui::test]
     fn grouped_tool_rows_stay_compact_when_clicked(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| TranscriptView::new())
@@ -750,7 +750,7 @@ mod tests {
 
     #[gpui::test]
     fn reasoning_and_tools_share_the_phase_rail_and_command_count(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| TranscriptView::new())
@@ -833,7 +833,7 @@ mod tests {
 
     #[gpui::test]
     fn first_assistant_prose_replaces_all_streamed_initial_thoughts(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let view = cx.new(|_| TranscriptView::new());
         view.update(cx, |view, cx| {
             let row = |role: &str, text: &str| Row {
@@ -862,6 +862,9 @@ mod tests {
                 2
             );
             view.patch(3, vec![row("assistant", "I'll inspect the connector.")], cx);
+        });
+        TranscriptView::settle_animation_frames(&view, cx);
+        view.update(cx, |view, _| {
             assert!(
                 !view
                     .rows

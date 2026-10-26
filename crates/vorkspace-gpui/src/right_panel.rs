@@ -439,7 +439,7 @@ impl RightPanel {
         let progress = self
             .reveal
             .as_ref()
-            .and_then(|reveal| reveal.progress(self.tab, window, cx));
+            .and_then(|reveal| reveal.progress(self.tab, window));
         let dragging = self
             .drag
             .as_ref()

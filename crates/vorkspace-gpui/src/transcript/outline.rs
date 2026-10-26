@@ -1,13 +1,11 @@
 // The prompt outline rail, ported from src/features/sessions/ui/PromptOutline.tsx
 // and its model in src/features/sessions/model/promptOutline.ts.
 use super::TranscriptView;
+use crate::clock::Instant;
 use crate::popover::{Align, Anchor, AnchorSlot, Side, popover};
 use crate::theme::*;
 use gpui::{Context, ListOffset, Role, Task, Window, div, prelude::*, px};
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, time::Duration};
 
 const OPEN_DELAY: Duration = Duration::from_millis(25);
 const POPOVER_WIDTH: f32 = 288.;
@@ -183,7 +181,6 @@ impl TranscriptView {
             .hovered
             .and_then(|hovered| bars.iter().position(|&p| p == hovered));
         let now = Instant::now();
-        let reduced = cx.reduce_motion();
         self.outline
             .tweens
             .retain(|prompt, _| bars.contains(prompt));
@@ -230,18 +227,10 @@ impl TranscriptView {
             if tween.to != target {
                 // The wave reaches the outer bars a beat after the hovered one.
                 let delay = distance.min(RIPPLE_SPAN) as f32 * RIPPLE_STEP;
-                *tween = if reduced {
-                    Tween {
-                        from: target,
-                        to: target,
-                        start: now,
-                    }
-                } else {
-                    Tween {
-                        from: tween.at(now),
-                        to: target,
-                        start: now + Duration::from_secs_f32(delay),
-                    }
+                *tween = Tween {
+                    from: tween.at(now),
+                    to: target,
+                    start: now + Duration::from_secs_f32(delay),
                 };
             }
             animating |= !tween.done(now);

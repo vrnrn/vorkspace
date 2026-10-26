@@ -1,6 +1,7 @@
 //! Frame-driven pane motion. A critically damped spring gives a quick response
 //! and a quiet finish, retaining velocity when an in-progress slide reverses.
-use std::{cell::Cell, time::Instant};
+use crate::clock::Instant;
+use std::cell::Cell;
 
 pub(crate) struct PaneSlide {
     from: f32,
@@ -166,6 +167,33 @@ impl ResizeSettle {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[gpui::test]
+    fn executor_clock_drives_first_paint_retargeting_and_completion(cx: &mut gpui::TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let slide = PaneSlide::new(0., 360., 360.);
+        // Construction is not first paint, even if loading takes a long time.
+        cx.executor().advance_clock(Duration::from_secs(60));
+        assert_eq!(slide.at(Instant::now()), (0., false));
+        for _ in 0..1000 {
+            assert_eq!(slide.at(Instant::now()), (0., false));
+        }
+        cx.executor().advance_clock(Duration::from_millis(70));
+        let (position, velocity, done) = slide.sample(Instant::now());
+        assert!(position > 0. && position < 360. && !done);
+        let reversed = slide.retarget(0., Instant::now());
+        assert_eq!(reversed.sample(Instant::now()), (position, velocity, false));
+        cx.executor().advance_clock(Duration::from_secs(1));
+        assert_eq!(reversed.at(Instant::now()), (0., true));
+
+        let reveal = PaneReveal::default();
+        assert_eq!(reveal.opacity(Instant::now()), (0., false));
+        cx.executor().advance_clock(Duration::from_millis(70));
+        let (opacity, done) = reveal.opacity(Instant::now());
+        assert!(opacity > 0. && opacity < 1. && !done);
+        cx.executor().advance_clock(Duration::from_millis(70));
+        assert_eq!(reveal.opacity(Instant::now()), (1., true));
+    }
 
     #[test]
     fn starts_at_first_frame_and_settles_without_overshoot_at_any_refresh_rate() {

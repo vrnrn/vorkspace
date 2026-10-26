@@ -15,13 +15,13 @@ fn ticket_context_requires_explicit_host_support() {
     }
     assert!(require_ticket_context(&json!({"capabilities":["sessions.preparedText"]})).is_ok());
 }
+use std::time::Instant;
 use std::{
     io::{BufRead, BufReader, Write},
     net::TcpListener,
     path::{Path, PathBuf},
     sync::atomic::AtomicUsize,
     thread,
-    time::Instant,
 };
 use vorkspace_core::remote::{Connections, Machine};
 
@@ -578,7 +578,6 @@ fn explicit_stop_is_journaled_once_for_the_observed_run() {
 /// This crosses the production Rust client, Node HTTP server, SQLite engine,
 /// attachment parser and provider adapter. The fixture provider performs no
 /// model requests; only its local JSON-lines protocol is exercised.
-#[cfg(unix)]
 #[test]
 #[ignore = "requires npm run host:build and loopback networking"]
 fn built_node_host_round_trip_preserves_native_wire_commands() {

@@ -1,11 +1,11 @@
 //! ActivityPhaseGroup's bounded live window and useLivePhaseScroll.
+use crate::clock::Instant;
 use gpui::{
     AnyElement, Bounds, Context, Pixels, ScrollHandle, Window, canvas, div, prelude::*, px,
 };
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    time::Instant,
 };
 
 #[derive(Default)]
@@ -56,16 +56,11 @@ impl Edges {
             self.from.1 + (self.to.1 - self.from.1) * progress,
         )
     }
-    fn update(&mut self, target: (f32, f32), now: Instant, reduced: bool) -> (f32, f32) {
+    fn update(&mut self, target: (f32, f32), now: Instant) -> (f32, f32) {
         if self.to != target {
             self.from = self.value(now);
             self.to = target;
             self.changed = Some(now);
-        }
-        if reduced {
-            self.from = target;
-            self.to = target;
-            self.changed = None;
         }
         self.value(now)
     }
@@ -144,7 +139,7 @@ fn edge_mask(scroll: &LiveScroll, begin: bool, enabled: bool) -> AnyElement {
     let edges = scroll.edges.clone();
     canvas(
         |_, _, _| {},
-        move |bounds, _, window, cx| {
+        move |bounds, _, window, _| {
             // Read during paint, after the scroller has clamped its offset and
             // measured this frame's content. A live append can change both.
             let offset = handle.offset().y;
@@ -161,7 +156,7 @@ fn edge_mask(scroll: &LiveScroll, begin: bool, enabled: bool) -> AnyElement {
                     (0., 0.)
                 };
                 let now = Instant::now();
-                edges.frame = edges.update(target, now, cx.reduce_motion());
+                edges.frame = edges.update(target, now);
                 if edges
                     .changed
                     .is_some_and(|at| now.duration_since(at).as_secs_f32() < 0.16)
@@ -183,7 +178,6 @@ fn edge_mask(scroll: &LiveScroll, begin: bool, enabled: bool) -> AnyElement {
 }
 
 fn paint_mask(bounds: Bounds<Pixels>, begin: bool, top: f32, bottom: f32, window: &mut Window) {
-    #[cfg(target_os = "macos")]
     window.paint_layer(bounds, |window| {
         window.paint_quad(gpui::fill(bounds, gpui::black()).border_color(
             gpui_apple::metal_renderer::edge_fade_marker(
@@ -193,32 +187,6 @@ fn paint_mask(bounds: Bounds<Pixels>, begin: bool, top: f32, bottom: f32, window
             ),
         ));
     });
-    #[cfg(not(target_os = "macos"))]
-    if !begin {
-        // Other backends have an opaque chat surface. Match the transcript's
-        // fallback while retaining the phase's conditional edge lengths.
-        window.paint_layer(bounds, |window| {
-            for (at_top, height) in [(true, top), (false, bottom)] {
-                let height = height.min(bounds.size.height.as_f32());
-                for y in 0..height.ceil() as usize {
-                    let mut color: gpui::Hsla = gpui::rgb(crate::theme::CHAT).into();
-                    color.a = (1. - (y as f32 + 0.5) / height).clamp(0., 1.);
-                    let origin = gpui::point(
-                        bounds.left(),
-                        if at_top {
-                            bounds.top() + px(y as f32)
-                        } else {
-                            bounds.bottom() - px(y as f32 + 1.)
-                        },
-                    );
-                    window.paint_quad(gpui::fill(
-                        Bounds::new(origin, gpui::size(bounds.size.width, px(1.))),
-                        color,
-                    ));
-                }
-            }
-        });
-    }
 }
 
 #[cfg(test)]
@@ -258,19 +226,40 @@ mod tests {
     fn fade_lengths_ease_for_160ms_and_reverse_from_the_current_value() {
         let mut edges = Edges::default();
         let now = Instant::now();
-        assert_eq!(edges.update((24., 32.), now, false), (0., 0.));
+        assert_eq!(edges.update((24., 32.), now), (0., 0.));
         let halfway = now + Duration::from_millis(80);
         let (top, bottom) = edges.value(halfway);
         assert!(top > 12. && top < 24.);
         assert!((bottom / top - 32. / 24.).abs() < 0.001);
-        assert_eq!(edges.update((0., 32.), halfway, false), (top, bottom));
+        assert_eq!(edges.update((0., 32.), halfway), (top, bottom));
         assert_eq!(edges.value(halfway + Duration::from_millis(160)), (0., 32.));
-        assert_eq!(edges.update((24., 0.), halfway, true), (24., 0.));
+    }
+
+    // Finish the actual staggered queue (not just one disclosure duration),
+    // then paint the resulting layout and the finite edge fades.
+    fn settle_phase(
+        window: gpui::WindowHandle<TranscriptView>,
+        visual: &mut gpui::VisualTestContext,
+    ) {
+        let now = Instant::now();
+        let through = window
+            .read_with(visual, |view, _| {
+                view.motions
+                    .values()
+                    .map(|motion| motion.start + motion.duration)
+                    .max()
+                    .unwrap_or(now)
+            })
+            .unwrap();
+        visual
+            .executor()
+            .advance_clock(through.saturating_duration_since(now));
+        crate::clock::settle_animations(window, visual);
     }
 
     #[gpui::test]
     fn live_group_caps_height_follows_appends_and_respects_nested_wheels(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(
                 WindowOptions {
@@ -299,6 +288,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        settle_phase(window, visual);
         let (position, outer) = window
             .update(visual, |view, _, _| {
                 let scroll = &view.phase_scrolls[&1];
@@ -323,6 +313,7 @@ mod tests {
             .unwrap();
         visual.simulate_event(wheel_event(position, 80.));
         visual.run_until_parked();
+        settle_phase(window, visual);
         let paused = window
             .update(visual, |view, _, _| {
                 let scroll = &view.phase_scrolls[&1];
@@ -346,6 +337,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        settle_phase(window, visual);
         window
             .update(visual, |view, _, _| {
                 assert_eq!(
@@ -357,6 +349,7 @@ mod tests {
             .unwrap();
         visual.simulate_event(wheel_event(position, -20.));
         visual.run_until_parked();
+        settle_phase(window, visual);
         window
             .update(visual, |view, _, _| {
                 assert!(!view.phase_scrolls[&1].following.get())
@@ -364,6 +357,7 @@ mod tests {
             .unwrap();
         visual.simulate_event(wheel_event(position, -10000.));
         visual.run_until_parked();
+        settle_phase(window, visual);
         window
             .update(visual, |view, _, cx| {
                 assert!(view.phase_scrolls[&1].following.get());
@@ -371,6 +365,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        settle_phase(window, visual);
         window
             .update(visual, |view, _, _| {
                 let scroll = &view.phase_scrolls[&1];
@@ -381,6 +376,7 @@ mod tests {
         // escapes the phase and reaches the transcript's scroll handler.
         visual.simulate_event(wheel_event(position, 10000.));
         visual.run_until_parked();
+        settle_phase(window, visual);
         window
             .update(visual, |view, _, _| {
                 assert_eq!(view.phase_scrolls[&1].handle.offset().y, px(0.));
@@ -390,9 +386,11 @@ mod tests {
             .unwrap();
         visual.simulate_event(wheel_event(position, 80.));
         visual.run_until_parked();
+        settle_phase(window, visual);
         assert_eq!(outer_wheels.get(), 1);
         visual.simulate_window_resize(window.into(), size(px(800.), px(400.)));
         visual.run_until_parked();
+        settle_phase(window, visual);
         window
             .update(visual, |view, _, cx| {
                 assert_eq!(view.phase_scrolls[&1].handle.bounds().size.height, px(180.));
@@ -401,6 +399,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        settle_phase(window, visual);
         window
             .update(visual, |view, _, _| {
                 assert!(!view.windowed_phase(1));
@@ -416,7 +415,7 @@ mod tests {
     fn short_groups_have_no_fades_and_live_groups_collapse_from_the_capped_height(
         cx: &mut TestAppContext,
     ) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| TranscriptView::new())
@@ -431,6 +430,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        settle_phase(window, visual);
         window
             .update(visual, |view, _, cx| {
                 let scroll = &view.phase_scrolls[&1];
@@ -440,9 +440,10 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        settle_phase(window, visual);
         window
             .update(visual, |view, _, cx| {
-                cx.set_reduce_motion(false);
+                crate::clock::use_test_clock(cx);
                 view.streaming(false, cx);
                 assert!(view.rows.iter().any(|r| r.phase_group() == Some(1)));
                 let now = Instant::now();

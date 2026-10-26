@@ -1,6 +1,7 @@
 // Anchored popovers and menus, ported from src/shared/ui/Popover.tsx, its
 // placement math in src/shared/lib/popover.ts, and the row/keyboard model of
 // src/features/files/ui/ExplorerMenu.tsx.
+use crate::clock::Instant;
 use crate::theme::*;
 use gpui::{
     AnyElement, AnyView, App, Bounds, BoxShadow, Context, CursorStyle, DispatchPhase, Display,
@@ -9,7 +10,7 @@ use gpui::{
     Position as CssPosition, Role, SharedString, Style, Toggled, Window, actions, canvas, deferred,
     div, point, prelude::*, px, rgb, rgba, size,
 };
-use std::{cell::Cell, rc::Rc, time::Instant};
+use std::{cell::Cell, rc::Rc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Side {
@@ -273,15 +274,10 @@ const MENU_TRAVEL: f32 = 8.;
 const SUBMENU_GAP: f32 = 4.;
 const RADIUS: f32 = 12.;
 // GlassBackdrop's backdrop-blur-xl.
-#[cfg(target_os = "macos")]
 const BLUR: f32 = 24.;
 
-fn entrance(elapsed: f32, reduced: bool) -> f32 {
-    if reduced {
-        1.
-    } else {
-        crate::reveal::bezier((elapsed / MENU_IN).clamp(0., 1.), 0.16, 1., 0.3, 1.)
-    }
+fn entrance(elapsed: f32) -> f32 {
+    crate::reveal::bezier((elapsed / MENU_IN).clamp(0., 1.), 0.16, 1., 0.3, 1.)
 }
 fn entrance_offset(side: Side, progress: f32) -> Point<Pixels> {
     let remaining = px(MENU_TRAVEL * (1. - progress));
@@ -421,7 +417,7 @@ impl RenderOnce for Popover {
         // stays rendered and the entrance replays on every open.
         let opened = window.use_keyed_state(self.id.clone(), cx, |_, _| Instant::now());
         let enter = if self.animate {
-            entrance(opened.read(cx).elapsed().as_secs_f32(), cx.reduce_motion())
+            entrance(opened.read(cx).elapsed().as_secs_f32())
         } else {
             1.
         };
@@ -529,18 +525,12 @@ fn glass(tint: Hsla, radius: f32) -> impl IntoElement {
         |_, _, _| {},
         move |bounds, _, window, _| {
             let opaque = crate::theme::floating_fill();
-            #[cfg(target_os = "macos")]
             let quad = if crate::theme::is_light() {
                 gpui::fill(bounds, opaque)
             } else {
                 gpui::fill(bounds, tint).border_color(
                     gpui_apple::metal_renderer::backdrop_blur_marker(BLUR * window.scale_factor()),
                 )
-            };
-            #[cfg(not(target_os = "macos"))]
-            let quad = {
-                let _ = tint;
-                gpui::fill(bounds, opaque)
             };
             window.paint_quad(quad.corner_radii(px(radius)));
         },
@@ -917,6 +907,8 @@ const MENU_WIDTH: f32 = 228.;
 const MENU_MIN_WIDTH: f32 = 160.;
 // Tailwind v4 reds.
 const RED_300: u32 = 0xffa2a2;
+/// Danger ink on a light surface; ThemeColor::Negative's light value.
+const RED_LIGHT_INK: u32 = 0xb9313d;
 const RED_500: u32 = 0xfb2c36;
 
 /// ExplorerMenu and its siblings: takes focus on open, highlights under the
@@ -1206,7 +1198,13 @@ impl Menu {
         in_submenu: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let red: Hsla = rgb(RED_300).into();
+        // A highlighted danger row sits on a red fill, so it keeps the pale ink.
+        let red: Hsla = rgb(if is_light() && !highlighted {
+            RED_LIGHT_INK
+        } else {
+            RED_300
+        })
+        .into();
         let rich = matches!(style, MenuStyle::Composer | MenuStyle::Access);
         // The plus menu dims a disabled row whole; the others grey its ink.
         let dim = action.disabled && (rich || style == MenuStyle::Git);
@@ -1865,11 +1863,10 @@ mod tests {
 
     #[test]
     fn entrance_uses_react_timing_and_the_resolved_side() {
-        assert_eq!(entrance(0., false), 0.);
-        assert_eq!(entrance(MENU_IN, false), 1.);
-        assert_eq!(entrance(0., true), 1.);
+        assert_eq!(entrance(0.), 0.);
+        assert_eq!(entrance(MENU_IN), 1.);
         // CSS cubic-bezier(.16, 1, .3, 1) is already about 97% done halfway.
-        assert!((entrance(MENU_IN / 2., false) - 0.972).abs() < 0.002);
+        assert!((entrance(MENU_IN / 2.) - 0.972).abs() < 0.002);
         for (side, from) in [
             (Side::Bottom, point(px(0.), px(-8.))),
             (Side::Top, point(px(0.), px(8.))),
@@ -2047,7 +2044,7 @@ mod tests {
     fn menus_and_picker_flyouts_keep_the_same_card_edge_gap(cx: &mut gpui::TestAppContext) {
         // Compare the resting gap; entrance motion deliberately starts child
         // cards a little closer to the parent before settling into this gap.
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |window, cx| {
                 cx.new(|cx| {
@@ -2119,6 +2116,7 @@ mod tests {
                     })
                     .unwrap();
                 cx.refresh().unwrap();
+                crate::clock::settle_animations(window, cx);
                 for ix in [0, 1] {
                     window
                         .update(cx, |host, window, cx| {
@@ -2128,6 +2126,7 @@ mod tests {
                         })
                         .unwrap();
                     cx.refresh().unwrap();
+                    crate::clock::settle_animations(window, cx);
                     window
                         .update(cx, |host, _, cx| {
                             let menu = host.menu.read(cx);

@@ -1,9 +1,10 @@
 //! useTabCloseMotion.ts with ClosingTab.tsx's TabWidthMotion: with Tab
 //! animations on, an opened tab's slot grows from nothing and a closed one
 //! collapses in place before it leaves the strip.
+use crate::clock::Instant;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// `--motion-tab-close-duration`.
 pub(crate) const DURATION: Duration = Duration::from_millis(200);

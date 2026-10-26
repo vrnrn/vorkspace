@@ -1,12 +1,13 @@
 // A collapsed project sidebar peeks from the right edge and puts itself
 // away once the pointer leaves it.
 use super::Shell;
+use crate::clock::Instant;
 use crate::{reveal::bezier, theme::*};
 use gpui::{
     AnyElement, BoxShadow, Context, DispatchPhase, MouseDownEvent, MouseMoveEvent, Pixels, Point,
     StyleRefinement, Window, canvas, div, prelude::*, px, rgba,
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// How close to the window's right edge the pointer peeks the sidebar out.
 const PEEK_EDGE: f32 = 6.;
@@ -26,14 +27,10 @@ pub(super) struct SidebarPeek {
 }
 
 impl SidebarPeek {
-    fn new(open: bool, from: f32, reduce_motion: bool) -> Self {
+    fn new(open: bool, from: f32) -> Self {
         Self {
             open,
-            from: if reduce_motion {
-                open as u8 as f32
-            } else {
-                from
-            },
+            from,
             start: Instant::now(),
         }
     }
@@ -95,7 +92,7 @@ impl Shell {
         if !open {
             self.close_preview(cx);
         }
-        self.sidebar_peek = Some(SidebarPeek::new(open, current, cx.reduce_motion()));
+        self.sidebar_peek = Some(SidebarPeek::new(open, current));
         self.sync_right_panel(cx);
         self.peek_animating = true;
         cx.notify();
@@ -296,15 +293,9 @@ impl Shell {
                     canvas(
                         |_, _, _| {},
                         move |bounds, _, window, _| {
-                            #[cfg(target_os = "macos")]
                             let quad = gpui::fill(bounds, content(0.05)).border_color(
                                 gpui_apple::metal_renderer::backdrop_blur_marker(24. * scale),
                             );
-                            #[cfg(not(target_os = "macos"))]
-                            let quad = {
-                                let _ = scale;
-                                gpui::fill(bounds, shell_fill())
-                            };
                             window.paint_quad(quad.corner_radii(px(10.)));
                         },
                     )

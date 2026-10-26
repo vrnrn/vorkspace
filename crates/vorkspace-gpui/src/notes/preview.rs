@@ -1,4 +1,5 @@
 //! Notes use shared Markdown rendering with their desktop image asset paths.
+use crate::clock::Instant;
 use crate::{
     markdown::{self, MarkdownRow, Part, Tone},
     markdown_model,
@@ -7,7 +8,7 @@ use crate::{
 };
 use gpui::{AnyElement, Context, ImageSource, Render, Role, Window, div, img, prelude::*, px};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-use std::{path::Path, time::Instant};
+use std::path::Path;
 
 enum Row {
     Markdown(MarkdownRow),

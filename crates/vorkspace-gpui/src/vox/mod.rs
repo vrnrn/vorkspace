@@ -1,7 +1,5 @@
 mod host;
-#[cfg(target_os = "macos")]
 mod visibility;
-#[cfg(target_os = "macos")]
 mod web;
 use crate::{
     runtime::{Database, locked},
@@ -25,9 +23,7 @@ pub(crate) struct Vox {
     generation: u64,
     active: Arc<AtomicBool>,
     task: Option<gpui::Task<()>>,
-    #[cfg(target_os = "macos")]
     web: Option<web::Web>,
-    #[cfg(target_os = "macos")]
     visibility: Option<visibility::Watch>,
     enabled: bool,
     silent: bool,
@@ -101,9 +97,7 @@ impl Vox {
             generation: 0,
             active: Arc::new(AtomicBool::new(false)),
             task: None,
-            #[cfg(target_os = "macos")]
             web: None,
-            #[cfg(target_os = "macos")]
             visibility: None,
             enabled: prefs.vox_enabled,
             silent: prefs.vox_silent,
@@ -138,11 +132,9 @@ impl Vox {
     }
     pub(crate) fn stop(&mut self, cx: &mut Context<Self>) {
         self.active.store(false, Ordering::Relaxed);
-        #[cfg(target_os = "macos")]
         {
             self.visibility = None;
         }
-        #[cfg(target_os = "macos")]
         {
             self.web = None;
         }
@@ -169,12 +161,10 @@ impl Vox {
     }
     fn finish(&mut self, cx: &mut Context<Self>) {
         self.active.store(false, Ordering::Relaxed);
-        #[cfg(target_os = "macos")]
         {
             self.visibility = None;
         }
         self.host = None;
-        #[cfg(target_os = "macos")]
         {
             self.web = None;
         }
@@ -198,7 +188,6 @@ impl Vox {
         self.receipts.clear();
         self.state = "connecting".into();
         self.face = "-_-".into();
-        #[cfg(target_os = "macos")]
         {
             let (watch, hidden) = match visibility::Watch::new(_window, self.active.clone()) {
                 Ok(watch) => watch,
@@ -287,19 +276,12 @@ impl Vox {
             if !self.active.load(Ordering::Relaxed) {
                 return;
             }
-            #[cfg(target_os = "macos")]
             match web::Web::new(url, self.active.clone(), window) {
                 Ok(web) => self.web = Some(web),
                 Err(e) => {
                     self.error = Some(e);
                     self.finish(cx);
                 }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                let _ = url;
-                self.error = Some("Vox audio currently requires macOS".into());
-                self.finish(cx);
             }
             return;
         }

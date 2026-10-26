@@ -120,7 +120,7 @@ mod tests {
 
     #[gpui::test]
     fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let (window, _, session) = window(cx);
         let folder =
             std::env::temp_dir().join(format!("vorkspace-bot-file-link-{}", std::process::id()));
@@ -239,7 +239,7 @@ mod tests {
 
     #[gpui::test]
     fn file_word_wrap_is_shared_and_persisted_across_restart(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let (window, _, session) = window(cx);
         let folder =
             std::env::temp_dir().join(format!("vorkspace-wrap-prefs-{}", std::process::id()));
@@ -261,12 +261,14 @@ mod tests {
             .unwrap();
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         window
             .update(visual, |_, w, cx| {
                 w.dispatch_action(Box::new(crate::file_editor::ToggleWordWrap), cx)
             })
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, w, cx| {
                 assert!(!shell.workspace.preferences.file_word_wrap);
@@ -291,6 +293,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         let (store, summaries, saved, project) = window
             .update(visual, |shell, _, cx| {
                 assert!(
@@ -323,6 +326,7 @@ mod tests {
             .unwrap()
         });
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         visual.refresh().unwrap();
         restored
             .update(visual, |shell, _, cx| {
@@ -341,13 +345,9 @@ mod tests {
     fn numbered_shortcuts_return_from_file_only_tabs_to_sessions(cx: &mut TestAppContext) {
         cx.update(|cx| {
             bind_keys(cx);
-            cx.set_reduce_motion(true);
+            crate::clock::use_test_clock(cx);
         });
-        let modifier = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
+        let modifier = "cmd";
         // File-only tabs can retain a hidden chat or be detached from it.
         for detached in [false, true] {
             let (window, first, session) = window(cx);
@@ -445,7 +445,7 @@ mod tests {
     ) {
         cx.update(|cx| {
             bind_keys(cx);
-            cx.set_reduce_motion(true);
+            crate::clock::use_test_clock(cx);
         });
         let (window, _, session) = window(cx);
         let path = std::env::temp_dir().join(format!(
@@ -471,6 +471,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
+        crate::clock::settle_animations(window, cx);
         let editor = window
             .update(cx, |_, w, cx| {
                 let editor = review.read(cx).active_editor().unwrap();
@@ -482,6 +483,7 @@ mod tests {
             .unwrap();
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         let grip_selector = Box::leak(format!("drag-session-pane-{session}").into_boxed_str());
         let grip = visual.debug_bounds(grip_selector).unwrap().center();
 
@@ -518,6 +520,7 @@ mod tests {
         visual.simulate_mouse_move(before, MouseButton::Left, Default::default());
         visual.simulate_mouse_up(before, MouseButton::Left, Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         let file = window
             .update(visual, |shell, w, cx| {
                 let file = *shell.workspace.review_owners.keys().next().unwrap();
@@ -533,6 +536,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
 
         // Redock the session next to the file, then reorder it with its grip.
         let tab = visual
@@ -547,6 +551,7 @@ mod tests {
         visual.simulate_mouse_move(right, MouseButton::Left, Default::default());
         visual.simulate_mouse_up(right, MouseButton::Left, Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, _, _| {
                 assert_eq!(shell.workspace.layout(file).leaf_ids(), [file, session]);
@@ -558,6 +563,7 @@ mod tests {
         visual.simulate_mouse_move(left, MouseButton::Left, Default::default());
         visual.simulate_mouse_up(left, MouseButton::Left, Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, _, cx| {
                 assert_eq!(shell.workspace.layout(file).leaf_ids(), [session, file]);
@@ -588,7 +594,7 @@ mod tests {
 
     #[gpui::test]
     fn session_pane_grip_places_chat_on_each_edge_of_its_attached_file(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
             let (window, _, session) = window(cx);
             window
@@ -605,6 +611,7 @@ mod tests {
                 .unwrap();
             let visual = &mut VisualTestContext::from_window(window.into(), cx);
             visual.run_until_parked();
+            crate::clock::settle_animations(window, visual);
             let grip = visual
                 .debug_bounds(Box::leak(
                     format!("drag-session-pane-{session}").into_boxed_str(),
@@ -630,6 +637,7 @@ mod tests {
                 .unwrap();
             visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
             visual.run_until_parked();
+            crate::clock::settle_animations(window, visual);
             window
                 .update(visual, |shell, _, _| {
                     let file = *shell.workspace.review_owners.keys().next().unwrap();
@@ -653,7 +661,7 @@ mod tests {
     fn file_pane_grip_detaches_and_redocks_without_recreating_dirty_editors(
         cx: &mut TestAppContext,
     ) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let (window, _, session) = window(cx);
         let path =
             std::env::temp_dir().join(format!("vorkspace-pane-drag-{}.txt", std::process::id()));
@@ -673,6 +681,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
+        crate::clock::settle_animations(window, cx);
         let editor = window
             .update(cx, |_, w, cx| {
                 let editor = review.read(cx).active_editor().unwrap();
@@ -683,6 +692,7 @@ mod tests {
             .unwrap();
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         let grip = visual.debug_bounds("drag-file-pane").unwrap().center();
         // A click and a drop outside the workspace leave the pane attached.
         visual.simulate_mouse_down(grip, MouseButton::Left, Default::default());
@@ -692,6 +702,7 @@ mod tests {
         visual.simulate_mouse_move(outside, MouseButton::Left, Default::default());
         visual.simulate_mouse_up(outside, MouseButton::Left, Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, _, _| {
                 assert!(shell.workspace.review_owners.is_empty());
@@ -711,6 +722,7 @@ mod tests {
             .unwrap();
         visual.simulate_mouse_up(drop, MouseButton::Left, Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         let pane = window
             .update(visual, |shell, _, cx| {
                 let pane = shell.workspace.active.unwrap();
@@ -753,6 +765,7 @@ mod tests {
             .update(visual, |shell, w, cx| shell.close(pane, w, cx))
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, w, cx| {
                 assert!(shell.workspace.tab_of(pane).is_none());
@@ -771,12 +784,14 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
 
         // The independent file tab can be pulled back into a split.
         window
             .update(visual, |shell, w, cx| shell.open(session, w, cx))
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         let tab = visual
             .debug_bounds(Box::leak(format!("title-tab-{pane}").into_boxed_str()))
             .unwrap()
@@ -789,6 +804,7 @@ mod tests {
         visual.simulate_mouse_move(left, MouseButton::Left, Default::default());
         visual.simulate_mouse_up(left, MouseButton::Left, Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, _, cx| {
                 assert_eq!(shell.workspace.layout(session).leaf_ids(), [pane, session]);
@@ -804,6 +820,7 @@ mod tests {
         visual.simulate_mouse_move(right, MouseButton::Left, Default::default());
         visual.simulate_mouse_up(right, MouseButton::Left, Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, _, cx| {
                 assert_eq!(shell.workspace.layout(session).leaf_ids(), [session, pane]);
@@ -834,7 +851,7 @@ mod tests {
 
     #[gpui::test]
     fn file_tab_drag_reorders_and_keeps_the_selected_editor(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let (window, _, session) = window(cx);
         let review = window
             .update(cx, |shell, w, cx| {
@@ -853,6 +870,7 @@ mod tests {
             .unwrap();
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         let first = visual.debug_bounds("file-tab-0").unwrap();
         let last = visual.debug_bounds("file-tab-2").unwrap();
         let start = point(first.left() + px(20.), first.center().y);
@@ -864,6 +882,7 @@ mod tests {
         visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
         visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, _, cx| {
                 let state = &review.read(cx).state;
@@ -880,7 +899,7 @@ mod tests {
 
     #[gpui::test]
     fn file_pane_grip_places_an_embedded_review_on_each_edge(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let (window, _, session) = window(cx);
         let review = window
             .update(cx, |shell, w, cx| {
@@ -897,6 +916,7 @@ mod tests {
             .unwrap();
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         for edge in [Edge::Left, Edge::Top, Edge::Bottom, Edge::Right] {
             let grip = visual.debug_bounds("drag-file-pane").unwrap().center();
             let target = visual
@@ -916,6 +936,7 @@ mod tests {
             visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
             visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
             visual.run_until_parked();
+            crate::clock::settle_animations(window, visual);
             window
                 .update(visual, |shell, _, _| {
                     let pane = shell.workspace.active.unwrap();

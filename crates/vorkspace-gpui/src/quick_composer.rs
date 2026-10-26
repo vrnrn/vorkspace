@@ -1,5 +1,5 @@
 //! The floating prompt window opened by the Settings global shortcut.
-#[cfg(all(target_os = "macos", not(test)))]
+#[cfg(not(test))]
 use crate::global_hotkey as hotkey;
 use crate::{
     input::{self, Input},
@@ -31,7 +31,7 @@ pub(crate) struct Controller {
     pub task: Option<Task<()>>,
     pub events: Option<Subscription>,
     config: String,
-    #[cfg(all(target_os = "macos", not(test)))]
+    #[cfg(not(test))]
     registration: Option<hotkey::Registration>,
 }
 impl Controller {
@@ -51,7 +51,7 @@ impl Controller {
         self.config = config;
         self.error = None;
         self.task = None;
-        #[cfg(all(target_os = "macos", not(test)))]
+        #[cfg(not(test))]
         {
             self.registration = None;
             if prefs.quick_composer && !shortcut.is_empty() {
