@@ -231,19 +231,38 @@ impl Shell {
                 SettingsEvent::Section(section) => this.select_settings(*section, cx),
                 SettingsEvent::InboxConnectorEnabled(provider, enabled) => {
                     this.ensure_background_inbox(window, cx);
-                    if let Some(inbox) = &this.inbox
-                        && let Err(error) = inbox.update(cx, |inbox, cx| {
-                            inbox.set_connector_enabled(provider, *enabled, cx)
-                        })
-                    {
-                        this.quick.error = Some(error);
+                    let result = this.inbox.as_ref().unwrap().update(cx, |inbox, cx| {
+                        inbox.set_connector_enabled(provider, *enabled, cx)
+                    });
+                    match result {
+                        Err(error) => this.quick.error = Some(error),
+                        Ok(()) => {
+                            if !enabled && let Some(provider) = Connector::from_id(provider) {
+                                let tab = TitleTab::App(app_views::AppView::Connector(provider));
+                                this.workspace.title_order.retain(|entry| *entry != tab);
+                                this.workspace.scope_focus.retain(|_, entry| *entry != tab);
+                                if this.active_app_view
+                                    == Some(app_views::AppView::Connector(provider))
+                                {
+                                    this.leave_app_views(cx);
+                                }
+                                this.update_chat_visibility(cx);
+                            }
+                            this.invalidate_chrome(cx);
+                            this.persist(cx);
+                        }
                     }
                     this.sync_settings(cx);
+                    cx.notify();
                 }
                 SettingsEvent::ManageInboxProvider(provider) => {
-                    this.open_inbox(window, cx);
-                    if let Some(inbox) = &this.inbox {
-                        inbox.update(cx, |inbox, cx| inbox.open_connection(provider.clone(), cx));
+                    if let Some(provider) = Connector::from_id(provider) {
+                        this.open_connector(provider, window, cx);
+                        if let Some(page) = this.connector_pages.get(&provider) {
+                            page.update(cx, |page, cx| {
+                                page.open_connection(provider.id().into(), cx)
+                            });
+                        }
                     }
                 }
                 SettingsEvent::JiraFilter(filter) => {
@@ -680,7 +699,7 @@ mod tests {
             "settings-nav-mcp",
             "settings-nav-skills",
             "settings-nav-bots",
-            "settings-nav-inbox",
+            "settings-nav-connectors",
             "settings-nav-archive",
             "settings-nav-worktrees",
             "settings-nav-vox",
@@ -711,7 +730,6 @@ mod tests {
             .unwrap();
         assert!(visual.debug_bounds("sidebar-content").is_some());
     }
-
     #[gpui::test]
     fn native_setting_edits_persist_and_theme_switches_live(cx: &mut TestAppContext) {
         let (window, _, _) = window(cx);

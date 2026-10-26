@@ -100,6 +100,7 @@ fn assert_titlebar(
                     TitleTab::Session(id) => format!("title-tab-{id}"),
                     TitleTab::Bot { id, .. } => format!("bot-title-tab-{id}"),
                     TitleTab::App(view) => format!("app-title-tab-{}", view.label()),
+                    TitleTab::Terminal { id, .. } => format!("terminal-title-tab-{id}"),
                     TitleTab::Search => "search-title-tab".into(),
                 })
                 .chain(std::iter::once("new-tab".into()))

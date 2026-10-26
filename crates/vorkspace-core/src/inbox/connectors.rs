@@ -56,14 +56,10 @@ impl Connectors {
     }
 
     pub fn set(&mut self, provider: &str, enabled: bool) -> Result<(), String> {
-        let value = self
-            .0
-            .get_mut(provider)
-            .ok_or("Unsupported inbox provider")?;
+        let value = self.0.get_mut(provider).ok_or("Unsupported connector")?;
         *value = enabled;
         Ok(())
     }
-
     pub fn save(&self, store: &Store) -> Result<(), String> {
         store.save_setting(
             KEY,
@@ -152,27 +148,21 @@ mod tests {
             };
             assert_eq!(
                 service.status(provider).unwrap_err(),
-                "Unsupported inbox provider"
+                "Unsupported connector"
             );
             assert_eq!(
                 service
                     .connect(provider, String::new(), String::new(), String::new())
                     .unwrap_err(),
-                "Unsupported inbox provider"
+                "Unsupported connector"
             );
-            assert_eq!(
-                service.details(&item).unwrap_err(),
-                "Unsupported inbox provider"
-            );
-            assert_eq!(
-                service.thread(&item).unwrap_err(),
-                "Unsupported inbox provider"
-            );
+            assert_eq!(service.details(&item).unwrap_err(), "Unsupported connector");
+            assert_eq!(service.thread(&item).unwrap_err(), "Unsupported connector");
             assert_eq!(
                 service
                     .comment(&item, "comment".into(), String::new())
                     .unwrap_err(),
-                "Unsupported inbox provider"
+                "Unsupported connector"
             );
             assert!(service.checks(&item).is_err());
             assert!(service.action(&item, "merge").is_err());

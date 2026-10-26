@@ -797,7 +797,7 @@ impl Service {
             {
                 run.status = "cancelled".into();
                 run.completed_at = Some(now);
-                run.error = Some("This Inbox connector is no longer supported.".into());
+                run.error = Some("This connector is no longer supported.".into());
                 apply_run_summary(&mut automation, &run);
                 write_run(&tx, &run)?;
                 write_automation(&tx, &automation)?;
@@ -822,7 +822,8 @@ impl Service {
             {
                 run.status = "failed".into();
                 run.completed_at = Some(now);
-                run.error = Some("The Inbox event prompt was not available after restart.".into());
+                run.error =
+                    Some("The connector event prompt was not available after restart.".into());
                 apply_run_summary(&mut automation, &run);
                 write_run(&tx, &run)?;
                 write_automation(&tx, &automation)?;
@@ -839,7 +840,6 @@ impl Service {
         tx.commit().map_err(|error| error.to_string())?;
         Ok(due)
     }
-
     pub fn run_now(&mut self, automation_id: &str, now: i64) -> Result<AutomationRun, String> {
         validate_id(automation_id, "automation")?;
         let conn = self.lock_conn()?;
@@ -1541,10 +1541,9 @@ mod tests {
         let history = service.runs(&supported.id).unwrap();
         assert_eq!(history.len(), 2);
         assert!(history.iter().all(|run| run.status == "cancelled"
-            && run.error.as_deref() == Some("This Inbox connector is no longer supported.")));
+            && run.error.as_deref() == Some("This connector is no longer supported.")));
         assert_eq!(service.list().unwrap().len(), 1);
     }
-
     #[test]
     fn schedules_skip_weekends_and_advance_exact_occurrence_boundaries() {
         let hourly = AutomationTrigger {

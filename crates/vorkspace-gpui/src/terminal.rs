@@ -258,6 +258,33 @@ fn detached(size: GridSize) -> Spawned {
 }
 
 impl Terminal {
+    #[cfg(test)]
+    pub(crate) fn fixture_output(&mut self, text: &str, cx: &mut Context<Self>) {
+        write_note(&self.term, text);
+        self.on_event(TermEvent::Wakeup, cx);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_screen(&self) -> String {
+        self.term
+            .lock()
+            .grid()
+            .display_iter()
+            .map(|cell| cell.c)
+            .collect()
+    }
+
+    /// Hidden terminals do not poll. Query at the explicit close boundary so
+    /// an old title cannot hide a job started before switching tabs.
+    pub(crate) fn foreground_process(&self) -> Option<String> {
+        if cfg!(test) {
+            return self.foreground.clone();
+        }
+        (!self.exited)
+            .then(|| foreground_label(self.master_fd, self.shell_pid))
+            .flatten()
+    }
+
     pub(crate) fn new(cwd: String, cx: &mut Context<Self>) -> Self {
         let size = GridSize {
             columns: 80,

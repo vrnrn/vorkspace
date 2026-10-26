@@ -621,45 +621,7 @@ impl TranscriptView {
         );
         view
     }
-    /// liveAgents.ts's toLiveAgent: the last turn's latest tool, as "Read
-    /// src/app.rs", when that turn was sent, and how long it ran once done.
-    pub(crate) fn live_turn(&self, cwd: &str) -> (Option<String>, Option<u64>, Option<u64>) {
-        let Some(prompt) = self.source.iter().rposition(|r| r.first && r.is_prompt()) else {
-            return (None, None, None);
-        };
-        let turn = (prompt + 1..self.source.len())
-            .find(|&at| self.source[at].first)
-            .unwrap_or(self.source.len());
-        let tool = (turn..self.source.len())
-            .rev()
-            .find(|&at| self.source[at].first && self.source[at].role == "tool")
-            .and_then(|at| {
-                let end = (at + 1..self.source.len())
-                    .find(|&i| self.source[i].first)
-                    .unwrap_or(self.source.len());
-                let text: String = self.source[at..end]
-                    .iter()
-                    .map(|r| r.text.as_str())
-                    .collect();
-                serde_json::from_str::<ToolCall>(&text).ok()
-            })
-            .map(|tool| {
-                let shown = tool.presentation_in(Some(cwd));
-                [shown.action, shown.target]
-                    .into_iter()
-                    .filter(|part| !part.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .filter(|label| !label.is_empty());
-        let duration = self
-            .turns
-            .get(&turn)
-            .filter(|info| info.has_duration())
-            .map(|info| info.duration_ms);
-        (tool, self.source[prompt].sent_at, duration)
-    }
-    /// Follow-ups delivered during a provider run share its original receipt.
+
     pub(crate) fn active_turn(&self) -> Option<usize> {
         let start = self.live_start.min(self.source.len());
         let prompt = self.source[start..]

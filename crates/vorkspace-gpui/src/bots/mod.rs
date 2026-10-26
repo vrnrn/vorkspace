@@ -8,6 +8,10 @@ pub(crate) mod color_picker;
 mod creation;
 mod files;
 mod filters;
+mod header;
+pub(crate) use header::chat_surface;
+#[cfg(test)]
+mod header_tests;
 mod host;
 mod html;
 mod memory_ui;
@@ -1471,6 +1475,7 @@ impl gpui::Render for Bots {
         bg.update(cx, |bg, cx| {
             bg.configure(bot.background.clone(), empty, None, cx)
         });
+        let header_visible = self.settings.is_none() && self.background.is_none();
         div()
             .size_full()
             .min_w_0()
@@ -1509,6 +1514,7 @@ impl gpui::Render for Bots {
                             .map(|view| view.update(cx, |v, cx| v.bot_attention(window, cx))),
                     )
                     .when_some(self.chat(), |d, chat| {
+                        chat.update(cx, |chat, cx| chat.show_bot_header(header_visible, cx));
                         d.child(div().flex_1().min_h_0().child(chat))
                     })
                     .child(self.topbar(&bot, cx)),

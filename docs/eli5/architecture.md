@@ -2,6 +2,8 @@
 
 The desktop app window is drawn by GPUI. Rust keeps track of conversations, files, Bots, and running agents in the same desktop process. Saved history lives in SQLite, with extra window settings beside it.
 
+A Bot's face and name stay at the top of its chat as messages scroll. Its face shows whether it is idle, working or needs you, without following the mouse. On Mac, messages fade gently around the face to reveal the chat's own background colors and picture. You can still select, click and scroll the chat there, and the fade stays above the typing box. Reduced motion turns off the animation, and an empty chat shows help instead of a second face.
+
 Open Bots in the main app window. Click the macOS menu bar icon or press ⌘⇧C to find recently copied text and images. Search finds text; image thumbnails show what you copied. Hover over an image for one second to show its larger preview; moving away hides that pane. Choosing an item puts its original contents back on the clipboard, ready for your usual Paste command. Settings and Quick Composer are also in this menu.
 
 Clipboard history keeps at most 50 items in memory and disappears when you quit. It also has a memory limit, so large images can make older items leave sooner. Very large copies are skipped. Clear history removes the app's saved copies; it leaves your current system clipboard alone. Turning clipboard history off in the Clipboard group in General settings clears it and stops watching for copies. When history is off, the menu shows only Settings, Quick Composer and Quit. Password-manager copies marked private are ignored.
@@ -13,6 +15,8 @@ Rust controls Vox calls and translates desktop Copilot requests. Small JavaScrip
 The [repository map](repository.md) shows where each part lives. Embedded helper code has its own folder; the scripts folder contains developer tools.
 
 Long saved chats are read a piece at a time. Hidden views keep their work without repeatedly asking to redraw, and repeated terminal redraw requests are combined. Cleaning up one idle agent does not hold the shared lock that other agents need.
+
+Every click of Terminal in the sidebar opens and focuses a new terminal across the main workspace, starting in your selected project or worktree folder. You can keep several independent shells in the same folder. Click a terminal tab at the top to return to that exact shell. Switching tabs keeps its output and commands running; selecting a different folder never moves an existing shell. Closing its tab ends only that shell, with a warning if a command is running. After quitting and reopening the app, saved terminal tabs start new shells in their saved starting folders when selected. Running programs and old terminal output do not survive quitting. The smaller terminal dock and its shortcuts still work separately.
 
 As a reply arrives, only changed chat blocks are saved. The screen can show a small preview while the full tool result stays safely in the database. A stale window cannot overwrite newer saved history.
 

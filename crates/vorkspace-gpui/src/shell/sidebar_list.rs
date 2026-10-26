@@ -59,11 +59,6 @@ impl SidebarList {
         self.structure_dirty.set(true);
     }
 
-    pub(super) fn remeasure(&self) {
-        self.state.remeasure_items(0..self.rows.len());
-        self.clear_bounds();
-    }
-
     pub(super) fn track_anchor(&self, anchor: AnchorSlot) {
         self.visible_anchors.borrow_mut().push(anchor);
     }
@@ -389,54 +384,124 @@ impl Shell {
 }
 
 impl Shell {
-    pub(super) fn sidebar_options_menu_items(&self) -> Vec<MenuItem> {
-        vec![
-            MenuAction::new("sidebar-notes", "Notes")
-                .icon("note")
-                .toggle(self.workspace.sidebar_notes_visible)
-                .disabled(!self.workspace.preferences.notes)
-                .into(),
-            MenuAction::new("sidebar-automations", "Automations")
-                .icon("zap")
-                .toggle(self.workspace.sidebar_automations_visible)
-                .into(),
-            MenuAction::new("sidebar-inbox", "Inbox")
-                .icon("inbox")
-                .toggle(self.workspace.sidebar_inbox_visible)
-                .into(),
+    fn available_sidebar_navigation(&self, cx: &App) -> Vec<SidebarNavigation> {
+        let enabled = self.enabled_connectors(cx);
+        SidebarNavigation::normalize(&self.workspace.sidebar_navigation_order)
+            .into_iter()
+            .filter(|item| match item {
+                SidebarNavigation::Connector(provider) => enabled.contains(provider),
+                _ => true,
+            })
+            .collect()
+    }
+
+    pub(super) fn visible_sidebar_navigation(&self, cx: &App) -> Vec<SidebarNavigation> {
+        self.available_sidebar_navigation(cx)
+            .into_iter()
+            .filter(|item| match item {
+                SidebarNavigation::Connector(provider) => !self
+                    .workspace
+                    .sidebar_hidden_connectors
+                    .contains(provider.id()),
+                SidebarNavigation::Notes => {
+                    self.workspace.preferences.notes && self.workspace.sidebar_notes_visible
+                }
+                SidebarNavigation::Automations => self.workspace.sidebar_automations_visible,
+                SidebarNavigation::Terminal => self.workspace.sidebar_terminal_visible,
+            })
+            .collect()
+    }
+
+    pub(super) fn sidebar_options_menu_items(&self, cx: &App) -> Vec<MenuItem> {
+        let mut items: Vec<_> = self
+            .available_sidebar_navigation(cx)
+            .into_iter()
+            .map(|item| {
+                let visible = match item {
+                    SidebarNavigation::Connector(provider) => !self
+                        .workspace
+                        .sidebar_hidden_connectors
+                        .contains(provider.id()),
+                    SidebarNavigation::Notes => self.workspace.sidebar_notes_visible,
+                    SidebarNavigation::Automations => self.workspace.sidebar_automations_visible,
+                    SidebarNavigation::Terminal => self.workspace.sidebar_terminal_visible,
+                };
+                MenuAction::new(format!("sidebar-{}", item.id()), item.label())
+                    .icon(item.icon())
+                    .toggle(visible)
+                    .reorderable()
+                    .disabled(item == SidebarNavigation::Notes && !self.workspace.preferences.notes)
+                    .into()
+            })
+            .collect();
+        items.extend([
+            MenuItem::Separator,
             MenuAction::new("sidebar-bots", "Bots")
                 .icon("ghost")
                 .toggle(self.workspace.preferences.bots)
-                .into(),
-            MenuAction::new("sidebar-activity", "Activity")
-                .icon("response-activity")
-                .toggle(self.workspace.sidebar_activity_visible)
-                .disabled(!self.workspace.preferences.working_agents)
                 .into(),
             MenuAction::new("sidebar-subscriptions", "Subscriptions")
                 .icon("chart-square")
                 .toggle(self.workspace.sidebar_subscriptions_visible)
                 .into(),
-            MenuItem::Separator,
-            MenuAction::new("compact-session-cards", "Compact view")
-                .icon("list-bullet")
-                .toggle(self.workspace.compact_session_cards)
-                .into(),
-        ]
+        ]);
+        items
+    }
+
+    pub(super) fn reorder_sidebar_navigation(
+        &mut self,
+        event: &crate::popover::MenuReordered,
+        cx: &mut Context<Self>,
+    ) {
+        let source = event
+            .source
+            .strip_prefix("sidebar-")
+            .and_then(SidebarNavigation::from_id);
+        let target = event
+            .target
+            .strip_prefix("sidebar-")
+            .and_then(SidebarNavigation::from_id);
+        let (Some(source), Some(target)) = (source, target) else {
+            return;
+        };
+        let available = self.available_sidebar_navigation(cx);
+        if self
+            .workspace
+            .reorder_sidebar_navigation(source, target, event.after, &available)
+        {
+            self.persist(cx);
+            cx.notify();
+        }
     }
 
     pub(super) fn change_sidebar_option(&mut self, action: &str, cx: &mut Context<Self>) {
-        let value = match action {
-            "sidebar-notes" => &mut self.workspace.sidebar_notes_visible,
-            "sidebar-automations" => &mut self.workspace.sidebar_automations_visible,
-            "sidebar-inbox" => &mut self.workspace.sidebar_inbox_visible,
-            "sidebar-bots" => &mut self.workspace.preferences.bots,
-            "sidebar-activity" => &mut self.workspace.sidebar_activity_visible,
-            "sidebar-subscriptions" => &mut self.workspace.sidebar_subscriptions_visible,
-            "compact-session-cards" => &mut self.workspace.compact_session_cards,
-            _ => return,
-        };
-        *value = !*value;
+        if let Some(provider) = action.strip_prefix("sidebar-").and_then(Connector::from_id) {
+            // This shortcut preference never reaches the connector Settings owner.
+            if !self.enabled_connectors(cx).contains(&provider) {
+                return;
+            }
+            if !self
+                .workspace
+                .sidebar_hidden_connectors
+                .remove(provider.id())
+            {
+                self.workspace
+                    .sidebar_hidden_connectors
+                    .insert(provider.id().into());
+            }
+        } else {
+            let value = match action {
+                "sidebar-notes" if self.workspace.preferences.notes => {
+                    &mut self.workspace.sidebar_notes_visible
+                }
+                "sidebar-automations" => &mut self.workspace.sidebar_automations_visible,
+                "sidebar-terminal" => &mut self.workspace.sidebar_terminal_visible,
+                "sidebar-bots" => &mut self.workspace.preferences.bots,
+                "sidebar-subscriptions" => &mut self.workspace.sidebar_subscriptions_visible,
+                _ => return,
+            };
+            *value = !*value;
+        }
         if action == "sidebar-subscriptions" && !self.workspace.sidebar_subscriptions_visible {
             self.usage_footer.update(cx, |usage, cx| usage.hide(cx));
         }
@@ -445,11 +510,9 @@ impl Shell {
             self.sync_settings(cx);
         }
         self.close_preview(cx);
-        self.sidebar_list.remeasure();
         self.persist(cx);
         cx.notify();
     }
-
     pub(super) fn sidebar_navigation(&mut self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .w_full()
@@ -522,75 +585,75 @@ impl Shell {
                     ),
             )
             .children(
-                [
-                    ("Inbox", "inbox"),
-                    ("Notes", "note"),
-                    ("Automations", "zap"),
-                ]
-                .into_iter()
-                .filter(|(label, _)| match *label {
-                    "Notes" => {
-                        self.workspace.preferences.notes && self.workspace.sidebar_notes_visible
-                    }
-                    "Automations" => self.workspace.sidebar_automations_visible,
-                    "Inbox" => self.workspace.sidebar_inbox_visible,
-                    _ => true,
-                })
-                .map(|(label, glyph)| {
-                    let selected = self.app_view_label() == Some(label);
-                    let unread = label == "Inbox"
-                        && self
-                            .inbox
-                            .as_ref()
-                            .is_some_and(|inbox| inbox.read(cx).unread_count() > 0);
-                    div()
-                        .id(label)
-                        .debug_selector(move || format!("sidebar-navigation-{label}"))
-                        .role(Role::Button)
-                        .aria_label(if unread { "Inbox, new items" } else { label })
-                        .aria_selected(selected)
-                        .cursor(CursorStyle::Arrow)
-                        .group("rail-action")
-                        .h(px(32.))
-                        .px_2()
-                        .rounded_md()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_size(px(14.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(content(if selected || self.sidebar_hover == Some(label) {
-                            1.
-                        } else {
-                            0.5
-                        }))
-                        .when(selected, |d| d.bg(content(0.1)))
-                        .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
-                        .child(icon(glyph, 16.).text_color(content(if selected {
-                            0.7
-                        } else {
-                            0.35
-                        })))
-                        .child(div().flex_1().child(label))
-                        .when(unread, |row| {
-                            row.child(div().size(px(6.)).rounded_full().bg(accent_color()))
-                        })
-                        .on_click(cx.listener(move |this, _, window, cx| match label {
-                            "Inbox" => this.open_inbox(window, cx),
-                            "Notes" => this.open_notes(window, cx),
-                            "Automations" => this.open_automations(window, cx),
-                            _ => (),
-                        }))
-                        .on_hover(cx.listener(move |this, hovered, _, cx| {
-                            if *hovered {
-                                this.sidebar_hover = Some(label);
-                            } else if this.sidebar_hover == Some(label) {
-                                this.sidebar_hover = None;
-                            }
-                            this.sidebar_frame.update(cx, |_, cx| cx.notify());
-                            this.project_rail_frame.update(cx, |_, cx| cx.notify());
-                        }))
-                }),
+                self.visible_sidebar_navigation(cx)
+                    .into_iter()
+                    .map(|item| (item.label(), item.icon()))
+                    .map(|(label, glyph)| {
+                        let selected = self.app_view_label() == Some(label);
+                        let connector = Connector::ALL
+                            .into_iter()
+                            .find(|provider| provider.label() == label);
+                        let unread =
+                            connector.is_some_and(|provider| self.connector_unread(provider, cx));
+                        div()
+                            .id(if label == "Terminal" {
+                                "terminal"
+                            } else {
+                                label
+                            })
+                            .debug_selector(move || format!("sidebar-navigation-{label}"))
+                            .role(Role::Button)
+                            .aria_label(if unread {
+                                format!("{label}, new items")
+                            } else {
+                                label.into()
+                            })
+                            .aria_selected(selected)
+                            .cursor(CursorStyle::Arrow)
+                            .group("rail-action")
+                            .h(px(32.))
+                            .px_2()
+                            .rounded_md()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(content(if selected || self.sidebar_hover == Some(label) {
+                                1.
+                            } else {
+                                0.5
+                            }))
+                            .when(selected, |d| d.bg(content(0.1)))
+                            .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                            .child(icon(glyph, 16.).text_color(content(if selected {
+                                0.7
+                            } else {
+                                0.35
+                            })))
+                            .child(div().flex_1().child(label))
+                            .when(unread, |row| {
+                                row.child(div().size(px(6.)).rounded_full().bg(accent_color()))
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| match label {
+                                "GitHub" => this.open_connector(Connector::Github, window, cx),
+                                "GitLab" => this.open_connector(Connector::Gitlab, window, cx),
+                                "Jira" => this.open_connector(Connector::Jira, window, cx),
+                                "Notes" => this.open_notes(window, cx),
+                                "Automations" => this.open_automations(window, cx),
+                                "Terminal" => this.open_terminal_tab(window, cx),
+                                _ => (),
+                            }))
+                            .on_hover(cx.listener(move |this, hovered, _, cx| {
+                                if *hovered {
+                                    this.sidebar_hover = Some(label);
+                                } else if this.sidebar_hover == Some(label) {
+                                    this.sidebar_hover = None;
+                                }
+                                this.sidebar_frame.update(cx, |_, cx| cx.notify());
+                                this.project_rail_frame.update(cx, |_, cx| cx.notify());
+                            }))
+                    }),
             )
             .into_any()
     }
@@ -639,95 +702,48 @@ mod tests {
     }
 
     #[gpui::test]
-    fn sidebar_options_switch_card_heights_and_persist_without_loading_history(
-        cx: &mut TestAppContext,
-    ) {
-        let (window, _, _) = super::super::tests::window(cx);
-        let (id, loaded) = window
+    fn sidebar_retired_density_and_activity_preferences_are_inert(cx: &mut TestAppContext) {
+        let (window, a, b) = super::super::tests::window(cx);
+        let card = window
             .update(cx, |shell, _, cx| {
+                // Blank sessions are deliberately absent from navigation. Seed
+                // a real history summary so this measures a materialized card.
                 let mut summary = locked(&shell.store)
                     .unwrap()
                     .create("codex", "/work/vorkspace")
                     .unwrap();
                 summary.has_messages = true;
-                summary.title =
-                    "A detailed session with a long title that must stay inside its card".into();
-                let id = summary.id;
-                shell.session_details.insert(
-                    id,
-                    vorkspace_core::store::SessionMetadata {
-                        model: Some("gpt-6.1-sol".into()),
-                        branch: Some("feature/session-cards".into()),
-                        ..Default::default()
-                    },
-                );
-                shell.session_summaries.insert(id, summary);
-                shell.order.insert(0, id);
-                shell.notify_sidebar(cx);
-                (id, shell.sessions.len())
+                summary.title = "Saved conversation".into();
+                let card = summary.id;
+                shell.session_summaries.insert(card, summary);
+                shell.order.insert(0, card);
+                for id in [a, b] {
+                    shell.sessions[&id].update(cx, |view, _| view.busy = true);
+                }
+                shell.unseen_finished.insert(a);
+                shell.workspace.compact_session_cards = false;
+                shell.workspace.sidebar_activity_visible = true;
+                shell.invalidate_chrome(cx);
+                card
             })
             .unwrap();
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        let selector: &'static str = Box::leak(format!("sidebar-session-{id}").into_boxed_str());
-        let model_selector: &'static str =
-            Box::leak(format!("session-model-{id}").into_boxed_str());
-        let workspace_selector: &'static str =
-            Box::leak(format!("session-workspace-{id}").into_boxed_str());
-        let title_selector: &'static str =
-            Box::leak(format!("session-title-{id}").into_boxed_str());
-        {
-            let classic = true;
-            window
-                .update(visual, |shell, _, cx| {
-                    shell.workspace.classic_layout = classic;
-                    shell.invalidate_chrome(cx);
-                    cx.notify();
-                })
-                .unwrap();
-            visual.run_until_parked();
-            assert_eq!(visual.debug_bounds(selector).unwrap().size.height, px(32.));
-            let options = visual.debug_bounds("sidebar-options").unwrap();
-            visual.simulate_click(options.center(), Default::default());
-            visual.run_until_parked();
-            let compact = visual
-                .debug_bounds("menu-action-compact-session-cards")
-                .unwrap();
-            visual.simulate_click(compact.center(), Default::default());
-            visual.run_until_parked();
-            let row = visual.debug_bounds(selector).unwrap();
-            assert_eq!(row.size.height, px(60.));
-            let model = visual.debug_bounds(model_selector).unwrap();
-            let workspace = visual.debug_bounds(workspace_selector).unwrap();
-            let title = visual.debug_bounds(title_selector).unwrap();
-            assert!(row.top() <= title.top() && title.bottom() <= workspace.top());
-            assert_eq!(model.center().y, workspace.center().y);
-            assert!(workspace.right() <= model.left());
-            assert!(workspace.bottom() <= row.bottom());
-            assert!(
-                model.right() <= row.right()
-                    && workspace.right() <= row.right()
-                    && title.right() <= row.right()
-            );
-            window
-                .update(visual, |shell, _, _| {
-                    assert_eq!(shell.sessions.len(), loaded);
-                    assert!(!shell.sessions.contains_key(&id));
-                    let saved = shell.latest_state.lock().unwrap().clone();
-                    let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
-                    assert!(!restored.compact_session_cards);
-                })
-                .unwrap();
-            // Switches keep the popover open for more choices.
-            let compact = visual
-                .debug_bounds("menu-action-compact-session-cards")
-                .unwrap();
-            visual.simulate_click(compact.center(), Default::default());
-            visual.run_until_parked();
-            assert_eq!(visual.debug_bounds(selector).unwrap().size.height, px(32.));
-            assert!(visual.debug_bounds(model_selector).is_none());
-            visual.simulate_click(options.center(), Default::default());
-            visual.run_until_parked();
-        }
+        visual.run_until_parked();
+        let selector: &'static str = Box::leak(format!("sidebar-session-{card}").into_boxed_str());
+        assert_eq!(visual.debug_bounds(selector).unwrap().size.height, px(32.));
+        assert!(visual.debug_bounds("sidebar-activity-card").is_none());
+        window.update(visual, |shell, _, cx| {
+            let loaded = shell.sessions.len();
+            shell.change_sidebar_option("compact-session-cards", cx);
+            shell.change_sidebar_option("sidebar-activity", cx);
+            assert!(!shell.workspace.compact_session_cards);
+            assert!(shell.workspace.sidebar_activity_visible);
+            assert_eq!(shell.sessions.len(), loaded);
+            assert!(shell.unseen_finished.contains(&a));
+            for id in [a, b] { assert!(shell.sessions[&id].read(cx).responding()); }
+            let items = shell.sidebar_options_menu_items(cx);
+            assert!(!items.iter().any(|item| matches!(item, MenuItem::Action(a) if a.id == "compact-session-cards" || a.id == "sidebar-activity")));
+        }).unwrap();
     }
 
     #[gpui::test]
@@ -751,32 +767,44 @@ mod tests {
                 let menu = shell.menu.as_ref().unwrap().menu.read(cx);
                 let bounds = menu.surface_region().get().unwrap();
                 assert_eq!(bounds.left(), options.left());
-                assert_eq!(bounds.size.width, px(184.));
+                assert_eq!(bounds.size.width, px(212.));
             })
             .unwrap();
         let notes = visual.debug_bounds("menu-action-sidebar-notes").unwrap();
         let automations = visual
             .debug_bounds("menu-action-sidebar-automations")
             .unwrap();
-        let inbox = visual.debug_bounds("menu-action-sidebar-inbox").unwrap();
+        assert!(visual.debug_bounds("menu-action-sidebar-inbox").is_none());
         let bots = visual.debug_bounds("menu-action-sidebar-bots").unwrap();
-        let activity = visual.debug_bounds("menu-action-sidebar-activity").unwrap();
-        let compact = visual
-            .debug_bounds("menu-action-compact-session-cards")
-            .unwrap();
-        assert!(notes.bottom() <= automations.top() && automations.bottom() <= inbox.top());
-        assert!(inbox.bottom() <= bots.top() && bots.bottom() <= activity.top());
         assert!(
-            activity.bottom() < compact.top(),
-            "a divider separates Compact view"
+            visual
+                .debug_bounds("menu-action-sidebar-activity")
+                .is_none()
         );
+        assert!(
+            visual
+                .debug_bounds("menu-action-compact-session-cards")
+                .is_none()
+        );
+        assert!(visual.debug_bounds("menu-grip-sidebar-notes").is_some());
+        assert!(
+            visual
+                .debug_bounds("menu-grip-sidebar-automations")
+                .is_some()
+        );
+        assert!(visual.debug_bounds("menu-grip-sidebar-bots").is_none());
+        assert!(
+            visual
+                .debug_bounds("menu-grip-sidebar-subscriptions")
+                .is_none()
+        );
+        assert!(notes.bottom() <= automations.top() && automations.bottom() < bots.top());
         for (action, navigation) in [
             ("menu-action-sidebar-notes", "sidebar-navigation-Notes"),
             (
                 "menu-action-sidebar-automations",
                 "sidebar-navigation-Automations",
             ),
-            ("menu-action-sidebar-inbox", "sidebar-navigation-Inbox"),
             ("menu-action-sidebar-bots", "new-bot"),
             ("menu-action-sidebar-subscriptions", "subscriptions"),
         ] {
@@ -787,7 +815,7 @@ mod tests {
             assert!(visual.debug_bounds(navigation).is_none());
             assert!(
                 visual
-                    .debug_bounds("menu-action-compact-session-cards")
+                    .debug_bounds("menu-action-sidebar-subscriptions")
                     .is_some()
             );
         }
@@ -803,7 +831,6 @@ mod tests {
                 for id in [
                     "sidebar-notes",
                     "sidebar-automations",
-                    "sidebar-inbox",
                     "sidebar-bots",
                     "sidebar-subscriptions",
                 ] {
@@ -814,7 +841,7 @@ mod tests {
                 let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
                 assert!(!restored.sidebar_notes_visible);
                 assert!(!restored.sidebar_automations_visible);
-                assert!(!restored.sidebar_inbox_visible);
+                assert!(restored.sidebar_inbox_visible);
                 assert!(!restored.sidebar_subscriptions_visible);
                 assert!(!restored.preferences.bots);
             })
@@ -825,7 +852,6 @@ mod tests {
                 "menu-action-sidebar-automations",
                 "sidebar-navigation-Automations",
             ),
-            ("menu-action-sidebar-inbox", "sidebar-navigation-Inbox"),
             ("menu-action-sidebar-bots", "new-bot"),
             ("menu-action-sidebar-subscriptions", "subscriptions"),
         ] {
@@ -863,72 +889,294 @@ mod tests {
             })
             .unwrap();
     }
-
     #[gpui::test]
-    fn activity_visibility_switch_preserves_agents_and_survives_restart(cx: &mut TestAppContext) {
-        let (window, a, b) = super::super::tests::window(cx);
-        window
-            .update(cx, |shell, _, cx| {
-                for id in [a, b] {
-                    shell.sessions[&id].update(cx, |session, _| session.busy = true);
-                }
-                shell.invalidate_chrome(cx);
+    fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(crate::popover::bind);
+        let (window, _, _) = super::super::tests::window(cx);
+        let page = window
+            .update(cx, |shell, w, cx| {
+                shell.ensure_background_inbox(w, cx);
+                shell
+                    .inbox
+                    .as_ref()
+                    .unwrap()
+                    .update(cx, |owner, _| owner.suspend_refresh_for_test());
+                shell.open_connector(Connector::Github, w, cx);
+                shell.connector_pages[&Connector::Github].clone()
             })
             .unwrap();
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        {
-            let classic = true;
-            window
-                .update(visual, |shell, _, cx| {
-                    shell.workspace.classic_layout = classic;
-                    shell.invalidate_chrome(cx);
-                    cx.notify();
-                })
-                .unwrap();
-            visual.run_until_parked();
-            assert!(visual.debug_bounds("sidebar-activity-card").is_some());
-            let options = visual.debug_bounds("sidebar-options").unwrap();
-            visual.simulate_click(options.center(), Default::default());
-            visual.run_until_parked();
-            let activity = visual.debug_bounds("menu-action-sidebar-activity").unwrap();
-            visual.simulate_click(activity.center(), Default::default());
-            visual.run_until_parked();
-            assert!(visual.debug_bounds("sidebar-activity-card").is_none());
-            window
-                .update(visual, |shell, _, cx| {
-                    assert!(shell.workspace.preferences.working_agents);
-                    for id in [a, b] {
-                        assert!(shell.sessions[&id].read(cx).responding());
-                    }
-                    let menu = shell.menu.as_ref().unwrap().menu.read(cx);
-                    assert_eq!(menu.toggle_state("sidebar-activity"), Some(false));
-                    let saved = shell.latest_state.lock().unwrap().clone();
-                    let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
-                    assert!(!restored.sidebar_activity_visible);
-                })
-                .unwrap();
-            let activity = visual.debug_bounds("menu-action-sidebar-activity").unwrap();
-            visual.simulate_click(activity.center(), Default::default());
-            visual.run_until_parked();
-            assert!(visual.debug_bounds("sidebar-activity-card").is_some());
-            window
-                .update(visual, |shell, _, _| {
-                    let saved = shell.latest_state.lock().unwrap().clone();
-                    let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
-                    assert!(restored.sidebar_activity_visible);
-                })
-                .unwrap();
-            visual.simulate_click(options.center(), Default::default());
-            visual.run_until_parked();
+        visual.run_until_parked();
+        let options = visual.debug_bounds("sidebar-options").unwrap();
+        visual.simulate_click(options.center(), Default::default());
+        visual.run_until_parked();
+        for id in ["github", "gitlab", "jira", "notes", "automations"] {
+            let selector: &'static str =
+                Box::leak(format!("menu-grip-sidebar-{id}").into_boxed_str());
+            assert!(visual.debug_bounds(selector).is_some());
         }
+        let grip = visual
+            .debug_bounds("menu-grip-sidebar-automations")
+            .unwrap();
+        // A grip click is not a visibility action.
+        visual.simulate_click(grip.center(), Default::default());
+        visual.run_until_parked();
         window
-            .update(visual, |shell, _, cx| {
-                shell.workspace.preferences.working_agents = false;
-                shell.invalidate_chrome(cx);
+            .update(visual, |shell, w, cx| {
+                assert!(shell.workspace.sidebar_automations_visible);
+                assert!(
+                    shell
+                        .menu
+                        .as_ref()
+                        .unwrap()
+                        .menu
+                        .focus_handle(cx)
+                        .is_focused(w)
+                );
             })
             .unwrap();
+        let end = visual
+            .debug_bounds("menu-action-sidebar-github")
+            .unwrap()
+            .origin
+            + gpui::point(px(70.), px(4.));
+        visual.simulate_mouse_down(grip.center(), MouseButton::Left, Default::default());
+        visual.simulate_mouse_move(
+            grip.center() + gpui::point(px(0.), px(-8.)),
+            MouseButton::Left,
+            Default::default(),
+        );
         visual.run_until_parked();
-        assert!(visual.debug_bounds("sidebar-activity-card").is_none());
+        visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
+        visual.run_until_parked();
+        visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, w, cx| {
+                assert_eq!(
+                    shell.workspace.sidebar_navigation_order,
+                    [
+                        "automations",
+                        "github",
+                        "gitlab",
+                        "jira",
+                        "notes",
+                        "terminal"
+                    ]
+                );
+                assert!(shell.workspace.sidebar_automations_visible);
+                assert!(shell.workspace.sidebar_hidden_connectors.is_empty());
+                let menu = shell.menu.as_ref().unwrap().menu.clone();
+                assert!(menu.focus_handle(cx).is_focused(w));
+            })
+            .unwrap();
+        // Escape cancels an in-flight drag, without committing or closing the menu.
+        let grip = visual
+            .debug_bounds("menu-grip-sidebar-notes")
+            .unwrap()
+            .center();
+        visual.simulate_mouse_down(grip, MouseButton::Left, Default::default());
+        visual.simulate_mouse_move(
+            grip + gpui::point(px(0.), px(-10.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        visual.run_until_parked();
+        visual.simulate_keystrokes("escape");
+        visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                assert!(shell.menu.is_some());
+                assert!(!cx.has_active_drag());
+                assert_eq!(shell.workspace.sidebar_navigation_order[0], "automations");
+            })
+            .unwrap();
+        let toggle = visual.debug_bounds("menu-action-sidebar-github").unwrap();
+        visual.simulate_click(toggle.center(), Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("sidebar-navigation-GitHub").is_none());
+        assert!(visual.debug_bounds("app-title-tab-GitHub").is_some());
+        window
+            .update(visual, |shell, _, cx| {
+                assert!(shell.enabled_connectors(cx).contains(&Connector::Github));
+                assert_eq!(shell.connector_pages[&Connector::Github], page);
+                let saved = shell.latest_state.lock().unwrap().clone();
+                let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
+                assert_eq!(
+                    restored.sidebar_navigation_order,
+                    shell.workspace.sidebar_navigation_order
+                );
+                assert!(restored.sidebar_hidden_connectors.contains("github"));
+            })
+            .unwrap();
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        // The same saved projection drives both layouts; Search remains fixed.
+        for expanded in [true, false, true] {
+            window
+                .update(visual, |shell, _, cx| {
+                    if shell.workspace.project_rail_open != expanded {
+                        shell.toggle_project_rail(cx);
+                    }
+                    assert_eq!(shell.workspace.project_rail_open, expanded);
+                })
+                .unwrap();
+            visual.run_until_parked();
+            let names = [
+                "sidebar-navigation-Automations",
+                "sidebar-navigation-GitLab",
+                "sidebar-navigation-Jira",
+                "sidebar-navigation-Notes",
+            ];
+            let bounds: Vec<_> = names
+                .into_iter()
+                .map(|id| visual.debug_bounds(id).unwrap())
+                .collect();
+            assert!(
+                bounds
+                    .windows(2)
+                    .all(|pair| pair[0].bottom() <= pair[1].top())
+            );
+            let search = visual
+                .debug_bounds(if expanded {
+                    "sidebar-search-field"
+                } else {
+                    "sidebar-navigation-Search"
+                })
+                .unwrap();
+            assert!(search.bottom() <= bounds[0].top());
+        }
+        // Disable and re-enable through the existing owner; neither operation
+        // discards custom position or the independently hidden shortcut.
+        for enabled in [false, true] {
+            window
+                .update(visual, |shell, _, cx| {
+                    shell.inbox.as_ref().unwrap().update(cx, |owner, cx| {
+                        owner.set_connector_enabled("gitlab", enabled, cx).unwrap()
+                    });
+                    shell.invalidate_chrome(cx);
+                    let items = shell.sidebar_options_menu_items(cx);
+                    assert_eq!(
+                        items.iter().any(
+                            |item| matches!(item, MenuItem::Action(a) if a.id == "sidebar-gitlab")
+                        ),
+                        enabled
+                    );
+                    assert_eq!(
+                        shell.workspace.sidebar_navigation_order,
+                        [
+                            "automations",
+                            "github",
+                            "gitlab",
+                            "jira",
+                            "notes",
+                            "terminal"
+                        ]
+                    );
+                    assert!(shell.workspace.sidebar_hidden_connectors.contains("github"));
+                })
+                .unwrap();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "Requires Metal and VOKKY_SIDEBAR_CAPTURE_DIR"]
+    fn sidebar_settings_native_capture() {
+        let output =
+            std::path::PathBuf::from(std::env::var_os("VOKKY_SIDEBAR_CAPTURE_DIR").unwrap());
+        assert!(output.is_absolute() && output.is_dir());
+        let store = Arc::new(Mutex::new(
+            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let session = locked(&store)
+            .unwrap()
+            .create("codex", "/work/sidebar-fixture")
+            .unwrap();
+        let mut state = Workspace::default();
+        state.open(session.id);
+        state.preferences.tab_animations = false;
+        let saved = serde_json::to_string(&state).unwrap();
+        let mut cx = gpui::HeadlessAppContext::with_platform(
+            Arc::new(gpui_apple::AppleTextSystem::new()),
+            Arc::new(crate::assets::Assets),
+            || {
+                Ok(Some(Box::new(
+                    gpui_apple::metal_renderer::MetalHeadlessRenderer::new(),
+                )))
+            },
+        );
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let window = cx
+            .open_window(gpui::size(px(1280.), px(800.)), |_, cx| {
+                cx.new(|cx| {
+                    Shell::new(
+                        store,
+                        vec![session],
+                        "/work/sidebar-fixture".into(),
+                        Some(saved),
+                        cx,
+                    )
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(&mut cx, |shell, w, cx| {
+                shell.open_menu(
+                    MenuTarget::SidebarOptions,
+                    Anchor::Slot(shell.sidebar_options_anchor.clone()),
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.capture_screenshot(window.into())
+            .unwrap()
+            .save(output.join("sidebar-options.png"))
+            .unwrap();
+        window
+            .update(&mut cx, |shell, _, cx| {
+                shell.reorder_sidebar_navigation(
+                    &crate::popover::MenuReordered {
+                        source: "sidebar-automations".into(),
+                        target: "sidebar-github".into(),
+                        after: false,
+                    },
+                    cx,
+                );
+                shell.change_sidebar_option("sidebar-gitlab", cx);
+                shell.close_menu(cx);
+            })
+            .unwrap();
+        for (name, expanded) in [("expanded", true), ("collapsed", false)] {
+            window
+                .update(&mut cx, |shell, _, cx| {
+                    if shell.workspace.project_rail_open != expanded {
+                        shell.toggle_project_rail(cx);
+                    }
+                })
+                .unwrap();
+            cx.run_until_parked();
+            cx.capture_screenshot(window.into())
+                .unwrap()
+                .save(output.join(format!("sidebar-reordered-{name}.png")))
+                .unwrap();
+        }
+        window
+            .update(&mut cx, |shell, w, cx| {
+                shell.open_settings(crate::settings::Section::Connections, w, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.capture_screenshot(window.into())
+            .unwrap()
+            .save(output.join("settings-app-group.png"))
+            .unwrap();
     }
 
     #[gpui::test]

@@ -15,13 +15,14 @@ pub(crate) enum Section {
     Mcp,
     Skills,
     Bots,
-    Inbox,
+    #[serde(alias = "inbox")]
+    Connectors,
     Archive,
     Worktrees,
     Vox,
 }
 
-pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
+pub(crate) const GROUPS: [(&str, &[Section]); 2] = [
     (
         "App",
         &[
@@ -29,6 +30,9 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
             Section::Connections,
             Section::Appearance,
             Section::Keybindings,
+            Section::Connectors,
+            Section::Archive,
+            Section::Worktrees,
         ],
     ),
     (
@@ -41,10 +45,6 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
             Section::Bots,
             Section::Vox,
         ],
-    ),
-    (
-        "Workspace",
-        &[Section::Inbox, Section::Archive, Section::Worktrees],
     ),
 ];
 
@@ -59,7 +59,7 @@ impl Section {
         Section::Mcp,
         Section::Skills,
         Section::Bots,
-        Section::Inbox,
+        Section::Connectors,
         Section::Archive,
         Section::Worktrees,
         Section::Vox,
@@ -76,7 +76,7 @@ impl Section {
             Section::Mcp => "mcp",
             Section::Skills => "skills",
             Section::Bots => "bots",
-            Section::Inbox => "inbox",
+            Section::Connectors => "connectors",
             Section::Archive => "archive",
             Section::Worktrees => "worktrees",
         }
@@ -93,7 +93,7 @@ impl Section {
             Section::Mcp => "MCP",
             Section::Skills => "Skills",
             Section::Bots => "Bots",
-            Section::Inbox => "Inbox",
+            Section::Connectors => "Connectors",
             Section::Archive => "Archive",
             Section::Worktrees => "Worktrees",
         }
@@ -122,8 +122,8 @@ impl Section {
                 "Discover and manage file skills from project, personal, and harness folders."
             }
             Section::Bots => "The resident agent beside your tabs, and which projects have one.",
-            Section::Inbox => {
-                "Manage Inbox services and notification preferences for each project."
+            Section::Connectors => {
+                "Manage GitHub, GitLab and Jira connectors and notification preferences for each project."
             }
             Section::Archive => "Projects and conversations you have archived.",
             Section::Worktrees => "Manage additional worktrees for each project.",
@@ -151,7 +151,7 @@ impl Section {
             }
             Section::Skills => "skill instructions prompt",
             Section::Bots => "bot resident agent mascot claim project title bar",
-            Section::Inbox => "github gitlab jira atlassian connect token integration",
+            Section::Connectors => "github gitlab jira atlassian connect token integration",
             Section::Archive => "archived restore delete hidden",
             Section::Worktrees => "git branch worktree working copy project create delete",
         }
@@ -169,7 +169,7 @@ impl Section {
             Section::Mcp => "globe",
             Section::Skills => "sparkles",
             Section::Bots => "ghost",
-            Section::Inbox => "inbox-hi",
+            Section::Connectors => "globe",
             Section::Archive => "archive",
             Section::Worktrees => "folder-tree",
         }
@@ -255,12 +255,6 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::General,
         "Clipboard",
         "copy paste text screenshot image clipboard memory menu bar",
-    ),
-    (
-        "working-agents",
-        Section::General,
-        "Working agents",
-        "live running sessions rail card",
     ),
     (
         "file-tabs",
@@ -445,25 +439,25 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
     ),
     (
         "project-notifications",
-        Section::Inbox,
+        Section::Connectors,
         "Project notifications",
         "mute resume sounds banners reminders categories",
     ),
     (
         "github",
-        Section::Inbox,
+        Section::Connectors,
         "GitHub",
         "gh cli connect pull request sign in",
     ),
     (
         "gitlab",
-        Section::Inbox,
+        Section::Connectors,
         "GitLab",
         "token self-managed merge request connect",
     ),
     (
         "jira",
-        Section::Inbox,
+        Section::Connectors,
         "Jira",
         "atlassian cloud site email api token issues projects connect",
     ),
@@ -537,6 +531,40 @@ pub(crate) fn search(query: &str) -> Vec<SearchResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn settings_groups_place_workspace_pages_in_app_without_changing_identity() {
+        assert_eq!(
+            GROUPS.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            ["App", "Agents"]
+        );
+        assert_eq!(
+            GROUPS[0].1,
+            &[
+                Section::General,
+                Section::Connections,
+                Section::Appearance,
+                Section::Keybindings,
+                Section::Connectors,
+                Section::Archive,
+                Section::Worktrees,
+            ]
+        );
+        let pages: Vec<_> = GROUPS
+            .iter()
+            .flat_map(|(_, pages)| pages.iter().copied())
+            .collect();
+        assert_eq!(pages.len(), Section::ALL.len());
+        for section in Section::ALL {
+            assert_eq!(pages.iter().filter(|page| **page == section).count(), 1);
+        }
+        assert_eq!(Section::Connections.id(), "connections");
+        assert_eq!(Section::Connectors.id(), "connectors");
+        assert!(Section::Connections.description().contains("SSH"));
+        assert_eq!(
+            serde_json::from_str::<Section>(r#""inbox""#).unwrap(),
+            Section::Connectors
+        );
+    }
     #[test]
     fn every_settings_navigation_icon_renders_visible_pixels_at_its_display_size() {
         use gpui::{AssetSource, DevicePixels, SvgRenderer, SvgSize, size};

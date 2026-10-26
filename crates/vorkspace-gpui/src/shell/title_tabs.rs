@@ -61,10 +61,15 @@ impl Shell {
             .iter()
             .filter(|tab| match tab {
                 TitleTab::Search => true,
-                TitleTab::App(view) => {
-                    !self.workspace.classic_layout
-                        && (*view != app_views::AppView::Notes || self.workspace.preferences.notes)
-                }
+                TitleTab::Terminal { .. } => true,
+                TitleTab::App(view) => match view {
+                    app_views::AppView::Inbox => false,
+                    app_views::AppView::Connector(provider) => {
+                        self.enabled_connectors(cx).contains(provider)
+                    }
+                    app_views::AppView::Notes => self.workspace.preferences.notes,
+                    _ => true,
+                },
                 TitleTab::Session(tab) => {
                     self.workspace.tabs.contains(tab) && {
                         let id = self.workspace.tab_focus(*tab);
@@ -95,8 +100,15 @@ impl Shell {
             .cloned()
             .collect()
     }
-
     pub(super) fn active_title_tab(&self, cx: &App) -> Option<TitleTab> {
+        if let Some(active) = self.active_terminal_tab {
+            return self
+                .workspace
+                .title_order
+                .iter()
+                .find(|tab| matches!(tab, TitleTab::Terminal { id, .. } if *id == active))
+                .cloned();
+        }
         if let Some(view) = self.active_app_view {
             return Some(TitleTab::App(view));
         }
@@ -159,9 +171,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match tab {
+            TitleTab::Terminal { id, cwd } => self.show_terminal_tab(*id, cwd.clone(), window, cx),
             TitleTab::Search => self.open_app_search(window, cx),
             TitleTab::App(view) => match view {
                 app_views::AppView::Inbox => self.open_inbox(window, cx),
+                app_views::AppView::Connector(provider) => {
+                    self.open_connector(*provider, window, cx)
+                }
                 app_views::AppView::Notes => self.open_notes(window, cx),
                 app_views::AppView::Automations => self.open_automations(window, cx),
             },
@@ -184,7 +200,6 @@ impl Shell {
             }
         }
     }
-
     pub(super) fn restore_scope_tab(
         &mut self,
         window: &mut Window,
@@ -246,6 +261,19 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.confirm_terminal_tab_close(tabs, preferred.clone(), window, cx) {
+            return;
+        }
+        self.close_title_tabs_confirmed(tabs, preferred, window, cx);
+    }
+
+    pub(super) fn close_title_tabs_confirmed(
+        &mut self,
+        tabs: &[TitleTab],
+        preferred: Option<TitleTab>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let before = self.visible_tabs(cx);
         let closing: HashSet<_> = tabs
             .iter()
@@ -281,6 +309,12 @@ impl Shell {
         self.cancel_pane_drag(cx);
         let session_active = self.workspace.active;
         for tab in &closing {
+            if let TitleTab::Terminal { id, .. } = tab {
+                if self.active_terminal_tab.as_ref() == Some(id) {
+                    self.leave_app_views(cx);
+                }
+                self.terminal_tabs.remove(id);
+            }
             if let TitleTab::App(view) = tab
                 && self.active_app_view == Some(*view)
             {
@@ -382,6 +416,244 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "Requires Metal and VOKKY_CONNECTOR_CAPTURE_DIR"]
+    fn connector_native_navigation_capture() {
+        let output =
+            std::path::PathBuf::from(std::env::var_os("VOKKY_CONNECTOR_CAPTURE_DIR").unwrap());
+        assert!(output.is_absolute() && output.is_dir());
+        let store = Arc::new(Mutex::new(
+            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let session = locked(&store)
+            .unwrap()
+            .create("codex", "/work/connector-fixture")
+            .unwrap();
+        let mut state = Workspace::default();
+        state.open(session.id);
+        let saved = serde_json::to_string(&state).unwrap();
+        let mut cx = gpui::HeadlessAppContext::with_platform(
+            Arc::new(gpui_apple::AppleTextSystem::new()),
+            Arc::new(crate::assets::Assets),
+            || {
+                Ok(Some(Box::new(
+                    gpui_apple::metal_renderer::MetalHeadlessRenderer::new(),
+                )))
+            },
+        );
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let window = cx
+            .open_window(gpui::size(px(1280.), px(800.)), |_, cx| {
+                cx.new(|cx| {
+                    Shell::new(
+                        store,
+                        vec![session],
+                        "/work/connector-fixture".into(),
+                        Some(saved),
+                        cx,
+                    )
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(&mut cx, |shell, w, cx| {
+                shell.ensure_background_inbox(w, cx);
+                shell.open_connector(Connector::Github, w, cx);
+                shell.open_connector(Connector::Jira, w, cx);
+            })
+            .unwrap();
+        for (name, expanded) in [("expanded", true), ("compact", false)] {
+            window
+                .update(&mut cx, |shell, _, cx| {
+                    shell.workspace.project_rail_open = expanded;
+                    shell.invalidate_chrome(cx);
+                    cx.notify();
+                })
+                .unwrap();
+            cx.run_until_parked();
+            cx.capture_screenshot(window.into())
+                .unwrap()
+                .save(output.join(format!("connectors-{name}.png")))
+                .unwrap();
+        }
+        window
+            .update(&mut cx, |shell, w, cx| {
+                shell.open_settings(crate::settings::Section::Connectors, w, cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.capture_screenshot(window.into())
+            .unwrap()
+            .save(output.join("connectors-settings.png"))
+            .unwrap();
+    }
+    #[gpui::test]
+    fn connector_navigation_reuses_orders_closes_restores_and_disables_tabs(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, _, session) = window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.workspace.preferences.tab_animations = false;
+                shell.workspace.sidebar_inbox_visible = false;
+                shell.ensure_background_inbox(w, cx);
+                shell
+                    .inbox
+                    .as_ref()
+                    .unwrap()
+                    .update(cx, |owner, _| owner.suspend_refresh_for_test());
+                shell.invalidate_chrome(cx);
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("sidebar-navigation-Inbox").is_none());
+        for selector in [
+            "sidebar-navigation-GitHub",
+            "sidebar-navigation-GitLab",
+            "sidebar-navigation-Jira",
+        ] {
+            assert!(visual.debug_bounds(selector).is_some());
+        }
+        let github = visual.debug_bounds("sidebar-navigation-GitHub").unwrap();
+        visual.simulate_click(github.center(), Default::default());
+        visual.run_until_parked();
+        let github_tab = TitleTab::App(app_views::AppView::Connector(Connector::Github));
+        let jira_tab = TitleTab::App(app_views::AppView::Connector(Connector::Jira));
+        let page = window
+            .update(visual, |shell, w, cx| {
+                shell.open_connector(Connector::Jira, w, cx);
+                shell.open_connector(Connector::Github, w, cx);
+                shell.open_connector(Connector::Github, w, cx);
+                assert!(shell.visible_tabs(cx).contains(&TitleTab::Session(session)));
+                assert_eq!(
+                    shell
+                        .workspace
+                        .title_order
+                        .iter()
+                        .filter(|tab| **tab == github_tab)
+                        .count(),
+                    1
+                );
+                assert!(shell.visible_tabs(cx).contains(&jira_tab));
+                shell.reorder_title_tab(&jira_tab, 0, cx);
+                assert_eq!(shell.visible_tabs(cx)[0], jira_tab);
+                let page = shell.connector_pages[&Connector::Github].clone();
+                shell.close_title_tabs(std::slice::from_ref(&github_tab), None, w, cx);
+                assert!(!shell.workspace.title_order.contains(&github_tab));
+                shell.open_connector(Connector::Github, w, cx);
+                assert_eq!(shell.connector_pages[&Connector::Github], page);
+                let saved = shell.latest_state.lock().unwrap().clone();
+                let sessions = shell
+                    .session_summaries
+                    .values()
+                    .map(|s| (s.id, s.cwd.clone()))
+                    .collect::<Vec<_>>();
+                let restored =
+                    Workspace::restore(Some(&saved), &sessions, &shell.workspace.project);
+                assert_eq!(restored.title_order, shell.workspace.title_order);
+                assert_eq!(restored.scope_focus[&shell.tab_scope()], github_tab);
+                shell.workspace.project_rail_open = false;
+                shell.invalidate_chrome(cx);
+                cx.notify();
+                page
+            })
+            .unwrap();
+        visual.run_until_parked();
+        for selector in [
+            "sidebar-navigation-GitHub",
+            "sidebar-navigation-GitLab",
+            "sidebar-navigation-Jira",
+        ] {
+            assert!(visual.debug_bounds(selector).is_some());
+        }
+        assert!(visual.debug_bounds("app-title-tab-GitHub").is_some());
+        assert!(visual.debug_bounds("app-title-tab-Jira").is_some());
+        assert!(visual.debug_bounds("inbox-source-jira").is_none());
+        let settings = visual.debug_bounds("connector-settings");
+        // A normal app page retains a settings recovery action.
+        window
+            .update(visual, |shell, w, cx| {
+                shell.open_settings(crate::settings::Section::Connectors, w, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(settings.is_some());
+        let toggle = visual
+            .debug_bounds("settings-toggle-inbox-connector-github")
+            .unwrap();
+        visual.simulate_click(toggle.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, w, cx| {
+                assert!(shell.settings.is_some());
+                assert!(!shell.workspace.title_order.contains(&github_tab));
+                assert!(
+                    !shell
+                        .workspace
+                        .scope_focus
+                        .values()
+                        .any(|tab| *tab == github_tab)
+                );
+                assert!(shell.workspace.title_order.contains(&jira_tab));
+                shell.close_settings(w, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("sidebar-navigation-GitHub").is_none());
+        assert!(visual.debug_bounds("sidebar-navigation-Jira").is_some());
+        window
+            .update(visual, |shell, w, cx| {
+                shell.open_settings(crate::settings::Section::Connectors, w, cx)
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let toggle = visual
+            .debug_bounds("settings-toggle-inbox-connector-github")
+            .unwrap();
+        visual.simulate_click(toggle.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, w, cx| {
+                shell.close_settings(w, cx);
+                shell.open_connector(Connector::Github, w, cx);
+                assert_eq!(shell.connector_pages[&Connector::Github], page);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("sidebar-navigation-GitHub").is_some());
+        let (store, summaries, saved, project, order) = window
+            .read_with(visual, |shell, _| {
+                (
+                    shell.store.clone(),
+                    shell
+                        .session_summaries
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    shell.latest_state.lock().unwrap().clone(),
+                    shell.workspace.project.clone(),
+                    shell.workspace.title_order.clone(),
+                )
+            })
+            .unwrap();
+        let reopened = visual.cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| Shell::new(store, summaries, project, Some(saved), cx))
+            })
+            .unwrap()
+        });
+        visual.run_until_parked();
+        reopened
+            .read_with(visual, |shell, cx| {
+                assert_eq!(shell.active_title_tab(cx), Some(github_tab));
+                assert_eq!(shell.workspace.title_order, order);
+                assert!(shell.visible_tabs(cx).contains(&jira_tab));
+            })
+            .unwrap();
+    }
     #[gpui::test]
     fn mixed_tabs_open_in_order_and_close_to_the_visible_neighbor(cx: &mut TestAppContext) {
         let (window, other_project, first) = window(cx);

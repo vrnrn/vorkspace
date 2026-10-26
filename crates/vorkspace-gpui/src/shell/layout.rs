@@ -419,7 +419,7 @@ mod tests {
             })
             .unwrap();
 
-        for surface in ["Inbox", "Notes", "Search", "Bot", "Settings", "Channels"] {
+        for surface in ["GitHub", "Notes", "Search", "Bot", "Settings", "Channels"] {
             window
                 .update(visual, |shell, window, cx| {
                     if shell.settings.is_some() {
@@ -428,7 +428,7 @@ mod tests {
                     shell.open(session, window, cx);
                     shell.set_sidebar_visible(true, cx);
                     match surface {
-                        "Inbox" => shell.open_inbox(window, cx),
+                        "GitHub" => shell.open_inbox(window, cx),
                         "Notes" => shell.open_notes(window, cx),
                         "Search" => shell.open_app_search(window, cx),
                         "Bot" => manager.update(cx, |manager, cx| manager.open(&bot, window, cx)),
@@ -477,7 +477,6 @@ mod tests {
                 .unwrap();
         }
     }
-
     #[gpui::test]
     fn original_workspace_tabs_fit_sidebar_widths_and_keep_their_actions(cx: &mut TestAppContext) {
         use crate::workspace::SidebarTab;
