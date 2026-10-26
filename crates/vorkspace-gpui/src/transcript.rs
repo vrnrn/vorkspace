@@ -1,6 +1,9 @@
 pub(crate) mod attachments;
 #[cfg(test)]
 mod bot_tests;
+#[cfg(test)]
+mod card_tests;
+mod cards;
 pub(crate) mod dates;
 mod drafts;
 #[cfg(test)]
@@ -1394,7 +1397,7 @@ impl TranscriptView {
             let next = (at + 1..end).find(|&i| self.source[i].first).unwrap_or(end);
             if self.source[at].role == "bot-launch" {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.source[at].text)
-                    && let Some(id) = value["sessionId"].as_i64()
+                    && let Some(id) = cards::session(&value["sessionId"])
                     && !found.contains(&id)
                 {
                     found.push(id);
@@ -1422,22 +1425,8 @@ impl TranscriptView {
                         });
                     for value in receipts {
                         if value["ok"] == true
-                            && let Some(id) = value["result"]["sessionId"]
-                                .as_i64()
-                                .or_else(|| {
-                                    vorkspace_core::bot::work::session_handle(
-                                        &value["result"]["id"],
-                                    )
-                                })
-                                .or_else(|| {
-                                    (value["result"]["submitted"] == true)
-                                        .then(|| {
-                                            vorkspace_core::bot::work::session_handle(
-                                                &value["result"]["sessionId"],
-                                            )
-                                        })
-                                        .flatten()
-                                })
+                            && let Some(id) = cards::session(&value["result"]["sessionId"])
+                                .or_else(|| cards::session(&value["result"]["id"]))
                             && (action == "sessions.start" || self.launches.contains_key(&id))
                             && !found.contains(&id)
                         {
@@ -1746,12 +1735,10 @@ impl TranscriptView {
         !self.entrances.is_empty()
             || !self.pending_entrances.is_empty()
             || (self.launches.values().any(|l| l.state == "working")
-                && self
-                    .rows
-                    .iter()
-                    .rev()
-                    .take(200)
-                    .any(|r| matches!(r.body, Body::Launch(_))))
+                && self.rows.iter().rev().take(200).any(|r| {
+                    matches!(r.body, Body::Launch(_))
+                        || matches!(&r.body, Body::BotCard(v) if v["type"] == "session")
+                }))
             || self.follow.offset.abs() >= 0.25
             || self.reactions.values().any(|(_, born)| born.is_some())
             || self
@@ -2758,10 +2745,20 @@ impl TranscriptView {
                 message_ix -= 1;
             }
         }
-        if self.bot {
+        if self.bot
+            || self.source[current_turn..current_end]
+                .iter()
+                .any(|r| r.role == "bot-card")
+        {
+            // Resource reconciliation needs the whole affected response; Bot
+            // completion runs also share identities with their opening run.
             // A completion run takes over the actions of the turn it
             // continues, so rebuild from the prompt that opens the group.
-            let group = self.bot_group_start(current_turn);
+            let group = if self.bot {
+                self.bot_group_start(current_turn)
+            } else {
+                current_turn
+            };
             let prompt = self.prompt_start(group);
             while message_ix > 0
                 && self
@@ -2791,6 +2788,7 @@ impl TranscriptView {
         };
         let old_count = self.rows.len();
         let old_rows = self.rows[display_start..].to_vec();
+        let previous_cards = cards::Previous::new(&old_rows, &self.messages);
         let mut previous: HashMap<_, _> = self
             .messages
             .split_off(message_ix)
@@ -2811,6 +2809,7 @@ impl TranscriptView {
             });
         }
         let activity = phases::collect(&self.source, source_start, self.streaming);
+        let cards = cards::Cards::collect(self, source_start, previous_cards);
         let mut at = source_start;
         let mut turn = 0;
         let mut turn_end = 0;
@@ -3015,7 +3014,9 @@ impl TranscriptView {
                     thought_phase: None,
                 });
             } else if matches!(role.as_str(), "bot-card" | "bot-note") {
-                if let Ok(value) = serde_json::from_str(&text) {
+                if !cards.owns(at)
+                    && let Ok(value) = serde_json::from_str(&text)
+                {
                     self.rows.push(UiRow {
                         key: (0, 0),
                         body: Body::BotCard(value),
@@ -3218,51 +3219,8 @@ impl TranscriptView {
                 // The running turn keeps the user's messages together above its work.
                 self.push_pending(at);
             }
-            if self.bot && !is_prompt && end == turn_end {
-                let settled = !(self.streaming && turn_end == self.source.len());
-                if settled {
-                    let mut documents = Vec::new();
-                    for row in &self.source[self.prompt_start(turn)..turn_end] {
-                        if row.role == "bot-document"
-                            && let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.text)
-                        {
-                            if let Some(old) =
-                                documents.iter_mut().find(|old: &&mut serde_json::Value| {
-                                    old["documentId"] == value["documentId"]
-                                })
-                            {
-                                *old = value;
-                            } else {
-                                documents.push(value);
-                            }
-                        }
-                    }
-                    for (k, value) in documents.into_iter().enumerate() {
-                        self.rows.push(UiRow {
-                            key: (at, usize::MAX - 128 + k.min(60)),
-                            body: Body::BotCard(value),
-                            message,
-                            first: false,
-                            last: false,
-                            work: false,
-                            work_tail: false,
-                            thought_phase: None,
-                        });
-                    }
-                    for (k, id) in self.run_launches(turn, turn_end).into_iter().enumerate() {
-                        self.rows.push(UiRow {
-                            key: (at, usize::MAX - 64 + k.min(60)),
-                            body: Body::Launch(id),
-                            message,
-                            first: false,
-                            last: false,
-                            work: false,
-                            work_tail: false,
-                            thought_phase: None,
-                        });
-                    }
-                }
-            }
+            self.rows
+                .extend(cards.rows(at, turn, !is_prompt && end == turn_end, message));
             if !self.document
                 && !self.source[at].is_prompt()
                 && self.source[at].role != "bot-card"
@@ -3533,6 +3491,12 @@ impl TranscriptView {
                 return false;
             }
             if wanted.contains(&row.key) {
+                return false;
+            }
+            // A resource can acquire a new source anchor after replacement.
+            // Retaining its obsolete representation for an exit would briefly
+            // show both cards, unlike the atomic replacement of launch rows.
+            if row.key.1 >= usize::MAX / 2 && matches!(row.body, Body::BotCard(_)) {
                 return false;
             }
             // React replaces the live prose/work block when its answer moves
@@ -4185,7 +4149,21 @@ impl TranscriptView {
                     })
                     .into_any_element()
             }
-            Body::BotCard(ref value) => crate::bots::cards::render(value, cx),
+            Body::BotCard(ref value) => {
+                if value["type"] == "session"
+                    && let Some(id) = cards::session(&value["sessionId"])
+                    && let Some(view) = self.launches.get(&id)
+                {
+                    crate::bots::cards::launch(
+                        id,
+                        Some(view),
+                        self.started_at.elapsed().as_secs_f32(),
+                        cx,
+                    )
+                } else {
+                    crate::bots::cards::render(value, cx)
+                }
+            }
             Body::OlderHistory
             | Body::Pending(_)
             | Body::Launch(_)
