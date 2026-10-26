@@ -1859,7 +1859,37 @@ impl Bots {
                                                     ))
                                             },
                                         ),
-                                    ),
+                                    )
+                                    .when(!creating, |d| {
+                                        let id = bot.id.clone();
+                                        d.child(div().flex_1()).child(
+                                            div()
+                                                .id("bot-delete")
+                                                .debug_selector(|| "bot-delete".into())
+                                                .role(Role::Button)
+                                                .aria_label("Delete bot")
+                                                .w_full()
+                                                .h(px(32.))
+                                                .flex_shrink_0()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(10.))
+                                                .px(px(10.))
+                                                .rounded_lg()
+                                                .text_size(px(13.))
+                                                .line_height(px(20.))
+                                                .text_color(rgb(0xff6467))
+                                                .hover(|d| d.bg(rgb(0xff6467).opacity(0.08)))
+                                                .child(icon("trash", 14.).text_color(rgb(0xff6467)))
+                                                .child("Delete bot…")
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.save_open_file(cx);
+                                                        this.delete_bot(&id, window, cx);
+                                                    },
+                                                )),
+                                        )
+                                    }),
                             )
                             .child(
                                 div()

@@ -565,13 +565,15 @@ fn fast_forward_append_in_another_window_allows_saving_drafts_and_settings() {
             params![source, appended.to_string()],
         )
         .unwrap();
-    let mut state = crate::follow_up::State::default();
-    state.draft = Some(crate::follow_up::Message {
-        id: "draft-1".into(),
-        text: "My new draft prompt".into(),
-        at: 100,
+    let state = crate::follow_up::State {
+        draft: Some(crate::follow_up::Message {
+            id: "draft-1".into(),
+            text: "My new draft prompt".into(),
+            at: 100,
+            ..Default::default()
+        }),
         ..Default::default()
-    });
+    };
     if let Err(e) = store.save_follow_ups(id, &state) {
         panic!("save_follow_ups failed with: {e}");
     }

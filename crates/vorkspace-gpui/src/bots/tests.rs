@@ -1527,6 +1527,75 @@ fn settings_match_react_dialog_and_left_navigation_geometry(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn settings_sidebar_delete_confirms_and_preserves_sessions(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let sessions = locked(&s.store)
+        .unwrap()
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .map(|session| session.id)
+        .collect::<Vec<_>>();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    for (width, height) in [(1400., 900.), (640., 540.)] {
+        visual.simulate_resize(gpui::size(px(width), px(height)));
+        visual.run_until_parked();
+        for section in ["General", "Soul", "Memory"] {
+            let selector = Box::leak(format!("bot-settings-{section}").into_boxed_str());
+            let tab = visual.debug_bounds(selector).unwrap();
+            visual.simulate_click(tab.center(), Default::default());
+            visual.run_until_parked();
+            let nav = visual.debug_bounds("bot-settings-navigation").unwrap();
+            let delete = visual.debug_bounds("bot-delete").unwrap();
+            assert!(delete.left() >= nav.left() && delete.right() <= nav.right());
+            assert!(delete.bottom() <= nav.bottom());
+            assert!(delete.top() > nav.bottom() - px(48.));
+        }
+    }
+    let delete = visual.debug_bounds("bot-delete").unwrap();
+    visual.simulate_click(delete.center(), Default::default());
+    visual.run_until_parked();
+    assert!(visual.has_pending_prompt());
+    assert_eq!(visual.pending_prompt().unwrap().0, "Delete bot?");
+    visual.simulate_prompt_answer("Cancel");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-settings-dialog").is_some());
+    s.manager.read_with(visual, |manager, _| {
+        assert!(manager.roster.get(&s.id).is_some());
+        assert_eq!(manager.active.as_deref(), Some(s.id.as_str()));
+    });
+    assert!(
+        Roster::load(&locked(&s.store).unwrap())
+            .unwrap()
+            .get(&s.id)
+            .is_some()
+    );
+
+    let delete = visual.debug_bounds("bot-delete").unwrap();
+    visual.simulate_click(delete.center(), Default::default());
+    visual.run_until_parked();
+    visual.simulate_prompt_answer("Delete");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-settings-dialog").is_none());
+    s.manager.read_with(visual, |manager, _| {
+        assert!(manager.roster.get(&s.id).is_none());
+        assert!(manager.active.is_none());
+        assert!(manager.settings.is_none());
+        assert!(!manager.chats.contains_key(&s.id));
+    });
+    let db = locked(&s.store).unwrap();
+    assert!(Roster::load(&db).unwrap().get(&s.id).is_none());
+    assert_eq!(
+        db.sessions()
+            .unwrap()
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<Vec<_>>(),
+        sessions
+    );
+}
+
+#[gpui::test]
 fn settings_color_popover_follows_its_mascot_when_the_window_resizes(cx: &mut TestAppContext) {
     let s = setup(cx);
     cx.update(|cx| {
@@ -3107,6 +3176,7 @@ fn new_bot_setup_focuses_name_and_cancel_keeps_storage_and_current_bot_unchanged
         .unwrap();
     assert!(visual.debug_bounds("bot-create").is_some());
     assert!(visual.debug_bounds("bot-reset").is_none());
+    assert!(visual.debug_bounds("bot-delete").is_none());
     visual.simulate_input("   ");
     visual.run_until_parked();
     let create = visual.debug_bounds("bot-create").unwrap();

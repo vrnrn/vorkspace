@@ -1694,7 +1694,14 @@ impl Shell {
         let scale = if delta == 0 {
             100
         } else {
-            (self.workspace.preferences.ui_scale as i32 + delta).clamp(50, 200) as u32
+            self.workspace
+                .preferences
+                .ui_scale
+                .saturating_add_signed(delta)
+                .clamp(
+                    crate::settings::Preferences::MIN_UI_SCALE_PERCENT,
+                    crate::settings::Preferences::MAX_UI_SCALE_PERCENT,
+                )
         };
         if self.workspace.preferences.ui_scale == scale {
             return;
@@ -7056,7 +7063,7 @@ fn enter_from(leaf: &LayoutLeaf) -> (Edge, Rect) {
 }
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let scale = self.workspace.preferences.ui_scale.clamp(50, 200) as f32 / 100.;
+        let scale = self.workspace.preferences.interface_scale();
         if window.ui_scale() != scale {
             window.set_ui_scale(scale, cx);
             self.close_preview(cx);

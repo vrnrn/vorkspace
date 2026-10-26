@@ -3,7 +3,7 @@
 use super::*;
 use gpui::{TestAppContext, VisualTestContext, WindowHandle, size};
 
-const SCALES: [u32; 7] = [50, 75, 90, 100, 125, 150, 200];
+const SCALES: [u32; 7] = [60, 75, 90, 100, 125, 150, 160];
 
 fn settle(visual: &mut VisualTestContext) {
     visual.run_until_parked();
@@ -316,7 +316,7 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
         bind_keys(cx);
         crate::app_menu::init(cx);
     });
-    let (window, a, b) = tests::window_with_scale(cx, 75);
+    let (window, a, b) = tests::window_with_scale(cx, 200);
     window
         .update(cx, |shell, _, cx| {
             // Title tabs are scoped to the current project. Keep both test tabs in
@@ -330,11 +330,11 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
         })
         .unwrap();
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    // Keep both session tabs visible at 200% while clicking them. The separate
+    // Keep both session tabs visible at 160% while clicking them. The separate
     // geometry matrix exercises narrow rails, including zero-width hidden tabs.
     visual.simulate_resize(size(px(1800.), px(1000.)));
     settle(visual);
-    assert_titlebar(window, visual, 75, false);
+    assert_titlebar(window, visual, 160, false);
     let modifier = if cfg!(target_os = "macos") {
         "cmd"
     } else {
@@ -463,6 +463,17 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
         })
         .unwrap();
     visual.cx.update(|cx| cx.dispatch_action(action.as_ref()));
+    settle(visual);
+    assert_titlebar(window, visual, 100, false);
+    for _ in 0..10 {
+        visual.cx.update(|cx| cx.dispatch_action(action.as_ref()));
+    }
+    settle(visual);
+    assert_titlebar(window, visual, 60, false);
+    visual.simulate_keystrokes(&format!("{modifier}-= ").repeat(20));
+    settle(visual);
+    assert_titlebar(window, visual, 160, false);
+    visual.simulate_keystrokes(&format!("{modifier}-0"));
     settle(visual);
     assert_titlebar(window, visual, 100, false);
     window

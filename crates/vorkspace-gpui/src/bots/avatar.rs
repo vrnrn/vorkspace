@@ -38,10 +38,10 @@ pub(crate) fn sidebar_cursor_tracker() -> AnyElement {
                 state.rail_bounds = Some(bounds);
             }
             window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, _| {
-                if phase == DispatchPhase::Capture {
-                    if let Ok(mut state) = SIDEBAR_CURSOR.lock() {
-                        state.mouse_pos = Some(event.position);
-                    }
+                if phase == DispatchPhase::Capture
+                    && let Ok(mut state) = SIDEBAR_CURSOR.lock()
+                {
+                    state.mouse_pos = Some(event.position);
                 }
             });
         },

@@ -163,7 +163,7 @@ mod scale_tests {
             })
             .unwrap();
         cx.run_until_parked();
-        for scale in [150, 75, 125] {
+        for (scale, expected) in [(150, 150), (75, 75), (125, 125), (200, 160), (50, 60)] {
             main.update(cx, |shell, _, cx| {
                 shell.workspace.preferences.ui_scale = scale;
                 shell.apply_preferences(cx);
@@ -173,7 +173,7 @@ mod scale_tests {
             let handles: [gpui::AnyWindowHandle; 2] = [main.into(), quick.into()];
             for handle in handles {
                 let actual = handle.update(cx, |_, window, _| window.ui_scale()).unwrap();
-                assert_eq!(actual, scale as f32 / 100.);
+                assert_eq!(actual, expected as f32 / 100.);
             }
         }
         quick

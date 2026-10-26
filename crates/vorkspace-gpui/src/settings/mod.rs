@@ -43,7 +43,7 @@ pub(crate) fn observe_window_scale<T: 'static>(
 fn apply_window_scale<T: 'static>(window: &mut Window, cx: &mut Context<T>) {
     let scale = cx
         .try_global::<Preferences>()
-        .map_or(1., |p| p.ui_scale.clamp(50, 200) as f32 / 100.);
+        .map_or(1., Preferences::interface_scale);
     if window.ui_scale() != scale {
         window.set_ui_scale(scale, cx);
         cx.notify();

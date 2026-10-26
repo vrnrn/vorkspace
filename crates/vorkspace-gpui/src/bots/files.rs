@@ -304,7 +304,6 @@ impl Bots {
         })
         .detach();
     }
-    #[allow(dead_code)]
     pub(super) fn delete_bot(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let prompt = window.prompt(
             gpui::PromptLevel::Warning,
@@ -328,6 +327,8 @@ impl Bots {
                 this.roster.bots.retain(|m| m.id != id);
                 if this.active.as_ref() == Some(&id) {
                     this.active = None;
+                    this.settings = None;
+                    this.picker = None;
                 }
                 this.save(cx);
             });
