@@ -137,6 +137,18 @@ impl Store {
                 local.remove(&session);
             }
         }
+        // A generic writer can still hold the old projected card after its
+        // tail revision advances. Retain only a fixed-size card-content guard
+        // until authoritative history reload, independently of suffix guards.
+        shared
+            .refreshed_cards
+            .borrow_mut()
+            .entry(session)
+            .or_default()
+            .insert(
+                id.to_owned(),
+                HistoryRevision::of(std::slice::from_ref(desired)),
+            );
         row.text = desired.to_string();
         Ok(Some(row))
     }
@@ -145,26 +157,14 @@ impl Store {
         session: i64,
         rows: &[Row],
     ) -> Result<(), String> {
-        let local = self.shared.as_ref().unwrap().card_revisions.borrow();
-        let Some(ledger) = local.get(&session).filter(|ledger| {
-            self.shared
-                .as_ref()
-                .unwrap()
-                .snapshots
-                .borrow()
-                .get(&session)
-                == Some(&ledger.base)
-        }) else {
+        let refreshed = self.shared.as_ref().unwrap().refreshed_cards.borrow();
+        let Some(cards) = refreshed.get(&session) else {
             return Ok(());
         };
         for row in rows.iter().filter(|row| row.role == "bot-card") {
             let card: Value = parse(&row.text)?;
-            if let Some((_, after)) = card["id"].as_str().and_then(|id| ledger.changes.get(id)) {
-                let durable = blocks::project(std::slice::from_ref(after))?
-                    .into_iter()
-                    .find(|row| row.role == "bot-card")
-                    .ok_or("Saved card is missing")?;
-                if card != parse::<Value>(&durable.text)? {
+            if let Some(current) = card["id"].as_str().and_then(|id| cards.get(id)) {
+                if *current != HistoryRevision::of(std::slice::from_ref(&card)) {
                     return Err(
                         "Card changed while this transcript was saving; reload before retrying"
                             .into(),
@@ -425,6 +425,37 @@ mod tests {
                         store.shared_blocks(id).unwrap().last().unwrap()["appRequestId"],
                         "queued"
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn local_card_guards_survive_tail_saves_and_reject_stale_full_history() {
+        for warm in [true, false] {
+            for bot in [false, true] {
+                for append in [false, true] {
+                    let (mut store, id, _, _, expected) = setup(Path::new(":memory:"), bot, 2);
+                    let mut transcript = store.load(id).unwrap();
+                    if warm {
+                        store.write_rows(id, transcript.rows.len(), &[]).unwrap();
+                    }
+                    let desired = title(&expected, "Refreshed");
+                    store
+                        .refresh_bot_card(id, &expected, &desired)
+                        .unwrap()
+                        .unwrap();
+                    if append {
+                        let at = transcript.begin("assistant");
+                        transcript.append("Provider tail from before the card refresh");
+                        store.write_rows(id, at, &transcript.rows[at..]).unwrap();
+                    }
+                    let before = store.shared_blocks(id).unwrap();
+                    assert!(
+                        store.write_rows(id, 0, &transcript.rows).is_err(),
+                        "An older transcript must not revert the card: warm={warm}, bot={bot}, append={append}"
+                    );
+                    assert_eq!(store.shared_blocks(id).unwrap(), before);
                 }
             }
         }

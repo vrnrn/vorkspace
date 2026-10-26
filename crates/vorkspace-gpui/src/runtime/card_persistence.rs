@@ -140,12 +140,14 @@ struct Shared {
 }
 struct Worker {
     shared: Arc<Shared>,
+    finished: async_channel::Receiver<()>,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 impl Worker {
     fn start() -> Result<Arc<Self>, String> {
         let shared = Arc::new(Shared::default());
         let work = shared.clone();
+        let (done, finished) = async_channel::bounded(1);
         let thread = std::thread::Builder::new()
             .name("bot-card-save".into())
             .spawn(move || {
@@ -164,16 +166,23 @@ impl Worker {
                     let result = job.save();
                     work.queue.lock().unwrap().finish(job, result);
                 }
+                let _ = done.try_send(());
             })
             .map_err(|_| "Card persistence worker unavailable".to_owned())?;
         Ok(Arc::new(Self {
             shared,
+            finished,
             thread: Mutex::new(Some(thread)),
         }))
     }
-    fn shutdown(&self) {
+    fn close(&self) -> async_channel::Receiver<()> {
         self.shared.queue.lock().unwrap().closed = true;
         self.shared.wake.notify_one();
+        self.finished.clone()
+    }
+    #[cfg(test)]
+    fn shutdown(&self) {
+        let _ = self.close().recv_blocking();
         if let Some(thread) = self.thread.lock().unwrap().take() {
             let _ = thread.join();
         }
@@ -181,7 +190,11 @@ impl Worker {
 }
 impl Drop for Worker {
     fn drop(&mut self) {
-        self.shutdown();
+        self.close();
+        // Dropping a JoinHandle detaches; the consumer owns its queue and can
+        // finish independently. Never wait for storage on the foreground,
+        // including owner destruction after GPUI's quit deadline expires.
+        self.thread.lock().unwrap().take();
     }
 }
 struct Owner {
@@ -197,13 +210,15 @@ fn install(cx: &mut App) -> Result<(), String> {
     let worker = Worker::start()?;
     let quitting = Arc::downgrade(&worker);
     let quit = cx.on_app_quit(move |_| {
-        // GPUI only gives asynchronous quit futures 200ms. Join this scoped
-        // worker in the quit callback itself: accepted saves must not disappear
-        // when that deadline expires. Normal admission/publication never waits.
-        if let Some(worker) = quitting.upgrade() {
-            worker.shutdown();
+        let finished = quitting.upgrade().map(|worker| worker.close());
+        // Drain within GPUI's existing asynchronous quit budget. A cosmetic
+        // refresh that cannot commit before exit remains unpublished; its
+        // previous durable value survives and can be refreshed next launch.
+        async move {
+            if let Some(finished) = finished {
+                let _ = finished.recv().await;
+            }
         }
-        async {}
     });
     cx.set_global(Owner {
         worker,
@@ -483,6 +498,31 @@ mod tests {
         assert_eq!(saved(&store, id)["title"], "After drop");
         assert!(worker.shared.queue.lock().unwrap().entries.is_empty());
         assert!(worker.thread.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn closing_and_dropping_the_owner_never_wait_for_a_held_store() {
+        let (store, id, base) = fixture();
+        let worker = Worker::start().unwrap();
+        let guard = locked(&store).unwrap();
+        let (_, observer) = worker
+            .shared
+            .queue
+            .lock()
+            .unwrap()
+            .admit(store.clone(), id, base.clone(), title(&base, "After close"))
+            .unwrap()
+            .unwrap();
+        worker.shared.wake.notify_one();
+        let finished = worker.close();
+        assert!(finished.try_recv().is_err());
+        drop(worker);
+        // Both operations returned while this thread still owns the database
+        // lock. The detached consumer retains and drains the admitted save.
+        drop(guard);
+        finished.recv_blocking().unwrap();
+        assert!(observer.recv_blocking().unwrap().unwrap().is_some());
+        assert_eq!(saved(&store, id)["title"], "After close");
     }
 
     #[test]

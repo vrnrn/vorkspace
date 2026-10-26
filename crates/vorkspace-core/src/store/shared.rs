@@ -35,6 +35,7 @@ pub(super) struct Shared {
     incremental: RefCell<HashMap<i64, incremental::HistoryIndex>>,
     history_schema: std::cell::Cell<Option<i64>>,
     card_revisions: RefCell<HashMap<i64, card::CardRevision>>,
+    refreshed_cards: RefCell<HashMap<i64, HashMap<String, HistoryRevision>>>,
     queues: RefCell<HashMap<i64, String>>,
     account_source: RefCell<Option<crate::accounts::Book>>,
     preferences: std::sync::Arc<crate::desktop_preferences::DesktopPreferences>,
@@ -367,6 +368,7 @@ impl Store {
                 extras_path,
                 snapshots: RefCell::new(HashMap::new()),
                 card_revisions: RefCell::new(HashMap::new()),
+                refreshed_cards: RefCell::new(HashMap::new()),
                 incremental: RefCell::new(HashMap::new()),
                 history_schema: std::cell::Cell::new(None),
                 queues: RefCell::new(HashMap::new()),
@@ -1061,6 +1063,12 @@ impl Store {
         self.shared
             .as_ref()
             .unwrap()
+            .refreshed_cards
+            .borrow_mut()
+            .remove(&id);
+        self.shared
+            .as_ref()
+            .unwrap()
             .card_revisions
             .borrow_mut()
             .remove(&id);
@@ -1700,6 +1708,12 @@ impl Store {
             .as_ref()
             .unwrap()
             .card_revisions
+            .borrow_mut()
+            .remove(&id);
+        self.shared
+            .as_ref()
+            .unwrap()
+            .refreshed_cards
             .borrow_mut()
             .remove(&id);
         // SQL deletion has committed. Publish sidecar removal atomically too;
