@@ -264,6 +264,35 @@ fn compute_bot_anim(
     bounds: Bounds<Pixels>,
     animate: bool,
 ) -> (BotAnimState, bool) {
+    let gaze = if animate {
+        SIDEBAR_CURSOR.lock().ok().and_then(|cursor| {
+            let (rail, mouse) = cursor.rail_bounds.zip(cursor.mouse_pos)?;
+            (rail.contains(&mouse) && rail.contains(&bounds.center())).then(|| {
+                (
+                    ((mouse.x - bounds.center().x).as_f32() / 140.0).clamp(-0.78, 0.78),
+                    ((mouse.y - bounds.center().y).as_f32() / 140.0).clamp(-0.68, 0.68),
+                )
+            })
+        })
+    } else {
+        None
+    };
+    bot_anim_at(seed, status, animate, START.elapsed().as_secs_f32(), gaze)
+}
+
+// Pointer input belongs to the sidebar only. The header shares these three
+// autonomous animations without reading or registering any pointer state.
+fn header_anim_at(seed: u32, status: &str, animate: bool, now: f32) -> (BotAnimState, bool) {
+    bot_anim_at(seed, status, animate, now, None)
+}
+
+fn bot_anim_at(
+    seed: u32,
+    status: &str,
+    animate: bool,
+    now: f32,
+    gaze: Option<(f32, f32)>,
+) -> (BotAnimState, bool) {
     let offset = (seed % 97) as f32 * 0.17;
     if !animate {
         return (
@@ -282,7 +311,6 @@ fn compute_bot_anim(
         );
     }
 
-    let now = START.elapsed().as_secs_f32();
     let t = now + offset;
     let mut anim = BotAnimState::default();
 
@@ -290,22 +318,12 @@ fn compute_bot_anim(
         anim.blink = blink_at(t);
     }
 
-    let mut following_cursor = false;
-    if let Ok(cursor) = SIDEBAR_CURSOR.lock()
-        && let (Some(rail), Some(mouse)) = (cursor.rail_bounds, cursor.mouse_pos)
-        && rail.contains(&mouse)
-        && rail.contains(&bounds.center())
-    {
-        following_cursor = true;
-        let cx = bounds.center().x.as_f32();
-        let cy = bounds.center().y.as_f32();
-        let mx = mouse.x.as_f32();
-        let my = mouse.y.as_f32();
-        anim.yaw = ((mx - cx) / 140.0).clamp(-0.78, 0.78);
-        anim.pitch = ((my - cy) / 140.0).clamp(-0.68, 0.68);
+    if let Some((yaw, pitch)) = gaze {
+        anim.yaw = yaw;
+        anim.pitch = pitch;
     }
 
-    if !following_cursor {
+    if gaze.is_none() {
         if status == "working" {
             // Working: Rhythmic Nod + Half-Speed Texture Flow (14 deg/sec)
             let pulse = (t * 5.2).sin();
@@ -336,6 +354,36 @@ fn compute_bot_anim(
 
 pub(crate) fn bot_avatar(bot: &Bot, status: &str, side: f32, still: bool) -> AnyElement {
     avatar_with_look(BotLookConfig::from_bot(bot), status, side, still)
+}
+
+/// Chat identity has explicitly no pointer gaze. Unlike `avatar_with_look` and
+/// `settings_preview`, this path never consults a cursor or installs a listener.
+pub(super) fn header_avatar(bot: &Bot, status: &str, side: f32, visible: bool) -> AnyElement {
+    let look = BotLookConfig::from_bot(bot);
+    let status = status.to_owned();
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let animate = visible
+                && !cx.reduce_motion()
+                && window.is_window_active()
+                && bounds.intersects(&window.content_mask().bounds);
+            let (anim, needs_frame) =
+                header_anim_at(look.seed, &status, animate, START.elapsed().as_secs_f32());
+            if needs_frame {
+                window.request_animation_frame();
+            }
+            let pixel_side = (bounds.size.width.as_f32() * window.scale_factor())
+                .ceil()
+                .clamp(28., 128.) as u32;
+            let image =
+                cached_badge_or_bot_image(true, &look, status == "needs-you", pixel_side, anim);
+            let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
+        },
+    )
+    .size(px(side))
+    .flex_shrink_0()
+    .into_any_element()
 }
 
 fn preview_anim(
@@ -532,6 +580,49 @@ pub(crate) fn color_swatch_circle(bg: u32, fg: Option<u32>, side: f32) -> AnyEle
         .object_fit(ObjectFit::Contain)
         .flex_shrink_0()
         .into_any_element()
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+
+    #[test]
+    fn header_modes_share_autonomous_animation_without_pointer_gaze() {
+        let look = BotLookConfig::from_legacy("robot", 0x3b82f6);
+        for status in ["idle", "working", "needs-you"] {
+            let (header, moving) = header_anim_at(look.seed, status, true, 6.);
+            let (autonomous, _) = bot_anim_at(look.seed, status, true, 6., None);
+            let (tracking, _) = bot_anim_at(look.seed, status, true, 6., Some((0.78, 0.68)));
+            let key = |anim| frame_cache_key(true, &look, status == "needs-you", 128, anim);
+            assert!(moving);
+            assert!(key(header) == key(autonomous));
+            assert!(key(header) != key(tracking));
+            assert_eq!(tracking.yaw, 0.78);
+            assert_eq!(tracking.pitch, 0.68);
+            assert!(!header.crossed_eyes);
+        }
+        let (working, _) = header_anim_at(look.seed, "working", true, 6.);
+        let (attention, _) = header_anim_at(look.seed, "needs-you", true, 6.);
+        assert_eq!(working.tex_rot, 84.);
+        assert_eq!(attention.wide, 1.14);
+    }
+
+    #[test]
+    fn header_reduced_motion_or_hidden_state_is_frozen_without_frame_requests() {
+        let look = BotLookConfig::from_legacy("cat", 0xe86b5f);
+        for status in ["idle", "working", "needs-you"] {
+            let (first, moving) = header_anim_at(look.seed, status, false, 0.);
+            let (later, later_moving) = header_anim_at(look.seed, status, false, 900.);
+            assert!(!moving && !later_moving);
+            assert!(
+                frame_cache_key(true, &look, status == "needs-you", 128, first)
+                    == frame_cache_key(true, &look, status == "needs-you", 128, later)
+            );
+            assert_eq!(first.blink, 1.);
+            assert_eq!(first.hop_y, 0.);
+            assert_eq!(first.tex_rot, 0.);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -7,6 +7,145 @@ use std::sync::Arc;
 
 #[test]
 #[ignore = "Requires a Metal device; run explicitly on macOS"]
+fn radial_cutout_preserves_colored_backdrops_and_nested_fades() {
+    use gpui::{Hsla, black, white};
+    use gpui_apple::metal_renderer::{edge_fade_marker, radial_cutout_marker};
+    let mut renderer = MetalRenderer::new_headless(Arc::new(parking_lot::Mutex::new(
+        InstanceBufferPool::default(),
+    )));
+    renderer.update_transparency(true);
+    for light in [false, true] {
+        for scale in [1., 2.] {
+            for clipped in [false, true] {
+                let bounds = |x, y, width, height| {
+                    Bounds::new(
+                        point(ScaledPixels(x * scale), ScaledPixels(y * scale)),
+                        size(ScaledPixels(width * scale), ScaledPixels(height * scale)),
+                    )
+                };
+                let full = bounds(0., 0., 128., 144.);
+                let cy = if clipped { 24. } else { 64. };
+                let mask = bounds(16., cy - 48., 96., 96.);
+                let control = bounds(62., cy - 18., 4., 4.);
+                let ink = if light { black() } else { white() };
+                let quad = |bounds, color: Hsla, marker: Hsla| Quad {
+                    order: 0,
+                    border_style: Default::default(),
+                    bounds,
+                    content_mask: ContentMask { bounds: full },
+                    background: color.into(),
+                    border_color: marker,
+                    corner_radii: Default::default(),
+                    border_widths: Default::default(),
+                };
+                let render = |renderer: &mut MetalRenderer, mode| {
+                    let mut scene = Scene::default();
+                    for y in (0..144).step_by(8) {
+                        for x in (0..128).step_by(8) {
+                            let alternate = (x / 8 + y / 8) % 2 == 0;
+                            let color = match (light, alternate) {
+                                (false, false) => 0x56305280,
+                                (false, true) => 0x1e677780,
+                                (true, false) => 0xf3c5dcff,
+                                (true, true) => 0xc1dae6ff,
+                            };
+                            scene.insert_primitive(quad(
+                                bounds(x as f32, y as f32, 8., 8.),
+                                gpui::rgba(color).into(),
+                                Default::default(),
+                            ));
+                        }
+                    }
+                    if mode > 0 {
+                        if mode == 2 {
+                            scene.insert_primitive(quad(
+                                mask,
+                                black(),
+                                radial_cutout_marker(true, 0.2),
+                            ));
+                        }
+                        // The real transcript has its own full-viewport edge fade.
+                        scene.insert_primitive(quad(
+                            full,
+                            black(),
+                            edge_fade_marker(true, 8. * scale, 8. * scale),
+                        ));
+                        scene.insert_primitive(quad(full, ink.opacity(0.6), Default::default()));
+                        scene.insert_primitive(quad(full, ink.opacity(0.6), Default::default()));
+                        scene.insert_primitive(quad(
+                            full,
+                            black(),
+                            edge_fade_marker(false, 8. * scale, 8. * scale),
+                        ));
+                        if mode == 2 {
+                            scene.insert_primitive(quad(
+                                mask,
+                                black(),
+                                radial_cutout_marker(false, 0.2),
+                            ));
+                            // Identity and controls painted after the cutout stay intact.
+                            scene.insert_primitive(quad(control, ink, Default::default()));
+                        }
+                    }
+                    scene.finish();
+                    renderer
+                        .render_scene_to_image(
+                            &scene,
+                            size(
+                                DevicePixels((128. * scale) as i32),
+                                DevicePixels((144. * scale) as i32),
+                            ),
+                        )
+                        .unwrap()
+                };
+                let background = render(&mut renderer, 0);
+                let foreground = render(&mut renderer, 1);
+                let cutout = render(&mut renderer, 2);
+                let point = |x: f32, y: f32| ((x * scale) as u32, (y * scale) as u32);
+                for (x, y) in [point(64., cy), point(61., cy + 3.)] {
+                    assert_eq!(
+                        cutout.get_pixel(x, y),
+                        background.get_pixel(x, y),
+                        "center reveals original color and alpha"
+                    );
+                }
+                for (x, y) in [point(5., cy), point(18., cy + 46.)] {
+                    assert_eq!(
+                        cutout.get_pixel(x, y),
+                        foreground.get_pixel(x, y),
+                        "outside the circle keeps all content"
+                    );
+                }
+                let (x, y) = point(64., cy - 16.);
+                assert_eq!(cutout.get_pixel(x, y)[3], 255);
+                assert_eq!(cutout.get_pixel(x, y)[0], if light { 0 } else { 255 });
+                let mut previous = -1.;
+                for radius in [0.35, 0.55, 0.75, 0.95] {
+                    let (x, y) = point(64. + 48. * radius, cy);
+                    let channel = if light { 0 } else { 3 };
+                    let before = background.get_pixel(x, y)[channel] as f32;
+                    let after = foreground.get_pixel(x, y)[channel] as f32;
+                    let actual =
+                        (cutout.get_pixel(x, y)[channel] as f32 - before) / (after - before);
+                    let dx = x as f32 + 0.5 - 64. * scale;
+                    let dy = y as f32 + 0.5 - cy * scale;
+                    let distance = dx.hypot(dy) / (48. * scale);
+                    let t = ((distance - 0.2) / 0.8).clamp(0., 1.);
+                    let expected = t.powi(3) * (t * (6. * t - 15.) + 10.);
+                    assert!(
+                        (actual - expected).abs() < 0.04,
+                        "the complete overlapping group follows one gradual fade: {actual} vs {expected}"
+                    );
+                    assert!(actual > previous);
+                    previous = actual;
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "Requires a Metal device; run explicitly on macOS"]
 fn rounded_children_restore_each_translucent_corner_without_touching_the_footer() {
     use gpui::{Hsla, black, white};
     use gpui_apple::metal_renderer::corner_clip_marker;

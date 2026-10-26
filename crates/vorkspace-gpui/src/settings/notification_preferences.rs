@@ -880,9 +880,19 @@ impl SettingsView {
             );
         }
         if projects.is_empty() {
-            rows.push(div().id("project-notification-accessible-3").role(Role::Status).px_4().py(px(14.)).text_size(px(12.)).text_color(content(0.45)).child("Open a project or connect an Inbox provider to configure its notifications.").into_any_element());
+            rows.push(
+                div()
+                    .id("project-notification-accessible-3")
+                    .role(Role::Status)
+                    .px_4()
+                    .py(px(14.))
+                    .text_size(px(12.))
+                    .text_color(content(0.45))
+                    .child("Open a project or enable a connector to configure its notifications.")
+                    .into_any_element(),
+            );
         }
-        self.group(Some("project-notifications"),true,"Project notifications",Some("Choose sounds, banners and sidebar indicators by category. Mute pauses them without changing your choices. Unread items stay marked in Inbox.".into()),
+        self.group(Some("project-notifications"),true,"Project notifications",Some("Choose sounds, banners and sidebar indicators by category. Mute pauses them without changing your choices. Unread items stay marked in their connector.".into()),
             Some(secondary_button("notification-select-projects",if selecting {"Done"} else {"Select projects"},false,projects.is_empty()).child(if selecting {"Done"} else {"Select projects"})
                 .on_click(cx.listener(|this,_,_,cx| {this.notification_state.selecting = !this.notification_state.selecting;this.notification_state.selected.clear();cx.notify();})).into_any_element()),rows)
     }

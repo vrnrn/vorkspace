@@ -34,7 +34,7 @@ impl SettingsView {
             Section::Mcp => self.mcp_page(cx),
             Section::Skills => self.skills_page(cx),
             Section::Bots => self.bots_page(cx),
-            Section::Inbox => self.inbox_page(cx),
+            Section::Connectors => self.inbox_page(cx),
             Section::Archive => self.archive_page(cx),
             Section::Worktrees => self.worktrees_page(cx),
         }

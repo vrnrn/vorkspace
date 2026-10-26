@@ -288,7 +288,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if action == "mute:custom" {
-            self.open_settings(crate::settings::Section::Inbox, window, cx);
+            self.open_settings(crate::settings::Section::Connectors, window, cx);
             return;
         }
         if action == "mute:resume" {

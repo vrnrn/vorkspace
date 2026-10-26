@@ -404,6 +404,8 @@ pub struct ViewState {
     #[serde(skip)]
     pub default_bots: BotDefaults,
     pub filters: Filters,
+    /// Provider pages share a fetch owner, but retain independent query choices.
+    pub provider_filters: BTreeMap<String, Filters>,
     pub seen: Seen,
     pub hidden_jira_projects: Vec<String>,
     pub list_width: f32,
@@ -419,6 +421,7 @@ impl Default for ViewState {
             },
             default_bots: BotDefaults::default(),
             filters: Filters::default(),
+            provider_filters: BTreeMap::new(),
             seen: Seen::default(),
             hidden_jira_projects: vec![],
             list_width: 280.,
@@ -426,6 +429,9 @@ impl Default for ViewState {
     }
 }
 impl ViewState {
+    pub fn filters_for(&self, provider: &str) -> &Filters {
+        self.provider_filters.get(provider).unwrap_or(&self.filters)
+    }
     pub fn fetch_scope(&self, projects: &[PathBuf]) -> String {
         let mut paths = projects
             .iter()
@@ -436,9 +442,19 @@ impl ViewState {
         let mut jira = self.hidden_jira_projects.clone();
         jira.sort();
         format!(
-            "{}:{}:{}:{}:{}:{}",
-            self.filters.assigned_to_me,
-            self.filters.fetch_state(),
+            "{}:{}:{}:{}:{}",
+            self.connectors
+                .enabled_providers()
+                .map(|provider| {
+                    let filters = self.filters_for(provider);
+                    format!(
+                        "{provider}:{}:{}",
+                        filters.assigned_to_me,
+                        filters.fetch_state()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(","),
             paths.join("|"),
             self.connectors
                 .enabled_providers()
@@ -607,7 +623,7 @@ impl Service {
                     ..Default::default()
                 })
             }
-            _ => Err("Unsupported inbox provider".into()),
+            _ => Err("Unsupported connector".into()),
         }
     }
     pub fn connect(
@@ -630,17 +646,18 @@ impl Service {
                 token,
             )?),
             "github" => self.status("github"),
-            _ => Err("Unsupported inbox provider".into()),
+            _ => Err("Unsupported connector".into()),
         }
     }
     pub fn list(&self, projects: &[PathBuf], state: &ViewState) -> Snapshot {
         let mut snapshot = Snapshot::default();
-        let limit = if state.filters.fetch_state() == "all" {
-            100
-        } else {
-            40
-        };
         for provider in state.connectors.enabled_providers() {
+            let filters = state.filters_for(provider);
+            let limit = if filters.fetch_state() == "all" {
+                100
+            } else {
+                40
+            };
             let status = match self.status(provider) {
                 Ok(status) => status,
                 Err(error) => {
@@ -677,8 +694,8 @@ impl Service {
                     }
                     return convert(jira::jira_list_issues(
                         self.data_dir.clone(),
-                        state.filters.assigned_to_me,
-                        state.filters.fetch_state().into(),
+                        filters.assigned_to_me,
+                        filters.fetch_state().into(),
                         if state.hidden_jira_projects.is_empty() {
                             vec![]
                         } else {
@@ -690,7 +707,7 @@ impl Service {
                 }
                 let mut items = Vec::new();
                 let mut visited = HashSet::new();
-                if state.filters.assigned_to_me && provider == "gitlab" {
+                if filters.assigned_to_me && provider == "gitlab" {
                     for kind in ["issue", "pr"] {
                         let rows: Vec<Item> = convert(gitlab::gitlab_list_todos(
                             self.data_dir.clone(),
@@ -712,7 +729,7 @@ impl Service {
                             project.to_string_lossy().into_owned(),
                         )
                         .map(|r| vec![r]),
-                        _ => Err("Unsupported inbox provider".into()),
+                        _ => Err("Unsupported connector".into()),
                     };
                     let Ok(repos) = repos else {
                         continue;
@@ -727,8 +744,8 @@ impl Service {
                                     project,
                                     &repo,
                                     kind,
-                                    state.filters.assigned_to_me,
-                                    state.filters.fetch_state(),
+                                    filters.assigned_to_me,
+                                    filters.fetch_state(),
                                     "",
                                     limit,
                                 )?)?,
@@ -737,10 +754,10 @@ impl Service {
                                     project.to_string_lossy().into_owned(),
                                     kind.into(),
                                     false,
-                                    state.filters.fetch_state().into(),
+                                    filters.fetch_state().into(),
                                     Some(limit),
                                 )?)?,
-                                _ => return Err("Unsupported inbox provider".into()),
+                                _ => return Err("Unsupported connector".into()),
                             };
                             items.extend(rows.into_iter().map(|mut item| {
                                 item.provider = provider.into();
@@ -786,7 +803,7 @@ impl Service {
                 &item.kind,
                 item.number,
             )?),
-            _ => Err("Unsupported inbox provider".into()),
+            _ => Err("Unsupported connector".into()),
         }
     }
     fn project<'a>(&'a self, item: &'a Item) -> &'a Path {
@@ -814,7 +831,7 @@ impl Service {
                 &item.kind,
                 item.number,
             )?),
-            _ => Err("Unsupported inbox provider".into()),
+            _ => Err("Unsupported connector".into()),
         }
     }
     pub fn comment(
@@ -842,7 +859,7 @@ impl Service {
                 &body,
                 &reply_to,
             ),
-            _ => Err("Unsupported inbox provider".into()),
+            _ => Err("Unsupported connector".into()),
         }
     }
     pub fn diff(&self, item: &Item) -> Result<Diff, String> {

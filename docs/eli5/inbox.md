@@ -1,7 +1,20 @@
-# Inbox connectors
+# Connectors
 
-Inbox brings GitHub, GitLab, and Jira Cloud work into Vorkspace. In
-**Settings → Inbox**, turn on the services you use and turn off the others.
+Connectors bring GitHub, GitLab, and Jira Cloud work into Vorkspace. In
+**Settings → Connectors**, turn on the services you use and turn off the others.
+Connectors, Archive and Worktrees are all in the App group in Settings.
+
+Open the sidebar's options menu to hide shortcuts or drag their handles into a
+different order. This includes enabled connectors, Notes, Automations and Terminal.
+The order is remembered and also works when the sidebar is collapsed. Hiding a
+shortcut keeps its tabs and connection running. Activity appears inside chats,
+so there is no separate Activity section or Compact view switch.
+
+Each enabled service has its own sidebar button. Click GitHub, GitLab or Jira to
+open its tab; clicking again returns to the same tab. You can keep several open,
+reorder them and close them like session tabs. Tabs return when Vorkspace restarts.
+Switching tabs keeps your search, selected item, scroll and unfinished reply in
+place during this run. A disconnected service shows its own setup instructions.
 
 Turning a service off hides it and stops checking it. Your saved login details
 and choices stay on your computer, so you can turn it back on later.
@@ -17,7 +30,7 @@ For Jira and GitLab, you can pick a default Bot to receive tickets or changes.
 Before sending an item to chat, you can choose another Bot or project instead.
 If the saved Bot is unavailable, Vorkspace lets you use a project.
 
-Inbox can play a quiet sound when new work or an update arrives. It stays quiet
+Connectors can play a quiet sound when new work or an update arrives. It stays quiet
 for old work when the app opens, muted projects, hidden items, and updates it can
 identify as your own successful comments or actions. Someone else's later update
 still counts as new activity. If a service cannot identify your update, the app

@@ -1582,7 +1582,11 @@ mod tests {
         assert_eq!(row(visual, a).unwrap().size.height, px(28.));
         assert_eq!(row(visual, b).unwrap().size.height, px(28.));
         assert_eq!(row(visual, child).unwrap().size.height, px(28.));
-        assert_eq!(row(visual, plain).unwrap().size.height, px(60.));
+        assert_eq!(
+            row(visual, plain).unwrap().size.height,
+            px(32.),
+            "the retired density action keeps the standard row height"
+        );
         window
             .update(visual, |_, window, _| {
                 let scale = window.scale_factor();

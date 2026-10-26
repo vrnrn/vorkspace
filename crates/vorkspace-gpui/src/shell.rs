@@ -11,7 +11,6 @@ mod idle_agents;
 #[cfg(test)]
 mod image_lightbox_tests;
 mod layout;
-mod live_agents;
 mod notifications;
 mod orchestration;
 mod picker_preferences;
@@ -34,6 +33,7 @@ mod sidebar_peek;
 #[cfg(any(target_os = "macos", test))]
 mod status_menu;
 mod terminal_dock;
+mod terminal_tabs;
 mod title_tabs;
 #[cfg(test)]
 mod titlebar_tests;
@@ -59,7 +59,9 @@ use crate::{
     terminal::{Terminal, TerminalEvent},
     theme::*,
     usage_footer::UsageFooter,
-    workspace::{DockSide, TitleTab, VisitHistory, Workspace, project_name},
+    workspace::{
+        Connector, DockSide, SidebarNavigation, TitleTab, VisitHistory, Workspace, project_name,
+    },
 };
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, ClipboardItem, Context, CursorStyle, DispatchPhase, Entity,
@@ -117,6 +119,9 @@ actions!(
         GoToFile,
         OpenCommandPalette,
         ShowInbox,
+        ShowGitHub,
+        ShowGitLab,
+        ShowJira,
         ShowNotes,
         ShowAutomations,
         OpenAppearance,
@@ -288,6 +293,7 @@ pub(crate) enum MenuTarget {
     BotTab(String),
     SearchTab,
     AppTab(app_views::AppView),
+    TerminalTitleTab(TitleTab),
     Session(i64),
     Folder(String),
     /// The sidebar project header's menu.
@@ -550,11 +556,6 @@ pub(crate) struct Shell {
     history_clock: u64,
     session_marks: HashMap<i64, Entity<SessionMark>>,
     tab_marks: HashMap<i64, Entity<SessionMark>>,
-    /// The live agents card's spinners, apart from the sidebar rows' marks.
-    live_marks: HashMap<i64, Entity<SessionMark>>,
-    live_agents_expanded: bool,
-    /// Repaints the live agents card's elapsed times once a second.
-    live_tick: Option<gpui::Task<()>>,
     busy_sessions: HashSet<i64>,
     notification_state: notifications::State,
     quick: crate::quick_composer::Controller,
@@ -581,8 +582,12 @@ pub(crate) struct Shell {
     _session_clock: gpui::Task<()>,
     notes: Option<Entity<Notes>>,
     inbox: Option<Entity<crate::inbox::Inbox>>,
+    connector_pages: HashMap<crate::workspace::Connector, Entity<crate::inbox::Inbox>>,
     automations: Option<Entity<crate::automations::Automations>>,
     active_app_view: Option<app_views::AppView>,
+    active_terminal_tab: Option<u64>,
+    /// Title-tab shells have exclusive ownership, separate from dock shells.
+    terminal_tabs: HashMap<u64, Entity<Terminal>>,
     app_view_events: Vec<Subscription>,
     automation_state: automation_runs::State,
     settings: Option<Entity<crate::settings::SettingsView>>,
@@ -750,7 +755,10 @@ impl Shell {
             }
         });
         let metadata: Vec<_> = summaries.iter().map(|s| (s.id, s.cwd.clone())).collect();
-        let workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
+        let mut workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
+        if let Ok(store) = locked(&store) {
+            workspace.normalize_connector_tabs(&vorkspace_core::inbox::ViewState::load(&store));
+        }
         vorkspace_core::cli::initialize(&workspace.preferences.binary_paths);
         let latest_state = Arc::new(Mutex::new(serde_json::to_string(&workspace).unwrap()));
         let quit_state = latest_state.clone();
@@ -873,9 +881,6 @@ impl Shell {
             history_clock: 0,
             session_marks: HashMap::new(),
             tab_marks: HashMap::new(),
-            live_marks: HashMap::new(),
-            live_agents_expanded: false,
-            live_tick: None,
             busy_sessions: HashSet::new(),
             notification_state,
             quick: Default::default(),
@@ -902,8 +907,11 @@ impl Shell {
             _session_clock: session_clock,
             notes: None,
             inbox: None,
+            connector_pages: HashMap::new(),
             automations: None,
             active_app_view: None,
+            active_terminal_tab: None,
+            terminal_tabs: HashMap::new(),
             app_view_events: Vec::new(),
             automation_state: Default::default(),
             settings: None,
@@ -1109,23 +1117,29 @@ impl Shell {
         this.apply_preferences(cx);
         this.poll_reminders(cx);
         this.initialize_automations(cx);
-        if this.workspace.active.is_none() {
-            cx.spawn(async move |this, cx| {
-                let _ = this.update_in(cx, |this, window, cx| {
+        cx.spawn(async move |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.navigation_revision == 0 && !this.restore_scope_tab(window, cx) {
                     this.ensure_project_session(window, cx);
-                    this.persist(cx);
-                });
-            })
-            .detach();
-        }
+                }
+                this.persist(cx);
+            });
+        })
+        .detach();
         this
     }
     fn update_chat_visibility(&mut self, cx: &mut Context<Self>) {
-        if let Some(inbox) = &self.inbox {
-            let active = self.active_app_view == Some(app_views::AppView::Inbox)
+        if let Some(id) = &self.active_terminal_tab
+            && let Some(terminal) = self.terminal_tabs.get(id)
+        {
+            let visible = self.settings.is_none() && self.app_search.is_none();
+            terminal.update(cx, |terminal, _| terminal.visible = visible);
+        }
+        for (provider, page) in &self.connector_pages {
+            let active = self.active_app_view == Some(app_views::AppView::Connector(*provider))
                 && self.settings.is_none()
                 && self.app_search.is_none();
-            inbox.update(cx, |inbox, cx| inbox.set_active(active, cx));
+            page.update(cx, |page, cx| page.set_active(active, cx));
         }
         // Every pane of the active tab is on screen, not just the focused one.
         let shown: HashSet<i64> = match self.workspace.active_tab() {
@@ -2144,6 +2158,16 @@ impl Shell {
     }
     /// The card's workspace: the active tab's pane tree, or its one session.
     fn workspace_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(id) = &self.active_terminal_tab
+            && let Some(terminal) = self.terminal_tabs.get(id)
+        {
+            return div()
+                .id("terminal-tab-body")
+                .debug_selector(|| "terminal-tab-body".into())
+                .size_full()
+                .child(terminal.clone())
+                .into_any_element();
+        }
         if let Some(view) = self.app_view_body() {
             return view;
         }
@@ -2766,6 +2790,9 @@ impl Shell {
     /// Terminal: New (cmd-`): another terminal in the project's dock, which
     /// opens if it was hidden.
     fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_terminal_tab.is_some() {
+            self.close_app_view(window, cx);
+        }
         if self.workspace.project.starts_with("remote://") {
             self.error = Some("Terminals are not available on remote projects.".into());
             cx.notify();
@@ -2799,6 +2826,9 @@ impl Shell {
     }
     /// Terminal: Toggle (cmd-j).
     fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_terminal_tab.is_some() {
+            self.close_app_view(window, cx);
+        }
         if self.workspace.project.starts_with("remote://") {
             self.error = Some("Terminals are not available on remote projects.".into());
             cx.notify();
@@ -3952,11 +3982,11 @@ impl Shell {
         self.sidebar_search
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.workspace.collapsed.remove(&path);
-        // Choosing a project explicitly leaves global Bot/app surfaces. Other
-        // restoration paths still remember their full worktree-scoped surface.
+        // Choosing a project restores its last conversation or terminal.
+        // Global Bot/app surfaces still require explicit navigation.
         if matches!(
             self.workspace.scope_focus.get(&self.tab_scope()),
-            Some(TitleTab::Session(_))
+            Some(TitleTab::Session(_) | TitleTab::Terminal { .. })
         ) && self.restore_scope_tab(window, cx)
         {
             return;
@@ -4011,7 +4041,10 @@ impl Shell {
         cx.notify();
     }
     fn ensure_project_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.workspace.active.is_some() || self.bot_active(cx) {
+        if self.workspace.active.is_some()
+            || self.bot_active(cx)
+            || self.active_terminal_tab.is_some()
+        {
             return;
         }
         if let Some(id) = self.order.iter().copied().find(|id| {
@@ -4786,7 +4819,7 @@ impl Shell {
                 {
                     let menu = open.menu.clone();
                     this.change_sidebar_option(id, cx);
-                    let items = this.sidebar_options_menu_items();
+                    let items = this.sidebar_options_menu_items(cx);
                     menu.update(cx, |menu, cx| menu.replace_items(items, cx));
                     return;
                 }
@@ -4815,6 +4848,22 @@ impl Shell {
                 cx.notify();
             }),
         );
+        if target == MenuTarget::SidebarOptions {
+            events.push(cx.subscribe_in(
+                &menu,
+                window,
+                |this, sender, event: &crate::popover::MenuReordered, _, cx| {
+                    if !this.menu.as_ref().is_some_and(|open| {
+                        open.target == MenuTarget::SidebarOptions && &open.menu == sender
+                    }) {
+                        return;
+                    }
+                    this.reorder_sidebar_navigation(event, cx);
+                    let items = this.sidebar_options_menu_items(cx);
+                    sender.update(cx, |menu, cx| menu.replace_items(items, cx));
+                },
+            ));
+        }
         self.menu = Some(ShellMenu {
             target,
             anchor,
@@ -4846,12 +4895,14 @@ impl Shell {
             MenuTarget::Tab(_)
             | MenuTarget::BotTab(_)
             | MenuTarget::SearchTab
-            | MenuTarget::AppTab(_) => {
+            | MenuTarget::AppTab(_)
+            | MenuTarget::TerminalTitleTab(_) => {
                 let tab = match target {
                     MenuTarget::Tab(id) => TitleTab::Session(*id),
                     MenuTarget::BotTab(id) => self.bot_tab(id.clone()),
                     MenuTarget::SearchTab => TitleTab::Search,
                     MenuTarget::AppTab(view) => TitleTab::App(*view),
+                    MenuTarget::TerminalTitleTab(tab) => tab.clone(),
                     _ => unreachable!(),
                 };
                 let tabs = self.visible_tabs(cx);
@@ -4912,6 +4963,7 @@ impl Shell {
                             TitleTab::Session(id) => title(id),
                             TitleTab::Search => "Search".into(),
                             TitleTab::App(view) => view.label().into(),
+                            TitleTab::Terminal { .. } => "Terminal".into(),
                             TitleTab::Bot { id, .. } => self
                                 .bots
                                 .as_ref()
@@ -4967,8 +5019,8 @@ impl Shell {
             ),
             MenuTarget::SidebarOptions => (
                 "Sidebar options".into(),
-                self.sidebar_options_menu_items(),
-                184.,
+                self.sidebar_options_menu_items(cx),
+                212.,
                 MenuStyle::Filter,
             ),
             // SidebarWorktreeSwitcher's menu under the project header.
@@ -5141,6 +5193,7 @@ impl Shell {
             MenuTarget::AppTab(view) => {
                 self.run_title_tab_menu(TitleTab::App(view), action, window, cx)
             }
+            MenuTarget::TerminalTitleTab(tab) => self.run_title_tab_menu(tab, action, window, cx),
             MenuTarget::Session(id) => self.run_session_menu(id, action, window, cx),
             MenuTarget::Folder(folder) => self.run_folder_menu(folder, action, window, cx),
             MenuTarget::Header => {
@@ -5371,7 +5424,9 @@ impl Shell {
             }),
             _ => false,
         };
-        let compact = nested || self.workspace.compact_session_cards;
+        // The retired density preference remains deserializable but cannot
+        // change the current/default presentation or its measurement.
+        let compact = true;
         let side = if nested || !compact { 14. } else { 16. };
         if let Some(mark) = self.session_marks.get(&id) {
             mark.update(cx, |mark, cx| mark.set_size(side, cx));
@@ -6817,6 +6872,16 @@ impl Shell {
                         element.into_any_element()
                     })
                 }
+                TitleTab::Terminal { .. } => {
+                    let element = self
+                        .tool_title_tab(tab.clone(), "Terminal", "terminal", tab_width(tab), cx)
+                        .left(shifts[ix]);
+                    Some(if dragged.as_ref() == Some(tab) {
+                        gpui::deferred(element).with_priority(1).into_any_element()
+                    } else {
+                        element.into_any_element()
+                    })
+                }
                 TitleTab::Search => {
                     let element = self.search_title_tab(tab_width(tab), cx).left(shifts[ix]);
                     Some(if dragged.as_ref() == Some(tab) {
@@ -7358,6 +7423,15 @@ impl Render for Shell {
                 this.open_quick_open(true, window, cx)
             }))
             .on_action(cx.listener(|this, _: &ShowInbox, window, cx| this.open_inbox(window, cx)))
+            .on_action(cx.listener(|this, _: &ShowGitHub, window, cx| {
+                this.open_connector(Connector::Github, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowGitLab, window, cx| {
+                this.open_connector(Connector::Gitlab, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowJira, window, cx| {
+                this.open_connector(Connector::Jira, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ShowNotes, window, cx| this.open_notes(window, cx)))
             .on_action(cx.listener(|this, _: &ShowAutomations, window, cx| {
                 this.open_automations(window, cx)
@@ -7425,12 +7499,15 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &NewClaude, _, cx| this.create(Kind::Claude, cx)))
             .on_action(cx.listener(|this, _: &OpenProject, _, cx| this.open_project(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                if this.settings.is_none()
+                    && this.active_terminal_tab.is_some()
+                    && let Some(tab) = this.active_title_tab(cx)
+                {
+                    this.close_title_tabs(&[tab], None, window, cx);
+                    return;
+                }
                 if let Some(view) = this.active_app_view.filter(|_| this.settings.is_none()) {
-                    if this.workspace.classic_layout {
-                        this.close_app_view(window, cx);
-                    } else {
-                        this.close_title_tabs(&[TitleTab::App(view)], None, window, cx);
-                    }
+                    this.close_title_tabs(&[TitleTab::App(view)], None, window, cx);
                     return;
                 }
                 if this.app_search.is_some() {
@@ -10118,14 +10195,14 @@ mod tests {
             root.read_with(cx, |s, cx| s.sessions[&active].read(cx).transcript.clone());
         let before = transcript.read_with(cx, |t, _| t.render_passes);
         let inbox = gpui::VisualTestContext::from_window(window.into(), cx)
-            .debug_bounds("sidebar-navigation-Inbox")
+            .debug_bounds("sidebar-navigation-GitHub")
             .unwrap();
         cx.update_window(window.into(), |_, w, cx| {
             w.simulate_mouse_move(inbox.center(), cx)
         })
         .unwrap();
         cx.run_until_parked();
-        assert_eq!(root.read_with(cx, |s, _| s.sidebar_hover), Some("Inbox"));
+        assert_eq!(root.read_with(cx, |s, _| s.sidebar_hover), Some("GitHub"));
         let notes = gpui::VisualTestContext::from_window(window.into(), cx)
             .debug_bounds("sidebar-navigation-Notes")
             .unwrap();
@@ -11475,7 +11552,7 @@ mod app_menu_tests {
                 })
                 .unwrap()
         };
-        for label in ["Inbox", "Notes", "Appearance…"] {
+        for label in ["GitHub", "Notes", "Appearance…"] {
             let command = action(label);
             window
                 .update(visual, |_, native, cx| {
@@ -11531,7 +11608,6 @@ mod app_menu_tests {
             })
             .unwrap();
     }
-
     #[gpui::test]
     fn workspace_menu_targets_one_live_workspace_while_another_window_is_active(
         cx: &mut TestAppContext,
@@ -11553,7 +11629,9 @@ mod app_menu_tests {
             .update(cx, |shell, _, _| {
                 assert_eq!(
                     shell.active_app_view,
-                    Some(crate::workspace::AppView::Inbox)
+                    Some(crate::workspace::AppView::Connector(
+                        crate::workspace::Connector::Github
+                    ))
                 );
             })
             .unwrap();

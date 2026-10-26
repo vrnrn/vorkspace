@@ -324,17 +324,12 @@ impl Inbox {
     }
 
     fn list_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let connected = model::PROVIDERS
-            .into_iter()
-            .filter(|provider| {
-                self.state.connectors.enabled(provider)
-                    && self
-                        .snapshot
-                        .connections
-                        .get(*provider)
-                        .is_some_and(|s| s.connected)
-            })
-            .collect::<Vec<_>>();
+        let provider = model::provider_label(&self.state.source);
+        let connected = self
+            .snapshot
+            .connections
+            .get(&self.state.source)
+            .is_some_and(|status| status.connected);
         let items = self.visible_items(cx);
         let sources = div()
             .h(px(36.))
@@ -342,73 +337,21 @@ impl Inbox {
             .flex_shrink_0()
             .flex()
             .items_center()
-            .gap(px(1.))
+            .gap(px(6.))
             .border_b_1()
             .border_color(content(0.07))
-            .children(connected.iter().map(|provider| {
-                let provider = *provider;
-                let source = provider.to_string();
-                div()
-                    .id(SharedString::from(format!("inbox-source-{provider}")))
-                    .debug_selector(move || format!("inbox-source-{provider}"))
-                    .role(Role::Tab)
-                    .aria_label(model::provider_label(provider))
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(24.))
-                    .px(px(8.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(6.))
-                    .rounded(px(6.))
-                    .text_size(px(12.))
-                    .text_color(content(if self.state.source == provider {
-                        1.
-                    } else {
-                        0.5
-                    }))
-                    .when(self.state.source == provider, |d| d.bg(content(0.1)))
-                    .hover(|s| s.bg(content(0.05)))
-                    .child(provider_mark(provider))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .child(model::provider_label(provider)),
-                    )
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.change_source(source.clone(), cx)),
-                    )
-            }))
+            .child(provider_mark(&self.state.source))
+            .child(div().flex_1().text_size(px(12.)).child(provider))
+            .when(!connected, |d| {
+                d.child(
+                    icon_button("connector-refresh", "Refresh", "refresh-cw")
+                        .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                )
+            })
             .child(
-                div()
-                    .id("inbox-add-connection")
-                    .role(Role::Button)
-                    .aria_label("Add connection")
-                    .relative()
-                    .h(px(24.))
-                    .flex_1()
-                    .min_w_0()
-                    .px(px(6.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(6.))
-                    .rounded(px(6.))
-                    .text_size(px(12.))
-                    .text_color(content(0.4))
-                    .hover(|s| s.bg(content(0.05)))
-                    .child(self.connection_anchor.probe())
-                    .child(icon("plus", 14.))
-                    .when(connected.len() < 2, |d| {
-                        d.child(div().truncate().child("Add connection"))
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.connections_open = !this.connections_open;
-                        this.filters_open = false;
-                        cx.notify();
-                    })),
+                icon_button("connector-settings", "Settings → Connectors", "settings")
+                    .debug_selector(|| "connector-settings".into())
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Settings))),
             );
         let tools = div()
             .h(px(36.))
@@ -432,7 +375,7 @@ impl Inbox {
                     .child(self.search.clone()),
             )
             .child(
-                icon_button("inbox-filter", "Filter inbox", "filter")
+                icon_button("inbox-filter", "Filter items", "filter")
                     .relative()
                     .child(self.filter_anchor.probe())
                     .when(self.filters_open || self.filters_active(), |d| {
@@ -452,7 +395,7 @@ impl Inbox {
                                 this.state.seen.mark(item);
                             }
                         }
-                        this.save();
+                        this.save(cx);
                         cx.notify();
                     },
                 )),
@@ -468,22 +411,29 @@ impl Inbox {
                     this.load_detail(false, cx);
                 })),
             );
-        let empty = if self.state.connectors.enabled_providers().next().is_none() {
-            "No Inbox connectors are enabled. Enable a source in Settings → Inbox.".into()
-        } else if connected.is_empty() && !self.loading {
-            "Add a connection to start using the Inbox.".into()
-        } else if self.loading && self.snapshot.items.is_empty() {
-            "Loading inbox…".into()
+        let empty = if !self.state.connectors.enabled(&self.state.source) {
+            format!("{provider} is disabled. Enable it in Settings → Connectors.")
         } else if let Some(error) = self.snapshot.errors.get(&self.state.source) {
-            error.clone()
+            format!("{provider}: {error}. Check Settings → Connectors or refresh.")
+        } else if self.loading && items.is_empty() {
+            format!("Loading {provider}…")
+        } else if !connected {
+            format!("Connect {provider} in Settings → Connectors.")
         } else if self.projects.is_empty() && !model::is_tracker(&self.state.source) {
-            "Open a project to fill the inbox".into()
+            format!("Open a project to see {provider} items.")
         } else if self.filters_active() || !self.search.read(cx).content.is_empty() {
-            "No items match these filters".into()
-        } else if model::is_tracker(&self.state.source) {
-            format!("No {} issues", model::provider_label(&self.state.source))
+            format!("No {provider} items match these filters.")
         } else {
-            "No matching issues or pull requests".into()
+            format!(
+                "No {provider} issues{}.",
+                if model::is_tracker(&self.state.source) {
+                    ""
+                } else if self.state.source == "gitlab" {
+                    " or merge requests"
+                } else {
+                    " or pull requests"
+                }
+            )
         };
         let rows = items
             .into_iter()
@@ -613,12 +563,14 @@ impl Inbox {
             .flex()
             .flex_col()
             .child(sources)
-            .when(!connected.is_empty(), |d| d.child(tools))
+            .when(connected, |d| d.child(tools))
             .child(
                 div()
                     .id("inbox-list-scroll")
+                    .debug_selector(|| "connector-list".into())
+                    .track_scroll(&self.list_scroll)
                     .role(Role::ListBox)
-                    .aria_label("Inbox items")
+                    .aria_label(format!("{} items", provider))
                     .min_h_0()
                     .flex_1()
                     .overflow_y_scroll()
@@ -633,7 +585,7 @@ impl Inbox {
                 div()
                     .id("inbox-list-resize")
                     .role(Role::Splitter)
-                    .aria_label("Resize inbox list")
+                    .aria_label("Resize connector list")
                     .absolute()
                     .right(px(-3.))
                     .top_0()
@@ -651,7 +603,6 @@ impl Inbox {
             )
             .into_any_element()
     }
-
     fn related_sessions(&self, item: &Item) -> Vec<Session> {
         let work_item = item.work_item();
         self.sessions
@@ -677,8 +628,18 @@ impl Inbox {
                 .items_center()
                 .justify_center()
                 .gap(px(12.))
-                .child(icon("inbox", 24.).text_color(content(0.3)))
-                .child(message("Select an inbox item").text_size(px(13.)))
+                .child(
+                    provider_mark(&self.state.source)
+                        .size(px(24.))
+                        .text_color(content(0.3)),
+                )
+                .child(
+                    message(format!(
+                        "Select a {} item",
+                        model::provider_label(&self.state.source)
+                    ))
+                    .text_size(px(13.)),
+                )
                 .into_any_element();
         };
         let is_pr = item.kind == "pr";
@@ -1063,7 +1024,6 @@ impl Inbox {
             .child(body)
             .into_any_element()
     }
-
     fn pr_actions(&self, item: &Item, cx: &mut Context<Self>) -> AnyElement {
         let open = item.state.eq_ignore_ascii_case("open");
         let selected = self.merge_action.clone();
@@ -2068,8 +2028,16 @@ impl Inbox {
                 && !self.state.hidden_jira_projects.is_empty())
     }
     pub(super) fn filters_changed(&mut self, refetch: bool, cx: &mut Context<Self>) {
-        self.save();
-        if let Some(item) = self.visible_items(cx).first() {
+        if self.state.source == "jira"
+            && let Some(owner) = self.owner.clone()
+        {
+            let hidden = self.state.hidden_jira_projects.clone();
+            let _ = owner.update(cx, |owner, _| owner.state.hidden_jira_projects = hidden);
+        }
+        self.save(cx);
+        if self.active
+            && let Some(item) = self.visible_items(cx).first()
+        {
             self.select(item.key(), cx);
         }
         if refetch {
@@ -2081,7 +2049,7 @@ impl Inbox {
         let weak = cx.entity().downgrade();
         let f = &self.state.filters;
         let tracker = model::is_tracker(&self.state.source);
-        let mut rows = vec![caption("FILTER INBOX").into_any_element()];
+        let mut rows = vec![caption("FILTER ITEMS").into_any_element()];
         if !(tracker && self.state.jira_filter.mode == "jql") {
             rows.push(
                 menu_row(
@@ -2240,7 +2208,6 @@ impl Inbox {
         )
         .into_any_element()
     }
-
     fn connection_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let weak = cx.entity().downgrade();
         popover(
@@ -2314,7 +2281,7 @@ impl Inbox {
             "gitlab" => {
                 "Connect GitLab.com or your GitLab instance with a personal access token with API access."
             }
-            _ => "Unsupported inbox provider.",
+            _ => "Unsupported connector.",
         };
         div()
             .absolute()
@@ -2445,7 +2412,6 @@ impl Inbox {
             )
             .into_any_element()
     }
-
     fn project_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let weak = cx.entity().downgrade();
         popover(
@@ -2756,7 +2722,7 @@ impl gpui::Render for Inbox {
         div()
             .id("inbox-view")
             .role(Role::Group)
-            .aria_label("Inbox")
+            .aria_label(model::provider_label(&self.state.source))
             .track_focus(&self.focus)
             .relative()
             .size_full()
@@ -2798,7 +2764,7 @@ impl gpui::Render for Inbox {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     if this.resize_start.take().is_some() {
-                        this.save();
+                        this.save(cx);
                         cx.notify();
                     }
                 }),
@@ -2807,7 +2773,7 @@ impl gpui::Render for Inbox {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     if this.resize_start.take().is_some() {
-                        this.save();
+                        this.save(cx);
                         cx.notify();
                     }
                 }),
@@ -2920,6 +2886,153 @@ mod tests {
         })
     }
     #[gpui::test]
+    fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_observer(
+        cx: &mut TestAppContext,
+    ) {
+        let window = inbox_window(cx);
+        let (github, jira) = window
+            .update(cx, |root, _, cx| {
+                root.loading = true;
+                root.snapshot.items = ["github", "jira"]
+                    .into_iter()
+                    .map(|provider| Item {
+                        provider: provider.into(),
+                        number: 42,
+                        identifier: format!("{provider}-42"),
+                        title: provider.into(),
+                        updated_at: "2026-10-22T10:00:00Z".into(),
+                        ..Default::default()
+                    })
+                    .collect();
+                (
+                    root.connector_page("github", cx),
+                    root.connector_page("jira", cx),
+                )
+            })
+            .unwrap();
+        cx.update(|cx| {
+            for (page, source, draft) in [
+                (&github, "github", "GitHub draft"),
+                (&jira, "jira", "Jira draft"),
+            ] {
+                page.update(cx, |page, cx| {
+                    assert_eq!(page.state.source, source);
+                    page.selected = Some(page.visible_items(cx)[0].key());
+                    page.detail_generation = 5;
+                    page.detail_loading = true;
+                    page.search
+                        .update(cx, |input, cx| input.set_text(source.into(), cx));
+                    page.comment
+                        .update(cx, |input, cx| input.set_text(draft.into(), cx));
+                    page.reply = Some((format!("{source}-thread"), source.into()));
+                    page.state.filters.time = if source == "github" { "7d" } else { "30d" }.into();
+                    page.summary_scroll = ListState::new(100, ListAlignment::Top, px(200.));
+                    page.summary_scroll.scroll_to(gpui::ListOffset {
+                        item_ix: 12,
+                        offset_in_item: px(4.),
+                    });
+                    page.set_active(true, cx);
+                    page.set_active(false, cx);
+                });
+            }
+            github.update(cx, |page, cx| {
+                page.finish_detail(
+                    4,
+                    page.selected.clone().unwrap(),
+                    Err("stale".into()),
+                    Err("stale".into()),
+                    cx,
+                );
+                assert!(page.detail_loading && page.detail_error.is_none());
+                page.finish_detail(
+                    5,
+                    "jira:wrong-key".into(),
+                    Err("wrong provider".into()),
+                    Err("wrong provider".into()),
+                    cx,
+                );
+                assert!(page.detail_loading);
+                page.finish_detail(
+                    5,
+                    page.selected.clone().unwrap(),
+                    Ok(Details {
+                        body: "GitHub detail".into(),
+                        ..Default::default()
+                    }),
+                    Ok(Thread::default()),
+                    cx,
+                );
+                assert_eq!(page.details.as_ref().unwrap().body, "GitHub detail");
+            });
+            jira.update(cx, |page, _| {
+                assert!(page.details.is_none() && page.detail_loading)
+            });
+        });
+        let changes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let output = changes.clone();
+        let _events = window
+            .update(cx, |root, _, cx| {
+                let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
+                    if matches!(event, Event::Activity { .. }) {
+                        output.set(output.get() + 1);
+                    }
+                });
+                let mut snapshot = root.snapshot.clone();
+                snapshot.connections.insert(
+                    "jira".into(),
+                    model::Status {
+                        connected: true,
+                        ..Default::default()
+                    },
+                );
+                snapshot
+                    .errors
+                    .insert("github".into(), "Temporarily unavailable".into());
+                snapshot.items.retain(|item| item.provider != "github");
+                root.generation = 7;
+                root.finish_refresh(
+                    7,
+                    root.state.fetch_scope(&root.projects),
+                    snapshot,
+                    vec![],
+                    cx,
+                );
+                subscription
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            changes.get(),
+            1,
+            "only the root observes and emits activity"
+        );
+        cx.update(|cx| {
+            for (page, source, draft, time) in [
+                (&github, "github", "GitHub draft", "7d"),
+                (&jira, "jira", "Jira draft", "30d"),
+            ] {
+                page.update(cx, |page, cx| {
+                    page.set_active(true, cx);
+                    assert_eq!(page.state.source, source);
+                    assert_eq!(page.search.read(cx).content.as_ref(), source);
+                    assert_eq!(page.comment.read(cx).content.as_ref(), draft);
+                    assert_eq!(page.state.filters.time, time);
+                    assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 12);
+                    assert_eq!(page.reply.as_ref().unwrap().0, format!("{source}-thread"));
+                });
+            }
+        });
+        window
+            .update(cx, |root, _, cx| {
+                assert_eq!(root.pages.len(), 2);
+                assert_eq!(root.connector_page("github", cx), github);
+                let state = ViewState::load(&locked(&root.store).unwrap());
+                assert_eq!(state.filters_for("github").time, "7d");
+                assert_eq!(state.filters_for("jira").time, "30d");
+            })
+            .unwrap();
+    }
+    #[gpui::test]
     fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight_results(
         cx: &mut TestAppContext,
     ) {
@@ -2973,8 +3086,8 @@ mod tests {
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
         assert!(visual.debug_bounds("inbox-source-github").is_none());
-        assert!(visual.debug_bounds("inbox-source-gitlab").is_some());
-        assert!(visual.debug_bounds("inbox-source-jira").is_some());
+        assert!(visual.debug_bounds("inbox-source-gitlab").is_none());
+        assert!(visual.debug_bounds("inbox-source-jira").is_none());
         window
             .update(visual, |inbox, _, cx| {
                 inbox.set_connector_enabled("gitlab", false, cx).unwrap();
@@ -3013,7 +3126,6 @@ mod tests {
             })
             .unwrap();
     }
-
     #[gpui::test]
     fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chime(
         cx: &mut TestAppContext,
@@ -3049,7 +3161,7 @@ mod tests {
                     cx,
                 );
                 item.updated_at = "2026-10-22T11:00:00Z".into();
-                inbox.record_self_activity(item.key(), item.updated_ms());
+                inbox.record_self_activity(item.key(), item.updated_ms(), cx);
                 inbox.finish_refresh(
                     1,
                     scope.clone(),
@@ -3082,7 +3194,6 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(*changes.borrow(), vec![0, 0, 1]);
     }
-
     #[gpui::test]
     fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut TestAppContext) {
         let window = inbox_window(cx);
@@ -3116,13 +3227,13 @@ mod tests {
                     cx,
                 );
                 let own = model::timestamp_ms("2026-10-22T11:00:00Z");
-                inbox.record_self_activity(item.key(), 0);
+                inbox.record_self_activity(item.key(), 0, cx);
                 assert!(
                     inbox.self_activity.is_empty(),
                     "an uncertain receipt cannot suppress anything"
                 );
-                inbox.record_self_activity(item.key(), own);
-                inbox.record_self_activity(item.key(), own - 1);
+                inbox.record_self_activity(item.key(), own, cx);
+                inbox.record_self_activity(item.key(), own - 1, cx);
                 assert_eq!(
                     inbox.self_activity[&item.key()].0,
                     own,
@@ -3160,7 +3271,6 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(*changes.borrow(), vec![0, 0, 1]);
     }
-
     #[gpui::test]
     fn saved_bot_destination_is_preselected_and_explicit_project_choice_wins(
         cx: &mut TestAppContext,
@@ -3186,6 +3296,7 @@ mod tests {
                     title: "Preserve context".into(),
                     ..Default::default()
                 };
+                inbox.state.source = "jira".into();
                 inbox.snapshot.items = vec![item.clone()];
                 inbox.selected = Some(item.key());
                 inbox.details = Some(Details {
@@ -3220,7 +3331,6 @@ mod tests {
         assert_eq!(sent[1].0, "/chosen/project");
         assert_eq!(sent[1].2, None);
     }
-
     #[gpui::test]
     fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_composer(
         cx: &mut TestAppContext,

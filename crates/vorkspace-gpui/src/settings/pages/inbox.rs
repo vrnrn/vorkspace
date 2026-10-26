@@ -184,7 +184,7 @@ impl SettingsView {
             .into_any_element();
             rows.push(div().id("jira-query-row").debug_selector(||"settings-jira-query".into()).px(px(20.)).py(px(12.)).flex().flex_col().gap(px(10.)).text_size(px(12.)).child("JQL query")
                 .child(div().h(px(36.)).px_2().border_1().border_color(content(0.15)).rounded_md().flex().items_center().child(query))
-                .child(div().text_color(content(0.5)).child("JQL controls which tickets are fetched. Project selections and Assigned to me do not apply. Inbox status, time, and search filters still narrow the results."))
+                .child(div().text_color(content(0.5)).child("JQL controls which tickets are fetched. Project selections and Assigned to me do not apply. Jira status, time, and search filters still narrow the results."))
                 .child(apply).child(div().text_color(content(0.5)).child(if applied {"JQL query applied."}else{"Apply to check and save your query."}))
                 .when_some(self.inbox.error.clone(),|d,error|d.child(div().text_color(gpui::rgb(0xef4444)).child(error))).into_any_element());
         } else {
@@ -197,7 +197,7 @@ impl SettingsView {
                 None,
                 false,
                 "Projects",
-                Some("Selections are shared with the Inbox filter menu.".into()),
+                Some("Selections are shared with the Jira filter menu.".into()),
                 vec![refresh],
             ));
             for (id, name) in self.ctx.jira_projects.clone() {
@@ -324,7 +324,7 @@ impl SettingsView {
                 self.row(
                     None,
                     false,
-                    "Disabled in Inbox",
+                    "Connector disabled",
                     Some("Saved connection details are kept.".into()),
                     vec![],
                 )
@@ -336,7 +336,7 @@ impl SettingsView {
             };
             let enable = self.toggle(
                 toggle_id,
-                format!("Enable {title} inbox connector"),
+                format!("Enable {title} connector"),
                 enabled,
                 false,
                 cx,
@@ -403,7 +403,7 @@ mod tests {
                 |_, cx| {
                     cx.new(|cx| {
                         let mut view = SettingsView::new(
-                            Section::Inbox,
+                            Section::Connectors,
                             Preferences::default(),
                             SettingsContext::default(),
                             cx,

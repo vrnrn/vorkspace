@@ -1,15 +1,39 @@
-# Inbox connectors
+# Connectors
 
-Inbox supports GitHub, GitLab, and Jira Cloud. Open **Settings → Inbox** to
+Vorkspace connectors support GitHub, GitLab, and Jira Cloud. Open **Settings → Connectors** to
 enable the sources you use and manage their connections. GitHub uses the
 GitHub CLI's active authentication. GitLab and Jira store connection details
-locally; see [Jira Cloud inbox](jira.md) for Jira setup and filtering.
+locally; see [Jira Cloud connector](jira.md) for Jira setup and filtering.
 
-Each source has an independent **Enable … inbox connector** switch. Turning
-one off removes its Inbox tabs, connection actions, unread counts, polling,
+Each source has an independent **Enable … connector** switch. Turning
+one off removes its sidebar button and tab, connection actions, unread counts, polling,
 and automation trigger choices. Saved connection details, filters, read
 state, and default Bot choices remain available when it is enabled again.
 Disabling a source does not log out of GitHub CLI or delete credentials.
+
+Enabled connectors each have a sidebar button in expanded and compact layouts.
+Clicking a button opens or focuses that provider's regular title tab. Connector
+tabs coexist with sessions, Bots, Notes and Automations and use the same close,
+ordering and restoration paths. Authentication does not determine availability.
+Each page remains pinned to its provider, including setup and failure states.
+
+Connectors, Archive and Worktrees are grouped under App in Settings. The sidebar
+options menu lists enabled connectors, Notes, Automations and Terminal with
+visibility switches and drag grips. Hiding a shortcut leaves its tabs, connection
+and background work available. Shortcut order is saved independently of title-tab
+order and applies to both expanded and collapsed sidebars. Disabled connectors
+retain their saved position. Search stays first; the Activity section and the
+session-card density switch are retired because work is shown inline.
+
+One retained owner fetches enabled providers and emits notification and automation
+events once. Provider pages retain independent selection, filters, search, list
+and detail scroll, detail requests and reply drafts while hidden or closed during
+this run. Disabling a connector retires its tab while retaining that page state.
+Provider filters are persisted alongside the existing native view state; legacy
+shared filters seed each provider until it has its own saved choice. Legacy Inbox
+tabs and scoped navigation migrate to the saved enabled source, then the first
+enabled provider. With none enabled, only those tabs are removed. The old sidebar
+visibility preference does not suppress individually enabled connectors.
 
 The GitHub Code tab handles large diffs using the pull request's exact local
 commit objects when available, or paginated file patches otherwise. Reconstruction
@@ -37,6 +61,6 @@ from existing preferences. Subsequent changes are saved in the native settings
 database. Opening the app does not rewrite or delete existing credential files.
 
 All change reviews use **Unified** or **Side by side**. The choice is shared by
-Inbox, working-tree, commit, and session reviews and is saved for the next launch.
+connector, working-tree, commit, and session reviews and is saved for the next launch.
 Reviews show changed hunks with nearby context; there is no full-file diff mode.
 Ordinary files still open in the file editor.

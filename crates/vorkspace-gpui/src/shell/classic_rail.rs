@@ -258,7 +258,6 @@ impl Shell {
             })
         });
         let navigation = self.sidebar_navigation(cx);
-        let live_agents = self.live_agents_preview(cx);
         rail = rail
             .child(navigation)
             .child(
@@ -314,7 +313,6 @@ impl Shell {
                         ),
                     ),
             )
-            .children(live_agents)
             .when(
                 self.notification_state.installed.read(cx).is_visible(),
                 |d| {
@@ -384,7 +382,7 @@ impl Shell {
     ) -> AnyElement {
         let selected = self.workspace.project == path
             && self.app_search.is_none()
-            && self.active_app_view.is_none()
+            && !self.app_view_open()
             && !self.bot_active(cx);
         let appearance = self.appearance(&path);
         let menu = path.clone();
@@ -570,7 +568,7 @@ impl Shell {
         use crate::workspace::SidebarTab;
 
         let workspace_active =
-            self.active_app_view.is_none() && self.app_search.is_none() && !self.bot_active(cx);
+            !self.app_view_open() && self.app_search.is_none() && !self.bot_active(cx);
         let tab = self.workspace.sidebar_tab();
         let tabs = SidebarTab::normalize(&self.workspace.sidebar_tab_order);
         let pinned_bots: Vec<_> = if self.workspace.preferences.rail_bots_pinned {
@@ -735,33 +733,38 @@ impl Shell {
                         })),
                 )
                 .children(
-                    [
-                        ("Search", "search"),
-                        ("Inbox", "inbox"),
-                        ("Notes", "note"),
-                        ("Automations", "zap"),
-                    ]
-                    .into_iter()
-                    .filter(|(label, _)| match *label {
-                        "Notes" => {
-                            self.workspace.preferences.notes && self.workspace.sidebar_notes_visible
-                        }
-                        "Inbox" => self.workspace.sidebar_inbox_visible,
-                        "Automations" => self.workspace.sidebar_automations_visible,
-                        _ => true,
-                    })
-                    .map(|(label, glyph)| {
-                        let selected = if label == "Search" {
-                            self.app_search.is_some()
-                        } else {
-                            self.app_view_label() == Some(label)
-                        };
-                        let unread = label == "Inbox"
-                            && self
-                                .inbox
-                                .as_ref()
-                                .is_some_and(|inbox| inbox.read(cx).unread_count() > 0);
-                        icon_button(label, label, glyph)
+                    std::iter::once(("Search", "search"))
+                        .chain(
+                            self.visible_sidebar_navigation(cx)
+                                .into_iter()
+                                .map(|item| (item.label(), item.icon())),
+                        )
+                        .map(|(label, glyph)| {
+                            let selected = if label == "Search" {
+                                self.app_search.is_some()
+                            } else {
+                                self.app_view_label() == Some(label)
+                            };
+                            let connector = Connector::ALL
+                                .into_iter()
+                                .find(|provider| provider.label() == label);
+                            let unread = connector
+                                .is_some_and(|provider| self.connector_unread(provider, cx));
+                            icon_button(
+                                if label == "Terminal" {
+                                    "terminal"
+                                } else {
+                                    label
+                                },
+                                label,
+                                glyph,
+                            )
+                            .debug_selector(move || format!("sidebar-navigation-{label}"))
+                            .aria_label(if unread {
+                                format!("{label}, new items")
+                            } else {
+                                label.into()
+                            })
                             .aria_selected(selected)
                             .focusable()
                             .tab_stop(true)
@@ -779,14 +782,19 @@ impl Shell {
                                         .bg(accent_color()),
                                 )
                             })
-                            .on_click(cx.listener(move |this, _, window, cx| match label {
-                                "Search" => this.focus_search(window, cx),
-                                "Inbox" => this.open_inbox(window, cx),
-                                "Notes" => this.open_notes(window, cx),
-                                "Automations" => this.open_automations(window, cx),
-                                _ => (),
-                            }))
-                    }),
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| match label {
+                                    "Search" => this.focus_search(window, cx),
+                                    "GitHub" => this.open_connector(Connector::Github, window, cx),
+                                    "GitLab" => this.open_connector(Connector::Gitlab, window, cx),
+                                    "Jira" => this.open_connector(Connector::Jira, window, cx),
+                                    "Notes" => this.open_notes(window, cx),
+                                    "Automations" => this.open_automations(window, cx),
+                                    "Terminal" => this.open_terminal_tab(window, cx),
+                                    _ => (),
+                                },
+                            ))
+                        }),
                 ),
         )
         .child(compact_footer(

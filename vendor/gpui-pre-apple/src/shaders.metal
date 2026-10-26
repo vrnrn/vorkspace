@@ -1340,6 +1340,14 @@ fragment float4 edge_fade_fragment(BackdropVertexOutput input [[stage_in]],
                                    texture2d<float> after [[texture(1)]],
                                    constant BackdropCompositeParams *params [[buffer(0)]]) {
   uint2 pixel = uint2(input.position.xy - params->origin);
+  if (params->padding <= -12288.) {
+    float2 local = (input.position.xy - params->region_origin) / params->region_size;
+    float radius = length((local - 0.5) * 2.);
+    float t = saturate((radius - params->corner_radius) / (1. - params->corner_radius));
+    // A wide, C2-continuous feather: no flat disk edge or color overlay.
+    float coverage = t * t * t * (t * (t * 6. - 15.) + 10.);
+    return mix(before.read(pixel), after.read(pixel), coverage);
+  }
   if (params->padding <= -8192.) {
     float corner = -params->padding - 8192.;
     float2 center = float2(corner == 0. || corner == 3. ? params->region_size.x : 0.,

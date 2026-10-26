@@ -274,7 +274,8 @@ impl Shell {
                             .detach();
                     }
                     Err(error) => {
-                        this.error = Some(format!("Could not evaluate Inbox automations: {error}"));
+                        this.error =
+                            Some(format!("Could not evaluate connector automations: {error}"));
                         cx.notify();
                     }
                 }
@@ -282,7 +283,6 @@ impl Shell {
         })
         .detach();
     }
-
     pub(super) fn launch_automation(
         &mut self,
         due: DueAutomationRun,

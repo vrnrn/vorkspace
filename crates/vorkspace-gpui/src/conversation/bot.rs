@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use vorkspace_core::bot::{Bot, Message};
 #[derive(Default)]
 pub(super) struct ChatState {
+    /// Standalone Bot chats opt into identity decoration. Channels keep None;
+    /// Some(false) retains the header but freezes it beneath a host modal.
+    pub(super) header_animation: Option<bool>,
     pub(super) pending: Vec<Message>,
     pub(super) emoji: bool,
     pub(super) delivered: Option<String>,
@@ -23,6 +26,12 @@ pub(crate) struct QueueChanged {
 impl EventEmitter<QueueChanged> for Conversation {}
 impl EventEmitter<Submitted> for Conversation {}
 impl Conversation {
+    pub(crate) fn show_bot_header(&mut self, animate: bool, cx: &mut Context<Self>) {
+        if self.bot_ui.header_animation != Some(animate) {
+            self.bot_ui.header_animation = Some(animate);
+            cx.notify();
+        }
+    }
     pub(crate) fn bot_quote(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.input.read(cx).is_composing() {
             return;
@@ -404,13 +413,9 @@ impl Conversation {
     }
     pub(super) fn render_bot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let bot = self.settings.bot.as_ref().unwrap().bot.clone();
-        let status = self.bot_status();
-        let name = bot.label();
-        // BotHeader's greeting: it shows only before the first message.
+        // The fixed Bot header owns identity; the empty state only offers help.
         let body = if !self.summary.has_messages {
             let greeting = div().flex().flex_col().items_center().justify_center().px_6().py_12()
-                .child(crate::bots::avatar::bot_avatar(&bot, status, 56., false))
-                .child(div().mt(px(-8.)).h(px(32.)).px(px(14.)).flex().items_center().rounded_full().border_1().border_color(content(0.14)).bg(content(0.06)).text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(name))
                 .child(div().mt_3().max_w(px(384.)).text_center().text_size(px(13.)).line_height(px(21.)).text_color(content(0.5)).child(if bot.projects.is_empty(){"Add the projects I should work on in my settings, or just ask me something.".into()}else{format!("I can see every session, note and folder in {}. Ask what’s going on, or hand me work.",bot.projects.iter().map(|p|std::path::Path::new(p).file_name().unwrap_or_default().to_string_lossy()).collect::<Vec<_>>().join(", "))}));
             div()
                 .flex_1()
@@ -446,7 +451,17 @@ impl Conversation {
                 )
             })
             .children(self.model_list_popover(cx))
-            .child(body)
+            .child(
+                // Conversation owns the transcript/composer boundary. Keep the
+                // floating identity inside that viewport, including when a
+                // draft or attention control makes the composer grow.
+                crate::bots::chat_surface(
+                    body,
+                    &bot,
+                    self.bot_status(),
+                    self.bot_ui.header_animation,
+                ),
+            )
             .child(
                 div()
                     .w_full()

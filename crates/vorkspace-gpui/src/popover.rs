@@ -767,6 +767,8 @@ pub(crate) struct MenuAction {
     pub switch: bool,
     /// Checkbox-style actions can update their owner without dismissing the menu.
     pub keep_open: bool,
+    /// Opt-in grip and drop target; ordinary menu actions retain their behavior.
+    pub reorderable: bool,
     pub submenu: Vec<MenuAction>,
     pub flyout: Option<Flyout>,
 }
@@ -837,6 +839,10 @@ impl MenuAction {
         self.keep_open = true;
         self
     }
+    pub(crate) fn reorderable(mut self) -> Self {
+        self.reorderable = true;
+        self
+    }
     pub(crate) fn submenu(mut self, items: Vec<MenuAction>) -> Self {
         self.submenu = items;
         self
@@ -875,6 +881,37 @@ pub(crate) enum MenuEvent {
 /// A separate event so lazy flyouts can load without dismissing menu owners.
 pub(crate) struct MenuOpened(pub SharedString);
 
+/// Separate from picking: a drop must never toggle a row or dismiss its menu.
+pub(crate) struct MenuReordered {
+    pub source: SharedString,
+    pub target: SharedString,
+    pub after: bool,
+}
+#[derive(Clone)]
+struct MenuDrag {
+    menu: gpui::EntityId,
+    id: SharedString,
+    label: SharedString,
+    icon: Option<&'static str>,
+}
+impl gpui::Render for MenuDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1p5()
+            .rounded_md()
+            .bg(floating_fill())
+            .text_color(content(1.))
+            .text_size(px(13.))
+            .child(icon("grip-vertical", 12.).text_color(content(0.5)))
+            .when_some(self.icon, |d, glyph| d.child(icon(glyph, 14.)))
+            .child(self.label.clone())
+    }
+}
+
 const MENU_WIDTH: f32 = 228.;
 /// Content-sized menus never shrink below this.
 const MENU_MIN_WIDTH: f32 = 160.;
@@ -904,6 +941,7 @@ pub(crate) struct Menu {
 }
 impl EventEmitter<MenuEvent> for Menu {}
 impl EventEmitter<MenuOpened> for Menu {}
+impl EventEmitter<MenuReordered> for Menu {}
 impl Focusable for Menu {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -1031,11 +1069,17 @@ impl Menu {
         cx.emit(event);
     }
     pub(crate) fn replace_items(&mut self, items: Vec<MenuItem>, cx: &mut Context<Self>) {
+        let active_id = self
+            .active
+            .and_then(|ix| self.action(ix))
+            .map(|action| action.id.clone());
         self.rows.resize_with(items.len(), AnchorSlot::default);
         self.items = items;
-        self.active = self
-            .active
-            .filter(|&ix| self.action(ix).is_some_and(|a| !a.disabled));
+        self.active = active_id.and_then(|id| {
+            self.items.iter().position(|item| {
+            matches!(item, MenuItem::Action(action) if action.id == id && !action.disabled)
+        })
+        });
         self.submenu = None;
         self.sub_active = None;
         cx.notify();
@@ -1211,6 +1255,14 @@ impl Menu {
         });
         let has_submenu = !action.submenu.is_empty() || action.flyout.is_some();
         let selector = action.id.clone();
+        let reorderable = action.reorderable && !in_submenu;
+        let menu_id = cx.entity_id();
+        let drag = MenuDrag {
+            menu: menu_id,
+            id: action.id.clone(),
+            label: action.label.clone(),
+            icon: action.icon,
+        };
         div()
             .id((
                 if in_submenu {
@@ -1244,6 +1296,8 @@ impl Menu {
             .w_full()
             .flex()
             .px_2()
+            // The grip's hit area supplies the leading inset for draggable rows.
+            .when(reorderable, |d| d.pl_0())
             .text_size(px(if style == MenuStyle::Git { 12. } else { 13. }))
             .text_color(ink)
             .when(dim, |d| d.opacity(0.4))
@@ -1286,6 +1340,63 @@ impl Menu {
             .when(filled && !action.disabled, |d| d.bg(fill))
             .when(!filled && !action.disabled, |d| d.hover(|s| s.bg(hover)))
             .when(!in_submenu, |d| d.child(self.rows[ix].probe()))
+            .when(reorderable, |d| {
+                let grip_selector = action.id.clone();
+                d.child(
+                    div()
+                        .id(("menu-grip", ix))
+                        .debug_selector(move || format!("menu-grip-{grip_selector}"))
+                        .aria_label(format!("Reorder {}", action.label))
+                        .cursor(CursorStyle::OpenHand)
+                        .w(px(20.))
+                        .h(px(24.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_sm()
+                        .text_color(content(0.5))
+                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                        .child(icon("grip-vertical", 12.))
+                        .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        })
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone())),
+                )
+                .can_drop(move |value, _, _| {
+                    value
+                        .downcast_ref::<MenuDrag>()
+                        .is_some_and(|drag| drag.menu == menu_id)
+                })
+                .drag_over::<MenuDrag>(move |s, drag, _, _| {
+                    if drag.menu == menu_id {
+                        s.bg(content(0.15))
+                    } else {
+                        s
+                    }
+                })
+                .on_drop(cx.listener(move |this, drag: &MenuDrag, window, cx| {
+                    if drag.menu != cx.entity_id() {
+                        return;
+                    }
+                    let Some(target) = this.action(ix).filter(|a| a.reorderable) else {
+                        return;
+                    };
+                    if target.id == drag.id {
+                        return;
+                    }
+                    let Some(bounds) = this.row_bounds(ix) else {
+                        return;
+                    };
+                    cx.emit(MenuReordered {
+                        source: drag.id.clone(),
+                        target: target.id.clone(),
+                        after: window.mouse_position().y >= bounds.center().y,
+                    });
+                }))
+            })
             .when_some(action.icon, |d, path| {
                 d.child(
                     icon(path, icon_size)
@@ -1660,6 +1771,15 @@ impl Render for Menu {
                 cx.listener(|this, _: &CloseSubmenu, window, cx| this.close_submenu(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Cancel, window, cx| {
+                // Escape abandons an uncommitted grip drag, retaining menu focus.
+                if this
+                    .items
+                    .iter()
+                    .any(|item| matches!(item, MenuItem::Action(a) if a.reorderable))
+                    && cx.stop_active_drag(window)
+                {
+                    return;
+                }
                 // A flyout's Escape closes everything, as the pickers' does.
                 if this.submenu.is_some() && !this.flyout_open() {
                     this.close_submenu(window, cx);

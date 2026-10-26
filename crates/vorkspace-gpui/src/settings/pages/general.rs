@@ -130,20 +130,6 @@ impl SettingsView {
                 ));controls},
             ));
         }
-        workspace.push(self.row(
-            Some("working-agents"),
-            false,
-            "Working agents",
-            Some("Show active chats across projects. Finished chats stay until opened.".into()),
-            vec![self.toggle(
-                "working-agents",
-                "Working agents",
-                p.working_agents,
-                false,
-                cx,
-                |this, on, cx| this.update(cx, |p| p.working_agents = on),
-            )],
-        ));
         if cfg!(target_os = "windows") {
             workspace.push(self.row(
                 Some("close-to-tray"),

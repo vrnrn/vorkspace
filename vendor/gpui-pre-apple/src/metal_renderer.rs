@@ -1135,6 +1135,7 @@ impl MetalRenderer {
         let (before, after) = &self.edge_fade_scratch[depth];
         copy_fade_region(command, target, after, region);
         let corner_clip = quad.border_color.h == CORNER_CLIP_END;
+        let radial_cutout = quad.border_color.h == RADIAL_CUTOUT_END;
         let params = BackdropCompositeParams {
             origin: [region.left().0, region.top().0],
             size: [region.size.width.0, region.size.height.0],
@@ -1144,14 +1145,18 @@ impl MetalRenderer {
                 i32::from(viewport.width) as f32,
                 i32::from(viewport.height) as f32,
             ],
-            corner_radius: if corner_clip {
+            corner_radius: if radial_cutout {
+                quad.border_color.s
+            } else if corner_clip {
                 quad.bounds.size.width.0.min(quad.bounds.size.height.0)
             } else {
                 quad.border_color.s * EDGE_FADE_MAX
             },
             // A negative padding selects the horizontal mask. Keep it
             // negative without a right ramp, so only the left edge fades.
-            padding: if corner_clip {
+            padding: if radial_cutout {
+                -3. * EDGE_FADE_MAX
+            } else if corner_clip {
                 // Below the horizontal ramp range: a circular corner mask,
                 // followed by its clockwise corner index from the top left.
                 -2. * EDGE_FADE_MAX - (quad.border_color.s * 4.).round()
@@ -1915,7 +1920,25 @@ const BACKGROUND_BEGIN: f32 = 0.223607;
 const BACKGROUND_END: f32 = 0.244949;
 const CORNER_CLIP_BEGIN: f32 = 0.316228;
 const CORNER_CLIP_END: f32 = 0.331662;
+const RADIAL_CUTOUT_BEGIN: f32 = 0.346410;
+const RADIAL_CUTOUT_END: f32 = 0.360555;
 const EDGE_FADE_MAX: f32 = 4096.;
+
+/// Reveal the original backdrop through a circular hole in a complete group.
+/// Use a square marker for a circle; `core` is the fully clear fraction of its
+/// radius. The remainder feathers smoothly to unchanged group content.
+pub fn radial_cutout_marker(begin: bool, core: f32) -> Hsla {
+    Hsla {
+        h: if begin {
+            RADIAL_CUTOUT_BEGIN
+        } else {
+            RADIAL_CUTOUT_END
+        },
+        s: core.clamp(0., 0.99),
+        l: 0.,
+        a: 0.,
+    }
+}
 
 /// Restore the pixels outside one rounded corner after a group's drawing.
 /// The quad covers only the radius-sized corner square. Corners run clockwise
@@ -2006,10 +2029,13 @@ fn edge_fade_kind(quad: &Quad) -> Option<bool> {
         return None;
     }
     match c.h {
-        EDGE_FADE_BEGIN | HORIZONTAL_FADE_BEGIN | BACKGROUND_BEGIN | CORNER_CLIP_BEGIN => {
-            Some(true)
-        }
-        EDGE_FADE_END | HORIZONTAL_FADE_END | BACKGROUND_END | CORNER_CLIP_END => Some(false),
+        EDGE_FADE_BEGIN
+        | HORIZONTAL_FADE_BEGIN
+        | BACKGROUND_BEGIN
+        | CORNER_CLIP_BEGIN
+        | RADIAL_CUTOUT_BEGIN => Some(true),
+        EDGE_FADE_END | HORIZONTAL_FADE_END | BACKGROUND_END | CORNER_CLIP_END
+        | RADIAL_CUTOUT_END => Some(false),
         _ => None,
     }
 }
