@@ -486,9 +486,9 @@ impl Popover {
             .child(glass(tint, radius))
             .child(
                 div()
+                    .debug_selector(|| "popover-inner-container".into())
                     .relative()
                     .m(px(1.))
-                    .flex_1()
                     .min_h_0()
                     .flex()
                     .flex_col()
@@ -1569,6 +1569,7 @@ impl Render for Menu {
         });
         div()
             .id("popover-menu")
+            .debug_selector(|| "popover-menu".into())
             .role(Role::Menu)
             .aria_label(self.label.clone())
             .key_context("PopoverMenu")

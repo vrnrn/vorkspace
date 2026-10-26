@@ -51,8 +51,9 @@ impl Conversation {
         self.input
             .update(cx, |input, cx| input.bot_composer(&bot.label(), cx));
         let name = bot.label();
+        let look = crate::bots::avatar::BotLookConfig::from_bot(&bot);
         self.transcript
-            .update(cx, |t, _| t.bot_mode(&bot.mascot, bot.color, &name));
+            .update(cx, |t, _| t.bot_mode_with_look(look, &name));
         self.settings.environment = environment;
         self.bot_ui.pending = bot.outbox.clone();
         self.sync_bot_pending(cx);
@@ -408,7 +409,7 @@ impl Conversation {
         // BotHeader's greeting: it shows only before the first message.
         let body = if !self.summary.has_messages {
             let greeting = div().flex().flex_col().items_center().justify_center().px_6().py_12()
-                .child(crate::bots::avatar::avatar(&bot.mascot, bot.color, status, 56., false))
+                .child(crate::bots::avatar::bot_avatar(&bot, status, 56., false))
                 .child(div().mt(px(-8.)).h(px(32.)).px(px(14.)).flex().items_center().rounded_full().border_1().border_color(content(0.14)).bg(content(0.06)).text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(name))
                 .child(div().mt_3().max_w(px(384.)).text_center().text_size(px(13.)).line_height(px(21.)).text_color(content(0.5)).child(if bot.projects.is_empty(){"Add the projects I should work on in my settings, or just ask me something.".into()}else{format!("I can see every session, note and folder in {}. Ask what’s going on, or hand me work.",bot.projects.iter().map(|p|std::path::Path::new(p).file_name().unwrap_or_default().to_string_lossy()).collect::<Vec<_>>().join(", "))}));
             div()

@@ -14,15 +14,132 @@ pub const COLORS: [u32; 9] = [
 pub const MASCOTS: [&str; 10] = [
     "invader", "ghost", "robot", "cat", "skull", "crab", "mushroom", "rocket", "dino", "frog",
 ];
+pub const BADGE_SHAPES: [&str; 5] = ["squircle", "circle", "rounded", "pill", "hex"];
+pub const BOT_FACES: [&str; 5] = ["pills", "dots", "visor", "carets", "wink"];
+pub const LOCKED_RINGS: usize = 4;
+pub const LOCKED_CURVATURE: f32 = 0.80;
+pub const LOCKED_TEX_OPACITY: f32 = 0.60;
+pub const SIDEBAR_PILL_OPACITY: f32 = 0.30;
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+/// Curated background + foreground palette pairs for concentric texture rendering.
+pub const TEXTURE_PALETTES: [(&str, u32, u32); 8] = [
+    ("Cobalt", 0x3b82f6, 0x0b1528),
+    ("Emerald", 0x22c55e, 0x052e16),
+    ("Plum", 0xa855f7, 0x230738),
+    ("Rose", 0xec4899, 0x38061e),
+    ("Amber", 0xf59e0b, 0x271703),
+    ("Teal", 0x14b8a6, 0x042f2e),
+    ("Obsidian", 0x1c1c21, 0xededf2),
+    ("Charcoal", 0x2c2c34, 0xa1a1aa),
+];
+
+/// Derive a dark companion foreground color from a background hex color.
+pub fn default_foreground_color(bg: u32) -> u32 {
+    for &(_, p_bg, p_fg) in &TEXTURE_PALETTES {
+        if p_bg == bg {
+            return p_fg;
+        }
+    }
+    let r = ((bg >> 16) & 0xff) as f32;
+    let g = ((bg >> 8) & 0xff) as f32;
+    let b = (bg & 0xff) as f32;
+    let lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
+    if lum < 0.18 {
+        let nr = (r + (255.0 - r) * 0.72).round().clamp(0.0, 255.0) as u32;
+        let ng = (g + (255.0 - g) * 0.72).round().clamp(0.0, 255.0) as u32;
+        let nb = (b + (255.0 - b) * 0.72).round().clamp(0.0, 255.0) as u32;
+        (nr << 16) | (ng << 8) | nb
+    } else {
+        let nr = (r * 0.18).round().clamp(0.0, 255.0) as u32;
+        let ng = (g * 0.18).round().clamp(0.0, 255.0) as u32;
+        let nb = (b * 0.22).round().clamp(0.0, 255.0) as u32;
+        (nr << 16) | (ng << 8) | nb
+    }
+}
+
+/// Derive a contrasting face color when texture is disabled (single-color mode).
+pub fn auto_contrast_color(bg: u32) -> u32 {
+    let r = ((bg >> 16) & 0xff) as f32;
+    let g = ((bg >> 8) & 0xff) as f32;
+    let b = (bg & 0xff) as f32;
+    let lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
+    if lum > 0.36 {
+        0x0d1117
+    } else {
+        0xf4f4f7
+    }
+}
+
+/// Deterministic 5-digit seed derived from a stable string key (10000..=99999).
+pub fn default_seed_for(key: &str) -> u32 {
+    let hash = key.encode_utf16().fold(2166136261u32, |h, c| {
+        (h ^ u32::from(c)).wrapping_mul(16777619)
+    });
+    10000 + (hash % 90000)
+}
+
+/// Map a mascot or face name to one of the 5 3D curved face styles.
+pub fn normalize_bot_face(face_or_mascot: &str) -> &'static str {
+    match face_or_mascot {
+        "pills" | "invader" | "skull" => "pills",
+        "dots" | "ghost" | "mushroom" => "dots",
+        "visor" | "robot" | "rocket" => "visor",
+        "carets" | "cat" | "crab" => "carets",
+        "wink" | "dino" | "frog" => "wink",
+        _ => "pills",
+    }
+}
+
+/// Normalize a badge shape name to one of the 5 supported shapes.
+pub fn normalize_badge_shape(shape: &str) -> &'static str {
+    match shape {
+        "squircle" => "squircle",
+        "circle" => "circle",
+        "rounded" => "rounded",
+        "pill" => "pill",
+        "hex" => "hex",
+        _ => "squircle",
+    }
+}
+
+fn default_textured() -> bool {
+    true
+}
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct ProjectAppearance {
     pub name: String,
     pub color: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg_color: Option<u32>,
+    #[serde(default = "default_textured", skip_serializing_if = "is_true")]
+    pub textured: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<u8>,
     pub mascot: Option<String>,
     pub logo: Option<String>,
     pub background: Option<Background>,
+}
+impl Default for ProjectAppearance {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            color: None,
+            fg_color: None,
+            textured: true,
+            seed: None,
+            grid: None,
+            mascot: None,
+            logo: None,
+            background: None,
+        }
+    }
 }
 impl ProjectAppearance {
     pub fn label(&self, project: &str) -> String {
@@ -42,6 +159,19 @@ impl ProjectAppearance {
             COLORS[(hash as usize % (COLORS.len() - 1)) + 1]
         })
     }
+    pub fn fg_color(&self, project: &str) -> u32 {
+        self.fg_color
+            .filter(|c| *c <= 0xffffff)
+            .unwrap_or_else(|| default_foreground_color(self.color(project)))
+    }
+    pub fn seed(&self, project: &str) -> u32 {
+        self.seed
+            .filter(|&s| s > 0)
+            .unwrap_or_else(|| default_seed_for(project))
+    }
+    pub fn grid(&self) -> u8 {
+        self.grid.unwrap_or(4).clamp(2, 8)
+    }
     pub fn mascot(&self, project: &str) -> usize {
         self.mascot
             .as_ref()
@@ -56,6 +186,9 @@ impl ProjectAppearance {
     pub fn normalize(&mut self) {
         self.name = self.name.trim().chars().take(200).collect();
         self.color = self.color.filter(|c| *c <= 0xffffff);
+        self.fg_color = self.fg_color.filter(|c| *c <= 0xffffff);
+        self.seed = self.seed.filter(|&s| s > 0);
+        self.grid = self.grid.map(|g| g.clamp(2, 8));
         self.mascot = self.mascot.take().filter(|s| MASCOTS.contains(&s.as_str()));
         if let Some(background) = &mut self.background {
             background.normalize();
@@ -475,6 +608,754 @@ pub fn png_bytes(image: RgbaImage) -> Result<Vec<u8>, String> {
         .write_to(&mut bytes, image::ImageFormat::Png)
         .map_err(|e| e.to_string())?;
     Ok(bytes.into_inner())
+}
+
+// ============================================================================
+// Concentric Texture Engine & 3D Curved Face / Badge / Pill Renderer
+// ============================================================================
+
+struct Arc4 {
+    i: u8,
+    j: u8,
+    s: [u8; 256],
+}
+impl Arc4 {
+    fn new(seed: &str) -> Self {
+        let mut key = Vec::new();
+        for (idx, ch) in seed.encode_utf16().enumerate() {
+            let k_idx = idx & 0xff;
+            if k_idx >= key.len() {
+                key.push(0u8);
+            }
+            let prev = key[k_idx];
+            let next = ((prev as u32).wrapping_mul(19) + ch as u32) as u8;
+            key[k_idx] = next;
+        }
+        if key.is_empty() {
+            key.push(0);
+        }
+        let mut s = [0u8; 256];
+        for (idx, slot) in s.iter_mut().enumerate() {
+            *slot = idx as u8;
+        }
+        let mut m = 0u8;
+        for j in 0..256 {
+            let p = s[j];
+            m = m.wrapping_add(key[j % key.len()]).wrapping_add(p);
+            s[j] = s[m as usize];
+            s[m as usize] = p;
+        }
+        let mut arc4 = Self { i: 0, j: 0, s };
+        for _ in 0..256 {
+            arc4.next_byte();
+        }
+        arc4
+    }
+    fn next_byte(&mut self) -> u8 {
+        self.i = self.i.wrapping_add(1);
+        let z = self.s[self.i as usize];
+        self.j = self.j.wrapping_add(z);
+        let sz = self.s[self.j as usize];
+        self.s[self.i as usize] = sz;
+        self.s[self.j as usize] = z;
+        self.s[(z.wrapping_add(sz)) as usize]
+    }
+    fn g(&mut self, count: usize) -> f64 {
+        let mut f = 0.0f64;
+        for _ in 0..count {
+            f = f * 256.0 + self.next_byte() as f64;
+        }
+        f
+    }
+    fn next_f64(&mut self) -> f64 {
+        let u = 256.0f64;
+        let l = 6usize;
+        let c = u.powi(l as i32);
+        let d = (1u64 << 52) as f64;
+        let m = d * 2.0;
+        let mut nt = self.g(l);
+        let mut z = c;
+        let mut f = 0u32;
+        while nt < d {
+            nt = (nt + f as f64) * u;
+            z *= u;
+            f = self.next_byte() as u32;
+        }
+        while nt >= m {
+            nt /= 2.0;
+            z /= 2.0;
+            f >>= 1;
+        }
+        (nt + f as f64) / z
+    }
+    fn rnd_int(&mut self, min: i32, max: i32) -> i32 {
+        (self.next_f64() * (max - min) as f64).floor() as i32 + min
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WalkStep {
+    pub s: usize,
+    pub c: usize,
+    pub corner: u8, // 0 = (0,0), 1 = (c,0), 2 = (c,c), 3 = (0,c)
+}
+
+#[derive(Clone, Debug)]
+pub struct ConcentricGeometry {
+    pub default_rotation_deg: f32,
+    pub steps: Vec<WalkStep>,
+    pub grid_dim: usize,
+}
+
+pub fn compute_concentric_geometry(seed: u32, grid: u8) -> ConcentricGeometry {
+    let l = grid.clamp(2, 8) as usize;
+    let mut rng = Arc4::new(&seed.to_string());
+    let default_rotation_deg = (rng.rnd_int(0, 4) * 15) as f32;
+    const XL: [isize; 4] = [0, 1, 0, -1];
+    const YL: [isize; 4] = [-1, 0, 1, 0];
+
+    let mut steps = Vec::new();
+    let mut visited = vec![vec![false; l]; l];
+    let mut k = 0usize;
+    let mut s = 0isize;
+    let mut c_cell = 0isize;
+    let mut t = if rng.next_f64() > 0.5 { 1usize } else { 2usize };
+    let d = l * l;
+    let max_steps = d * 45;
+
+    let push_step = |steps: &mut Vec<WalkStep>, s: usize, c: usize, p: usize, v: usize| {
+        let b = (p + 2) % 4;
+        let j = v;
+        let (a0, a1) = if b <= j { (b, j) } else { (j, b) };
+        let corner = match (a0, a1) {
+            (0, 3) => 0,
+            (0, 1) => 1,
+            (1, 2) => 2,
+            (2, 3) => 3,
+            _ => return,
+        };
+        steps.push(WalkStep { s, c, corner });
+    };
+
+    for _ in 0..max_steps {
+        let r_done = k >= d;
+        if !visited[s as usize][c_cell as usize] {
+            visited[s as usize][c_cell as usize] = true;
+            k += 1;
+        }
+        let a = (t + 3) % 4;
+        let p = (t + 1) % 4;
+        let mut choices = Vec::with_capacity(2);
+        let b = s + XL[a];
+        let j = c_cell + YL[a];
+        if b >= 0 && b < l as isize && j >= 0 && j < l as isize {
+            choices.push(a);
+        }
+        let g = s + XL[p];
+        let nt = c_cell + YL[p];
+        let z = g >= 0 && g < l as isize && nt >= 0 && nt < l as isize;
+        if z {
+            choices.push(p);
+        }
+        if r_done && (s == 0 || s == l as isize - 1 || c_cell == 0 || c_cell == l as isize - 1) {
+            push_step(
+                &mut steps,
+                s as usize,
+                c_cell as usize,
+                t,
+                if z { a } else { p },
+            );
+            break;
+        }
+        if choices.is_empty() {
+            break;
+        }
+        let f = choices[rng.rnd_int(0, choices.len() as i32) as usize];
+        push_step(&mut steps, s as usize, c_cell as usize, t, f);
+        s += XL[f];
+        c_cell += YL[f];
+        t = f;
+    }
+
+    ConcentricGeometry {
+        default_rotation_deg,
+        steps,
+        grid_dim: l,
+    }
+}
+
+#[inline]
+fn unpack_rgb(hex: u32) -> [f32; 3] {
+    [
+        ((hex >> 16) & 0xff) as f32,
+        ((hex >> 8) & 0xff) as f32,
+        (hex & 0xff) as f32,
+    ]
+}
+
+#[inline]
+fn lerp_rgb(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
+/// Rasterize the concentric ring texture at `bucket x bucket` resolution.
+pub fn render_concentric_texture(
+    seed: u32,
+    grid: u8,
+    textured: bool,
+    bg_hex: u32,
+    fg_hex: u32,
+    bucket: u32,
+    rot_offset_deg: f32,
+) -> RgbaImage {
+    let bg = unpack_rgb(bg_hex);
+    if !textured {
+        return RgbaImage::from_pixel(
+            bucket,
+            bucket,
+            image::Rgba([bg[0] as u8, bg[1] as u8, bg[2] as u8, 255]),
+        );
+    }
+    let fg = unpack_rgb(fg_hex);
+    let geo = compute_concentric_geometry(seed, grid);
+    let l = geo.grid_dim;
+    let c = 1.0f32 / l as f32;
+    let p = LOCKED_RINGS;
+    let f = 0.72f32;
+    let base_w = c / (p as f32 * 2.0 - 1.0);
+    let half_stroke = base_w * f * 0.5;
+    let mut radii = [0.0f32; LOCKED_RINGS];
+    for (q, r) in radii.iter_mut().enumerate() {
+        let at = q as f32 + 0.5 - p as f32 / 2.0;
+        *r = c / 2.0 + at * (c / (p as f32 - 0.5) * (0.5 + f * 0.5));
+    }
+
+    // Group steps by cell in painter's order so each pixel only evaluates the
+    // steps that touched its cell `(gx, gy)`.
+    let mut cell_steps: Vec<Vec<u8>> = vec![Vec::new(); l * l];
+    for step in &geo.steps {
+        if step.s < l && step.c < l {
+            let cell = &mut cell_steps[step.c * l + step.s];
+            cell.push(step.corner);
+        }
+    }
+
+    let m = (l as f32 / (l.saturating_sub(1).max(1) as f32)).max(1.42);
+    let angle = -(geo.default_rotation_deg + rot_offset_deg).to_radians();
+    let cos_a = angle.cos() / m;
+    let sin_a = angle.sin() / m;
+    let inv_bucket = 1.0f32 / bucket.max(1) as f32;
+    let aa = inv_bucket / m * 1.15;
+
+    let mut img = RgbaImage::new(bucket, bucket);
+    for py in 0..bucket {
+        let ny = (py as f32 + 0.5) * inv_bucket - 0.5;
+        for px in 0..bucket {
+            let nx = (px as f32 + 0.5) * inv_bucket - 0.5;
+            let u = nx * cos_a - ny * sin_a + 0.5;
+            let v = nx * sin_a + ny * cos_a + 0.5;
+
+            let mut off_col = bg;
+            if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
+                let gx = ((u * l as f32).floor() as usize).min(l - 1);
+                let gy = ((v * l as f32).floor() as usize).min(l - 1);
+                let f_x = gx as f32 * c;
+                let b_y = gy as f32 * c;
+                for &corner in &cell_steps[gy * l + gx] {
+                    let (mx, gy_c) = match corner {
+                        0 => (0.0, 0.0),
+                        1 => (c, 0.0),
+                        2 => (c, c),
+                        _ => (0.0, c),
+                    };
+                    let dist = (u - (f_x + mx)).hypot(v - (b_y + gy_c));
+                    // Quarter-circle background mask that occludes prior strokes in this cell
+                    let mask_alpha = ((c - dist) / aa + 0.5).clamp(0.0, 1.0);
+                    if mask_alpha > 0.0 {
+                        off_col = lerp_rgb(off_col, bg, mask_alpha);
+                    }
+                    // Concentric ring strokes
+                    let mut min_ring_dist = f32::MAX;
+                    for &r in &radii {
+                        let d = (dist - r).abs();
+                        if d < min_ring_dist {
+                            min_ring_dist = d;
+                        }
+                    }
+                    let stroke_alpha = ((half_stroke - min_ring_dist) / aa + 0.5).clamp(0.0, 1.0);
+                    if stroke_alpha > 0.0 {
+                        off_col = lerp_rgb(off_col, fg, stroke_alpha);
+                    }
+                }
+            }
+            let out = lerp_rgb(bg, off_col, LOCKED_TEX_OPACITY);
+            img.put_pixel(
+                px,
+                py,
+                image::Rgba([
+                    out[0].round() as u8,
+                    out[1].round() as u8,
+                    out[2].round() as u8,
+                    255,
+                ]),
+            );
+        }
+    }
+    img
+}
+
+/// Render a wide rectangular textured pill for selected Project or Channel rows
+/// in the sidebar (`30%` overall opacity).
+pub fn render_textured_pill(
+    seed: u32,
+    grid: u8,
+    textured: bool,
+    bg_hex: u32,
+    fg_hex: u32,
+    width: u32,
+    height: u32,
+) -> RgbaImage {
+    let w = width.max(16);
+    let h = height.max(8);
+    let tex = render_concentric_texture(seed, grid, textured, bg_hex, fg_hex, 240, 0.0);
+    let tw = tex.width() as f32;
+    let th = tex.height() as f32;
+    let sh = (tw * (h as f32 / w as f32)).min(th);
+    let sy = (th - sh) * 0.5;
+
+    let mut out = RgbaImage::new(w, h);
+    let alpha_u8 = (SIDEBAR_PILL_OPACITY * 255.0).round() as u8;
+    for y in 0..h {
+        let ty = ((sy + (y as f32 + 0.5) / h as f32 * sh) as u32).min(tex.height() - 1);
+        for x in 0..w {
+            let tx = (((x as f32 + 0.5) / w as f32 * tw) as u32).min(tex.width() - 1);
+            let p = tex.get_pixel(tx, ty).0;
+            let mut col = [p[0] as f32, p[1] as f32, p[2] as f32];
+
+            // Subtle dark gradient from left so label text is always crisp
+            let u = x as f32 / w.max(1) as f32;
+            let dark_alpha = if u < 0.5 {
+                0.22 + (0.08 - 0.22) * (u * 2.0)
+            } else {
+                0.08 + (0.18 - 0.08) * ((u - 0.5) * 2.0)
+            };
+            col = lerp_rgb(col, [0.0, 0.0, 0.0], dark_alpha);
+
+            // Crisp inner highlight border
+            if x <= 1 || x >= w - 2 || y <= 1 || y >= h - 2 {
+                col = lerp_rgb(col, [255.0, 255.0, 255.0], 0.16);
+            }
+
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    col[0].round() as u8,
+                    col[1].round() as u8,
+                    col[2].round() as u8,
+                    alpha_u8,
+                ]),
+            );
+        }
+    }
+    out
+}
+
+#[inline]
+fn sd_rounded_box(px: f32, py: f32, bx: f32, by: f32, r: f32) -> f32 {
+    let qx = px.abs() - bx + r;
+    let qy = py.abs() - by + r;
+    qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r
+}
+
+#[inline]
+fn sd_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let pax = px - ax;
+    let pay = py - ay;
+    let bax = bx - ax;
+    let bay = by - ay;
+    let h = ((pax * bax + pay * bay) / (bax * bax + bay * bay).max(1e-6)).clamp(0.0, 1.0);
+    (pax - bax * h).hypot(pay - bay * h)
+}
+
+/// Signed distance to one of the 5 badge shapes centered at `(s/2, s/2)`.
+#[inline]
+fn sd_badge_shape(shape: &str, x: f32, y: f32, s: f32) -> f32 {
+    let cx = x - s * 0.5;
+    let cy = y - s * 0.5;
+    match shape {
+        "circle" => cx.hypot(cy) - s * 0.47,
+        "rounded" => {
+            let half = s * 0.46;
+            sd_rounded_box(cx, cy, half, half, s * 0.22)
+        }
+        "pill" => {
+            let bx = s * 0.47;
+            let by = s * 0.39;
+            sd_rounded_box(cx, cy, bx, by, by)
+        }
+        "hex" => {
+            // Pointy-top rounded hexagon matching `r = s * 0.48`, `cr = s * 0.09`
+            let cr = s * 0.09;
+            let r_in = s * 0.48 * 0.866_025_4 - cr;
+            let mut qx = cx.abs();
+            let mut qy = cy.abs();
+            // Pointy-top hex symmetry: normals at (1, 0) and (0.5, sqrt(3)/2)
+            let dot = 0.5 * qx + 0.866_025_4 * qy;
+            if dot > 0.0 {
+                let d = (qx - dot).max(0.0);
+                let _ = d;
+            }
+            // Exact pointy-top hex SDF via 60-degree folding
+            // Rotate by 30 deg so flat-top hex formula applies
+            let rx = (cx * 0.866_025_4 - cy * 0.5).abs();
+            let ry = (cx * 0.5 + cy * 0.866_025_4).abs();
+            qx = rx;
+            qy = ry;
+            const K_X: f32 = -0.866_025_4;
+            const K_Y: f32 = 0.5;
+            const K_Z: f32 = 0.577_350_26;
+            let m2 = 2.0 * (K_X * qx + K_Y * qy).min(0.0);
+            qx -= m2 * K_X;
+            qy -= m2 * K_Y;
+            qx -= qx.clamp(-K_Z * r_in, K_Z * r_in);
+            qy -= r_in;
+            qx.hypot(qy) * qy.signum() - cr
+        }
+        _ => {
+            // "squircle"
+            let half = s * 0.46;
+            sd_rounded_box(cx, cy, half, half, s * 0.30)
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BotAnimState {
+    pub yaw: f32,
+    pub pitch: f32,
+    pub blink: f32,
+    pub squash_x: f32,
+    pub squash_y: f32,
+    pub hop_y: f32,
+    pub wide: f32,
+    pub tex_rot: f32,
+}
+impl Default for BotAnimState {
+    fn default() -> Self {
+        Self {
+            yaw: 0.0,
+            pitch: 0.0,
+            blink: 1.0,
+            squash_x: 1.0,
+            squash_y: 1.0,
+            hop_y: 0.0,
+            wide: 1.0,
+            tex_rot: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ProjectedEye {
+    cx: f32,
+    cy: f32,
+    cos_r: f32,
+    sin_r: f32,
+    inv_sx: f32,
+    inv_sy: f32,
+    scale_avg: f32,
+}
+
+fn project_eye(u: f32, v: f32, yaw: f32, pitch: f32, s: f32, wide: f32) -> ProjectedEye {
+    let k = LOCKED_CURVATURE;
+    let r2 = (u * u + v * v).min(0.85);
+    let z0 = (1.0 - r2).sqrt();
+
+    let (sy, cy) = (yaw * k).sin_cos();
+    let (sp, cp) = (pitch * k).sin_cos();
+
+    let x1 = u * cy + z0 * sy;
+    let z1 = -u * sy + z0 * cy;
+    let y2 = v * cp + z1 * sp;
+    let z2 = -v * sp + z1 * cp;
+
+    let foreshorten = z2.max(0.35);
+    let rot = (-yaw * pitch * 0.95 - x1 * y2 * 0.55) * k;
+    let sx = (1.0 - (x1.abs() * 0.58 * k).min(0.48)) * wide;
+    let sy_scale = (1.0 - (1.0 - foreshorten) * 0.22 * k) * wide;
+    let (sin_r, cos_r) = rot.sin_cos();
+    let radius = s * 0.43;
+    ProjectedEye {
+        cx: s * 0.5 + x1 * radius,
+        cy: s * 0.5 + y2 * radius,
+        cos_r,
+        sin_r,
+        inv_sx: 1.0 / sx.max(0.1),
+        inv_sy: 1.0 / sy_scale.max(0.1),
+        scale_avg: (sx + sy_scale) * 0.5,
+    }
+}
+
+impl ProjectedEye {
+    #[inline]
+    fn to_local(self, px: f32, py: f32) -> (f32, f32) {
+        let dx = px - self.cx;
+        let dy = py - self.cy;
+        let rx = dx * self.cos_r + dy * self.sin_r;
+        let ry = -dx * self.sin_r + dy * self.cos_r;
+        (rx * self.inv_sx, ry * self.inv_sy)
+    }
+}
+
+/// Render a Project badge (`is_bot = false`, always Soft Hex) or a 3D Bot avatar
+/// (`is_bot = true`, with 3D curved face & optional `needs-you` notification dot).
+#[allow(clippy::too_many_arguments)]
+pub fn render_badge_or_bot(
+    is_bot: bool,
+    shape: &str,
+    face: &str,
+    needs_you: bool,
+    textured: bool,
+    seed: u32,
+    grid: u8,
+    bg_hex: u32,
+    fg_hex: u32,
+    pixel_side: u32,
+    anim: BotAnimState,
+) -> RgbaImage {
+    let s_u32 = pixel_side.max(16);
+    let s = s_u32 as f32;
+    let bucket = if s_u32 <= 64 { 96 } else { 192 };
+    let tex = render_concentric_texture(
+        seed,
+        grid,
+        textured,
+        bg_hex,
+        fg_hex,
+        bucket,
+        if is_bot { anim.tex_rot } else { 0.0 },
+    );
+    let shape_id = if is_bot {
+        normalize_badge_shape(shape)
+    } else {
+        "hex"
+    };
+    let face_id = normalize_bot_face(face);
+    let bg_rgb = unpack_rgb(bg_hex);
+    let face_rgb = unpack_rgb(if textured {
+        fg_hex
+    } else {
+        auto_contrast_color(bg_hex)
+    });
+
+    let eye_left = project_eye(
+        -0.27,
+        if face_id == "pills" { -0.02 } else { -0.01 },
+        anim.yaw,
+        anim.pitch,
+        s,
+        anim.wide,
+    );
+    let eye_right = project_eye(
+        0.27,
+        if face_id == "pills" { -0.02 } else { -0.01 },
+        anim.yaw,
+        anim.pitch,
+        s,
+        anim.wide,
+    );
+    let eye_center = project_eye(0.0, -0.01, anim.yaw, anim.pitch, s, anim.wide);
+
+    let hx = s * (0.5 + anim.yaw * 0.22);
+    let hy = s * (0.38 + anim.pitch * 0.22);
+    let r_inner = s * 0.04;
+    let r_outer = s * 0.62;
+    let border_w = (s * 0.025).max(1.0);
+
+    let mut out = RgbaImage::new(s_u32, s_u32);
+    let pivot_x = s * 0.5;
+    let pivot_y = s * 0.88;
+    let hop_px = anim.hop_y * s;
+    let inv_squash_x = 1.0 / anim.squash_x.max(0.2);
+    let inv_squash_y = 1.0 / anim.squash_y.max(0.2);
+
+    for py in 0..s_u32 {
+        let fy = py as f32 + 0.5;
+        for px in 0..s_u32 {
+            let fx = px as f32 + 0.5;
+
+            // Inverse squash & hop transform
+            let sx = (fx - pivot_x) * inv_squash_x + pivot_x;
+            let sy = (fy - (pivot_y + hop_px)) * inv_squash_y + pivot_y;
+
+            let d_shape = sd_badge_shape(shape_id, sx, sy, s);
+            let shape_alpha = (0.5 - d_shape).clamp(0.0, 1.0);
+            let mut rgba = [0.0f32; 4];
+
+            if shape_alpha > 0.0 {
+                let tx = (((sx / s).clamp(0.0, 0.9999) * bucket as f32) as u32).min(bucket - 1);
+                let ty = (((sy / s).clamp(0.0, 0.9999) * bucket as f32) as u32).min(bucket - 1);
+                let tp = tex.get_pixel(tx, ty).0;
+                let mut col = [tp[0] as f32, tp[1] as f32, tp[2] as f32];
+
+                // 3D spherical radial shading
+                let d_hi = (sx - hx).hypot(sy - hy);
+                let t_rad = ((d_hi - r_inner) / (r_outer - r_inner).max(1.0)).clamp(0.0, 1.0);
+                if t_rad < 0.55 {
+                    let hi = (1.0 - t_rad / 0.55) * 0.12;
+                    col = lerp_rgb(col, [255.0, 255.0, 255.0], hi);
+                } else {
+                    let sh = ((t_rad - 0.55) / 0.45) * 0.22;
+                    col = lerp_rgb(col, [0.0, 0.0, 0.0], sh);
+                }
+
+                // 3D curved face (Bots only)
+                if is_bot {
+                    match face_id {
+                        "pills" => {
+                            let ew = s * 0.118 * 0.5;
+                            let eh = (s * 0.26 * anim.blink).max(s * 0.118 * 0.35) * 0.5;
+                            for eye in [eye_left, eye_right] {
+                                let (lx, ly) = eye.to_local(sx, sy);
+                                let d = sd_rounded_box(lx, ly, ew, eh, ew.min(eh)) * eye.scale_avg;
+                                let a = (0.5 - d).clamp(0.0, 1.0);
+                                if a > 0.0 {
+                                    col = lerp_rgb(col, face_rgb, a);
+                                }
+                            }
+                        }
+                        "dots" => {
+                            let er = s * 0.088;
+                            let b = anim.blink.max(0.08);
+                            for eye in [eye_left, eye_right] {
+                                let (lx, ly) = eye.to_local(sx, sy);
+                                let d = (lx.hypot(ly / b) - er) * eye.scale_avg * b.min(1.0);
+                                let a = (0.5 - d).clamp(0.0, 1.0);
+                                if a > 0.0 {
+                                    col = lerp_rgb(col, face_rgb, a);
+                                }
+                            }
+                        }
+                        "visor" => {
+                            let (lx, ly) = eye_center.to_local(sx, sy);
+                            let vw = s * 0.58 * 0.5;
+                            let vh = s * 0.25 * 0.5;
+                            let d_visor =
+                                sd_rounded_box(lx, ly, vw, vh, vh * 0.96) * eye_center.scale_avg;
+                            let a_visor = (0.5 - d_visor).clamp(0.0, 1.0);
+                            if a_visor > 0.0 {
+                                let mut v_col = face_rgb;
+                                let er = s * 0.055;
+                                let b = anim.blink.max(0.08);
+                                for side in [-1.0f32, 1.0f32] {
+                                    let ex = lx - side * s * 0.13;
+                                    let ey = ly / b;
+                                    let d_inner = sd_rounded_box(ex, ey, er, er * 1.15, er * 0.6)
+                                        * eye_center.scale_avg
+                                        * b.min(1.0);
+                                    let a_inner = (0.5 - d_inner).clamp(0.0, 1.0);
+                                    if a_inner > 0.0 {
+                                        v_col = lerp_rgb(v_col, bg_rgb, a_inner);
+                                    }
+                                }
+                                col = lerp_rgb(col, v_col, a_visor);
+                            }
+                        }
+                        "carets" => {
+                            let r = s * 0.095;
+                            let half_w = (s * 0.055).max(1.8) * 0.5;
+                            let b = anim.blink.max(0.08);
+                            for eye in [eye_left, eye_right] {
+                                let (lx, ly) = eye.to_local(sx, sy);
+                                let ly = ly / b;
+                                let d1 = sd_segment(lx, ly, -r * 0.85, r * 0.45, 0.0, -r * 0.65);
+                                let d2 = sd_segment(lx, ly, 0.0, -r * 0.65, r * 0.85, r * 0.45);
+                                let d = (d1.min(d2) - half_w) * eye.scale_avg * b.min(1.0);
+                                let a = (0.5 - d).clamp(0.0, 1.0);
+                                if a > 0.0 {
+                                    col = lerp_rgb(col, face_rgb, a);
+                                }
+                            }
+                        }
+                        "wink" => {
+                            // Left eye: pill
+                            let ew = s * 0.115 * 0.5;
+                            let eh = (s * 0.25 * anim.blink).max(s * 0.115 * 0.35) * 0.5;
+                            let (lx, ly) = eye_left.to_local(sx, sy);
+                            let d_left =
+                                sd_rounded_box(lx, ly, ew, eh, ew.min(eh)) * eye_left.scale_avg;
+                            let a_left = (0.5 - d_left).clamp(0.0, 1.0);
+                            if a_left > 0.0 {
+                                col = lerp_rgb(col, face_rgb, a_left);
+                            }
+                            // Right eye: '>' caret
+                            let r = s * 0.095;
+                            let half_w = (s * 0.055).max(1.8) * 0.5;
+                            let (rx, ry) = eye_right.to_local(sx, sy);
+                            let d1 = sd_segment(rx, ry, -r * 0.7, -r * 0.55, r * 0.55, 0.0);
+                            let d2 = sd_segment(rx, ry, r * 0.55, 0.0, -r * 0.7, r * 0.55);
+                            let d_right = (d1.min(d2) - half_w) * eye_right.scale_avg;
+                            let a_right = (0.5 - d_right).clamp(0.0, 1.0);
+                            if a_right > 0.0 {
+                                col = lerp_rgb(col, face_rgb, a_right);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Subtle inner rim highlight
+                let d_border = (d_shape + border_w * 0.5).abs() - border_w * 0.5;
+                let border_a = (0.5 - d_border).clamp(0.0, 1.0) * 0.14;
+                if border_a > 0.0 {
+                    col = lerp_rgb(col, [255.0, 255.0, 255.0], border_a);
+                }
+
+                rgba = [col[0], col[1], col[2], shape_alpha * 255.0];
+            }
+
+            // Notification dot for `needs-you`
+            if is_bot && needs_you {
+                let br = (s * 0.13).max(2.5);
+                let bx = s - br * 1.05;
+                let by = br * 1.05;
+                let d_dot = (fx - bx).hypot(fy - by) - br;
+                let dot_stroke = (s * 0.03).max(1.0);
+                let a_outer = (0.5 - (d_dot - dot_stroke * 0.5)).clamp(0.0, 1.0);
+                if a_outer > 0.0 {
+                    let a_inner = (0.5 - (d_dot + dot_stroke * 0.5)).clamp(0.0, 1.0);
+                    let dot_col = lerp_rgb([20.0, 20.0, 22.0], [255.0, 210.0, 74.0], a_inner);
+                    let src_a = a_outer;
+                    let dst_a = rgba[3] / 255.0;
+                    let out_a = src_a + dst_a * (1.0 - src_a);
+                    if out_a > 0.0 {
+                        rgba[0] = (dot_col[0] * src_a + rgba[0] * dst_a * (1.0 - src_a)) / out_a;
+                        rgba[1] = (dot_col[1] * src_a + rgba[1] * dst_a * (1.0 - src_a)) / out_a;
+                        rgba[2] = (dot_col[2] * src_a + rgba[2] * dst_a * (1.0 - src_a)) / out_a;
+                        rgba[3] = out_a * 255.0;
+                    }
+                }
+            }
+
+            out.put_pixel(
+                px,
+                py,
+                image::Rgba([
+                    rgba[0].round() as u8,
+                    rgba[1].round() as u8,
+                    rgba[2].round() as u8,
+                    rgba[3].round() as u8,
+                ]),
+            );
+        }
+    }
+    out
 }
 
 #[cfg(test)]

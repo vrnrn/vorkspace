@@ -113,7 +113,8 @@ impl Shell {
                     .w_px()
                     .bg(content(0.08)),
             )
-            .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0());
+            .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0())
+            .child(crate::bots::avatar::sidebar_cursor_tracker());
 
         self.resources.update(cx, |resources, cx| {
             resources.set_compact(
@@ -385,6 +386,7 @@ impl Shell {
             && self.app_search.is_none()
             && self.active_app_view.is_none()
             && !self.bot_active(cx);
+        let appearance = self.appearance(&path);
         let menu = path.clone();
         let options = path.clone();
         div()
@@ -402,6 +404,7 @@ impl Shell {
             .tab_stop(true)
             .group("classic-project-row")
             .relative()
+            .overflow_hidden()
             .h(px(32.))
             .min_w_0()
             .flex_shrink_0()
@@ -411,18 +414,17 @@ impl Shell {
             .items_center()
             .gap_2()
             .opacity(if selected { 1. } else { 0.65 })
-            .when(selected, |d| d.bg(content(0.16)))
+            .when(selected, |d| {
+                d.child(crate::bots::avatar::sidebar_selection_pill(
+                    appearance.seed(&path),
+                    appearance.grid(),
+                    appearance.textured,
+                    appearance.color(&path),
+                    appearance.fg_color(&path),
+                ))
+            })
             .hover(|s| s.bg(content(0.08)).opacity(1.))
             .focus(|s| s.bg(content(0.1)).opacity(1.))
-            .child(
-                div()
-                    .size(px(16.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(self.project_mark(&path, 12.)),
-            )
             .child(
                 div()
                     .flex_1()
@@ -430,13 +432,23 @@ impl Shell {
                     .truncate()
                     .text_size(px(14.))
                     .font_weight(FontWeight::MEDIUM)
-                    .group_hover("classic-project-row", |s| s.pr(px(24.)))
                     .debug_selector(move || format!("classic-project-label-{ix}"))
                     .child(self.project_label(&path)),
             )
             .when(busy, |d| {
                 d.child(div().size(px(5.)).rounded_full().bg(accent_color()))
             })
+            .child(
+                div()
+                    .size(px(20.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .opacity(1.)
+                    .group_hover("classic-project-row", |s| s.invisible())
+                    .child(self.project_mark(&path, 16.)),
+            )
             .child(
                 icon_button(
                     "classic-project-options",
@@ -447,7 +459,7 @@ impl Shell {
                 .focusable()
                 .tab_stop(true)
                 .absolute()
-                .right_1()
+                .right_2()
                 .top(px(6.))
                 .invisible()
                 .focus(|s| s.visible())
@@ -591,13 +603,7 @@ impl Shell {
                                 .justify_center()
                                 .when(selected, |d| d.bg(content(0.1)))
                                 .hover(|s| s.bg(content(0.08)))
-                                .child(crate::bots::avatar::avatar(
-                                    &bot.mascot,
-                                    bot.color,
-                                    "idle",
-                                    18.,
-                                    true,
-                                ))
+                                .child(crate::bots::avatar::bot_avatar(bot, "idle", 18., true))
                                 .on_click(move |_, window, cx| {
                                     manager.update(cx, |manager, cx| manager.open(&id, window, cx));
                                 })

@@ -134,6 +134,9 @@ impl Shell {
     }
     fn close_background_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.background_dialog = None;
+        if let Some(bots) = &self.bots {
+            bots.update(cx, |bots, cx| bots.close_background(cx));
+        }
         self.focus_workspace(window, cx);
         cx.notify();
     }
@@ -142,7 +145,15 @@ impl Shell {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let view = self.background_dialog.as_ref()?.view.clone();
+        let view = self
+            .background_dialog
+            .as_ref()
+            .map(|open| open.view.clone())
+            .or_else(|| {
+                self.bots
+                    .as_ref()
+                    .and_then(|bots| bots.read(cx).background_dialog())
+            })?;
         let viewport = window.viewport_size();
         let width = 420f32.min(viewport.width.as_f32() - 24.);
         let height = (view.read(cx).measured_height().unwrap_or(622.) + 2.)

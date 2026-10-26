@@ -1,5 +1,9 @@
 //! TabGroupMenu's project appearance controls and ProjectBackgroundDialog.
 use crate::{
+    bots::{
+        avatar::{BotLookConfig, cached_badge_or_bot_image, color_swatch_circle},
+        color_picker::{ColorPicker, Picked},
+    },
     input::{self, Input},
     popover::{Align, Anchor, AnchorSlot, popover},
     project_background::ProjectBackground,
@@ -8,11 +12,12 @@ use crate::{
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, MouseButton,
     MouseDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Role, SharedString, Subscription,
-    Window, canvas, div, img, prelude::*, px, rgb,
+    Window, div, img, prelude::*, px, rgb,
 };
 use std::path::PathBuf;
 use vorkspace_core::project_appearance::{
-    Background, COLORS, Effect, MASCOTS, ProjectAppearance, Scope, import_image,
+    Background, BotAnimState, COLORS, Effect, ProjectAppearance, Scope, TEXTURE_PALETTES,
+    default_foreground_color, import_image,
 };
 
 pub(crate) enum Event {
@@ -20,73 +25,6 @@ pub(crate) enum Event {
     Close,
 }
 
-// The original 8x8 project sprites from projectMascots.ts.
-const SPRITES: [[&str; 8]; 10] = [
-    [
-        "..#..#..", ".######.", "##.##.##", "########", ".######.", ".#.##.#.", "#.#..#.#",
-        "........",
-    ],
-    [
-        "..####..", ".######.", "##.##.##", "########", "########", "########", "########",
-        "#.##.##.",
-    ],
-    [
-        "...#....", ".######.", ".#.##.#.", ".######.", ".#....#.", ".######.", "..#..#..",
-        "........",
-    ],
-    [
-        ".#....#.", ".##..##.", "########", "#.####.#", "########", "###..###", ".######.",
-        "..#..#..",
-    ],
-    [
-        ".######.", "########", "##.##.##", "########", ".##..##.", ".######.", ".#.##.#.",
-        "........",
-    ],
-    [
-        "#......#", ".#....#.", ".######.", "##.##.##", "########", "#.####.#", "#......#",
-        "........",
-    ],
-    [
-        "..####..", ".######.", "########", "##.##.##", "########", "...##...", "...##...",
-        "..####..",
-    ],
-    [
-        "...##...", "..####..", "..#..#..", "..####..", ".######.", ".######.", "##....##",
-        "..####..",
-    ],
-    [
-        "...#####", "...##.##", "...#####", ".#######", "########", "#####...", ".##.##..",
-        "..#..#..",
-    ],
-    [
-        "........", "##....##", "#.####.#", "########", "########", ".######.", "##....##",
-        "........",
-    ],
-];
-fn mascot(index: usize, side: f32, color: gpui::Hsla) -> AnyElement {
-    canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let unit = bounds.size.width / 8.;
-            for (y, row) in SPRITES[index].iter().enumerate() {
-                for (x, pixel) in row.bytes().enumerate() {
-                    if pixel == b'#' {
-                        window.paint_quad(gpui::fill(
-                            gpui::Bounds::new(
-                                bounds.origin + gpui::point(unit * x as f32, unit * y as f32),
-                                gpui::size(unit, unit),
-                            ),
-                            color,
-                        ));
-                    }
-                }
-            }
-        },
-    )
-    .size(px(side))
-    .flex_shrink_0()
-    .into_any_element()
-}
 pub(crate) fn project_icon(appearance: &ProjectAppearance, project: &str, side: f32) -> AnyElement {
     if project.starts_with("remote://") && appearance.logo.is_none() {
         return icon("internet", side)
@@ -99,11 +37,25 @@ pub(crate) fn project_icon(appearance: &ProjectAppearance, project: &str, side: 
             .object_fit(ObjectFit::Contain)
             .flex_shrink_0()
             .into_any_element(),
-        None => mascot(
-            appearance.mascot(project),
-            side,
-            rgb(appearance.color(project)).into(),
-        ),
+        None => {
+            let pixel_side = ((side * 2.0).round() as u32).clamp(28, 96);
+            let look = BotLookConfig {
+                shape: "hex".into(),
+                face: "pills".into(),
+                textured: appearance.textured,
+                seed: appearance.seed(project),
+                grid: appearance.grid(),
+                bg_color: appearance.color(project),
+                fg_color: appearance.fg_color(project),
+            };
+            let image =
+                cached_badge_or_bot_image(false, &look, false, pixel_side, BotAnimState::default());
+            img(image)
+                .size(px(side))
+                .object_fit(ObjectFit::Contain)
+                .flex_shrink_0()
+                .into_any_element()
+        }
     }
 }
 
@@ -134,12 +86,20 @@ fn button(
         .child(label)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditingProjectColor {
+    Background,
+    Foreground,
+}
+
 pub(crate) struct AppearanceControls {
     project: String,
     appearance: ProjectAppearance,
     name: Entity<Input>,
-    custom_color: Entity<Input>,
-    custom_open: bool,
+    dragging_grid: bool,
+    grid_bounds: AnchorSlot,
+    editing_color: Option<EditingProjectColor>,
+    color_picker: Entity<ColorPicker>,
     busy: bool,
     error: Option<String>,
     _events: Vec<Subscription>,
@@ -157,11 +117,8 @@ impl AppearanceControls {
             field.select_range(0..field.content.len(), cx);
             field
         });
-        let custom_color = cx.new(|cx| {
-            let mut field = Input::field("Custom project color", "#RRGGBB", content(0.35), cx);
-            field.set_text(format!("#{:06x}", appearance.color(&project)), cx);
-            field
-        });
+        let initial_bg = appearance.color(&project);
+        let color_picker = cx.new(|cx| ColorPicker::new(initial_bg, cx));
         let events = vec![
             cx.subscribe(&name, |this, _, _: &input::Changed, cx| {
                 this.appearance.name = this.name.read(cx).content.to_string();
@@ -170,28 +127,25 @@ impl AppearanceControls {
             cx.subscribe(&name, |_, _, _: &input::Submitted, cx| {
                 cx.emit(Event::Close)
             }),
-            cx.subscribe(&custom_color, |this, _, _: &input::Changed, cx| {
-                let text = this
-                    .custom_color
-                    .read(cx)
-                    .content
-                    .trim()
-                    .trim_start_matches('#')
-                    .to_owned();
-                if text.len() == 6
-                    && let Ok(color) = u32::from_str_radix(&text, 16)
+            cx.subscribe(&color_picker, |this, _, event: &Picked, cx| {
+                match this
+                    .editing_color
+                    .unwrap_or(EditingProjectColor::Background)
                 {
-                    this.appearance.color = Some(color);
-                    this.save(cx);
+                    EditingProjectColor::Background => this.appearance.color = Some(event.0),
+                    EditingProjectColor::Foreground => this.appearance.fg_color = Some(event.0),
                 }
+                this.save(cx);
             }),
         ];
         Self {
             project,
             appearance,
             name,
-            custom_color,
-            custom_open: false,
+            dragging_grid: false,
+            grid_bounds: AnchorSlot::default(),
+            editing_color: None,
+            color_picker,
             busy: false,
             error: None,
             _events: events,
@@ -203,6 +157,41 @@ impl AppearanceControls {
     fn save(&mut self, cx: &mut Context<Self>) {
         self.appearance.normalize();
         cx.emit(Event::Changed(self.appearance.clone()));
+        cx.notify();
+    }
+    fn randomize_seed(&mut self, cx: &mut Context<Self>) {
+        let next = 10000
+            + ((vorkspace_core::time::now_ms() as u32)
+                .wrapping_mul(1664525)
+                .wrapping_add(self.appearance.seed(&self.project))
+                % 90000);
+        self.appearance.seed = Some(next);
+        self.save(cx);
+    }
+    fn set_grid_from_x(&mut self, x: gpui::Pixels, cx: &mut Context<Self>) {
+        let Some(bounds) = self.grid_bounds.get() else {
+            return;
+        };
+        let width = (bounds.size.width.as_f32() - 12.).max(1.);
+        let t = ((x - bounds.left()).as_f32() - 6.) / width;
+        let next = (2. + t.clamp(0., 1.) * 6.).round() as u8;
+        if self.appearance.grid() != next {
+            self.appearance.grid = Some(next);
+            self.save(cx);
+        }
+    }
+    fn toggle_color_picker(&mut self, target: EditingProjectColor, cx: &mut Context<Self>) {
+        if self.editing_color == Some(target) {
+            self.editing_color = None;
+        } else {
+            self.editing_color = Some(target);
+            let c = match target {
+                EditingProjectColor::Background => self.appearance.color(&self.project),
+                EditingProjectColor::Foreground => self.appearance.fg_color(&self.project),
+            };
+            self.color_picker
+                .update(cx, |picker, cx| picker.set_color(c, cx));
+        }
         cx.notify();
     }
     fn choose_logo(&mut self, cx: &mut Context<Self>) {
@@ -257,7 +246,13 @@ impl AppearanceControls {
 impl Render for AppearanceControls {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.appearance.color(&self.project);
-        let shown = self.appearance.mascot(&self.project);
+        let current_fg = self.appearance.fg_color(&self.project);
+        let textured = self.appearance.textured;
+        let grid = self.appearance.grid();
+        let fraction = (grid.saturating_sub(2) as f32 / 6.).clamp(0., 1.);
+        let probe = self.grid_bounds.clone();
+        let bg_active = self.editing_color == Some(EditingProjectColor::Background);
+        let fg_active = self.editing_color == Some(EditingProjectColor::Foreground);
         div()
             .id("project-appearance-controls")
             .debug_selector(|| "project-appearance-controls".into())
@@ -323,7 +318,7 @@ impl Render for AppearanceControls {
                                     .child(if self.busy {
                                         "Saving image…"
                                     } else {
-                                        "Shown in tabs and composer"
+                                        "Soft Hex · Shown in sidebar and tabs"
                                     }),
                             ),
                     )
@@ -337,6 +332,292 @@ impl Render for AppearanceControls {
                         )
                     }),
             )
+            // Texture Toggle Switch
+            .child(
+                div()
+                    .px(px(2.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(content(0.75))
+                            .child("Texture"),
+                    )
+                    .child(
+                        div()
+                            .id("project-texture-toggle")
+                            .debug_selector(|| "project-texture-toggle".into())
+                            .role(Role::Switch)
+                            .aria_label("Texture")
+                            .aria_selected(textured)
+                            .w(px(36.))
+                            .h(px(20.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .bg(if textured {
+                                accent_color()
+                            } else {
+                                content(0.2)
+                            })
+                            .child(
+                                div()
+                                    .size(px(16.))
+                                    .mt(px(2.))
+                                    .ml(px(if textured { 18. } else { 2. }))
+                                    .rounded_full()
+                                    .bg(gpui::white()),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.appearance.textured = !this.appearance.textured;
+                                if !this.appearance.textured
+                                    && this.editing_color == Some(EditingProjectColor::Foreground)
+                                {
+                                    this.editing_color = None;
+                                }
+                                this.save(cx);
+                            })),
+                    ),
+            )
+            // Grid Scale Slider (2x2..8x8) + Seed Die shown only when Texture is enabled
+            .when(textured, |d| {
+                d.child(
+                    div()
+                        .px(px(2.))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(11.))
+                                .text_color(content(0.5))
+                                .child("Grid Scale")
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1p5()
+                                        .child(
+                                            div()
+                                                .text_color(content(0.8))
+                                                .child(format!("{grid}×{grid}")),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("project-randomize-seed")
+                                                .debug_selector(|| "project-randomize-seed".into())
+                                                .role(Role::Button)
+                                                .aria_label("Randomize texture seed")
+                                                .size(px(22.))
+                                                .rounded_md()
+                                                .border_1()
+                                                .border_color(content(0.14))
+                                                .bg(content(0.06))
+                                                .hover(|s| s.bg(content(0.14)))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_size(px(11.))
+                                                .child("🎲")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.randomize_seed(cx);
+                                                })),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("project-grid-slider")
+                                .debug_selector(|| "project-grid-slider".into())
+                                .role(Role::Slider)
+                                .aria_label("Grid scale")
+                                .aria_value(format!("{grid}x{grid}"))
+                                .relative()
+                                .w_full()
+                                .h(px(14.))
+                                .flex()
+                                .items_center()
+                                .child(probe.probe())
+                                .child(div().w_full().h(px(4.)).rounded_full().bg(content(0.16)))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(1.))
+                                        .left(gpui::relative(fraction * 0.94))
+                                        .size(px(12.))
+                                        .rounded_full()
+                                        .bg(content(1.)),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                        this.dragging_grid = true;
+                                        this.set_grid_from_x(event.position.x, cx);
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .on_mouse_move(cx.listener(
+                                    |this, event: &MouseMoveEvent, _, cx| {
+                                        if this.dragging_grid
+                                            && event.pressed_button == Some(MouseButton::Left)
+                                        {
+                                            this.set_grid_from_x(event.position.x, cx);
+                                        } else {
+                                            this.dragging_grid = false;
+                                        }
+                                    },
+                                ))
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, _| {
+                                        this.dragging_grid = false;
+                                    }),
+                                ),
+                        ),
+                )
+            })
+            // Background & Foreground Color Buttons
+            .child(
+                div()
+                    .px(px(2.))
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(content(0.5))
+                            .child(if textured { "Colors" } else { "Color" }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .id("project-bg-color-button")
+                                    .debug_selector(|| "project-bg-color-button".into())
+                                    .role(Role::Button)
+                                    .aria_label(if textured {
+                                        "Background color"
+                                    } else {
+                                        "Color"
+                                    })
+                                    .aria_expanded(bg_active)
+                                    .flex_1()
+                                    .h(px(24.))
+                                    .px_2()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(if bg_active {
+                                        accent_color()
+                                    } else {
+                                        content(0.15)
+                                    })
+                                    .bg(content(if bg_active { 0.12 } else { 0.05 }))
+                                    .hover(|s| s.bg(content(0.1)))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap_1p5()
+                                    .child(color_swatch_circle(current, None, 10.))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(content(0.85))
+                                            .child(if textured { "Background" } else { "Color" }),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_color_picker(
+                                            EditingProjectColor::Background,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .when(textured, |d| {
+                                d.child(
+                                    div()
+                                        .id("project-fg-color-button")
+                                        .debug_selector(|| "project-fg-color-button".into())
+                                        .role(Role::Button)
+                                        .aria_label("Foreground color")
+                                        .aria_expanded(fg_active)
+                                        .flex_1()
+                                        .h(px(24.))
+                                        .px_2()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(if fg_active {
+                                            accent_color()
+                                        } else {
+                                            content(0.15)
+                                        })
+                                        .bg(content(if fg_active { 0.12 } else { 0.05 }))
+                                        .hover(|s| s.bg(content(0.1)))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap_1p5()
+                                        .child(color_swatch_circle(current_fg, None, 10.))
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(content(0.85))
+                                                .child("Foreground"),
+                                        )
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.toggle_color_picker(
+                                                EditingProjectColor::Foreground,
+                                                cx,
+                                            );
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("project-swap-colors")
+                                        .debug_selector(|| "project-swap-colors".into())
+                                        .role(Role::Button)
+                                        .aria_label("Swap background and foreground colors")
+                                        .h(px(24.))
+                                        .w(px(28.))
+                                        .flex_shrink_0()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(content(0.15))
+                                        .bg(content(0.05))
+                                        .hover(|s| s.bg(content(0.12)))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(px(11.))
+                                        .text_color(content(0.85))
+                                        .child("⇄")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            let bg = this.appearance.color(&this.project);
+                                            let fg = this.appearance.fg_color(&this.project);
+                                            this.appearance.color = Some(fg);
+                                            this.appearance.fg_color = Some(bg);
+                                            if let Some(target) = this.editing_color {
+                                                let next_c = match target {
+                                                    EditingProjectColor::Background => fg,
+                                                    EditingProjectColor::Foreground => bg,
+                                                };
+                                                this.color_picker.update(cx, |picker, cx| {
+                                                    picker.set_color(next_c, cx)
+                                                });
+                                            }
+                                            this.save(cx);
+                                        })),
+                                )
+                            }),
+                    ),
+            )
+            // Preset Color Swatches (9 circular swatches, no custom picker button)
             .child(
                 div()
                     .flex()
@@ -345,13 +626,17 @@ impl Render for AppearanceControls {
                     .gap_1()
                     .px(px(2.))
                     .children(COLORS.into_iter().enumerate().map(|(ix, color)| {
+                        let pair_fg = TEXTURE_PALETTES
+                            .get(ix)
+                            .map(|p| p.2)
+                            .unwrap_or_else(|| default_foreground_color(color));
                         div()
                             .id(("project-color", ix))
                             .debug_selector(move || format!("project-color-{ix}"))
                             .role(Role::Button)
                             .aria_label(format!("Project color #{color:06x}"))
                             .aria_selected(current == color)
-                            .size(px(20.))
+                            .size(px(22.))
                             .flex_shrink_0()
                             .flex()
                             .items_center()
@@ -360,89 +645,20 @@ impl Render for AppearanceControls {
                             .when(current == color, |d| {
                                 d.border_2().border_color(content(0.7))
                             })
-                            .child(div().size(px(14.)).rounded_full().bg(rgb(color)))
+                            .child(color_swatch_circle(color, textured.then_some(pair_fg), 16.))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.appearance.color = Some(color);
-                                this.custom_open = false;
+                                if this.appearance.textured {
+                                    this.appearance.fg_color = Some(pair_fg);
+                                }
+                                this.editing_color = None;
                                 this.save(cx);
                             }))
-                    }))
-                    .child(
-                        div()
-                            .id("custom-project-color")
-                            .role(Role::Button)
-                            .aria_label("Custom project color")
-                            .size(px(20.))
-                            .rounded_full()
-                            .border_2()
-                            .border_color(content(0.4))
-                            .bg(rgb(current))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.custom_open = !this.custom_open;
-                                if this.custom_open {
-                                    let color =
-                                        format!("#{:06x}", this.appearance.color(&this.project));
-                                    this.custom_color.update(cx, |input, cx| {
-                                        input.set_text(color, cx);
-                                        input.select_range(0..input.content.len(), cx);
-                                    });
-                                    window.focus(&this.custom_color.focus_handle(cx), cx);
-                                }
-                                cx.notify();
-                            })),
-                    ),
+                    })),
             )
-            .when(self.custom_open, |d| {
-                d.child(
-                    div()
-                        .h(px(30.))
-                        .px_2()
-                        .flex()
-                        .items_center()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(content(0.1))
-                        .child(self.custom_color.clone()),
-                )
+            .when(self.editing_color.is_some(), |d| {
+                d.child(div().px(px(2.)).child(self.color_picker.clone()))
             })
-            .child(
-                div()
-                    .px(px(2.))
-                    .text_size(px(11.))
-                    .line_height(px(16.5))
-                    .text_color(content(0.5))
-                    .child("Mascot")
-                    .child(
-                        div()
-                            .mt_1()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_1()
-                            .children(MASCOTS.into_iter().enumerate().map(|(ix, name)| {
-                                div()
-                                    .id(("project-mascot", ix))
-                                    .debug_selector(move || format!("project-mascot-{ix}"))
-                                    .role(Role::Button)
-                                    .aria_label(format!("Mascot {name}"))
-                                    .aria_selected(ix == shown)
-                                    .size(px(20.))
-                                    .rounded_md()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .when(ix == shown, |d| {
-                                        d.bg(content(0.1)).border_1().border_color(content(0.3))
-                                    })
-                                    .hover(|s| s.bg(content(0.08)))
-                                    .child(mascot(ix, 12., content(0.75)))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.appearance.mascot = Some(name.into());
-                                        this.save(cx);
-                                    }))
-                            })),
-                    ),
-            )
             .when_some(self.error.clone(), |d, error| {
                 d.child(
                     div()
@@ -1017,7 +1233,7 @@ impl Render for BackgroundDialog {
                 .child(div().min_w_0().flex_1().pt(px(2.)).flex().flex_col()
                     .child(div().debug_selector(||"background-dialog-title".into()).text_size(px(16.)).line_height(px(20.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Background Image"))
                     .child(div().mt(px(2.)).min_w_0().truncate().text_size(px(12.)).line_height(px(16.5)).text_color(content(0.5)).child(format!("Choose a background image for {}",self.appearance.label(&self.project)))))
-                .child(icon_button("close-project-background","Close background settings","close").size(px(28.)).on_click(cx.listener(|_,_,_,cx|cx.emit(Event::Close)))))
+                .child(icon_button("close-project-background","Close background settings","close").debug_selector(|| "close-project-background".into()).size(px(28.)).on_click(cx.listener(|_,_,_,cx|cx.emit(Event::Close)))))
             .child(div().id("background-dialog-body").debug_selector(||"background-dialog-body".into())
                 .min_h_0().overflow_y_scroll().flex().flex_col().gap_5().p_4()
                 .child(div().flex_shrink_0().flex().flex_col()

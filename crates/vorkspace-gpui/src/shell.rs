@@ -8508,8 +8508,12 @@ mod tests {
             .expect("appearance controls in the flyout");
         visual.simulate_click(color.center(), Default::default());
         visual.run_until_parked();
-        let mascot = visual.debug_bounds("project-mascot-3").unwrap();
-        visual.simulate_click(mascot.center(), Default::default());
+        let grid_slider = visual.debug_bounds("project-grid-slider").unwrap();
+        let click_x = grid_slider.left() + grid_slider.size.width * (4. / 6.);
+        visual.simulate_click(
+            gpui::point(click_x, grid_slider.center().y),
+            Default::default(),
+        );
         visual.run_until_parked();
         visual.simulate_keystrokes("escape");
         visual.run_until_parked();
@@ -8523,7 +8527,7 @@ mod tests {
                     .get_mut("/work/vorkspace")
                     .unwrap();
                 assert_eq!(appearance.color, Some(COLORS[4]));
-                assert_eq!(appearance.mascot.as_deref(), Some("cat"));
+                assert_eq!(appearance.grid, Some(6));
                 appearance.background = Some(Background {
                     path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vorkspace.png").into(),
                     ..Default::default()

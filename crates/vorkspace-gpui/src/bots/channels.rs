@@ -1,8 +1,498 @@
 use super::*;
+use crate::popover::{Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle};
+use gpui::{AnyView, EventEmitter, FocusHandle};
 use serde_json::{Value, json};
-use vorkspace_core::bot::channels::Channels;
+use vorkspace_core::{
+    bot::channels::{Channel, Channels},
+    project_appearance::{COLORS, TEXTURE_PALETTES, default_foreground_color},
+};
 mod ui;
 pub(super) const READ_KEY: &str = "bot-channel-read";
+
+struct ChannelLookChanged {
+    channel: Channel,
+}
+struct ChannelLookSubmitted;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditingChannelColor {
+    Background,
+    Foreground,
+}
+
+struct ChannelLookEditor {
+    channel: Channel,
+    name: Entity<Input>,
+    dragging_grid: bool,
+    grid_bounds: AnchorSlot,
+    editing_color: Option<EditingChannelColor>,
+    color_picker: Entity<super::color_picker::ColorPicker>,
+    _events: Vec<Subscription>,
+}
+impl EventEmitter<ChannelLookChanged> for ChannelLookEditor {}
+impl EventEmitter<ChannelLookSubmitted> for ChannelLookEditor {}
+
+impl ChannelLookEditor {
+    fn new(channel: Channel, cx: &mut Context<Self>) -> Self {
+        let name = cx.new(|cx| {
+            let mut field = Input::field("Channel name", "Channel name", content(0.35), cx);
+            field.set_font_size(13.);
+            field.set_max_chars(40);
+            field.set_text(channel.name.clone(), cx);
+            field.select_range(0..field.content.len(), cx);
+            field
+        });
+        let initial_bg = channel.resolved_color();
+        let color_picker = cx.new(|cx| super::color_picker::ColorPicker::new(initial_bg, cx));
+        let changed = cx.subscribe(&name, |this, _, _: &input::Changed, cx| {
+            let next: String = this.name.read(cx).content.trim().chars().take(40).collect();
+            if !next.is_empty() {
+                this.channel.name = next;
+                this.emit(cx);
+            }
+        });
+        let submitted = cx.subscribe(&name, |_, _, _: &input::Submitted, cx| {
+            cx.emit(ChannelLookSubmitted);
+        });
+        let picked = cx.subscribe(
+            &color_picker,
+            |this, _, event: &super::color_picker::Picked, cx| {
+                match this
+                    .editing_color
+                    .unwrap_or(EditingChannelColor::Background)
+                {
+                    EditingChannelColor::Background => this.channel.color = Some(event.0),
+                    EditingChannelColor::Foreground => this.channel.fg_color = Some(event.0),
+                }
+                this.emit(cx);
+            },
+        );
+        Self {
+            channel,
+            name,
+            dragging_grid: false,
+            grid_bounds: AnchorSlot::default(),
+            editing_color: None,
+            color_picker,
+            _events: vec![changed, submitted, picked],
+        }
+    }
+
+    fn focus(&self, cx: &App) -> FocusHandle {
+        self.name.focus_handle(cx)
+    }
+
+    fn emit(&mut self, cx: &mut Context<Self>) {
+        cx.emit(ChannelLookChanged {
+            channel: self.channel.clone(),
+        });
+        cx.notify();
+    }
+
+    fn randomize_seed(&mut self, cx: &mut Context<Self>) {
+        let next = 10000
+            + ((vorkspace_core::time::now_ms() as u32)
+                .wrapping_mul(1664525)
+                .wrapping_add(self.channel.resolved_seed())
+                % 90000);
+        self.channel.seed = Some(next);
+        self.emit(cx);
+    }
+
+    fn set_grid_from_x(&mut self, x: gpui::Pixels, cx: &mut Context<Self>) {
+        let Some(bounds) = self.grid_bounds.get() else {
+            return;
+        };
+        let width = (bounds.size.width.as_f32() - 12.).max(1.);
+        let t = ((x - bounds.left()).as_f32() - 6.) / width;
+        let next = (2. + t.clamp(0., 1.) * 6.).round() as u8;
+        if self.channel.resolved_grid() != next {
+            self.channel.grid = Some(next);
+            self.emit(cx);
+        }
+    }
+
+    fn toggle_color_picker(&mut self, target: EditingChannelColor, cx: &mut Context<Self>) {
+        if self.editing_color == Some(target) {
+            self.editing_color = None;
+        } else {
+            self.editing_color = Some(target);
+            let c = match target {
+                EditingChannelColor::Background => self.channel.resolved_color(),
+                EditingChannelColor::Foreground => self.channel.resolved_fg_color(),
+            };
+            self.color_picker
+                .update(cx, |picker, cx| picker.set_color(c, cx));
+        }
+        cx.notify();
+    }
+}
+
+impl gpui::Render for ChannelLookEditor {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let textured = self.channel.textured;
+        let grid = self.channel.resolved_grid();
+        let fraction = (grid.saturating_sub(2) as f32 / 6.).clamp(0., 1.);
+        let probe = self.grid_bounds.clone();
+        let current_bg = self.channel.resolved_color();
+        let current_fg = self.channel.resolved_fg_color();
+        let bg_active = self.editing_color == Some(EditingChannelColor::Background);
+        let fg_active = self.editing_color == Some(EditingChannelColor::Foreground);
+        div()
+            .id("channel-look-editor")
+            .debug_selector(|| "channel-look-editor".into())
+            .flex()
+            .flex_col()
+            .gap_2()
+            .pb_1()
+            .child(
+                div()
+                    .id("channel-look-name")
+                    .debug_selector(|| "channel-look-name".into())
+                    .mx_1()
+                    .mt_1()
+                    .h(px(34.))
+                    .px_2p5()
+                    .flex()
+                    .items_center()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(content(0.1))
+                    .bg(content(0.05))
+                    .child(self.name.clone()),
+            )
+            // Texture Toggle Switch
+            .child(
+                div()
+                    .px_1()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(content(0.75))
+                            .child("Texture"),
+                    )
+                    .child(
+                        div()
+                            .id("channel-texture-toggle")
+                            .debug_selector(|| "channel-texture-toggle".into())
+                            .role(Role::Switch)
+                            .aria_label("Texture")
+                            .aria_selected(textured)
+                            .w(px(36.))
+                            .h(px(20.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .bg(if textured {
+                                accent_color()
+                            } else {
+                                content(0.2)
+                            })
+                            .child(
+                                div()
+                                    .size(px(16.))
+                                    .mt(px(2.))
+                                    .ml(px(if textured { 18. } else { 2. }))
+                                    .rounded_full()
+                                    .bg(gpui::white()),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.channel.textured = !this.channel.textured;
+                                if !this.channel.textured
+                                    && this.editing_color == Some(EditingChannelColor::Foreground)
+                                {
+                                    this.editing_color = None;
+                                }
+                                this.emit(cx);
+                            })),
+                    ),
+            )
+            // Grid Scale Slider + Seed Die when textured
+            .when(textured, |d| {
+                d.child(
+                    div()
+                        .px_1()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(11.))
+                                .text_color(content(0.5))
+                                .child("Grid Scale")
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1p5()
+                                        .child(
+                                            div()
+                                                .text_color(content(0.8))
+                                                .child(format!("{grid}×{grid}")),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("channel-seed-randomize")
+                                                .debug_selector(|| "channel-seed-randomize".into())
+                                                .role(Role::Button)
+                                                .aria_label("Randomize seed")
+                                                .size(px(22.))
+                                                .rounded_md()
+                                                .border_1()
+                                                .border_color(content(0.14))
+                                                .bg(content(0.06))
+                                                .hover(|s| s.bg(content(0.14)))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_size(px(11.))
+                                                .child("🎲")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.randomize_seed(cx)
+                                                })),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("channel-grid-slider")
+                                .debug_selector(|| "channel-grid-slider".into())
+                                .role(Role::Slider)
+                                .aria_label("Grid scale")
+                                .aria_value(format!("{grid}x{grid}"))
+                                .relative()
+                                .w_full()
+                                .h(px(14.))
+                                .flex()
+                                .items_center()
+                                .child(probe.probe())
+                                .child(div().w_full().h(px(4.)).rounded_full().bg(content(0.16)))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(1.))
+                                        .left(gpui::relative(fraction * 0.94))
+                                        .size(px(12.))
+                                        .rounded_full()
+                                        .bg(content(1.)),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                                        this.dragging_grid = true;
+                                        this.set_grid_from_x(event.position.x, cx);
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .on_mouse_move(cx.listener(
+                                    |this, event: &gpui::MouseMoveEvent, _, cx| {
+                                        if this.dragging_grid
+                                            && event.pressed_button == Some(MouseButton::Left)
+                                        {
+                                            this.set_grid_from_x(event.position.x, cx);
+                                        } else {
+                                            this.dragging_grid = false;
+                                        }
+                                    },
+                                ))
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, _| {
+                                        this.dragging_grid = false;
+                                    }),
+                                ),
+                        ),
+                )
+            })
+            // Background & Foreground Color Buttons
+            .child(
+                div()
+                    .px_1()
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(content(0.5))
+                            .child(if textured { "Colors" } else { "Color" }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .id("channel-bg-color-button")
+                                    .debug_selector(|| "channel-bg-color-button".into())
+                                    .role(Role::Button)
+                                    .aria_label(if textured {
+                                        "Background color"
+                                    } else {
+                                        "Color"
+                                    })
+                                    .aria_expanded(bg_active)
+                                    .flex_1()
+                                    .h(px(24.))
+                                    .px_2()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(if bg_active {
+                                        accent_color()
+                                    } else {
+                                        content(0.15)
+                                    })
+                                    .bg(content(if bg_active { 0.12 } else { 0.05 }))
+                                    .hover(|s| s.bg(content(0.1)))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap_1p5()
+                                    .child(avatar::color_swatch_circle(current_bg, None, 10.))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(content(0.85))
+                                            .child(if textured { "Background" } else { "Color" }),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_color_picker(
+                                            EditingChannelColor::Background,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .when(textured, |d| {
+                                d.child(
+                                    div()
+                                        .id("channel-fg-color-button")
+                                        .debug_selector(|| "channel-fg-color-button".into())
+                                        .role(Role::Button)
+                                        .aria_label("Foreground color")
+                                        .aria_expanded(fg_active)
+                                        .flex_1()
+                                        .h(px(24.))
+                                        .px_2()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(if fg_active {
+                                            accent_color()
+                                        } else {
+                                            content(0.15)
+                                        })
+                                        .bg(content(if fg_active { 0.12 } else { 0.05 }))
+                                        .hover(|s| s.bg(content(0.1)))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap_1p5()
+                                        .child(avatar::color_swatch_circle(current_fg, None, 10.))
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(content(0.85))
+                                                .child("Foreground"),
+                                        )
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.toggle_color_picker(
+                                                EditingChannelColor::Foreground,
+                                                cx,
+                                            );
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("channel-swap-colors")
+                                        .debug_selector(|| "channel-swap-colors".into())
+                                        .role(Role::Button)
+                                        .aria_label("Swap background and foreground colors")
+                                        .h(px(24.))
+                                        .w(px(28.))
+                                        .flex_shrink_0()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(content(0.15))
+                                        .bg(content(0.05))
+                                        .hover(|s| s.bg(content(0.12)))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(px(11.))
+                                        .text_color(content(0.85))
+                                        .child("⇄")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            let bg = this.channel.resolved_color();
+                                            let fg = this.channel.resolved_fg_color();
+                                            this.channel.color = Some(fg);
+                                            this.channel.fg_color = Some(bg);
+                                            if let Some(target) = this.editing_color {
+                                                let next_c = match target {
+                                                    EditingChannelColor::Background => fg,
+                                                    EditingChannelColor::Foreground => bg,
+                                                };
+                                                this.color_picker.update(cx, |picker, cx| {
+                                                    picker.set_color(next_c, cx)
+                                                });
+                                            }
+                                            this.emit(cx);
+                                        })),
+                                )
+                            }),
+                    ),
+            )
+            // Preset Color Swatches (9 circular swatches, no custom picker button)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(2.))
+                    .px_1()
+                    .children(COLORS.into_iter().enumerate().map(|(ix, color)| {
+                        let fg_pair = TEXTURE_PALETTES
+                            .get(ix)
+                            .map(|p| p.2)
+                            .unwrap_or_else(|| default_foreground_color(color));
+                        let selected = current_bg == color;
+                        div()
+                            .id(("channel-color", ix))
+                            .debug_selector(move || format!("channel-color-{ix}"))
+                            .role(Role::Button)
+                            .aria_label(format!("Color #{color:06x}"))
+                            .aria_selected(selected)
+                            .size(px(22.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .when(selected, |d| d.border_2().border_color(content(0.8)))
+                            .child(avatar::color_swatch_circle(
+                                color,
+                                textured.then_some(fg_pair),
+                                16.,
+                            ))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.channel.color = Some(color);
+                                if this.channel.textured {
+                                    this.channel.fg_color = Some(fg_pair);
+                                }
+                                this.editing_color = None;
+                                this.emit(cx);
+                            }))
+                    })),
+            )
+            .when(self.editing_color.is_some(), |d| {
+                d.child(div().px_1().child(self.color_picker.clone()))
+            })
+    }
+}
 
 #[derive(Default)]
 pub(super) struct ChannelUi {
@@ -17,6 +507,7 @@ pub(super) struct ChannelUi {
     pub(super) starts: HashMap<String, usize>,
     pub(super) editing: bool,
     pub(super) settings_anchor: AnchorSlot,
+    pub(super) rail_bounds: HashMap<String, AnchorSlot>,
     pub(super) completions: HashMap<String, Entity<crate::composer_completion::Completion>>,
     pub(super) form_members: HashMap<String, HashSet<String>>,
     pub(super) message_cache: HashMap<String, std::sync::Arc<Vec<crate::markdown::MarkdownRow>>>,
@@ -93,6 +584,13 @@ impl Bots {
         if !self.prefs.bots {
             return div().into_any_element();
         }
+        let channels = self.channels.state.channels.clone();
+        for channel in &channels {
+            self.channels
+                .rail_bounds
+                .entry(channel.id.clone())
+                .or_default();
+        }
         div()
             .id("classic-channels")
             .debug_selector(|| "classic-channels".into())
@@ -110,15 +608,24 @@ impl Bots {
                         })),
                 ),
             )
-            .children(self.channels.state.channels.iter().map(|channel| {
+            .children(channels.into_iter().map(|channel| {
                 let id = channel.id.clone();
                 let selector = id.clone();
+                let options = id.clone();
+                let context = id.clone();
+                let slot = self.channels.rail_bounds[&id].clone();
                 let selected = self.channels.open
                     && self.channels.selected.as_deref() == Some(channel.id.as_str());
                 let unread = self.channel_unread(&id);
+                let seed = channel.resolved_seed();
+                let grid = channel.resolved_grid();
+                let textured = channel.textured;
+                let bg = channel.resolved_color();
+                let fg = channel.resolved_fg_color();
                 div()
                     .id(SharedString::from(format!("classic-channel-{id}")))
                     .debug_selector(move || format!("classic-channel-{selector}"))
+                    .group("classic-channel-row")
                     .role(Role::Button)
                     .aria_label(format!(
                         "Channel #{}{}",
@@ -128,6 +635,8 @@ impl Bots {
                     .aria_selected(selected)
                     .focusable()
                     .tab_stop(true)
+                    .relative()
+                    .overflow_hidden()
                     .h(px(32.))
                     .min_w_0()
                     .px_2()
@@ -137,10 +646,11 @@ impl Bots {
                     .gap_2()
                     .text_size(px(14.))
                     .opacity(if selected { 1. } else { 0.65 })
-                    .when(selected, |d| d.bg(content(0.1)))
+                    .when(selected, |d| {
+                        d.child(avatar::sidebar_selection_pill(seed, grid, textured, bg, fg))
+                    })
                     .hover(|s| s.bg(content(0.08)).opacity(1.))
                     .focus(|s| s.bg(content(0.08)).opacity(1.))
-                    .child(div().w(px(16.)).flex_shrink_0().text_center().child("#"))
                     .child(
                         div()
                             .debug_selector({
@@ -150,8 +660,9 @@ impl Bots {
                             .flex_1()
                             .min_w_0()
                             .truncate()
+                            .group_hover("classic-channel-row", |s| s.pr(px(24.)))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .child(channel.name.clone()),
+                            .child(format!("# {}", channel.name)),
                     )
                     .when(unread, |d| {
                         d.child(
@@ -163,14 +674,126 @@ impl Bots {
                                 .size(px(6.))
                                 .flex_shrink_0()
                                 .rounded_full()
-                                .bg(accent_color()),
+                                .bg(accent_color())
+                                .group_hover("classic-channel-row", |s| s.invisible()),
                         )
                     })
+                    .child(
+                        div()
+                            .absolute()
+                            .right_2()
+                            .top(px(6.))
+                            .invisible()
+                            .group_hover("classic-channel-row", |s| s.visible())
+                            .child(
+                                icon_button(
+                                    "channel-options",
+                                    "Channel options",
+                                    "more-horizontal",
+                                )
+                                .debug_selector({
+                                    let id = id.clone();
+                                    move || format!("classic-channel-options-{id}")
+                                })
+                                .size(px(20.))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_click(cx.listener(
+                                    move |this, _, w, cx| {
+                                        cx.stop_propagation();
+                                        this.open_channel_options(&options, None, w, cx);
+                                    },
+                                )),
+                            ),
+                    )
+                    .child(slot.probe())
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, w, cx| {
+                            this.open_channel_options(&context, Some(event.position), w, cx);
+                        }),
+                    )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_classic_channel(Some(id.clone()), window, cx);
                     }))
             }))
             .into_any_element()
+    }
+
+    pub(super) fn open_channel_options(
+        &mut self,
+        id: &str,
+        at: Option<gpui::Point<gpui::Pixels>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(channel) = self.channels.state.get(id).cloned() else {
+            return;
+        };
+        let editor = cx.new(|cx| ChannelLookEditor::new(channel, cx));
+        let focus = editor.read(cx).focus(cx);
+        let changed = cx.subscribe(&editor, |this, _, event: &ChannelLookChanged, cx| {
+            let mut next = this.channels.state.clone();
+            if let Some(ch) = next.get_mut(&event.channel.id) {
+                ch.name = event.channel.name.clone();
+                ch.color = event.channel.color;
+                ch.fg_color = event.channel.fg_color;
+                ch.textured = event.channel.textured;
+                ch.seed = event.channel.seed;
+                ch.grid = event.channel.grid;
+            }
+            if let Err(error) = this.commit_channels(next, cx) {
+                this.error = Some(error);
+                cx.notify();
+            }
+        });
+        let submitted = cx.subscribe(&editor, |this, _, _: &ChannelLookSubmitted, cx| {
+            this.menu = None;
+            cx.notify();
+        });
+        let menu = cx.new(|cx| {
+            Menu::new(
+                "Channel options",
+                vec![
+                    MenuItem::Custom(AnyView::from(editor), focus.clone()),
+                    MenuItem::Separator,
+                    MenuAction::new("settings", "Channel settings")
+                        .icon("settings")
+                        .into(),
+                ],
+                window,
+                cx,
+            )
+            .width(280.)
+            .style(MenuStyle::Group)
+        });
+        let target = id.to_string();
+        let picked = cx.subscribe_in(&menu, window, move |this, _, event: &MenuEvent, w, cx| {
+            this.menu = None;
+            if let MenuEvent::Picked(action, _) = event
+                && action.as_ref() == "settings"
+            {
+                this.open_classic_channel(Some(target.clone()), w, cx);
+                this.channels.editing = true;
+            }
+            cx.notify();
+        });
+        self.menu_anchor = match at {
+            Some(at) => Anchor::Point(at),
+            None => self
+                .channels
+                .rail_bounds
+                .get(id)
+                .cloned()
+                .map(Anchor::Slot)
+                .unwrap_or_else(|| Anchor::Slot(self.channels.settings_anchor.clone())),
+        };
+        self.menu = Some((
+            format!("channel:{id}"),
+            menu,
+            vec![changed, submitted, picked],
+        ));
+        window.focus(&focus, cx);
+        cx.notify();
     }
 
     fn open_classic_channel(
@@ -643,7 +1266,7 @@ mod classic_rail_tests {
         let label = visual.debug_bounds("channel-label-team").unwrap();
         let bot = visual.debug_bounds("bot-rail-reader").unwrap();
         let project = visual.debug_bounds("classic-project-label-0").unwrap();
-        assert_eq!(label.left(), bot.left() + px(32.));
+        assert_eq!(label.left(), bot.left() + px(8.));
         assert_eq!(label.left(), project.left());
         assert!(visual.debug_bounds("channel-unread-team").is_some());
         visual.simulate_click(channel.center(), Default::default());
@@ -716,5 +1339,45 @@ mod classic_rail_tests {
         visual.run_until_parked();
         assert!(!manager.read_with(visual, |manager, _| manager.classic_channels_open()));
         assert!(visual.debug_bounds("sidebar-frame").is_some());
+
+        // Right-clicking a channel in the sidebar opens its appearance options menu.
+        let channel = visual.debug_bounds("classic-channel-team").unwrap();
+        let at = channel.center();
+        visual.simulate_event(gpui::MouseDownEvent {
+            position: at,
+            button: MouseButton::Right,
+            modifiers: Default::default(),
+            click_count: 1,
+            first_mouse: false,
+        });
+        visual.simulate_event(gpui::MouseUpEvent {
+            position: at,
+            button: MouseButton::Right,
+            modifiers: Default::default(),
+            click_count: 1,
+        });
+        visual.run_until_parked();
+        let grid_slider = visual
+            .debug_bounds("channel-grid-slider")
+            .expect("right-click opens the channel appearance menu");
+        let click_x = grid_slider.left() + grid_slider.size.width * (4. / 6.);
+        visual.simulate_click(
+            gpui::point(click_x, grid_slider.center().y),
+            Default::default(),
+        );
+        visual.run_until_parked();
+        let color_btn = visual.debug_bounds("channel-color-4").unwrap();
+        visual.simulate_click(color_btn.center(), Default::default());
+        visual.run_until_parked();
+        let tex_toggle = visual.debug_bounds("channel-texture-toggle").unwrap();
+        visual.simulate_click(tex_toggle.center(), Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("channel-grid-slider").is_none());
+        manager.read_with(visual, |manager, _| {
+            let ch = manager.channels.state.get("team").unwrap();
+            assert_eq!(ch.grid, Some(6));
+            assert_eq!(ch.color, Some(COLORS[4]));
+            assert!(!ch.textured);
+        });
     }
 }

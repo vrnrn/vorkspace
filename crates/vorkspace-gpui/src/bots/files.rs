@@ -304,6 +304,7 @@ impl Bots {
         })
         .detach();
     }
+    #[allow(dead_code)]
     pub(super) fn delete_bot(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let prompt = window.prompt(
             gpui::PromptLevel::Warning,

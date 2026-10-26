@@ -5,7 +5,9 @@ use crate::{
     project_settings::{BackgroundDialog, Event as BackgroundEvent},
 };
 use gpui::{AnyView, Div, FontWeight, Stateful};
-use vorkspace_core::project_appearance::{MASCOTS, ProjectAppearance};
+use vorkspace_core::project_appearance::{
+    ProjectAppearance, TEXTURE_PALETTES, default_foreground_color,
+};
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum OverviewTab {
     Sessions,
@@ -207,12 +209,19 @@ struct LookChanged {
 }
 /// Enter in the name field: BotMenu commits the name and closes.
 struct LookSubmitted;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditingColor {
+    Background,
+    Foreground,
+}
 struct LookEditor {
     bot: Bot,
     name: Entity<Input>,
-    color: Entity<Input>,
     settings: bool,
-    custom_open: bool,
+    shape_open: bool,
+    dragging_grid: bool,
+    grid_bounds: AnchorSlot,
+    editing_color: Option<EditingColor>,
     custom: Entity<super::color_picker::ColorPicker>,
     focus: gpui::FocusHandle,
     _events: Vec<Subscription>,
@@ -226,20 +235,15 @@ impl LookEditor {
             f.set_text(bot.name.clone(), cx);
             f
         });
-        let color = cx.new(|cx| {
-            let mut f = Input::field("Custom Bot color", "#rrggbb", content(0.4), cx);
-            f.set_text(format!("#{:06x}", bot.color), cx);
-            f
-        });
         let custom = cx.new(|cx| super::color_picker::ColorPicker::new(bot.color, cx));
         let events = vec![
             cx.subscribe(
                 &custom,
                 |this, _, event: &super::color_picker::Picked, cx| {
-                    this.bot.color = event.0;
-                    this.color.update(cx, |field, cx| {
-                        field.set_text(format!("#{:06x}", event.0), cx)
-                    });
+                    match this.editing_color.unwrap_or(EditingColor::Background) {
+                        EditingColor::Background => this.bot.color = event.0,
+                        EditingColor::Foreground => this.bot.fg_color = Some(event.0),
+                    }
                     cx.emit(LookChanged {
                         bot: this.bot.clone(),
                     });
@@ -255,31 +259,481 @@ impl LookEditor {
             cx.subscribe(&name, |_, _, _: &input::Submitted, cx| {
                 cx.emit(LookSubmitted)
             }),
-            cx.subscribe(&color, |this, input, _: &input::Changed, cx| {
-                let text = input.read(cx).content.trim();
-                if text.len() == 7
-                    && let Ok(color) = u32::from_str_radix(text.trim_start_matches('#'), 16)
-                {
-                    this.bot.color = color;
-                    this.custom
-                        .update(cx, |picker, cx| picker.set_color(color, cx));
-                    cx.emit(LookChanged {
-                        bot: this.bot.clone(),
-                    });
-                    cx.notify();
-                }
-            }),
         ];
         Self {
             bot,
             name,
-            color,
             settings: false,
-            custom_open: false,
+            shape_open: false,
+            dragging_grid: false,
+            grid_bounds: AnchorSlot::default(),
+            editing_color: None,
             custom,
             focus: cx.focus_handle(),
             _events: events,
         }
+    }
+    fn randomize_seed(&mut self, cx: &mut Context<Self>) {
+        let next = 10000
+            + ((vorkspace_core::time::now_ms() as u32)
+                .wrapping_mul(1664525)
+                .wrapping_add(self.bot.resolved_seed())
+                % 90000);
+        self.bot.seed = Some(next);
+        cx.emit(LookChanged {
+            bot: self.bot.clone(),
+        });
+        cx.notify();
+    }
+    fn set_grid_from_x(&mut self, x: gpui::Pixels, cx: &mut Context<Self>) {
+        let Some(bounds) = self.grid_bounds.get() else {
+            return;
+        };
+        let width = (bounds.size.width.as_f32() - 12.).max(1.);
+        let t = ((x - bounds.left()).as_f32() - 6.) / width;
+        let next = (2. + t.clamp(0., 1.) * 6.).round() as u8;
+        if self.bot.resolved_grid() != next {
+            self.bot.grid = Some(next);
+            cx.emit(LookChanged {
+                bot: self.bot.clone(),
+            });
+            cx.notify();
+        }
+    }
+    fn toggle_color_picker(&mut self, target: EditingColor, cx: &mut Context<Self>) {
+        if self.editing_color == Some(target) {
+            self.editing_color = None;
+        } else {
+            self.editing_color = Some(target);
+            let c = match target {
+                EditingColor::Background => self.bot.color,
+                EditingColor::Foreground => self.bot.resolved_fg_color(),
+            };
+            self.custom.update(cx, |picker, cx| picker.set_color(c, cx));
+        }
+        cx.notify();
+    }
+    fn shape_section(&self, prefix: &'static str, cx: &mut Context<Self>) -> AnyElement {
+        const SHAPE_LABELS: [(&str, &str); 5] = [
+            ("squircle", "Squircle"),
+            ("circle", "Circle"),
+            ("rounded", "Rounded"),
+            ("pill", "Capsule"),
+            ("hex", "Soft Hex"),
+        ];
+        let current_shape = self.bot.badge_shape();
+        let current_label = SHAPE_LABELS
+            .iter()
+            .find(|(id, _)| *id == current_shape)
+            .map(|(_, l)| *l)
+            .unwrap_or("Squircle");
+        let dropdown_id = format!("{prefix}-shape-dropdown");
+        let selector_dropdown = dropdown_id.clone();
+        div()
+            .px_1()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(content(0.75))
+                            .child("Shape"),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(dropdown_id))
+                            .debug_selector(move || selector_dropdown.clone())
+                            .role(Role::ComboBox)
+                            .aria_label("Shape")
+                            .aria_expanded(self.shape_open)
+                            .h(px(26.))
+                            .px_2p5()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(content(0.14))
+                            .bg(content(0.05))
+                            .hover(|s| s.bg(content(0.1)).border_color(content(0.24)))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_size(px(12.))
+                            .text_color(content(0.9))
+                            .child(current_label)
+                            .child(icon("chevron-down", 12.).text_color(content(0.5)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.shape_open = !this.shape_open;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .when(self.shape_open, |d| {
+                d.child(
+                    div()
+                        .id(SharedString::from(format!("{prefix}-shape-options")))
+                        .debug_selector(move || format!("{prefix}-shape-options"))
+                        .role(Role::ListBox)
+                        .aria_label("Badge shape")
+                        .p_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(content(0.12))
+                        .bg(content(0.06))
+                        .flex()
+                        .flex_col()
+                        .gap(px(1.))
+                        .children(SHAPE_LABELS.iter().enumerate().map(
+                            |(ix, (shape_id, label))| {
+                                let selected = current_shape == *shape_id;
+                                let opt_id = format!("{prefix}-shape-{ix}");
+                                let opt_sel = opt_id.clone();
+                                div()
+                                    .id(SharedString::from(opt_id))
+                                    .debug_selector(move || opt_sel.clone())
+                                    .role(Role::ListBoxOption)
+                                    .aria_label(*label)
+                                    .aria_selected(selected)
+                                    .h(px(26.))
+                                    .px_2()
+                                    .rounded(px(4.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .text_size(px(12.))
+                                    .text_color(content(if selected { 1. } else { 0.75 }))
+                                    .when(selected, |d| d.bg(content(0.12)))
+                                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                                    .child(*label)
+                                    .when(selected, |d| {
+                                        d.child(icon("check", 12.).text_color(content(1.)))
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.bot.shape = (*shape_id).into();
+                                        this.shape_open = false;
+                                        cx.emit(LookChanged {
+                                            bot: this.bot.clone(),
+                                        });
+                                        cx.notify();
+                                    }))
+                            },
+                        )),
+                )
+            })
+            .into_any_element()
+    }
+    fn texture_and_grid_section(&self, prefix: &'static str, cx: &mut Context<Self>) -> AnyElement {
+        let textured = self.bot.textured;
+        let grid = self.bot.resolved_grid();
+        let fraction = (grid.saturating_sub(2) as f32 / 6.).clamp(0., 1.);
+        let probe = self.grid_bounds.clone();
+        let toggle_id = format!("{prefix}-texture-toggle");
+        let toggle_sel = toggle_id.clone();
+        let rand_id = format!("{prefix}-randomize-seed");
+        let rand_sel = rand_id.clone();
+        let slider_id = format!("{prefix}-grid-slider");
+        let slider_sel = slider_id.clone();
+        div()
+            .px_1()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(content(0.75))
+                            .child("Texture"),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(toggle_id))
+                            .debug_selector(move || toggle_sel.clone())
+                            .role(Role::Switch)
+                            .aria_label("Texture")
+                            .aria_selected(textured)
+                            .w(px(36.))
+                            .h(px(20.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .bg(if textured {
+                                accent_color()
+                            } else {
+                                content(0.2)
+                            })
+                            .child(
+                                div()
+                                    .size(px(16.))
+                                    .mt(px(2.))
+                                    .ml(px(if textured { 18. } else { 2. }))
+                                    .rounded_full()
+                                    .bg(gpui::white()),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.bot.textured = !this.bot.textured;
+                                if !this.bot.textured
+                                    && this.editing_color == Some(EditingColor::Foreground)
+                                {
+                                    this.editing_color = None;
+                                }
+                                cx.emit(LookChanged {
+                                    bot: this.bot.clone(),
+                                });
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .when(textured, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(11.))
+                                .text_color(content(0.5))
+                                .child("Grid Scale")
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1p5()
+                                        .child(
+                                            div()
+                                                .text_color(content(0.8))
+                                                .child(format!("{grid}×{grid}")),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(SharedString::from(rand_id))
+                                                .debug_selector(move || rand_sel.clone())
+                                                .role(Role::Button)
+                                                .aria_label("Randomize texture seed")
+                                                .size(px(22.))
+                                                .rounded_md()
+                                                .border_1()
+                                                .border_color(content(0.14))
+                                                .bg(content(0.06))
+                                                .hover(|s| s.bg(content(0.14)))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_size(px(11.))
+                                                .child("🎲")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.randomize_seed(cx);
+                                                })),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(slider_id))
+                                .debug_selector(move || slider_sel.clone())
+                                .role(Role::Slider)
+                                .aria_label("Grid scale")
+                                .aria_value(format!("{grid}x{grid}"))
+                                .relative()
+                                .w_full()
+                                .h(px(14.))
+                                .flex()
+                                .items_center()
+                                .child(probe.probe())
+                                .child(div().w_full().h(px(4.)).rounded_full().bg(content(0.16)))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(1.))
+                                        .left(gpui::relative(fraction * 0.94))
+                                        .size(px(12.))
+                                        .rounded_full()
+                                        .bg(content(1.)),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                                        this.dragging_grid = true;
+                                        this.set_grid_from_x(event.position.x, cx);
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                                .on_mouse_move(cx.listener(
+                                    |this, event: &gpui::MouseMoveEvent, _, cx| {
+                                        if this.dragging_grid
+                                            && event.pressed_button == Some(MouseButton::Left)
+                                        {
+                                            this.set_grid_from_x(event.position.x, cx);
+                                        } else {
+                                            this.dragging_grid = false;
+                                        }
+                                    },
+                                ))
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, _| {
+                                        this.dragging_grid = false;
+                                    }),
+                                ),
+                        ),
+                )
+            })
+            .into_any_element()
+    }
+    fn color_buttons_section(&self, prefix: &'static str, cx: &mut Context<Self>) -> AnyElement {
+        let textured = self.bot.textured;
+        let current_bg = self.bot.color;
+        let current_fg = self.bot.resolved_fg_color();
+        let bg_active = self.editing_color == Some(EditingColor::Background);
+        let fg_active = self.editing_color == Some(EditingColor::Foreground);
+        let bg_id = format!("{prefix}-bg-color-button");
+        let bg_sel = bg_id.clone();
+        let fg_id = format!("{prefix}-fg-color-button");
+        let fg_sel = fg_id.clone();
+        let swap_id = format!("{prefix}-swap-colors");
+        let swap_sel = swap_id.clone();
+        div()
+            .px_1()
+            .flex()
+            .flex_col()
+            .gap_1p5()
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(content(0.5))
+                    .child(if textured { "Colors" } else { "Color" }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id(SharedString::from(bg_id))
+                            .debug_selector(move || bg_sel.clone())
+                            .role(Role::Button)
+                            .aria_label(if textured {
+                                "Background color"
+                            } else {
+                                "Color"
+                            })
+                            .aria_expanded(bg_active)
+                            .flex_1()
+                            .h(px(24.))
+                            .px_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(if bg_active {
+                                accent_color()
+                            } else {
+                                content(0.15)
+                            })
+                            .bg(content(if bg_active { 0.12 } else { 0.05 }))
+                            .hover(|s| s.bg(content(0.1)))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap_1p5()
+                            .child(avatar::color_swatch_circle(current_bg, None, 10.))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(content(0.85))
+                                    .child(if textured { "Background" } else { "Color" }),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.toggle_color_picker(EditingColor::Background, cx);
+                            })),
+                    )
+                    .when(textured, |d| {
+                        d.child(
+                            div()
+                                .id(SharedString::from(fg_id))
+                                .debug_selector(move || fg_sel.clone())
+                                .role(Role::Button)
+                                .aria_label("Foreground color")
+                                .aria_expanded(fg_active)
+                                .flex_1()
+                                .h(px(24.))
+                                .px_2()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(if fg_active {
+                                    accent_color()
+                                } else {
+                                    content(0.15)
+                                })
+                                .bg(content(if fg_active { 0.12 } else { 0.05 }))
+                                .hover(|s| s.bg(content(0.1)))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .gap_1p5()
+                                .child(avatar::color_swatch_circle(current_fg, None, 10.))
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(content(0.85))
+                                        .child("Foreground"),
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.toggle_color_picker(EditingColor::Foreground, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(swap_id))
+                                .debug_selector(move || swap_sel.clone())
+                                .role(Role::Button)
+                                .aria_label("Swap background and foreground colors")
+                                .h(px(24.))
+                                .w(px(28.))
+                                .flex_shrink_0()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(content(0.15))
+                                .bg(content(0.05))
+                                .hover(|s| s.bg(content(0.12)))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(px(11.))
+                                .text_color(content(0.85))
+                                .child("⇄")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let bg = this.bot.color;
+                                    let fg = this.bot.resolved_fg_color();
+                                    this.bot.color = fg;
+                                    this.bot.fg_color = Some(bg);
+                                    if let Some(target) = this.editing_color {
+                                        let next_c = match target {
+                                            EditingColor::Background => fg,
+                                            EditingColor::Foreground => bg,
+                                        };
+                                        this.custom
+                                            .update(cx, |picker, cx| picker.set_color(next_c, cx));
+                                    }
+                                    cx.emit(LookChanged {
+                                        bot: this.bot.clone(),
+                                    });
+                                    cx.notify();
+                                })),
+                        )
+                    }),
+            )
+            .into_any_element()
     }
 }
 impl gpui::Render for LookEditor {
@@ -287,12 +741,18 @@ impl gpui::Render for LookEditor {
         if self.settings {
             return self.settings_controls(cx);
         }
-        // BotMenu: the name, MascotPicker and the inline ColorPicker, each
-        // ten columns wide.
         const COLOR_NAMES: [&str; 9] = [
             "Blue", "Coral", "Yellow", "Green", "Pink", "Purple", "Teal", "Orange", "Indigo",
         ];
-        let preset = bot::COLORS_BOT.contains(&self.bot.color);
+        const FACE_LABELS: [(&str, &str); 5] = [
+            ("pills", "3D Pills"),
+            ("dots", "Round Dots"),
+            ("visor", "Visor"),
+            ("carets", "Happy ^ ^"),
+            ("wink", "Wink"),
+        ];
+        let current_face = self.bot.face_style();
+        let textured = self.bot.textured;
         let swatch = |id: gpui::ElementId, label: SharedString, ring: bool, dot: AnyElement| {
             div()
                 .id(id)
@@ -305,7 +765,7 @@ impl gpui::Render for LookEditor {
                 .justify_center()
                 .child(
                     div()
-                        .size(px(20.))
+                        .size(px(22.))
                         .rounded_full()
                         .flex()
                         .items_center()
@@ -315,11 +775,15 @@ impl gpui::Render for LookEditor {
                 )
         };
         div()
+            .debug_selector(|| "bot-look-editor".into())
             .w_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .pb_2()
             .child(
                 div()
                     .debug_selector(|| "bot-options-name".into())
-                    .mb_2()
                     .px_2p5()
                     .py_1p5()
                     .rounded_lg()
@@ -329,27 +793,28 @@ impl gpui::Render for LookEditor {
                     .text_size(px(13.))
                     .child(self.name.clone()),
             )
+            // Face Style Row (5 curved 3D faces)
             .child(
                 div()
-                    .mb_2()
+                    .id("bot-mascot-options")
+                    .role(Role::RadioGroup)
+                    .aria_label("Face style")
+                    .px_1()
                     .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .id("bot-mascot-options")
-                            .role(Role::RadioGroup)
-                            .aria_label("Mascot")
-                            .px_1()
-                            .flex()
-                            .gap(px(2.))
-                            .children(MASCOTS.iter().enumerate().map(|(ix, name)| {
-                                let selected = self.bot.mascot == *name;
+                    .gap(px(2.))
+                    .children(
+                        FACE_LABELS
+                            .iter()
+                            .enumerate()
+                            .map(|(ix, (face_id, label))| {
+                                let selected = current_face == *face_id;
+                                let mut preview_bot = self.bot.clone();
+                                preview_bot.mascot = (*face_id).into();
                                 div()
                                     .id(("bot-mascot", ix))
                                     .debug_selector(move || format!("bot-mascot-{ix}"))
                                     .role(Role::RadioButton)
-                                    .aria_label(*name)
+                                    .aria_label(*label)
                                     .aria_selected(selected)
                                     .flex_1()
                                     .min_w_0()
@@ -362,105 +827,64 @@ impl gpui::Render for LookEditor {
                                         d.bg(content(0.1)).border_1().border_color(content(0.2))
                                     })
                                     .when(!selected, |d| d.hover(|s| s.bg(content(0.06))))
-                                    .child(avatar::avatar(
-                                        name,
-                                        self.bot.color,
-                                        "idle",
-                                        20.,
-                                        !selected,
-                                    ))
+                                    .child(avatar::bot_avatar(&preview_bot, "idle", 20., !selected))
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.bot.mascot = (*name).into();
+                                        this.bot.mascot = (*face_id).into();
                                         cx.emit(LookChanged {
                                             bot: this.bot.clone(),
                                         });
                                         cx.notify();
                                     }))
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("bot-color-options")
-                            .role(Role::Group)
-                            .aria_label("Color")
-                            .child(
-                                div()
-                                    .px_1()
-                                    .flex()
-                                    .gap(px(2.))
-                                    .children(bot::COLORS_BOT.into_iter().enumerate().map(
-                                        |(ix, color)| {
-                                            swatch(
-                                                ("bot-color", ix).into(),
-                                                COLOR_NAMES[ix].into(),
-                                                self.bot.color == color,
-                                                div()
-                                                    .size(px(14.))
-                                                    .rounded_full()
-                                                    .bg(rgb(color))
-                                                    .into_any_element(),
-                                            )
-                                            .debug_selector(move || format!("bot-color-{ix}"))
-                                            .on_click(
-                                                cx.listener(move |this, _, _, cx| {
-                                                    this.bot.color = color;
-                                                    this.custom_open = false;
-                                                    this.custom.update(cx, |picker, cx| {
-                                                        picker.set_color(color, cx)
-                                                    });
-                                                    cx.emit(LookChanged {
-                                                        bot: this.bot.clone(),
-                                                    });
-                                                    cx.notify();
-                                                }),
-                                            )
-                                        },
-                                    ))
-                                    .child(
-                                        swatch(
-                                            "bot-custom-color".into(),
-                                            "Custom color".into(),
-                                            !preset || self.custom_open,
-                                            div()
-                                                .relative()
-                                                .size(px(14.))
-                                                .rounded_full()
-                                                .overflow_hidden()
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .map(|d| {
-                                                    if preset {
-                                                        d.child(
-                                                            div().absolute().inset_0().child(
-                                                                super::color_picker::spectrum(),
-                                                            ),
-                                                        )
-                                                        .child(
-                                                            icon("pipette", 8.)
-                                                                .relative()
-                                                                .text_color(gpui::white()),
-                                                        )
-                                                    } else {
-                                                        d.bg(rgb(self.bot.color))
-                                                    }
-                                                })
-                                                .into_any_element(),
-                                        )
-                                        .debug_selector(|| "bot-custom-color".into())
-                                        .aria_expanded(self.custom_open)
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.custom_open = !this.custom_open;
-                                                cx.notify();
-                                            }),
-                                        ),
-                                    ),
-                            )
-                            .when(self.custom_open, |d| {
-                                d.child(div().px_1().pt_2().child(self.custom.clone()))
                             }),
                     ),
+            )
+            // Shape Dropdown
+            .child(self.shape_section("bot", cx))
+            // Texture Toggle + Seed Die + Grid Scale Slider
+            .child(self.texture_and_grid_section("bot", cx))
+            // Background & Foreground Color Buttons
+            .child(self.color_buttons_section("bot", cx))
+            // Preset Color Swatches (9 circular swatches, no custom picker button)
+            .child(
+                div()
+                    .id("bot-color-options")
+                    .role(Role::Group)
+                    .aria_label("Color")
+                    .child(div().px_1().flex().justify_between().gap(px(2.)).children(
+                        bot::COLORS_BOT.into_iter().enumerate().map(|(ix, color)| {
+                            let pair_fg = TEXTURE_PALETTES
+                                .get(ix)
+                                .map(|p| p.2)
+                                .unwrap_or_else(|| default_foreground_color(color));
+                            swatch(
+                                ("bot-color", ix).into(),
+                                COLOR_NAMES[ix].into(),
+                                self.bot.color == color,
+                                avatar::color_swatch_circle(
+                                    color,
+                                    textured.then_some(pair_fg),
+                                    16.,
+                                ),
+                            )
+                            .debug_selector(move || format!("bot-color-{ix}"))
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.bot.color = color;
+                                    if this.bot.textured {
+                                        this.bot.fg_color = Some(pair_fg);
+                                    }
+                                    this.editing_color = None;
+                                    cx.emit(LookChanged {
+                                        bot: this.bot.clone(),
+                                    });
+                                    cx.notify();
+                                },
+                            ))
+                        }),
+                    ))
+                    .when(self.editing_color.is_some(), |d| {
+                        d.child(div().px_1().pt_2().child(self.custom.clone()))
+                    }),
             )
             .into_any_element()
     }
@@ -470,6 +894,15 @@ impl LookEditor {
         const COLOR_NAMES: [&str; 9] = [
             "Blue", "Coral", "Yellow", "Green", "Pink", "Purple", "Teal", "Orange", "Indigo",
         ];
+        const FACE_LABELS: [(&str, &str); 5] = [
+            ("pills", "3D Pills"),
+            ("dots", "Round Dots"),
+            ("visor", "Visor"),
+            ("carets", "Happy ^ ^"),
+            ("wink", "Wink"),
+        ];
+        let current_face = self.bot.face_style();
+        let textured = self.bot.textured;
         div()
             .id("bot-settings-look-picker")
             .debug_selector(|| "bot-settings-look-picker".into())
@@ -480,26 +913,29 @@ impl LookEditor {
             .w_full()
             .flex()
             .flex_col()
-            .gap_3()
+            .gap_2p5()
             .child(
                 div()
                     .id("bot-mascot-options")
                     .role(Role::RadioGroup)
-                    .aria_label("Mascot")
+                    .aria_label("Face style")
                     .px_1()
                     .flex()
-                    .flex_col()
                     .gap_1()
-                    .children(MASCOTS.chunks(5).enumerate().map(|(row, names)| {
-                        div().flex().gap_1().children(names.iter().enumerate().map(
-                            |(col, name)| {
-                                let selected = self.bot.mascot == *name;
+                    .children(
+                        FACE_LABELS
+                            .iter()
+                            .enumerate()
+                            .map(|(ix, (face_id, label))| {
+                                let selected = current_face == *face_id;
+                                let mut preview_bot = self.bot.clone();
+                                preview_bot.mascot = (*face_id).into();
                                 div()
-                                    .id(("settings-mascot", row * 5 + col))
+                                    .id(("settings-mascot", ix))
                                     .role(Role::RadioButton)
-                                    .aria_label(*name)
+                                    .aria_label(*label)
                                     .aria_selected(selected)
-                                    .h(px(48.))
+                                    .h(px(44.))
                                     .flex_1()
                                     .min_w_0()
                                     .rounded_lg()
@@ -510,25 +946,21 @@ impl LookEditor {
                                         d.bg(content(0.1)).border_1().border_color(content(0.2))
                                     })
                                     .hover(|d| d.bg(content(0.06)))
-                                    .child(avatar::avatar(
-                                        name,
-                                        self.bot.color,
-                                        "idle",
-                                        32.,
-                                        !selected,
-                                    ))
+                                    .child(avatar::bot_avatar(&preview_bot, "idle", 28., !selected))
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.bot.mascot = (*name).into();
+                                        this.bot.mascot = (*face_id).into();
                                         cx.emit(LookChanged {
                                             bot: this.bot.clone(),
                                         });
                                         cx.notify();
                                     }))
-                            },
-                        ))
-                    })),
+                            }),
+                    ),
             )
+            .child(self.shape_section("settings-bot", cx))
+            .child(self.texture_and_grid_section("settings-bot", cx))
             .child(div().h(px(1.)).bg(content(0.1)))
+            .child(self.color_buttons_section("settings-bot", cx))
             .child(
                 div()
                     .id("bot-color-options")
@@ -536,100 +968,49 @@ impl LookEditor {
                     .aria_label("Color")
                     .px_1()
                     .flex()
-                    .flex_col()
-                    .gap_2()
-                    .children((0..2).map(|row| {
-                        div().flex().justify_between().children((0..5).map(|col| {
-                            let index = row * 5 + col;
-                            if index < 9 {
-                                let color = bot::COLORS_BOT[index];
+                    .justify_between()
+                    .gap_1()
+                    .children(
+                        bot::COLORS_BOT
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, color)| {
+                                let pair_fg = TEXTURE_PALETTES
+                                    .get(index)
+                                    .map(|p| p.2)
+                                    .unwrap_or_else(|| default_foreground_color(color));
                                 let selected = self.bot.color == color;
                                 div()
                                     .id(("settings-color", index))
                                     .role(Role::Button)
                                     .aria_label(COLOR_NAMES[index])
                                     .aria_selected(selected)
-                                    .size(px(36.))
+                                    .size(px(26.))
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .rounded_full()
-                                    .child(
-                                        div()
-                                            .size(px(32.))
-                                            .rounded_full()
-                                            .border_2()
-                                            .border_color(if selected {
-                                                content(0.8)
-                                            } else {
-                                                content(0.)
-                                            })
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                div().size(px(28.)).rounded_full().bg(rgb(color)),
-                                            ),
-                                    )
+                                    .when(selected, |d| d.border_2().border_color(content(0.8)))
+                                    .child(avatar::color_swatch_circle(
+                                        color,
+                                        textured.then_some(pair_fg),
+                                        20.,
+                                    ))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.bot.color = color;
-                                        this.custom_open = false;
-                                        this.custom
-                                            .update(cx, |picker, cx| picker.set_color(color, cx));
-                                        this.color.update(cx, |f, cx| {
-                                            f.set_text(format!("#{color:06x}"), cx)
-                                        });
+                                        if this.bot.textured {
+                                            this.bot.fg_color = Some(pair_fg);
+                                        }
+                                        this.editing_color = None;
                                         cx.emit(LookChanged {
                                             bot: this.bot.clone(),
                                         });
                                         cx.notify();
                                     }))
-                                    .into_any_element()
-                            } else {
-                                div()
-                                    .id("settings-custom-color")
-                                    .role(Role::Button)
-                                    .aria_label("Custom color")
-                                    .size(px(36.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_full()
-                                    .child(
-                                        div()
-                                            .size(px(28.))
-                                            .rounded_full()
-                                            .when(!bot::COLORS_BOT.contains(&self.bot.color), |d| {
-                                                d.bg(rgb(self.bot.color))
-                                            })
-                                            .when(bot::COLORS_BOT.contains(&self.bot.color), |d| {
-                                                d.child(
-                                                    div()
-                                                        .absolute()
-                                                        .inset_0()
-                                                        .child(super::color_picker::spectrum()),
-                                                )
-                                            })
-                                            .relative()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                icon("pipette", 14.)
-                                                    .relative()
-                                                    .text_color(gpui::white()),
-                                            ),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.custom_open = !this.custom_open;
-                                        cx.notify();
-                                    }))
-                                    .into_any_element()
-                            }
-                        }))
-                    })),
+                            }),
+                    ),
             )
-            .when(self.custom_open, |d| {
+            .when(self.editing_color.is_some(), |d| {
                 d.child(div().px_1().pt_2().child(self.custom.clone()))
             })
             .into_any_element()
@@ -651,7 +1032,12 @@ impl Bots {
                 &event.bot.id,
                 |bot| {
                     bot.mascot = event.bot.mascot.clone();
+                    bot.shape = event.bot.shape.clone();
                     bot.color = event.bot.color;
+                    bot.fg_color = event.bot.fg_color;
+                    bot.textured = event.bot.textured;
+                    bot.seed = event.bot.seed;
+                    bot.grid = event.bot.grid;
                 },
                 cx,
             );
@@ -663,7 +1049,7 @@ impl Bots {
                 window,
                 cx,
             )
-            .width(272.)
+            .width(280.)
         });
         let closed = cx.subscribe(&menu, |this, _, _: &MenuEvent, cx| {
             this.picker = None;
@@ -673,7 +1059,7 @@ impl Bots {
         self.picker = Some(OpenPicker {
             menu,
             anchor,
-            width: 272.,
+            width: 280.,
             align: crate::popover::Align::Center,
             _events: vec![changed, closed],
         });
@@ -1697,7 +2083,7 @@ impl Bots {
                     .bg(content(0.04))
                     .hover(|s| s.bg(content(0.08)))
                     .child(self.settings_anchor.probe())
-                    .child(avatar::avatar(&bot.mascot, bot.color, "idle", 48., false))
+                    .child(avatar::bot_avatar(bot, "idle", 48., false))
                     .on_click(
                         cx.listener(move |this, _, w, cx| this.open_settings_look(&look, w, cx)),
                     ),
@@ -1921,7 +2307,12 @@ impl Bots {
             if let Some(bot) = this.roster.get_mut(&event.bot.id) {
                 bot.name = event.bot.name.clone();
                 bot.mascot = event.bot.mascot.clone();
+                bot.shape = event.bot.shape.clone();
                 bot.color = event.bot.color;
+                bot.fg_color = event.bot.fg_color;
+                bot.textured = event.bot.textured;
+                bot.seed = event.bot.seed;
+                bot.grid = event.bot.grid;
             }
             this.configure_chat(&event.bot.id, cx);
             this.save(cx);
@@ -1939,9 +2330,8 @@ impl Bots {
                     MenuAction::new("background", "Background image")
                         .icon("image-add")
                         .into(),
-                    MenuAction::new("delete", "Delete bot…")
-                        .icon("trash")
-                        .danger()
+                    MenuAction::new("settings", "Settings")
+                        .icon("settings")
                         .into(),
                 ],
                 window,
@@ -1956,7 +2346,7 @@ impl Bots {
             if let MenuEvent::Picked(action, _) = event {
                 match action.as_ref() {
                     "background" => this.open_background(&target, w, cx),
-                    "delete" => this.delete_bot(&target, w, cx),
+                    "settings" => this.open_bot_settings(&target, w, cx),
                     _ => {}
                 }
             }
@@ -2231,7 +2621,17 @@ impl Bots {
         })
         .detach();
     }
-    fn open_background(&mut self, id: &str, window: &Window, cx: &mut Context<Self>) {
+    fn open_bot_settings(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.roster.get(id).is_none() {
+            return;
+        }
+        self.open(id, window, cx);
+        self.settings = Some(SettingsSection::General);
+        window.focus(&self.settings_focus, cx);
+        self.reload_files(id, cx);
+        cx.notify();
+    }
+    fn open_background(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(bot) = self.roster.get(id).cloned() else {
             return;
         };
@@ -2256,30 +2656,26 @@ impl Bots {
                     if let Some(bot) = this.roster.get_mut(&id) {
                         bot.background = appearance.background.clone();
                     }
+                    this.configure_chat(&id, cx);
                     this.save(cx);
                 }
                 BackgroundEvent::Close => {
                     this.background = None;
-                    cx.notify();
+                    this.changed(cx);
                 }
             },
         );
-        let width = window.viewport_size().width.as_f32();
-        let at = gpui::point(px((width - 640.) / 2.), px(50.));
-        self.background = Some((view, events, at));
-        cx.notify();
+        window.focus(&view.focus_handle(cx), cx);
+        self.background = Some((view, events));
+        self.changed(cx);
     }
-    pub(super) fn background_modal(&self) -> Option<AnyElement> {
-        let (view, _, at) = self.background.as_ref()?;
-        Some(
-            popover("bot-background", Anchor::Point(*at))
-                .modal_surface(false)
-                .without_animation()
-                .priority(100)
-                .width(640.)
-                .child(view.clone())
-                .into_any_element(),
-        )
+    pub(crate) fn close_background(&mut self, cx: &mut Context<Self>) {
+        if self.background.take().is_some() {
+            self.changed(cx);
+        }
+    }
+    pub(crate) fn background_dialog(&self) -> Option<Entity<BackgroundDialog>> {
+        self.background.as_ref().map(|(view, _)| view.clone())
     }
     pub(crate) fn finish_reorder(&mut self, cx: &mut Context<Self>) {
         if let Some((id, _, Some(over))) = self.drag.take()

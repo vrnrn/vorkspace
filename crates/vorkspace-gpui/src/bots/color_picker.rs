@@ -2,7 +2,7 @@
 use super::*;
 use gpui::{DispatchPhase, canvas, linear_color_stop, linear_gradient};
 
-pub(super) struct Picked(pub u32);
+pub(crate) struct Picked(pub u32);
 #[derive(Clone, Copy)]
 struct Hsv {
     h: f32,
@@ -52,7 +52,7 @@ impl Hsv {
             | ((b + m) * 255.).round() as u32
     }
 }
-pub(super) struct ColorPicker {
+pub(crate) struct ColorPicker {
     hsv: Hsv,
     hex: Entity<Input>,
     sv: AnchorSlot,
@@ -62,7 +62,7 @@ pub(super) struct ColorPicker {
 }
 impl EventEmitter<Picked> for ColorPicker {}
 impl ColorPicker {
-    pub(super) fn new(color: u32, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(color: u32, cx: &mut Context<Self>) -> Self {
         let hex = cx.new(|cx| {
             let mut field = Input::field("Hex color", "#rrggbb", content(0.35), cx);
             field.set_font_size(12.);
@@ -90,7 +90,7 @@ impl ColorPicker {
             _change: change,
         }
     }
-    pub(super) fn set_color(&mut self, color: u32, cx: &mut Context<Self>) {
+    pub(crate) fn set_color(&mut self, color: u32, cx: &mut Context<Self>) {
         self.hsv = Hsv::from_hex(color);
         let text = format!("#{color:06x}");
         // The enclosing editor mirrors Picked back into this picker. Rewriting
@@ -297,36 +297,6 @@ impl gpui::Render for ColorPicker {
                     ),
             )
     }
-}
-pub(super) fn spectrum() -> AnyElement {
-    canvas(
-        |_, _, _| {},
-        |bounds, _, window, _| {
-            let radius = bounds.size.width.as_f32() / 2.;
-            for y in 0..bounds.size.height.as_f32().ceil() as usize {
-                for x in 0..bounds.size.width.as_f32().ceil() as usize {
-                    let (dx, dy) = (x as f32 + 0.5 - radius, y as f32 + 0.5 - radius);
-                    if dx * dx + dy * dy <= radius * radius {
-                        let hue = (dy.atan2(dx) / std::f32::consts::TAU).rem_euclid(1.);
-                        window.paint_quad(gpui::fill(
-                            gpui::Bounds::new(
-                                bounds.origin + gpui::point(px(x as f32), px(y as f32)),
-                                gpui::size(px(1.), px(1.)),
-                            ),
-                            rgb(Hsv {
-                                h: hue,
-                                s: 1.,
-                                v: 1.,
-                            }
-                            .hex()),
-                        ));
-                    }
-                }
-            }
-        },
-    )
-    .size_full()
-    .into_any_element()
 }
 #[cfg(test)]
 mod tests {
