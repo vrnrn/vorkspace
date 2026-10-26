@@ -751,6 +751,7 @@ impl Inbox {
             );
             for page in pages {
                 page.update(cx, |page, cx| {
+                    let defaults_changed = page.state.default_bots != state.default_bots;
                     page.state.connectors = state.connectors.clone();
                     page.state.jira_filter = state.jira_filter.clone();
                     page.state.default_bots = state.default_bots.clone();
@@ -773,6 +774,9 @@ impl Inbox {
                             page.state.seen.mark(&item);
                             page.save(cx);
                         }
+                    }
+                    if defaults_changed && !page.destination_explicit {
+                        page.reset_destination();
                     }
                     cx.notify();
                 });

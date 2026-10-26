@@ -3033,6 +3033,128 @@ mod tests {
             .unwrap();
     }
     #[gpui::test]
+    fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit_destinations(
+        cx: &mut TestAppContext,
+    ) {
+        let window = inbox_window(cx);
+        let pages = window
+            .update(cx, |root, _, cx| {
+                root.loading = true;
+                root.set_bots(
+                    ["first", "second", "chosen"]
+                        .map(|id| (id.into(), id.into()))
+                        .to_vec(),
+                    cx,
+                );
+                root.snapshot.items = ["jira", "gitlab"]
+                    .map(|provider| Item {
+                        provider: provider.into(),
+                        identifier: format!("{provider}-42"),
+                        ..Default::default()
+                    })
+                    .to_vec();
+                ["jira", "gitlab"].map(|provider| {
+                    root.set_default_bot(provider, "first", cx).unwrap();
+                    (provider, root.connector_page(provider, cx))
+                })
+            })
+            .unwrap();
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let _subscriptions = cx.update(|cx| {
+            pages.each_ref().map(|(provider, page)| {
+                page.update(cx, |page, cx| {
+                    // Retain a selected item without starting provider detail requests.
+                    page.selected = Some(
+                        page.snapshot
+                            .items
+                            .iter()
+                            .find(|item| item.provider == *provider)
+                            .unwrap()
+                            .key(),
+                    );
+                    page.reset_destination();
+                    assert_eq!(page.start_bot.as_deref(), Some("first"));
+                    page.comment
+                        .update(cx, |input, cx| input.set_text("Unsent draft".into(), cx));
+                    page.start_project = "/chosen/project".into();
+                    let output = sent.clone();
+                    cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
+                        if let Event::StartSession { item, bot, .. } = event {
+                            output.borrow_mut().push((
+                                item.provider.clone(),
+                                bot.clone(),
+                                item.project_path.clone(),
+                            ));
+                        }
+                    })
+                })
+            })
+        });
+        cx.run_until_parked();
+        for explicit in [false, true] {
+            if explicit {
+                cx.update(|cx| {
+                    for (provider, page) in &pages {
+                        page.update(cx, |page, _| {
+                            page.destination_explicit = true;
+                            page.start_bot = (*provider == "jira").then(|| "chosen".into());
+                        });
+                    }
+                });
+            }
+            for default in ["second", ""] {
+                window
+                    .update(cx, |root, _, cx| {
+                        for (provider, _) in &pages {
+                            root.set_default_bot(provider, default, cx).unwrap();
+                        }
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                cx.update(|cx| {
+                    for (provider, page) in &pages {
+                        page.update(cx, |page, cx| {
+                            let expected = if explicit {
+                                (*provider == "jira").then_some("chosen")
+                            } else {
+                                (!default.is_empty()).then_some(default)
+                            };
+                            assert_eq!(page.start_bot.as_deref(), expected);
+                            assert_eq!(
+                                page.state.default_bots.get(provider),
+                                (!default.is_empty()).then_some(default)
+                            );
+                            assert_eq!(page.comment.read(cx).content.as_ref(), "Unsent draft");
+                            page.set_active(true, cx);
+                            page.start(cx);
+                            page.set_active(false, cx);
+                        });
+                    }
+                });
+                cx.run_until_parked();
+            }
+        }
+        let sent = sent.borrow();
+        assert_eq!(sent.len(), 8);
+        for (events, expected) in sent.as_chunks::<2>().0.iter().zip([
+            [Some("second"), Some("second")],
+            [None, None],
+            [Some("chosen"), None],
+            [Some("chosen"), None],
+        ]) {
+            for ((provider, bot, project), (source, expected)) in events
+                .iter()
+                .zip(["jira", "gitlab"].into_iter().zip(expected))
+            {
+                assert_eq!(provider, source);
+                assert_eq!(bot.as_deref(), expected);
+                if expected.is_none() {
+                    assert_eq!(project, "/chosen/project");
+                }
+            }
+        }
+    }
+    #[gpui::test]
     fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight_results(
         cx: &mut TestAppContext,
     ) {
