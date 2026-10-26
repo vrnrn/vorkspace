@@ -38,6 +38,7 @@ use crate::{
 };
 pub(crate) use accounts::UsageResumed;
 pub(crate) use bot::QueueChanged as BotQueueChanged;
+pub(crate) use bot::SteerFailed as BotSteerFailed;
 pub(crate) use bot::Submitted as BotSubmitted;
 use gpui::{
     AnyElement, Context, CursorStyle, Entity, EventEmitter, Focusable, MouseButton, Role,
@@ -1555,6 +1556,11 @@ impl Conversation {
         self.follow_ups.resuming = false;
         self.follow_ups.requested = None;
         self.follow_ups.continuations.clear();
+        if let Some(id) = self.follow_ups.sending.clone()
+            && self.settings.bot.is_some()
+        {
+            self.fail_follow_up(&id, UNCONFIRMED_TURN.into(), cx);
+        }
         if let Some(id) = self.follow_ups.sending.take()
             && let Some(message) = self
                 .follow_ups

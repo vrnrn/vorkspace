@@ -202,3 +202,56 @@ fn background_and_peer_errors_show_recovery_controls_once(cx: &mut TestAppContex
     assert!(visual.debug_bounds("bot-pending-retry-peer").is_some());
     assert!(visual.debug_bounds("bot-pending-discard-peer").is_some());
 }
+
+#[gpui::test]
+fn only_the_users_own_message_steers_a_running_bot_turn(cx: &mut TestAppContext) {
+    let window = chat(cx);
+    let (controls, received) = std::sync::mpsc::channel();
+    let failures = Rc::new(RefCell::new(Vec::new()));
+    window
+        .update(cx, |view, _, cx| {
+            let seen = failures.clone();
+            cx.subscribe(&cx.entity(), move |_, _, event: &SteerFailed, _| {
+                seen.borrow_mut()
+                    .push((event.id.clone(), event.error.clone()));
+            })
+            .detach();
+            view.busy = true;
+            view.controls = Some(controls);
+            let user = Message {
+                attachments: vec!["/tmp/plan.png".into()],
+                ..message("user", "Use the other approach", false)
+            };
+            assert!(
+                !view.bot_steer(&user, cx),
+                "a turn that has not reported readiness keeps the message queued"
+            );
+            view.follow_ups.ready = true;
+            assert!(!view.bot_steer(&message("report", "Completion", true), cx));
+            assert!(!view.bot_steer(&peer_message(), cx));
+            assert!(view.bot_steer(&user, cx));
+            assert!(
+                !view.bot_steer(&message("next", "And this", false), cx),
+                "one steer is in flight at a time"
+            );
+            assert!(view.bot_delivered().is_none());
+            view.follow_up_delivered("user", cx);
+            assert_eq!(view.bot_delivered(), Some("user"));
+            assert!(view.bot_steer(&message("next", "And this", false), cx));
+            view.fail_follow_up("next", "turn is closing".into(), cx);
+            assert!(view.follow_ups.sending.is_none());
+        })
+        .unwrap();
+    let Decision::Steer(steer) = received.try_recv().unwrap().decision else {
+        panic!("expected steering");
+    };
+    assert_eq!(steer.id, "user");
+    assert_eq!(steer.text, "Use the other approach");
+    assert_eq!(steer.attachments, [PathBuf::from("/tmp/plan.png")]);
+    assert!(matches!(received.try_recv().unwrap().decision, Decision::Steer(m) if m.id == "next"));
+    assert!(received.try_recv().is_err());
+    assert_eq!(
+        *failures.borrow(),
+        [("next".to_owned(), "turn is closing".to_owned())]
+    );
+}

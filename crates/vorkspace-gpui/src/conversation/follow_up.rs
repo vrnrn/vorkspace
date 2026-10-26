@@ -306,6 +306,11 @@ impl Conversation {
     pub(super) fn follow_up_delivered(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.follow_ups.sending.as_deref() == Some(id) {
             self.follow_ups.sending = None;
+            if self.settings.bot.is_some() {
+                // The Bot outbox retires its head against this receipt.
+                self.bot_ui.delivered = Some(id.to_owned());
+                self.sync_bot_pending(cx);
+            }
         }
         if self.follow_ups.requested.as_deref() == Some(id) {
             self.follow_ups.requested = None;
@@ -326,6 +331,16 @@ impl Conversation {
         }
     }
     pub(super) fn fail_follow_up(&mut self, id: &str, error: String, cx: &mut Context<Self>) {
+        if self.settings.bot.is_some() {
+            if self.follow_ups.sending.as_deref() == Some(id) {
+                self.follow_ups.sending = None;
+                cx.emit(super::bot::SteerFailed {
+                    id: id.to_owned(),
+                    error,
+                });
+            }
+            return;
+        }
         if let Some(message) = self
             .follow_ups
             .state

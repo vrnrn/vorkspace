@@ -51,7 +51,11 @@ rewrite history. Send accepts a Bot name or ID, message and optional
 `expectReply` (default true). The recipient keeps its own model, account,
 permissions and assigned projects. Direct messages use its durable primary
 outbox and wait while it is busy. The final assistant message returns to the
-sender as a one-way message; intermediate commentary is not forwarded.
+sender as a one-way message; intermediate commentary is not forwarded. A
+user's own message to a busy Bot steers its running turn when the chat
+Follow-ups setting is Steer and the provider supports steering; it is otherwise
+held for the next turn. A turn answering a peer is never steered, so its reply
+contains only that conversation.
 The primary conversation displays the incoming body in a **Bot-to-bot** block
 with sender and recipient names. Its answer identifies the peer it addresses;
 automatic replies and one-way follow-ups use different labels. These labels

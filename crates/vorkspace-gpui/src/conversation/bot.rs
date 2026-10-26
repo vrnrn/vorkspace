@@ -26,8 +26,15 @@ pub(crate) struct QueueChanged {
     pub id: String,
     pub remove: bool,
 }
+/// The provider did not confirm a steered outbox message. The Bot outbox owns
+/// the message, so it records the error and offers Retry/Discard.
+pub(crate) struct SteerFailed {
+    pub id: String,
+    pub error: String,
+}
 impl EventEmitter<QueueChanged> for Conversation {}
 impl EventEmitter<Submitted> for Conversation {}
+impl EventEmitter<SteerFailed> for Conversation {}
 impl Conversation {
     pub(crate) fn show_bot_header(&mut self, animate: bool, cx: &mut Context<Self>) {
         if self.bot_ui.header_animation != Some(animate) {
@@ -214,6 +221,55 @@ impl Conversation {
         self.launch_prompt(message.text.clone(), cx);
         true
     }
+    /// The user's own message joins the active turn through the provider's
+    /// follow-up control, as in a session. Peer and automatic messages keep
+    /// whole-turn delivery because their replies belong to a complete turn.
+    /// Acceptance writes the same delivery receipt as a new turn would.
+    pub(crate) fn bot_steer(&mut self, message: &Message, cx: &mut Context<Self>) -> bool {
+        if message.peer.is_some()
+            || message.internal
+            || message.error.is_some()
+            || !self.busy
+            || self.stopping
+            || !self.follow_ups.ready
+            || self.follow_ups.sending.is_some()
+            || self.settings.pending_provider_switch.is_some()
+            || self.is_remote()
+            || !cx
+                .try_global::<crate::settings::Preferences>()
+                .is_none_or(|p| p.follow_up == "steer")
+            || !Kind::from_id(&self.summary.provider).can_steer()
+            || self
+                .questions
+                .iter()
+                .any(|(card, _)| card.read(cx).blocks_steering())
+        {
+            return false;
+        }
+        let Some(controls) = &self.controls else {
+            return false;
+        };
+        let prepared = self.completion.read(cx).prepare_prompt(&message.text);
+        let steer = vorkspace_core::follow_up::Message {
+            id: message.id.clone(),
+            text: message.text.clone(),
+            prepared_prompt: (prepared != message.text).then_some(prepared),
+            attachments: message.attachments.iter().map(PathBuf::from).collect(),
+            steer: true,
+            ..Default::default()
+        };
+        if controls
+            .send(Control {
+                id: message.id.clone(),
+                decision: Decision::Steer(steer),
+            })
+            .is_err()
+        {
+            return false;
+        }
+        self.follow_ups.sending = Some(message.id.clone());
+        true
+    }
     pub(crate) fn bot_rows<'a>(&self, cx: &'a App) -> &'a [vorkspace_core::transcript::Row] {
         self.transcript.read(cx).source_rows()
     }
@@ -271,6 +327,17 @@ impl Conversation {
     #[cfg(test)]
     pub(crate) fn app_hold_account_switch(&mut self) {
         self.account_switching = true;
+    }
+    #[cfg(test)]
+    pub(crate) fn app_steerable_turn(&mut self, controls: std::sync::mpsc::Sender<Control>) {
+        self.busy = true;
+        self.controls = Some(controls);
+        self.follow_ups.ready = true;
+    }
+    #[cfg(test)]
+    pub(crate) fn app_steer_delivered(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.follow_up_delivered(id, cx);
+        cx.notify();
     }
     #[cfg(test)]
     pub(crate) fn app_settle_stopped_turn(&mut self, cx: &mut Context<Self>) {

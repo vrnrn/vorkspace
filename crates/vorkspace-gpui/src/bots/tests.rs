@@ -3441,3 +3441,80 @@ fn new_bot_footer_remains_visible_at_narrow_window_sizes(cx: &mut TestAppContext
         }
     }
 }
+
+#[gpui::test]
+fn a_users_message_steers_the_running_turn_but_never_a_peer_turn(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let (controls, received) = mpsc::channel();
+    let turn = |id: &str, peer| bot::Message {
+        id: id.into(),
+        text: "Start the change".into(),
+        peer,
+        sent_at: None,
+        internal: false,
+        error: None,
+        attachments: Vec::new(),
+    };
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |v, _| v.app_steerable_turn(controls));
+        m.inflight.insert(s.id.clone(), turn("running", None));
+        m.send_message(&s.id, "Actually, skip the tests".into(), Vec::new(), cx)
+            .unwrap();
+    });
+    cx.run_until_parked();
+    let vorkspace_core::agent::Decision::Steer(steer) = received.try_recv().unwrap().decision
+    else {
+        panic!("expected steering");
+    };
+    assert_eq!(steer.text, "Actually, skip the tests");
+    assert!(received.try_recv().is_err(), "a steer is sent once");
+    s.manager.update(cx, |m, cx| {
+        assert_eq!(m.roster.get(&s.id).unwrap().outbox[0].id, steer.id);
+        m.chats[&s.id].update(cx, |v, cx| v.app_steer_delivered(&steer.id, cx));
+    });
+    cx.run_until_parked();
+    s.manager.update(cx, |m, cx| {
+        assert!(
+            m.roster.get(&s.id).unwrap().outbox.is_empty(),
+            "the accepted steer retires from the outbox"
+        );
+        assert!(
+            m.inflight.contains_key(&s.id),
+            "the running turn still owns completion"
+        );
+        m.send_message(&s.id, "One more thing".into(), Vec::new(), cx)
+            .unwrap();
+    });
+    cx.run_until_parked();
+    let vorkspace_core::agent::Decision::Steer(failed) = received.try_recv().unwrap().decision
+    else {
+        panic!("expected steering");
+    };
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |_, cx| {
+            cx.emit(crate::conversation::BotSteerFailed {
+                id: failed.id.clone(),
+                error: "turn is closing".into(),
+            })
+        });
+    });
+    s.manager.update(cx, |m, cx| {
+        let queued = &m.roster.get(&s.id).unwrap().outbox[0];
+        assert_eq!(queued.error.as_deref(), Some("turn is closing"));
+        m.roster.get_mut(&s.id).unwrap().outbox.clear();
+        let peer = bot::peers::Peer {
+            from: "merlin".into(),
+            hop: 1,
+            expect_reply: true,
+        };
+        m.inflight
+            .insert(s.id.clone(), turn("peer-turn", Some(peer)));
+        m.send_message(&s.id, "Not into a peer reply".into(), Vec::new(), cx)
+            .unwrap();
+    });
+    cx.run_until_parked();
+    assert!(
+        received.try_recv().is_err(),
+        "a peer turn's reply must not absorb the user's message"
+    );
+}
