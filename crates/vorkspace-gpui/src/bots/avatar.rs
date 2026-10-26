@@ -114,6 +114,7 @@ struct FrameCacheKey {
     hop_y_q: i16,
     wide_q: i16,
     tex_rot_q: i16,
+    crossed_eyes: bool,
 }
 
 static FRAME_CACHE: LazyLock<Mutex<HashMap<FrameCacheKey, Arc<RenderImage>>>> =
@@ -133,14 +134,14 @@ struct PillCacheKey {
 static PILL_CACHE: LazyLock<Mutex<HashMap<PillCacheKey, Arc<RenderImage>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-pub(crate) fn cached_badge_or_bot_image(
+fn frame_cache_key(
     is_bot: bool,
     look: &BotLookConfig,
     needs_you: bool,
     pixel_side: u32,
     anim: BotAnimState,
-) -> Arc<RenderImage> {
-    let key = FrameCacheKey {
+) -> FrameCacheKey {
+    FrameCacheKey {
         is_bot,
         shape: normalize_badge_shape(&look.shape).into(),
         face: normalize_bot_face(&look.face).into(),
@@ -159,7 +160,18 @@ pub(crate) fn cached_badge_or_bot_image(
         hop_y_q: (anim.hop_y * 100.0).round() as i16,
         wide_q: (anim.wide * 50.0).round() as i16,
         tex_rot_q: (anim.tex_rot * 0.5).round() as i16,
-    };
+        crossed_eyes: anim.crossed_eyes,
+    }
+}
+
+pub(crate) fn cached_badge_or_bot_image(
+    is_bot: bool,
+    look: &BotLookConfig,
+    needs_you: bool,
+    pixel_side: u32,
+    anim: BotAnimState,
+) -> Arc<RenderImage> {
+    let key = frame_cache_key(is_bot, look, needs_you, pixel_side, anim);
     if let Ok(cache) = FRAME_CACHE.lock()
         && let Some(img) = cache.get(&key)
     {
@@ -236,6 +248,16 @@ pub(crate) fn sidebar_selection_pill(
         .into_any_element()
 }
 
+fn blink_at(t: f32) -> f32 {
+    let cycle = (t * 0.22).rem_euclid(1.0);
+    if cycle > 0.94 {
+        let u = (cycle - 0.94) / 0.06;
+        (u * std::f32::consts::PI).cos().abs().max(0.08)
+    } else {
+        1.
+    }
+}
+
 fn compute_bot_anim(
     seed: u32,
     status: &str,
@@ -254,6 +276,7 @@ fn compute_bot_anim(
                 hop_y: 0.0,
                 wide: if status == "needs-you" { 1.14 } else { 1.0 },
                 tex_rot: 0.0,
+                crossed_eyes: false,
             },
             false,
         );
@@ -263,10 +286,8 @@ fn compute_bot_anim(
     let t = now + offset;
     let mut anim = BotAnimState::default();
 
-    let blink_cycle = (t * 0.22).rem_euclid(1.0);
-    if status != "needs-you" && blink_cycle > 0.94 {
-        let u = (blink_cycle - 0.94) / 0.06;
-        anim.blink = (u * std::f32::consts::PI).cos().abs().max(0.08);
+    if status != "needs-you" {
+        anim.blink = blink_at(t);
     }
 
     let mut following_cursor = false;
@@ -315,6 +336,93 @@ fn compute_bot_anim(
 
 pub(crate) fn bot_avatar(bot: &Bot, status: &str, side: f32, still: bool) -> AnyElement {
     avatar_with_look(BotLookConfig::from_bot(bot), status, side, still)
+}
+
+fn preview_anim(
+    seed: u32,
+    bounds: Bounds<Pixels>,
+    mouse: Point<Pixels>,
+    crossed_eyes: bool,
+    animate: bool,
+) -> (BotAnimState, bool) {
+    let mut anim = BotAnimState::default();
+    let center = bounds.center();
+    anim.yaw = ((mouse.x - center.x).as_f32() / 240.).clamp(-0.78, 0.78);
+    anim.pitch = ((mouse.y - center.y).as_f32() / 240.).clamp(-0.68, 0.68);
+    anim.crossed_eyes = crossed_eyes;
+    if animate && !crossed_eyes {
+        anim.blink = blink_at(START.elapsed().as_secs_f32() + (seed % 97) as f32 * 0.17);
+    }
+    (anim, animate)
+}
+
+/// A large preview follows this window's pointer rather than the sidebar's
+/// shared cursor. Retain only its last frame: high-resolution animation frames
+/// must not accumulate in the sidebar image cache.
+pub(super) fn settings_preview(
+    bot: &Bot,
+    side: f32,
+    delete_anchor: crate::popover::AnchorSlot,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> AnyElement {
+    let look = BotLookConfig::from_bot(bot);
+    let frame = window.use_keyed_state(
+        gpui::SharedString::from(format!("bot-settings-preview:{}", bot.id)),
+        cx,
+        |_, _| None::<(FrameCacheKey, Arc<RenderImage>)>,
+    );
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window: &mut Window, cx| {
+            let mouse = window.mouse_position();
+            let crossed_eyes = delete_anchor.get().is_some_and(|b| b.contains(&mouse));
+            let (anim, needs_frame) =
+                preview_anim(look.seed, bounds, mouse, crossed_eyes, !cx.reduce_motion());
+            if needs_frame {
+                window.request_animation_frame();
+            }
+            // Direct pointer feedback remains live with reduced motion enabled.
+            // Capture the drawing owner now: input dispatch has no rendering
+            // context, so request_animation_frame cannot be called there.
+            let view = window.current_view();
+            window.on_mouse_event(move |_: &gpui::MouseMoveEvent, phase, _, cx| {
+                if phase == DispatchPhase::Capture {
+                    cx.notify(view);
+                }
+            });
+            let pixel_side = (bounds.size.width.as_f32() * window.scale_factor())
+                .ceil()
+                .clamp(128., 512.) as u32;
+            let key = frame_cache_key(true, &look, false, pixel_side, anim);
+            let cached = frame
+                .read(cx)
+                .as_ref()
+                .filter(|(previous, _)| previous == &key)
+                .map(|(_, image)| image.clone());
+            let image = cached.unwrap_or_else(|| {
+                let image = to_render_image(render_badge_or_bot(
+                    true,
+                    &look.shape,
+                    &look.face,
+                    false,
+                    look.textured,
+                    look.seed,
+                    look.grid,
+                    look.bg_color,
+                    look.fg_color,
+                    pixel_side,
+                    anim,
+                ));
+                frame.update(cx, |frame, _| *frame = Some((key, image.clone())));
+                image
+            });
+            let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
+        },
+    )
+    .size(px(side))
+    .flex_shrink_0()
+    .into_any_element()
 }
 
 pub(crate) fn avatar_with_look(
@@ -424,4 +532,41 @@ pub(crate) fn color_swatch_circle(bg: u32, fg: Option<u32>, side: f32) -> AnyEle
         .object_fit(ObjectFit::Contain)
         .flex_shrink_0()
         .into_any_element()
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn settings_preview_tracks_both_axes_and_restores_eyes_after_delete_hover() {
+        let bounds = Bounds::new(
+            gpui::point(px(200.), px(100.)),
+            gpui::size(px(128.), px(128.)),
+        );
+        let look = BotLookConfig::from_legacy("robot", 0x3b82f6);
+        // Direct input remains live even when automatic animation is disabled.
+        let (left, moving) =
+            preview_anim(look.seed, bounds, gpui::point(px(0.), px(0.)), false, false);
+        let (right, _) = preview_anim(
+            look.seed,
+            bounds,
+            gpui::point(px(600.), px(400.)),
+            false,
+            false,
+        );
+        assert!(!moving);
+        assert!(left.yaw < 0. && left.pitch < 0.);
+        assert!(right.yaw > 0. && right.pitch > 0.);
+        let (crossed, _) = preview_anim(look.seed, bounds, bounds.center(), true, false);
+        let (restored, _) = preview_anim(look.seed, bounds, bounds.center(), false, false);
+        assert!(crossed.crossed_eyes && !restored.crossed_eyes);
+        assert!(
+            frame_cache_key(true, &look, false, 256, crossed)
+                != frame_cache_key(true, &look, false, 256, restored)
+        );
+        assert_eq!(restored.yaw, 0.);
+        assert_eq!(restored.pitch, 0.);
+        assert_eq!(look.face, "visor");
+    }
 }

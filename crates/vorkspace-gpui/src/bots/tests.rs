@@ -1518,12 +1518,23 @@ fn settings_match_react_dialog_and_left_navigation_geometry(cx: &mut TestAppCont
     }
     assert_eq!(
         visual.debug_bounds("bot-look").unwrap().size,
-        gpui::size(px(80.), px(80.))
+        gpui::size(px(144.), px(144.))
     );
     assert_eq!(
         visual.debug_bounds("bot-name-field").unwrap().size,
         gpui::size(px(160.), px(32.))
     );
+    // Real input runs outside the drawing context. The preview must repaint
+    // without asking for the current rendering view from this event handler.
+    for pointer in [
+        visual.debug_bounds("bot-look").unwrap().center(),
+        visual.debug_bounds("bot-delete").unwrap().center(),
+        nav.center(),
+    ] {
+        visual.simulate_mouse_move(pointer, None, Default::default());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+    }
 }
 
 #[gpui::test]
@@ -3362,14 +3373,57 @@ fn new_bot_footer_remains_visible_at_narrow_window_sizes(cx: &mut TestAppContext
                 .update(cx, |manager, cx| manager.create(Vec::new(), window, cx))
         })
         .unwrap();
-    for size in [
-        gpui::size(px(1100.), px(800.)),
-        gpui::size(px(640.), px(500.)),
+    for (scale, size) in [
+        (60, gpui::size(px(1100.), px(800.))),
+        (100, gpui::size(px(1100.), px(800.))),
+        (160, gpui::size(px(1100.), px(800.))),
+        (60, gpui::size(px(640.), px(500.))),
+        (100, gpui::size(px(640.), px(500.))),
+        (160, gpui::size(px(640.), px(500.))),
     ] {
+        s.window
+            .update(visual, |shell, window, cx| {
+                shell.workspace.preferences.ui_scale = scale;
+                cx.set_global(shell.workspace.preferences.clone());
+                window.set_ui_scale(scale as f32 / 100., cx);
+                cx.notify();
+            })
+            .unwrap();
         visual.simulate_resize(size);
         visual.run_until_parked();
         let dialog = visual.debug_bounds("bot-settings-dialog").unwrap();
+        let viewport = visual.update(|window, _| window.viewport_size());
+        // GPUI snaps explicit heights and each 1px inset before layout. Compare
+        // physical pixels so fractional zoom preserves the exact frame closure.
+        let (expected_height, density) = visual.update(|window, _| {
+            (
+                window.pixel_snap(px(680.).min(viewport.height - px(32.)))
+                    - window.pixel_snap(px(1.)) * 2.,
+                window.scale_factor(),
+            )
+        });
+        let device_pixel = |value: gpui::Pixels| (value.as_f32() * density).round() as i32;
+        assert_eq!(
+            device_pixel(dialog.size.height),
+            device_pixel(expected_height),
+            "the dialog content must fill the fixed-height popover"
+        );
         let footer = visual.debug_bounds("bot-settings-footer").unwrap();
+        let navigation = visual.debug_bounds("bot-settings-navigation").unwrap();
+        assert_eq!(
+            device_pixel(navigation.bottom()),
+            device_pixel(dialog.bottom())
+        );
+        assert_eq!(device_pixel(footer.bottom()), device_pixel(dialog.bottom()));
+        assert_eq!(
+            device_pixel(
+                visual
+                    .debug_bounds("bot-general-settings")
+                    .unwrap()
+                    .bottom()
+            ),
+            device_pixel(footer.top())
+        );
         let create = visual.debug_bounds("bot-create").unwrap();
         assert!(create.bottom() <= dialog.bottom());
         assert!(create.top() >= footer.top());
@@ -3377,7 +3431,9 @@ fn new_bot_footer_remains_visible_at_narrow_window_sizes(cx: &mut TestAppContext
         let look = visual.debug_bounds("bot-look").unwrap();
         let name = visual.debug_bounds("bot-name-field").unwrap();
         assert!(name.top() >= look.bottom());
-        if size.width >= px(780.) {
+        visual.simulate_mouse_move(look.center(), None, Default::default());
+        visual.run_until_parked();
+        if viewport.width >= px(780.) {
             let model = visual.debug_bounds("bot-model-settings").unwrap();
             assert!(model.left() > name.right());
             let identity_center = (look.top() + name.bottom()) / 2.;
