@@ -190,26 +190,8 @@ impl Shell {
         };
         let mut appearance = self.appearance(&path);
         if appearance.background.is_none() {
-            use vorkspace_core::project_appearance::{Background, Effect, Scope};
             let p = &self.workspace.preferences;
-            appearance.background = p.chat_background.as_ref().map(|path| Background {
-                path: path.clone(),
-                effect: match p.chat_background_effect.as_str() {
-                    "dither" => Effect::Dither,
-                    "ascii" => Effect::Ascii,
-                    "halftone" => Effect::Halftone,
-                    "scanlines" => Effect::Scanlines,
-                    "gradient-blur" => Effect::GradientBlur,
-                    _ => Effect::None,
-                },
-                scope: if p.chat_background_scope == "empty" {
-                    Scope::Empty
-                } else {
-                    Scope::All
-                },
-                empty_opacity: p.chat_background_empty.clamp(5, 65) as f32 / 100.,
-                session_opacity: p.chat_background_session.clamp(5, 65) as f32 / 100.,
-            });
+            appearance.background = p.chat_background_settings();
         }
         let classic = self.workspace.classic_layout;
         chat.update(cx, |session, cx| {

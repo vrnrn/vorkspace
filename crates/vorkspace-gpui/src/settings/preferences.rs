@@ -162,6 +162,33 @@ impl Default for Preferences {
 }
 
 impl Preferences {
+    pub(crate) fn chat_background_settings(
+        &self,
+    ) -> Option<vorkspace_core::project_appearance::Background> {
+        use vorkspace_core::project_appearance::{Background, Effect, Scope};
+
+        Some(Background {
+            path: self.chat_background.clone()?,
+            effect: match self.chat_background_effect.as_str() {
+                "dither" => Effect::Dither,
+                "ascii" => Effect::Ascii,
+                "halftone" => Effect::Halftone,
+                "scanlines" => Effect::Scanlines,
+                "gradient-blur" => Effect::GradientBlur,
+                _ => Effect::None,
+            },
+            scope: if self.chat_background_scope == "empty" {
+                Scope::Empty
+            } else {
+                Scope::All
+            },
+            empty_opacity: self.chat_background_empty.clamp(5, 65) as f32 / 100.,
+            session_opacity: self.chat_background_session.clamp(5, 65) as f32 / 100.,
+        })
+    }
+}
+
+impl Preferences {
     pub(crate) fn apply_workspace_theme(&mut self, id: String) {
         let color: gpui::Hsla = gpui::rgb(super::palette(&id, false).surface).into();
         self.theme_hue = (color.h * 360.).round() as u32;

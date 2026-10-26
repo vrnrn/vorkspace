@@ -20,6 +20,7 @@ pub(crate) use preferences::{ModelChoice, Preferences};
 use crate::{
     input::{self, Input},
     popover::{Align, Anchor, AnchorSlot, Side, popover},
+    project_background::ProjectBackground,
     theme::*,
 };
 use gpui::{
@@ -269,6 +270,7 @@ pub(crate) struct SettingsView {
     accent_custom: Entity<Input>,
     accent_custom_open: bool,
     accent_anchor: AnchorSlot,
+    chat_background_preview: Entity<ProjectBackground>,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -303,6 +305,7 @@ impl SettingsView {
             input.set_font_size(12.);
             input
         });
+        let chat_background_preview = cx.new(|_| ProjectBackground::preview());
         let skill_filter = cx.new(|cx| {
             let mut input = Input::field("Filter skills", "Filter", content(0.35), cx);
             input.set_font_size(12.);
@@ -404,6 +407,7 @@ impl SettingsView {
             accent_custom,
             accent_custom_open: false,
             accent_anchor: AnchorSlot::default(),
+            chat_background_preview,
             _subscriptions: subscriptions,
         };
         this.watch_connections(cx);
