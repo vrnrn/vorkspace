@@ -786,6 +786,13 @@ impl Bots {
                 let source = id.clone();
                 this.observations.push(cx.subscribe(
                     &view,
+                    move |this, _, event: &crate::conversation::BotSteerFailed, cx| {
+                        this.steer_failed(&source, &event.id, &event.error, cx)
+                    },
+                ));
+                let source = id.clone();
+                this.observations.push(cx.subscribe(
+                    &view,
                     move |this, _, event: &crate::conversation::BotQueueChanged, cx| {
                         this.queue_changed(&source, &event.id, event.remove, cx)
                     },
@@ -849,10 +856,12 @@ impl Bots {
                 bot.outbox.retain(|m| m.id != id);
             } else if let Some(message) = bot.outbox.iter_mut().find(|m| m.id == id) {
                 // A retry is a new explicit submission, never a replay of the
-                // provider receipt from a failed or interrupted turn.
-                if message.peer.is_some() {
-                    message.id = format!("peer:retry:{}", bot::new_id());
-                }
+                // provider receipt from a failed or interrupted turn or steer.
+                message.id = if message.peer.is_some() {
+                    format!("peer:retry:{}", bot::new_id())
+                } else {
+                    bot::new_id()
+                };
                 message.error = None;
             }
         }
@@ -914,6 +923,7 @@ impl Bots {
         }
 
         if self.inflight.contains_key(id) {
+            self.steer(id, cx);
             return;
         }
 
@@ -964,10 +974,42 @@ impl Bots {
             return;
         };
         if view.read(cx).busy {
+            self.steer(id, cx);
             return;
         }
         if view.update(cx, |v, cx| v.bot_dispatch(&message, cx)) {
             self.inflight.insert(id.into(), message);
+        }
+    }
+    /// A user message waiting behind a running turn steers that turn. A peer
+    /// turn keeps its reply scoped to the peer's message, so it never mixes in
+    /// the user's text.
+    fn steer(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.inflight.get(id).is_some_and(|m| m.peer.is_some()) {
+            return;
+        }
+        let Some(message) = self
+            .roster
+            .get(id)
+            .and_then(|m| m.outbox.first())
+            .filter(|m| self.persisted_messages.contains(&m.id))
+            .cloned()
+        else {
+            return;
+        };
+        if let Some(view) = self.chats.get(id).cloned() {
+            view.update(cx, |v, cx| v.bot_steer(&message, cx));
+        }
+    }
+    fn steer_failed(&mut self, id: &str, message: &str, error: &str, cx: &mut Context<Self>) {
+        if let Some(queued) = self
+            .roster
+            .get_mut(id)
+            .and_then(|bot| bot.outbox.iter_mut().find(|m| m.id == message))
+        {
+            queued.error = Some(error.to_owned());
+            self.save(cx);
+            self.configure_chat(id, cx);
         }
     }
     fn chat_changed(&mut self, id: &str, cx: &mut Context<Self>) {

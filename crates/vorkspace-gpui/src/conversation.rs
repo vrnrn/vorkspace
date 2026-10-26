@@ -38,6 +38,7 @@ use crate::{
 };
 pub(crate) use accounts::UsageResumed;
 pub(crate) use bot::QueueChanged as BotQueueChanged;
+pub(crate) use bot::SteerFailed as BotSteerFailed;
 pub(crate) use bot::Submitted as BotSubmitted;
 use gpui::{
     AnyElement, Context, CursorStyle, Entity, EventEmitter, Focusable, MouseButton, Role,
@@ -1357,20 +1358,12 @@ impl Conversation {
                         if update.turn_ready && !stopping {
                             this.follow_ups.ready = true;
                         }
-                        for id in update.follow_up_delivered {
-                            this.follow_up_delivered(&id, cx);
-                        }
-                        for (id, error) in update.follow_up_errors {
-                            this.fail_follow_up(&id, error, cx);
-                        }
-                        if let Some(id) = update.delivered {
-                            if this.settings.bot.is_some() {
-                                this.bot_ui.delivered = Some(id);
-                                this.sync_bot_pending(cx);
-                            } else {
-                                this.follow_up_delivered(&id, cx);
-                            }
-                        }
+                        this.apply_receipts(
+                            update.delivered,
+                            update.follow_up_delivered,
+                            update.follow_up_errors,
+                            cx,
+                        );
                         if !stopping || finished {
                             this.status = update.status;
                         }
@@ -1537,6 +1530,30 @@ impl Conversation {
         })
         .detach();
     }
+    /// The final update repeats the turn's initial receipt beside any steers.
+    /// A steer is always accepted after its turn began, so its receipt wins.
+    pub(super) fn apply_receipts(
+        &mut self,
+        delivered: Option<String>,
+        follow_ups: Vec<String>,
+        errors: Vec<(String, String)>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = delivered {
+            if self.settings.bot.is_some() {
+                self.bot_ui.delivered = Some(id);
+                self.sync_bot_pending(cx);
+            } else {
+                self.follow_up_delivered(&id, cx);
+            }
+        }
+        for id in follow_ups {
+            self.follow_up_delivered(&id, cx);
+        }
+        for (id, error) in errors {
+            self.fail_follow_up(&id, error, cx);
+        }
+    }
     fn turn_updates_closed(&mut self, generation: u64, cx: &mut Context<Self>) {
         // The sender can disappear while unwinding, without a final Update.
         // A superseded worker must never release the replacement turn's UI.
@@ -1555,6 +1572,11 @@ impl Conversation {
         self.follow_ups.resuming = false;
         self.follow_ups.requested = None;
         self.follow_ups.continuations.clear();
+        if let Some(id) = self.follow_ups.sending.clone()
+            && self.settings.bot.is_some()
+        {
+            self.fail_follow_up(&id, UNCONFIRMED_TURN.into(), cx);
+        }
         if let Some(id) = self.follow_ups.sending.take()
             && let Some(message) = self
                 .follow_ups

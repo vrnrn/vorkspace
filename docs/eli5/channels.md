@@ -13,7 +13,9 @@ Messages display formatted text. Enter sends; Shift+Enter starts a new line.
 Your draft is cleared only when the message is saved successfully.
 
 Bots can also find, read and message other Bots directly. A busy Bot holds the
-message until it can respond, then sends its final answer back. It keeps its
+message until it can respond, then sends its final answer back. Your own
+messages are different: they join the Bot's current work right away, unless
+you chose to queue follow-ups or the Bot is answering another Bot. It keeps its
 own account and permissions. Reply chains stop after four steps, even when
 Bots switch between direct messages and channels. Direct messages show a
 **Bot-to-bot** label and who is talking to whom, so you can distinguish them
