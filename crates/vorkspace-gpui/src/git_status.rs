@@ -4,11 +4,8 @@
 //! read requested meanwhile runs once the current one returns, and only a
 //! changed snapshot notifies.
 use gpui::{Context, EventEmitter, Task};
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::time::Instant;
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 use vorkspace_core::scm::{self, DiffIndex, DiffStats};
 
 const POLL: Duration = Duration::from_secs(2);

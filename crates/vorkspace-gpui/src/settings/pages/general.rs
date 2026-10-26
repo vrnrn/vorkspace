@@ -97,7 +97,7 @@ impl SettingsView {
                 ],
             ),
         ];
-        if cfg!(target_os = "macos") {
+        {
             workspace.push(self.row(
                 Some("bot-menu-bar-icon"),
                 false,
@@ -128,22 +128,6 @@ impl SettingsView {
                     cx,
                     |this, on, cx| this.update(cx, |p| p.quick_composer = on),
                 ));controls},
-            ));
-        }
-        if cfg!(target_os = "windows") {
-            workspace.push(self.row(
-                Some("close-to-tray"),
-                false,
-                "Close to tray",
-                Some("Closing a window hides it to the system tray instead of quitting, so running agents keep going. Reopen from the tray icon, and quit for real from its menu. Turn this off to have close end the window.".into()),
-                vec![self.toggle(
-                    "close-to-tray",
-                    "Close to tray",
-                    p.close_to_tray,
-                    false,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.close_to_tray = on),
-                )],
             ));
         }
         let version = env!("CARGO_PKG_VERSION");
@@ -203,7 +187,7 @@ impl SettingsView {
             self.group(None, true, "Alerts", None, None, alerts),
             self.group(None, false, "Workspace", None, None, workspace),
         ];
-        if cfg!(target_os = "macos") {
+        {
             groups.push(self.clipboard_group(cx));
         }
         groups.push(self.group(None, false, "About", None, None, about));

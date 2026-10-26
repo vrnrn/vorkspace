@@ -1,7 +1,7 @@
 //! Compact project tool tabs shared by the rounded and expanded layouts.
+use crate::clock::Instant;
 use crate::{right_panel::RightTab, theme::*};
-use gpui::{App, CursorStyle, MouseButton, Role, Stateful, Window, div, prelude::*, px};
-use std::time::Instant;
+use gpui::{CursorStyle, MouseButton, Role, Stateful, Window, div, prelude::*, px};
 
 const TAB_TEXT_SIZE: f32 = 12.;
 
@@ -20,8 +20,8 @@ impl<T: Copy + PartialEq> TabReveal<T> {
         }
     }
 
-    pub(crate) fn progress(&self, current: T, window: &mut Window, cx: &App) -> Option<(T, f32)> {
-        if self.open != current || cx.reduce_motion() {
+    pub(crate) fn progress(&self, current: T, window: &mut Window) -> Option<(T, f32)> {
+        if self.open != current {
             return None;
         }
         // TabButton's duration-200 ease-out on the label's grid track.

@@ -17,30 +17,16 @@ use gpui::{
     MouseButton, MouseDownEvent, Point, PromptLevel, Role, SharedString, StyleRefinement,
     Subscription, Window, actions, div, list, prelude::*, px, rgb,
 };
+use std::time::Instant;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    time::Instant,
 };
 use vorkspace_core::files::{self, DirEntry, NameIssueKind, Severity};
 
-const MOD: &str = if cfg!(target_os = "macos") {
-    "⌘"
-} else {
-    "Ctrl+"
-};
-const SHIFT: &str = if cfg!(target_os = "macos") {
-    "⇧"
-} else {
-    "Shift+"
-};
-const REVEAL_LABEL: &str = if cfg!(target_os = "macos") {
-    "Reveal in Finder"
-} else if cfg!(target_os = "windows") {
-    "Reveal in File Explorer"
-} else {
-    "Open Containing Folder"
-};
+const MOD: &str = "⌘";
+const SHIFT: &str = "⇧";
+const REVEAL_LABEL: &str = "Reveal in Finder";
 const ROW: f32 = 30.;
 const ENTRY_FONT_SIZE: f32 = 13.;
 
@@ -98,11 +84,7 @@ actions!(
 );
 
 pub(crate) fn bind(cx: &mut App) {
-    let m = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl"
-    };
+    let m = "cmd";
     let c = Some("Explorer");
     cx.bind_keys([
         KeyBinding::new("down", Down, c),

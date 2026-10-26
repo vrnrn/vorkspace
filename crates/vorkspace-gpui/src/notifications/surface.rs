@@ -6,7 +6,6 @@ pub(crate) fn backdrop(radius: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            #[cfg(target_os = "macos")]
             let quad = if is_light() {
                 gpui::fill(bounds, floating_fill())
             } else {
@@ -14,8 +13,6 @@ pub(crate) fn backdrop(radius: f32) -> impl IntoElement {
                     gpui_apple::metal_renderer::backdrop_blur_marker(24. * window.scale_factor()),
                 )
             };
-            #[cfg(not(target_os = "macos"))]
-            let quad = gpui::fill(bounds, floating_fill());
             window.paint_quad(quad.corner_radii(px(radius)));
         },
     )

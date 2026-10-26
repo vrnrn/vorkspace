@@ -1,6 +1,6 @@
 //! PanelStack.tsx's 280ms slide over a covered, fading overview.
 use super::panels::Route;
-use std::time::Instant;
+use crate::clock::Instant;
 
 const DURATION: f32 = 0.28;
 
@@ -95,7 +95,7 @@ impl Default for PanelStack {
     }
 }
 impl PanelStack {
-    pub fn sync(&mut self, bot: &str, route: Option<Route>, now: Instant, reduced: bool) -> bool {
+    pub fn sync(&mut self, bot: &str, route: Option<Route>, now: Instant) -> bool {
         let changed = self.bot.as_deref() != Some(bot) || self.route != route;
         if self.bot.as_deref() != Some(bot) {
             *self = Self {
@@ -108,17 +108,7 @@ impl PanelStack {
         } else {
             Pose::SHOWN
         };
-        if reduced {
-            self.base = Motion::still(base);
-            self.layers = route
-                .iter()
-                .map(|route| Layer {
-                    route: route.clone(),
-                    leaving: false,
-                    motion: Motion::still(Pose::SHOWN),
-                })
-                .collect();
-        } else if self.route != route {
+        if self.route != route {
             self.base.retarget(base, now);
             let mut previous = std::mem::take(&mut self.layers);
             if let Some(route) = &route {
@@ -189,7 +179,7 @@ mod tests {
         let mut stack = PanelStack::default();
         let now = Instant::now();
         let document = Route::Document("doc".into());
-        stack.sync("bot", Some(document.clone()), now, false);
+        stack.sync("bot", Some(document.clone()), now);
         let first = stack.frame(now);
         assert_eq!(first.base, Pose::SHOWN);
         assert_eq!(first.pages[0].pose, Pose::OUTSIDE);
@@ -203,7 +193,7 @@ mod tests {
         assert_eq!(settled.pages[0].pose, Pose::SHOWN);
 
         let back = now + Duration::from_secs(1);
-        stack.sync("bot", None, back, false);
+        stack.sync("bot", None, back);
         let first = stack.frame(back);
         assert!(!first.covered);
         assert_eq!(first.pages[0].route, document);
@@ -220,17 +210,17 @@ mod tests {
         let mut stack = PanelStack::default();
         let now = Instant::now();
         let route = Route::Session(42);
-        stack.sync("bot", Some(route.clone()), now, false);
+        stack.sync("bot", Some(route.clone()), now);
         stack.frame(now);
         let mid = now + Duration::from_millis(90);
         let before = stack.frame(mid).pages[0].pose;
-        stack.sync("bot", Some(route.clone()), mid, false);
+        stack.sync("bot", Some(route.clone()), mid);
         assert_eq!(stack.frame(mid).pages[0].pose, before);
-        stack.sync("bot", None, mid, false);
+        stack.sync("bot", None, mid);
         assert_eq!(stack.frame(mid).pages[0].pose, before);
         let reopen = mid + Duration::from_millis(40);
         let before = stack.frame(reopen).pages[0].pose;
-        stack.sync("bot", Some(route), reopen, false);
+        stack.sync("bot", Some(route), reopen);
         let frame = stack.frame(reopen);
         assert_eq!(frame.pages.len(), 1);
         assert_eq!(frame.pages[0].pose, before);
@@ -241,9 +231,12 @@ mod tests {
     fn replacing_pages_keeps_the_departing_page_above_the_new_one() {
         let mut stack = PanelStack::default();
         let now = Instant::now();
-        stack.sync("bot", Some(Route::Document("a".into())), now, true);
-        stack.sync("bot", Some(Route::Session(1)), now, false);
-        let frame = stack.frame(now);
+        stack.sync("bot", Some(Route::Document("a".into())), now);
+        let settled = now + std::time::Duration::from_secs(1);
+        stack.frame(now);
+        stack.frame(settled);
+        stack.sync("bot", Some(Route::Session(1)), settled);
+        let frame = stack.frame(settled);
         assert_eq!(frame.pages[0].route, Route::Session(1));
         assert!(frame.pages[0].interactive);
         assert_eq!(frame.pages[1].route, Route::Document("a".into()));
@@ -251,15 +244,11 @@ mod tests {
     }
 
     #[test]
-    fn reduced_motion_and_switching_bots_discard_old_pages() {
+    fn switching_bots_discards_old_pages() {
         let mut stack = PanelStack::default();
         let now = Instant::now();
-        stack.sync("a", Some(Route::Session(1)), now, false);
-        stack.frame(now);
-        stack.sync("a", None, now, true);
-        assert!(stack.frame(now).pages.is_empty());
-        stack.sync("a", Some(Route::Session(1)), now, false);
-        stack.sync("b", None, now, false);
+        stack.sync("a", Some(Route::Session(1)), now);
+        stack.sync("b", None, now);
         let frame = stack.frame(now);
         assert!(frame.pages.is_empty());
         assert_eq!(frame.base, Pose::SHOWN);

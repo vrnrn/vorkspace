@@ -331,9 +331,10 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::Instant;
     use crate::{bots::Bots, shell::tests::window};
     use gpui::{TestAppContext, WindowHandle};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     fn mixed_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, Entity<Bots>, String, i64) {
         let (window, _, session) = window(cx);
@@ -354,7 +355,7 @@ mod tests {
 
     #[gpui::test]
     fn channels_after_bot_details_keep_a_plain_header_and_full_tab_width(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let (window, manager, _, _) = mixed_window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
@@ -392,7 +393,7 @@ mod tests {
     fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
         cx: &mut TestAppContext,
     ) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let (window, manager, bot, session) = mixed_window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
@@ -480,7 +481,7 @@ mod tests {
     #[gpui::test]
     fn original_workspace_tabs_fit_sidebar_widths_and_keep_their_actions(cx: &mut TestAppContext) {
         use crate::workspace::SidebarTab;
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let (window, _, _) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1600.), px(900.)));
@@ -534,15 +535,17 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         use crate::workspace::SidebarTab;
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let (window, manager, bot, session) = mixed_window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("right-panel-frame").is_none());
         let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
         visual.simulate_click(toggle.center(), Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("bot-overview-panel").is_some());
         let frame = visual.debug_bounds("right-panel-frame").unwrap();
         let bounds = visual.debug_bounds("right-panel-resize").unwrap();
@@ -556,6 +559,7 @@ mod tests {
                 .unwrap();
             visual.simulate_mouse_up(point, MouseButton::Left, Default::default());
             visual.run_until_parked();
+            crate::clock::settle_animations(window, visual);
         }
         let handle = visual.debug_bounds("right-panel-resize").unwrap().center();
         let end = handle - gpui::point(px(30.), px(0.));
@@ -563,6 +567,7 @@ mod tests {
         visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
         visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         let expanded = window
             .update(visual, |shell, _, _| shell.workspace.right_panel_width)
             .unwrap();
@@ -581,10 +586,11 @@ mod tests {
             Default::default(),
         );
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         let width = window
             .update(visual, |shell, w, cx| {
                 assert!(shell.right_resize.is_none());
-                cx.set_reduce_motion(false);
+                crate::clock::use_test_clock(cx);
                 let width = shell.workspace.right_panel_width;
                 shell.open(session, w, cx);
                 shell.select_classic_sidebar(SidebarTab::Files, w, cx);
@@ -592,6 +598,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("right-panel-frame").is_none());
         assert!(visual.debug_bounds("bot-overview-panel").is_none());
         let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
@@ -605,6 +612,7 @@ mod tests {
         visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
         visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         let width = width + 40.;
         let session_sidebar = visual.debug_bounds("sidebar-frame").unwrap();
         assert_eq!(session_sidebar.size.width, px(width));
@@ -614,6 +622,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         for _ in 0..3 {
             assert_eq!(
                 visual.debug_bounds("right-panel-frame").unwrap(),
@@ -623,7 +632,7 @@ mod tests {
                 .update_window(window.into(), |_, w, cx| w.simulate_next_frame(cx))
                 .unwrap();
         }
-        visual.update(|_, cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         // One sidebar fits at this size. Counting the hidden session sidebar
         // alongside Bot details must not change its visibility preference.
         visual.simulate_resize(gpui::size(px(1050.), px(1000.)));
@@ -634,6 +643,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         let session_sidebar = visual.debug_bounds("sidebar-frame").unwrap();
         assert_eq!(session_sidebar.size.width, px(width));
         window
@@ -642,6 +652,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         assert_eq!(
             visual.debug_bounds("right-panel-frame").unwrap(),
             session_sidebar
@@ -649,6 +660,7 @@ mod tests {
         let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
         visual.simulate_click(toggle.center(), Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("right-panel-frame").is_none());
         window
             .update(visual, |shell, _, _| {
@@ -667,7 +679,7 @@ mod tests {
     }
     #[gpui::test]
     fn session_sidebar_peeks_from_the_right_and_never_over_a_bot(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let (window, manager, bot, session) = mixed_window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
@@ -675,10 +687,14 @@ mod tests {
             .update(visual, |shell, window, cx| {
                 shell.open(session, window, cx);
                 shell.set_sidebar_visible(false, cx);
-                shell.set_peek(true, cx);
             })
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
+        window
+            .update(visual, |shell, _, cx| shell.set_peek(true, cx))
+            .unwrap();
+        crate::clock::settle_animations(window, visual);
         let peek = visual.debug_bounds("sidebar-peek").unwrap();
         assert_eq!(peek.right(), px(1594.));
         assert_eq!(peek.size.width, px(crate::right_panel::WIDTH_DEFAULT));
@@ -702,7 +718,7 @@ mod tests {
                 })
             })
             .unwrap();
-        cx.update(|cx| cx.set_reduce_motion(false));
+        crate::clock::use_test_clock(cx);
         window
             .update(cx, |shell, w, cx| shell.toggle_right_panel(w, cx))
             .unwrap();

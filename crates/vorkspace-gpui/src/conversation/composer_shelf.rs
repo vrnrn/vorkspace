@@ -1,11 +1,11 @@
 //! Queued messages and tool approvals share the ledge above the composer.
 //! Entrances grow upward from its edge without scaling the clipped contents.
+use crate::clock::Instant;
 use crate::{pane_motion::PaneSlide, reveal::Disclosure, theme::content};
 use gpui::{AnyElement, Div, IntoElement, Pixels, Stateful, Window, div, prelude::*, px};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    time::Instant,
 };
 
 #[derive(Default)]

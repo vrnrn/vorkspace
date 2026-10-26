@@ -1315,7 +1315,6 @@ fn next_run_preview(timestamp: i64) -> String {
         return "Next run —".into();
     };
     let mut zone = gmt_offset();
-    #[cfg(unix)]
     {
         let seconds = (timestamp / 1000) as libc::time_t;
         let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();

@@ -1,7 +1,7 @@
 //! Bot details content inside the shell's shared right sidebar.
 use super::panel_stack::{PanelStack, Pose};
 use super::*;
-use std::time::Instant;
+use crate::clock::Instant;
 
 impl Bots {
     pub(crate) fn native_detail_content(&self, cx: &App) -> bool {
@@ -95,7 +95,7 @@ impl Render for Overview {
         let mut layers = Vec::new();
         self.native_content = false;
         if let Some((bot, route)) = state {
-            let changed = self.stack.sync(&bot.id, route, now, cx.reduce_motion());
+            let changed = self.stack.sync(&bot.id, route, now);
             if changed && self.focus.contains_focused(window, cx) {
                 window.focus(&self.focus, cx);
             }

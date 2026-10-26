@@ -1,6 +1,7 @@
 //! App.tsx / handoffTurn.ts's bounded recap from the outgoing bound provider.
 use super::*;
-use std::{path::Path, sync::mpsc, time::Instant};
+use std::time::Instant;
+use std::{path::Path, sync::mpsc};
 use vorkspace_core::agent::{AccessMode, Decision, Handoff, ProviderSwitch};
 
 pub(super) fn prepare(

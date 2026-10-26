@@ -1,10 +1,9 @@
 //! A bounded, process-local clipboard owner. No database, files, or rich formats.
 mod history;
-#[cfg(all(target_os = "macos", not(test)))]
+#[cfg(not(test))]
 mod menu;
-#[cfg(target_os = "macos")]
 mod native;
-#[cfg(all(target_os = "macos", not(test)))]
+#[cfg(not(test))]
 use gpui::Task;
 use gpui::{App, AppContext, Context, Entity, Global};
 use history::{Content, History, Preview};
@@ -16,17 +15,17 @@ impl Global for Clipboard {}
 #[derive(Default)]
 pub(crate) struct Service {
     history: History,
-    #[cfg(all(target_os = "macos", not(test)))]
+    #[cfg(not(test))]
     query: String,
-    #[cfg(all(target_os = "macos", not(test)))]
+    #[cfg(not(test))]
     menu: Option<(menu::Menu, Task<()>)>,
     enabled: bool,
     epoch: u64,
     pub error: Option<String>,
     last: isize,
-    #[cfg(all(target_os = "macos", not(test)))]
+    #[cfg(not(test))]
     poll: Option<Task<()>>,
-    #[cfg(all(target_os = "macos", not(test)))]
+    #[cfg(not(test))]
     hotkey: Option<(crate::global_hotkey::Registration, Task<()>)>,
 }
 pub(crate) fn get(cx: &App) -> Option<Entity<Service>> {
@@ -45,7 +44,7 @@ pub(crate) fn configure(enabled: bool, cx: &mut App) {
         s.enabled = enabled;
         s.clear(cx);
         s.error = None;
-        #[cfg(all(target_os = "macos", not(test)))]
+        #[cfg(not(test))]
         {
             if !enabled && let Some((menu, _)) = &s.menu {
                 menu.hide();
@@ -121,14 +120,14 @@ pub(crate) fn clear(cx: &mut App) {
 }
 impl Service {
     fn sync_menu(&self) {
-        #[cfg(all(target_os = "macos", not(test)))]
+        #[cfg(not(test))]
         if let Some((menu, _)) = &self.menu
             && menu.visible()
         {
             menu.sync(self);
         }
     }
-    #[cfg(all(target_os = "macos", not(test)))]
+    #[cfg(not(test))]
     pub(crate) fn toggle_menu(
         &mut self,
         anchor: objc2_foundation::NSRect,
@@ -193,7 +192,7 @@ impl Service {
     }
     fn clear(&mut self, cx: &mut Context<Self>) {
         self.epoch += 1;
-        #[cfg(all(target_os = "macos", not(test)))]
+        #[cfg(not(test))]
         {
             self.last = native::revision();
         }
@@ -221,11 +220,11 @@ impl Service {
         let Some(item) = self.history.get(id) else {
             return false;
         };
-        #[cfg(all(target_os = "macos", not(test)))]
+        #[cfg(not(test))]
         let success = native::write(&item.content)
             .map(|revision| self.last = revision)
             .is_some();
-        #[cfg(any(not(target_os = "macos"), test))]
+        #[cfg(test)]
         let success = match &*item.content {
             Content::Text { value, .. } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(value.clone()));

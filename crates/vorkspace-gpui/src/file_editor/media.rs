@@ -7,12 +7,10 @@ use gpui::{
     ScrollWheelEvent, canvas, fill, point, size,
 };
 
-#[cfg(target_os = "macos")]
 #[path = "video.rs"]
 mod video;
 
 pub(super) fn prepare_document(doc: Document) -> Result<Document, String> {
-    #[cfg(target_os = "macos")]
     if let Document::Image {
         ref bytes,
         format: "avif",
@@ -60,7 +58,6 @@ pub(super) struct MediaPreview {
     duration: Option<f64>,
     failed: bool,
     menu: Option<(Point<gpui::Pixels>, Entity<Menu>, Subscription)>,
-    #[cfg(target_os = "macos")]
     video: Option<video::Video>,
     _poll: Option<Task<()>>,
     _source: Option<Arc<document::TemporaryMedia>>,
@@ -109,7 +106,6 @@ impl MediaPreview {
             duration: None,
             failed: false,
             menu: None,
-            #[cfg(target_os = "macos")]
             video: None,
             _poll: None,
             _source: None,
@@ -143,7 +139,6 @@ impl MediaPreview {
             duration: None,
             failed: false,
             menu: None,
-            #[cfg(target_os = "macos")]
             video: Some(video::Video::new(
                 source
                     .as_ref()
@@ -160,7 +155,6 @@ impl MediaPreview {
                     .await;
                 if this
                     .update(cx, |this, cx| {
-                        #[cfg(target_os = "macos")]
                         if this.visible
                             && let Some(video) = &this.video
                             && let Some((width, height, duration, failed)) = video.metadata()
@@ -189,7 +183,6 @@ impl MediaPreview {
     }
     pub(super) fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
-        #[cfg(target_os = "macos")]
         if !visible && let Some(video) = &self.video {
             video.hide();
         }
@@ -311,13 +304,11 @@ impl MediaPreview {
 impl gpui::Render for MediaPreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_image = self.image.is_some();
-        #[cfg(target_os = "macos")]
         if self.failed
             && let Some(video) = &self.video
         {
             video.hide();
         }
-        #[cfg(target_os = "macos")]
         if !window.is_window_active()
             && let Some(video) = &self.video
         {
@@ -518,19 +509,11 @@ impl gpui::Render for MediaPreview {
                 )
                 .into_any_element()
         } else {
-            #[cfg(target_os = "macos")]
             {
                 self.video
                     .as_ref()
                     .map(|v| v.element())
                     .unwrap_or_else(|| div().into_any_element())
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                div()
-                    .flex_1()
-                    .child("Video playback is unavailable on this platform")
-                    .into_any_element()
             }
         };
         let footer = div()
@@ -563,21 +546,19 @@ impl gpui::Render for MediaPreview {
             .child(self.format.to_uppercase())
             .child(div().flex_1())
             .when(is_image, |d| {
-                d.when(cfg!(target_os = "macos"), |d| {
-                    d.child(
-                        icon_action(
-                            "copy-original-image",
-                            if self.copied {
-                                "Copied"
-                            } else {
-                                "Copy original file"
-                            },
-                            if self.copied { "check" } else { "copy" },
-                            true,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.copy_original(cx))),
+                d.child(
+                    icon_action(
+                        "copy-original-image",
+                        if self.copied {
+                            "Copied"
+                        } else {
+                            "Copy original file"
+                        },
+                        if self.copied { "check" } else { "copy" },
+                        true,
                     )
-                })
+                    .on_click(cx.listener(|this, _, _, cx| this.copy_original(cx))),
+                )
                 .child(
                     icon_action("image-zoom-out", "Zoom out", "minus", true).on_click(cx.listener(
                         |this, _, _, cx| this.zoom_at(Some(this.scale() / 1.5), None, cx),

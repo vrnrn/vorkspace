@@ -559,50 +559,45 @@ fn multiline_sends_keep_sliding_when_the_composer_shrinks_and_delivery_is_immedi
 }
 
 #[gpui::test]
-fn delivery_does_not_restart_settled_bubbles_or_override_reduced_motion(cx: &mut TestAppContext) {
-    for reduced in [false, true] {
-        cx.update(|cx| cx.set_reduce_motion(reduced));
-        for remove_first in [false, true] {
-            let view = cx.new(|_| {
-                let mut view = TranscriptView::new();
-                view.bot_mode("cat", 0xe86b5f, "BotCat");
-                view
-            });
-            view.update(cx, |view, cx| {
-                // UTF-8 byte chunking, independently of explicit newline chunking.
-                let text = "🙂 café 漢字 ".repeat(200);
-                view.set_pending(
-                    vec![PendingMessage {
-                        id: "q".into(),
-                        text: text.clone().into(),
-                        error: None,
-                        sent_at: None,
-                        attachments: Vec::new(),
-                        peer: None,
-                    }],
-                    cx,
-                );
-                if !reduced {
-                    view.pending_entrances.insert(
-                        "q".into(),
-                        Instant::now() - std::time::Duration::from_secs(1),
-                    );
-                }
-                if remove_first {
-                    view.set_pending(Vec::new(), cx);
-                }
-                view.streaming(true, cx);
-                let mut delivered = vorkspace_core::transcript::Transcript::default();
-                delivered.begin("user");
-                delivered.append(&text);
-                assert!(delivered.rows.len() > 1);
-                view.patch(0, delivered.rows, cx);
-                assert!(
-                    !view.entrances.contains_key(&0),
-                    "settled and reduced-motion messages stay settled on delivery"
-                );
-            });
-        }
+fn delivery_does_not_restart_settled_bubbles(cx: &mut TestAppContext) {
+    for remove_first in [false, true] {
+        let view = cx.new(|_| {
+            let mut view = TranscriptView::new();
+            view.bot_mode("cat", 0xe86b5f, "BotCat");
+            view
+        });
+        view.update(cx, |view, cx| {
+            // UTF-8 byte chunking, independently of explicit newline chunking.
+            let text = "🙂 café 漢字 ".repeat(200);
+            view.set_pending(
+                vec![PendingMessage {
+                    id: "q".into(),
+                    text: text.clone().into(),
+                    error: None,
+                    sent_at: None,
+                    attachments: Vec::new(),
+                    peer: None,
+                }],
+                cx,
+            );
+            view.pending_entrances.insert(
+                "q".into(),
+                Instant::now() - std::time::Duration::from_secs(1),
+            );
+            if remove_first {
+                view.set_pending(Vec::new(), cx);
+            }
+            view.streaming(true, cx);
+            let mut delivered = vorkspace_core::transcript::Transcript::default();
+            delivered.begin("user");
+            delivered.append(&text);
+            assert!(delivered.rows.len() > 1);
+            view.patch(0, delivered.rows, cx);
+            assert!(
+                !view.entrances.contains_key(&0),
+                "settled messages stay settled on delivery"
+            );
+        });
     }
 }
 
@@ -899,7 +894,7 @@ fn queued_messages_contribute_their_height_once(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn changing_inline_tool_status_does_not_move_settled_messages(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     let window = chat(cx);
     window
         .update(cx, |view, _, cx| {
@@ -910,7 +905,7 @@ fn changing_inline_tool_status_does_not_move_settled_messages(cx: &mut TestAppCo
         })
         .unwrap();
     render(window, cx);
-    cx.update(|cx| cx.set_reduce_motion(false));
+    crate::clock::use_test_clock(cx);
     window
         .update(cx, |view, _, _| {
             view.follow.reset();

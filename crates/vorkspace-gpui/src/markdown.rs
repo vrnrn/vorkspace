@@ -34,11 +34,11 @@ fn activate_link(event: &ClickEvent, selection: Option<&TextSelection>) -> bool 
         && !event.modifiers().shift
         && !selection.is_some_and(TextSelection::has_selection)
 }
+use crate::clock::Instant;
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     ops::Range,
     sync::Arc,
-    time::Instant,
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -63,11 +63,7 @@ impl Tone {
         }
     }
 }
-pub(crate) const FIXED_FONT: &str = if cfg!(target_os = "macos") {
-    "Menlo"
-} else {
-    "monospace"
-};
+pub(crate) const FIXED_FONT: &str = "Menlo";
 const PART_BYTES: usize = 2048;
 const PART_LINES: usize = 24;
 
@@ -1063,7 +1059,7 @@ mod file_link_tests {
                     "row-1".into(),
                     Tone::Normal,
                     None,
-                    std::time::Instant::now(),
+                    crate::clock::Instant::now(),
                 ))
             }
         }

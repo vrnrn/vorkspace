@@ -1,6 +1,5 @@
 //! Sparkle owns verification, staged installation and relaunch. Development
 //! bundles have no feed or framework and never check the production channel.
-#[cfg(target_os = "macos")]
 mod macos {
     use objc2::{
         msg_send,
@@ -58,11 +57,9 @@ mod macos {
     }
 }
 pub(crate) fn start(_cx: &mut gpui::App) {
-    #[cfg(target_os = "macos")]
     macos::start(_cx);
 }
 pub(crate) fn check(cx: &mut gpui::App) {
-    #[cfg(target_os = "macos")]
     if macos::check(cx) {
         return;
     }

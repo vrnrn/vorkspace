@@ -392,7 +392,7 @@ mod tests {
         let window = cx.update(|cx| {
             input::bind(cx);
             crate::popover::bind(cx);
-            cx.set_reduce_motion(true);
+            crate::clock::use_test_clock(cx);
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx))
             })
@@ -500,6 +500,9 @@ mod tests {
     #[gpui::test]
     fn response_picker_ignores_old_completions_and_insets_model_rows(cx: &mut TestAppContext) {
         let window = conversation(cx);
+        let stale = Some((1, TransferKind::Handoff, Instant::now()));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(1));
         window
             .update(cx, |view, window, cx| {
                 let request = Some((1, TransferKind::Handoff, Instant::now()));
@@ -522,7 +525,7 @@ mod tests {
                 );
                 let models = view.response_menu.as_ref().unwrap().models[&Kind::Codex].clone();
                 view.finish_response_models(
-                    Some((1, TransferKind::Handoff, Instant::now())),
+                    stale,
                     Kind::Codex,
                     &models,
                     Err("Stale failure".into()),

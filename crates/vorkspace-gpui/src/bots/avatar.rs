@@ -1,5 +1,6 @@
 //! 3D curved Bot avatars (`80%` spherical curvature, direct backing, `4` rings/cell
 //! concentric texture at `60%` opacity) + sidebar cursor gaze tracking & textured pills.
+use crate::clock::Instant;
 use gpui::{
     AnyElement, Bounds, Corners, DispatchPhase, ObjectFit, Pixels, Point, RenderImage, Window,
     canvas, img, prelude::*, px,
@@ -8,7 +9,6 @@ use image::Frame;
 use std::{
     collections::HashMap,
     sync::{Arc, LazyLock, Mutex},
-    time::Instant,
 };
 use vorkspace_core::{
     bot::Bot,
@@ -19,6 +19,49 @@ use vorkspace_core::{
 };
 
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// Autonomous avatar motion is slow, but each frame re-renders the avatar's
+/// owning view (a whole chat or sidebar). Bound that work to about 30 fps.
+const AVATAR_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
+
+type PendingFrameKey = (gpui::AnyWindowHandle, gpui::EntityId);
+thread_local! {
+    static PENDING_FRAMES: std::cell::RefCell<std::collections::HashSet<PendingFrameKey>> =
+        Default::default();
+}
+
+// Own admission inside the future, so dropping it before its first poll or at
+// any await releases the slot. A cancelled repaint must never freeze a view.
+struct PendingAvatarFrame(PendingFrameKey);
+impl PendingAvatarFrame {
+    fn acquire(view: PendingFrameKey) -> Option<Self> {
+        PENDING_FRAMES.with(|pending| pending.borrow_mut().insert(view).then(|| Self(view)))
+    }
+}
+impl Drop for PendingAvatarFrame {
+    fn drop(&mut self) {
+        // The executor may drop cancelled tasks during thread-local teardown.
+        let _ = PENDING_FRAMES.try_with(|pending| {
+            pending.borrow_mut().remove(&self.0);
+        });
+    }
+}
+
+/// Every avatar painted by a view shares one pending repaint. Window context
+/// validation prevents publication into a closed window.
+fn request_avatar_frame(window: &Window, cx: &gpui::App) {
+    let view = window.current_view();
+    let Some(pending) = PendingAvatarFrame::acquire((window.window_handle(), view)) else {
+        return;
+    };
+    window
+        .spawn(cx, async move |cx| {
+            cx.background_executor().timer(AVATAR_FRAME).await;
+            drop(pending);
+            let _ = cx.update(|_, cx| cx.notify(view));
+        })
+        .detach();
+}
 
 #[derive(Default)]
 struct SidebarCursorState {
@@ -365,13 +408,12 @@ pub(super) fn header_avatar(bot: &Bot, status: &str, side: f32, visible: bool) -
         |_, _, _| {},
         move |bounds, _, window, cx| {
             let animate = visible
-                && !cx.reduce_motion()
                 && window.is_window_active()
                 && bounds.intersects(&window.content_mask().bounds);
             let (anim, needs_frame) =
                 header_anim_at(look.seed, &status, animate, START.elapsed().as_secs_f32());
-            if needs_frame {
-                window.request_animation_frame();
+            if needs_frame && !crate::clock::suppress_endless_animation_frames() {
+                request_avatar_frame(window, cx);
             }
             let pixel_side = (bounds.size.width.as_f32() * window.scale_factor())
                 .ceil()
@@ -391,17 +433,16 @@ fn preview_anim(
     bounds: Bounds<Pixels>,
     mouse: Point<Pixels>,
     crossed_eyes: bool,
-    animate: bool,
 ) -> (BotAnimState, bool) {
     let mut anim = BotAnimState::default();
     let center = bounds.center();
     anim.yaw = ((mouse.x - center.x).as_f32() / 240.).clamp(-0.78, 0.78);
     anim.pitch = ((mouse.y - center.y).as_f32() / 240.).clamp(-0.68, 0.68);
     anim.crossed_eyes = crossed_eyes;
-    if animate && !crossed_eyes {
+    if !crossed_eyes {
         anim.blink = blink_at(START.elapsed().as_secs_f32() + (seed % 97) as f32 * 0.17);
     }
-    (anim, animate)
+    (anim, true)
 }
 
 /// A large preview follows this window's pointer rather than the sidebar's
@@ -425,12 +466,10 @@ pub(super) fn settings_preview(
         move |bounds, _, window: &mut Window, cx| {
             let mouse = window.mouse_position();
             let crossed_eyes = delete_anchor.get().is_some_and(|b| b.contains(&mouse));
-            let (anim, needs_frame) =
-                preview_anim(look.seed, bounds, mouse, crossed_eyes, !cx.reduce_motion());
-            if needs_frame {
+            let (anim, needs_frame) = preview_anim(look.seed, bounds, mouse, crossed_eyes);
+            if needs_frame && !crate::clock::suppress_endless_animation_frames() {
                 window.request_animation_frame();
             }
-            // Direct pointer feedback remains live with reduced motion enabled.
             // Capture the drawing owner now: input dispatch has no rendering
             // context, so request_animation_frame cannot be called there.
             let view = window.current_view();
@@ -489,10 +528,10 @@ pub(crate) fn avatar_with_look(
                     rail.contains(&pos) && rail.contains(&bounds.center())
                 })
             });
-            let animate = !cx.reduce_motion() && (!still || status == "working" || sidebar_hovered);
+            let animate = !still || status == "working" || sidebar_hovered;
             let (anim, needs_frame) = compute_bot_anim(look.seed, &status, bounds, animate);
-            if needs_frame {
-                window.request_animation_frame();
+            if needs_frame && !crate::clock::suppress_endless_animation_frames() {
+                request_avatar_frame(window, cx);
             }
             let image =
                 cached_badge_or_bot_image(true, &look, status == "needs-you", pixel_side, anim);
@@ -586,6 +625,99 @@ pub(crate) fn color_swatch_circle(bg: u32, fg: Option<u32>, side: f32) -> AnyEle
 mod header_tests {
     use super::*;
 
+    #[gpui::test]
+    fn pending_avatar_frame_releases_admission_on_cancellation(cx: &mut gpui::TestAppContext) {
+        let first = cx.new(|_| ());
+        let second = cx.new(|_| ());
+        let open = |cx: &mut gpui::App| -> gpui::AnyWindowHandle {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|_| AvatarFrameTestView(false))
+            })
+            .unwrap()
+            .into()
+        };
+        let window: gpui::AnyWindowHandle = cx.update(open);
+        let other_window: gpui::AnyWindowHandle = cx.update(open);
+        let id = (window, first.entity_id());
+        let pending = PendingAvatarFrame::acquire(id).unwrap();
+        assert!(PendingAvatarFrame::acquire(id).is_none());
+        assert!(PendingAvatarFrame::acquire(id).is_none());
+        // Another owning view is independently admitted.
+        let other = PendingAvatarFrame::acquire((window, second.entity_id())).unwrap();
+        let another_window =
+            PendingAvatarFrame::acquire((other_window, first.entity_id())).unwrap();
+        let unpolled = async move {
+            let _pending = pending;
+            std::future::pending::<()>().await;
+        };
+        drop(unpolled);
+        let replacement = PendingAvatarFrame::acquire(id).unwrap();
+        // Also cancel after a poll reached an await boundary.
+        let mut polled = Box::pin(async move {
+            let _pending = replacement;
+            std::future::pending::<()>().await;
+        });
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(std::future::Future::poll(polled.as_mut(), &mut context).is_pending());
+        drop(polled);
+        assert!(PendingAvatarFrame::acquire(id).is_some());
+        drop(other);
+        drop(another_window);
+        PENDING_FRAMES.with(|pending| assert!(pending.borrow().is_empty()));
+    }
+
+    #[gpui::test]
+    fn avatar_frame_coalesces_and_releases_after_timer(cx: &mut gpui::TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|_| AvatarFrameTestView(true))
+            })
+            .unwrap()
+        });
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        PENDING_FRAMES.with(|pending| assert_eq!(pending.borrow().len(), 1));
+        cx.background_executor.advance_clock(AVATAR_FRAME);
+        cx.run_until_parked();
+        PENDING_FRAMES.with(|pending| assert!(pending.borrow().is_empty()));
+        window
+            .update(cx, |view, _, cx| {
+                view.0 = true;
+                cx.notify();
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        PENDING_FRAMES.with(|pending| assert_eq!(pending.borrow().len(), 1));
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.background_executor.advance_clock(AVATAR_FRAME);
+        cx.run_until_parked();
+        PENDING_FRAMES.with(|pending| assert!(pending.borrow().is_empty()));
+    }
+
+    struct AvatarFrameTestView(bool);
+    impl gpui::Render for AvatarFrameTestView {
+        fn render(
+            &mut self,
+            _: &mut Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let schedule = std::mem::take(&mut self.0);
+            gpui::canvas(
+                |_, _, _| {},
+                move |_, _, window, cx| {
+                    if schedule {
+                        request_avatar_frame(window, cx);
+                        request_avatar_frame(window, cx);
+                    }
+                },
+            )
+            .size(px(20.))
+        }
+    }
+
     #[test]
     fn header_modes_share_autonomous_animation_without_pointer_gaze() {
         let look = BotLookConfig::from_legacy("robot", 0x3b82f6);
@@ -608,7 +740,7 @@ mod header_tests {
     }
 
     #[test]
-    fn header_reduced_motion_or_hidden_state_is_frozen_without_frame_requests() {
+    fn header_hidden_state_is_frozen_without_frame_requests() {
         let look = BotLookConfig::from_legacy("cat", 0xe86b5f);
         for status in ["idle", "working", "needs-you"] {
             let (first, moving) = header_anim_at(look.seed, status, false, 0.);
@@ -636,21 +768,12 @@ mod preview_tests {
             gpui::size(px(128.), px(128.)),
         );
         let look = BotLookConfig::from_legacy("robot", 0x3b82f6);
-        // Direct input remains live even when automatic animation is disabled.
-        let (left, moving) =
-            preview_anim(look.seed, bounds, gpui::point(px(0.), px(0.)), false, false);
-        let (right, _) = preview_anim(
-            look.seed,
-            bounds,
-            gpui::point(px(600.), px(400.)),
-            false,
-            false,
-        );
-        assert!(!moving);
+        let (left, _) = preview_anim(look.seed, bounds, gpui::point(px(0.), px(0.)), false);
+        let (right, _) = preview_anim(look.seed, bounds, gpui::point(px(600.), px(400.)), false);
         assert!(left.yaw < 0. && left.pitch < 0.);
         assert!(right.yaw > 0. && right.pitch > 0.);
-        let (crossed, _) = preview_anim(look.seed, bounds, bounds.center(), true, false);
-        let (restored, _) = preview_anim(look.seed, bounds, bounds.center(), false, false);
+        let (crossed, _) = preview_anim(look.seed, bounds, bounds.center(), true);
+        let (restored, _) = preview_anim(look.seed, bounds, bounds.center(), false);
         assert!(crossed.crossed_eyes && !restored.crossed_eyes);
         assert!(
             frame_cache_key(true, &look, false, 256, crossed)

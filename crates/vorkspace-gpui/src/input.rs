@@ -80,11 +80,7 @@ pub(crate) enum CodeAction {
 pub struct Rejected(pub &'static str);
 
 pub fn bind(cx: &mut App) {
-    let selection_modifier = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl"
-    };
+    let selection_modifier = "cmd";
     cx.bind_keys([KeyBinding::new(
         &format!("{selection_modifier}-c"),
         Copy,
@@ -108,11 +104,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("shift-enter", Newline, Some("Composer")),
         KeyBinding::new("enter", Submit, Some("Composer")),
     ]);
-    let modifier = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl"
-    };
+    let modifier = "cmd";
     cx.bind_keys([
         KeyBinding::new(&format!("{modifier}-z"), Undo, Some("CodeEditor")),
         KeyBinding::new(&format!("{modifier}-shift-z"), Redo, Some("CodeEditor")),
@@ -138,7 +130,7 @@ pub fn bind(cx: &mut App) {
             Some("Composer"),
         ),
     ]);
-    if cfg!(target_os = "macos") {
+    {
         cx.bind_keys([
             KeyBinding::new("cmd-left", Home, Some("Composer")),
             KeyBinding::new("cmd-right", End, Some("Composer")),
@@ -151,19 +143,8 @@ pub fn bind(cx: &mut App) {
             KeyBinding::new("cmd-backspace", DeleteToHome, Some("Composer")),
             KeyBinding::new("cmd-delete", DeleteToEnd, Some("Composer")),
         ]);
-    } else {
-        cx.bind_keys([
-            KeyBinding::new("ctrl-home", DocumentStart, Some("Composer")),
-            KeyBinding::new("ctrl-end", DocumentEnd, Some("Composer")),
-            KeyBinding::new("ctrl-shift-home", SelectDocumentStart, Some("Composer")),
-            KeyBinding::new("ctrl-shift-end", SelectDocumentEnd, Some("Composer")),
-        ]);
     }
-    let word_modifier = if cfg!(target_os = "macos") {
-        "alt"
-    } else {
-        "ctrl"
-    };
+    let word_modifier = "alt";
     cx.bind_keys([
         KeyBinding::new(&format!("{word_modifier}-left"), WordLeft, Some("Composer")),
         KeyBinding::new(
@@ -343,12 +324,7 @@ impl Input {
     pub(crate) fn inbox_comment(cx: &mut Context<Self>) -> Self {
         let mut input = Self::commit_message(cx);
         input.label = "Comment".into();
-        input.placeholder = if cfg!(target_os = "macos") {
-            "Leave a comment (⌘↩)"
-        } else {
-            "Leave a comment (Ctrl+Enter)"
-        }
-        .into();
+        input.placeholder = "Leave a comment (⌘↩)".into();
         input.height = 40.;
         input.min_height = 40.;
         input.max_height = 144.;
@@ -1034,7 +1010,6 @@ impl Input {
         self.replace_text_in_range(None, "", w, cx);
     }
     fn mouse_down(&mut self, e: &MouseDownEvent, w: &mut Window, cx: &mut Context<Self>) {
-        #[cfg(target_os = "macos")]
         crate::traffic_lights::focus_content(w);
         if self.code_fold_down(e, cx) || self.code_scrollbar_down(e, w, cx) {
             return;
@@ -1950,14 +1925,7 @@ mod native_input_tests {
                 assert_eq!(i.position(next_line).x, px(0.));
                 assert!(!i.lines[1].wrap_boundaries().is_empty());
             });
-            cx.simulate_keystrokes(
-                window.into(),
-                if cfg!(target_os = "macos") {
-                    "cmd-a cmd-c"
-                } else {
-                    "ctrl-a ctrl-c"
-                },
-            );
+            cx.simulate_keystrokes(window.into(), "cmd-a cmd-c");
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().as_deref(),
                 Some(text.as_str())
@@ -2008,36 +1976,12 @@ mod native_input_tests {
 
     #[gpui::test]
     fn keyboard_selection_dispatches_in_search_and_composer(cx: &mut TestAppContext) {
-        let modifier = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
-        let word_modifier = if cfg!(target_os = "macos") {
-            "alt"
-        } else {
-            "ctrl"
-        };
-        let start = if cfg!(target_os = "macos") {
-            "cmd-left"
-        } else {
-            "home"
-        };
-        let end = if cfg!(target_os = "macos") {
-            "cmd-right"
-        } else {
-            "end"
-        };
-        let select_start = if cfg!(target_os = "macos") {
-            "cmd-shift-left"
-        } else {
-            "shift-home"
-        };
-        let select_end = if cfg!(target_os = "macos") {
-            "cmd-shift-right"
-        } else {
-            "shift-end"
-        };
+        let modifier = "cmd";
+        let word_modifier = "alt";
+        let start = "cmd-left";
+        let end = "cmd-right";
+        let select_start = "cmd-shift-left";
+        let select_end = "cmd-shift-right";
         for single_line in [true, false] {
             let window = field(cx, single_line);
             let input = window.root(cx).unwrap();
@@ -2078,26 +2022,14 @@ mod native_input_tests {
         let window = field(cx, false);
         let input = window.root(cx).unwrap();
         replace(window, "first line\nsecond word\nlast line", cx);
-        let (start, end, select_start, select_end, doc_start, doc_end) =
-            if cfg!(target_os = "macos") {
-                (
-                    "cmd-left",
-                    "cmd-right",
-                    "cmd-shift-left",
-                    "cmd-shift-right",
-                    "cmd-up",
-                    "cmd-shift-down",
-                )
-            } else {
-                (
-                    "home",
-                    "end",
-                    "shift-home",
-                    "shift-end",
-                    "ctrl-home",
-                    "ctrl-shift-end",
-                )
-            };
+        let (start, end, select_start, select_end, doc_start, doc_end) = (
+            "cmd-left",
+            "cmd-right",
+            "cmd-shift-left",
+            "cmd-shift-right",
+            "cmd-up",
+            "cmd-shift-down",
+        );
         cx.simulate_keystrokes(window.into(), &format!("{start} up {end} {select_start}"));
         assert_eq!(selected(&input, cx), "second word");
         cx.simulate_keystrokes(window.into(), &format!("left {select_end}"));
@@ -2150,14 +2082,7 @@ mod native_input_tests {
             let at = i.mouse_index(click);
             assert!(at > 0 && i.content.is_char_boundary(at));
         });
-        cx.simulate_keystrokes(
-            window.into(),
-            if cfg!(target_os = "macos") {
-                "cmd-left"
-            } else {
-                "home"
-            },
-        );
+        cx.simulate_keystrokes(window.into(), "cmd-left");
         cx.refresh().unwrap();
         assert_eq!(input.read_with(cx, |i, _| i.scroll_x), px(0.));
         replace(window, "first\nsecond\r\nthird", cx);

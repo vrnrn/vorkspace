@@ -529,13 +529,12 @@ impl Shell {
                     .focus(|s| s.bg(content(0.08)))
                     .child(icon("settings", 16.))
                     .child(div().flex_1().child("Settings"))
-                    .child(div().text_size(px(11.)).text_color(content(0.4)).child(
-                        if cfg!(target_os = "macos") {
-                            "⌘,"
-                        } else {
-                            "Ctrl ,"
-                        },
-                    ))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(content(0.4))
+                            .child("⌘,"),
+                    )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_settings(crate::settings::Section::General, window, cx)
                     })),

@@ -410,7 +410,6 @@ impl Shell {
             crate::settings::Preferences::MIN_UI_SCALE_PERCENT,
             crate::settings::Preferences::MAX_UI_SCALE_PERCENT,
         );
-        #[cfg(any(target_os = "macos", test))]
         crate::clipboard::configure(self.workspace.preferences.clipboard_history, cx);
         if let Some(vox) = &self.vox {
             let prefs = self.workspace.preferences.clone();

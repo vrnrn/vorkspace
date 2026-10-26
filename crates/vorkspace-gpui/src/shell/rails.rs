@@ -3,8 +3,9 @@
 //! its row. Each rail opens while its thread, or one of the thread's
 //! sessions, is in view, chosen or working, and RevealHeight grows it in.
 use super::*;
+use crate::clock::Instant;
 use crate::reveal::{Disclosure, bezier};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// RevealHeight's `reveal-height-in` and `reveal-height-out`.
 const OPEN: Duration = Duration::from_millis(240);
@@ -140,7 +141,6 @@ impl Shell {
             };
             seen.insert(id);
             let open = self.rail_open(id, &rail, cx);
-            let reduced = cx.reduce_motion();
             match self.rails.motions.get(&id).copied() {
                 None => {
                     self.rails.motions.insert(
@@ -153,17 +153,12 @@ impl Shell {
                     );
                 }
                 Some(motion) if motion.open != open => {
-                    let from = if reduced {
-                        if open { 1. } else { 0. }
-                    } else {
-                        motion.value(now)
-                    };
                     self.rails.motions.insert(
                         id,
                         Motion {
                             open,
-                            from,
-                            start: if reduced { now - OPEN } else { now },
+                            from: motion.value(now),
+                            start: now,
                         },
                     );
                 }
@@ -448,10 +443,11 @@ mod tests {
     fn bounds(cx: &mut VisualTestContext, selector: String) -> Option<gpui::Bounds<Pixels>> {
         cx.debug_bounds(Box::leak(selector.into_boxed_str()))
     }
-    /// Rail motion runs on the wall clock, as the window's frames do.
+    /// Rails share the executor clock with the window's other animations.
     fn settle(window: gpui::WindowHandle<Shell>, cx: &mut VisualTestContext) {
         for _ in 0..2 {
-            std::thread::sleep(OPEN + Duration::from_millis(20));
+            cx.executor()
+                .advance_clock(OPEN + Duration::from_millis(20));
             window
                 .update(cx, |shell, _, cx| {
                     shell.invalidate_chrome(cx);

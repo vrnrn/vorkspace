@@ -844,7 +844,7 @@ impl ReviewPane {
                 self.remember_body_focus(cx);
             }
             if self.deferred {
-                self.revealed = (!cx.reduce_motion()).then(PaneReveal::default);
+                self.revealed = Some(PaneReveal::default());
             }
             self.deferred = deferred;
             if !deferred {
@@ -1452,7 +1452,6 @@ impl ReviewPane {
         let animate = cx
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| p.tab_animations)
-            && !cx.reduce_motion()
             && !self.tab_drag.as_ref().is_some_and(|d| d.active);
         let keyed = self
             .sources
@@ -1461,7 +1460,7 @@ impl ReviewPane {
             .collect();
         let (slots, moving) = self
             .tab_motion
-            .sync(keyed, animate, std::time::Instant::now());
+            .sync(keyed, animate, crate::clock::Instant::now());
         if moving {
             window.request_animation_frame();
         }
@@ -1755,12 +1754,9 @@ impl Render for ReviewPane {
         }
         self.prompt_close(window, cx);
         // PaneTree's reveal: the files fade in once the pane has arrived.
-        if cx.reduce_motion() {
-            self.revealed = None;
-        }
         let fade = match &self.revealed {
             Some(reveal) => {
-                let (opacity, done) = reveal.opacity(std::time::Instant::now());
+                let (opacity, done) = reveal.opacity(crate::clock::Instant::now());
                 if !done {
                     window.request_animation_frame();
                 } else {

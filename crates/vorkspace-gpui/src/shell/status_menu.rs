@@ -2,7 +2,7 @@ use super::*;
 use crate::status_menu::Action;
 
 impl Shell {
-    #[cfg(all(target_os = "macos", not(test)))]
+    #[cfg(not(test))]
     pub(super) fn sync_status_menu(&mut self, window: &Window, cx: &mut Context<Self>) {
         // Retain the saved preference key so existing users keep their choice.
         if !self.workspace.preferences.bot_menu_bar_icon {
@@ -44,7 +44,6 @@ impl Shell {
             Action::Settings => {
                 cx.activate(true);
                 window.activate_window();
-                #[cfg(target_os = "macos")]
                 crate::traffic_lights::show(window);
                 self.open_settings(crate::settings::Section::General, window, cx);
             }
@@ -58,7 +57,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        #[cfg(all(target_os = "macos", not(test)))]
+        #[cfg(not(test))]
         if let Some(service) = crate::clipboard::get(cx) {
             let anchor = self
                 .status_menu

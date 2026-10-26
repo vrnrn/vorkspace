@@ -1,5 +1,6 @@
 // Project terminal dock, tab actions and resize interactions.
 use super::{MenuTarget, Shell, TabShift};
+use crate::clock::Instant;
 use crate::{
     popover::{Anchor, MenuAction, MenuItem, MenuStyle},
     terminal::Terminal,
@@ -10,7 +11,7 @@ use gpui::{
     AnyElement, App, Bounds, Context, Entity, EntityId, MouseButton, MouseDownEvent,
     MouseMoveEvent, Pixels, Role, SharedString, Window, div, point, prelude::*, px,
 };
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
 
 /// useAnimatedReorder's drag of one dock tab along the strip.
 pub(super) struct DockTabDrag {
@@ -29,10 +30,9 @@ fn eased_shift(
     id: EntityId,
     target: f32,
     follow: bool,
-    reduced: bool,
 ) -> (f32, bool) {
     let now = Instant::now();
-    if follow || reduced {
+    if follow {
         shifts.remove(&id);
         return (target, false);
     }
@@ -270,25 +270,23 @@ impl Shell {
             dock.reorder(drag.from, drag.to);
         }
         self.dock_shifts.clear();
-        if !cx.reduce_motion() {
-            for (ix, terminal) in self.live_terminals().iter().enumerate() {
-                let id = terminal.entity_id();
-                let (Some((_, left)), Some(slot)) =
-                    (drawn.iter().find(|(t, _)| *t == id), drag.bounds.get(ix))
-                else {
-                    continue;
-                };
-                let from = left - slot.left().as_f32();
-                if from.abs() > 0.5 {
-                    self.dock_shifts.insert(
-                        id,
-                        TabShift {
-                            from,
-                            to: 0.,
-                            start: now,
-                        },
-                    );
-                }
+        for (ix, terminal) in self.live_terminals().iter().enumerate() {
+            let id = terminal.entity_id();
+            let (Some((_, left)), Some(slot)) =
+                (drawn.iter().find(|(t, _)| *t == id), drag.bounds.get(ix))
+            else {
+                continue;
+            };
+            let from = left - slot.left().as_f32();
+            if from.abs() > 0.5 {
+                self.dock_shifts.insert(
+                    id,
+                    TabShift {
+                        from,
+                        to: 0.,
+                        start: now,
+                    },
+                );
             }
         }
         self.persist(cx);
@@ -329,7 +327,6 @@ impl Shell {
             DockSide::Left => "panel-left",
             DockSide::Right => "panel-right",
         };
-        let reduced = cx.reduce_motion();
         let dragged = self.dock_drag.as_ref().filter(|d| d.active).map(|d| d.from);
         let mut moving = false;
         let shifts: Vec<f32> = live
@@ -342,20 +339,19 @@ impl Shell {
                     terminal.entity_id(),
                     target,
                     dragged == Some(ix),
-                    reduced,
                 );
                 moving |= active;
                 value
             })
             .collect();
-        let animate = self.workspace.preferences.tab_animations && !reduced && dragged.is_none();
+        let animate = self.workspace.preferences.tab_animations && dragged.is_none();
         let keyed = live
             .iter()
             .map(|t| (t.entity_id(), SharedString::from(t.read(cx).title.clone())))
             .collect();
-        let (slots, opening) = self
-            .dock_tab_motion
-            .sync(keyed, animate, std::time::Instant::now());
+        let (slots, opening) =
+            self.dock_tab_motion
+                .sync(keyed, animate, crate::clock::Instant::now());
         if moving || opening {
             window.request_animation_frame();
         }
@@ -653,13 +649,5 @@ impl Shell {
     }
 }
 
-const NEW_TERMINAL_LABEL: &str = if cfg!(target_os = "macos") {
-    "New Terminal (⌘`)"
-} else {
-    "New Terminal (Ctrl+`)"
-};
-const HIDE_TERMINAL_LABEL: &str = if cfg!(target_os = "macos") {
-    "Hide Terminal (⌘J)"
-} else {
-    "Hide Terminal (Ctrl+J)"
-};
+const NEW_TERMINAL_LABEL: &str = "New Terminal (⌘`)";
+const HIDE_TERMINAL_LABEL: &str = "Hide Terminal (⌘J)";

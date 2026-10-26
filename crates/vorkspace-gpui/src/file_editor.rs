@@ -46,11 +46,7 @@ actions!(
     ]
 );
 pub(crate) fn bind(cx: &mut App) {
-    let m = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl"
-    };
+    let m = "cmd";
     cx.bind_keys([
         KeyBinding::new(&format!("{m}-s"), Save, Some("FileEditor")),
         KeyBinding::new(&format!("{m}-f"), Find, Some("FileEditor")),
@@ -1459,11 +1455,7 @@ mod tests {
                     assert_eq!(e.input.focus_handle(cx).is_focused(w), source_mode);
                 })
                 .unwrap();
-            let m = if cfg!(target_os = "macos") {
-                "cmd"
-            } else {
-                "ctrl"
-            };
+            let m = "cmd";
             cx.simulate_keystrokes(&format!("{m}-f"));
             cx.run_until_parked();
             window

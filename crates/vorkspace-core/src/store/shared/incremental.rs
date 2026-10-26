@@ -100,7 +100,9 @@ impl Store {
         blocks: &[Value],
     ) -> Result<bool, String> {
         match expected {
-            HistoryRevision::Digest(_) => Ok(expected.matches(blocks)),
+            HistoryRevision::Digest(_) => Ok(self
+                .shared_card_history_matches(id, expected, blocks)
+                .unwrap_or_else(|| expected.matches(blocks))),
             HistoryRevision::Invalidated => Ok(false),
             HistoryRevision::Stored(revision) => {
                 let schema: i64 = sql(self

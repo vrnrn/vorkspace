@@ -6,9 +6,9 @@ pub(crate) enum Action {
     Settings,
     Quit,
 }
-#[cfg(all(target_os = "macos", not(test)))]
+#[cfg(not(test))]
 pub(crate) use native::Status;
-#[cfg(all(target_os = "macos", not(test)))]
+#[cfg(not(test))]
 mod native {
     use super::Action;
     use objc2::runtime::AnyObject;

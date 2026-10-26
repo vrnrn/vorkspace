@@ -11,6 +11,7 @@ pub(super) struct ChatState {
     /// Some(false) retains the header but freezes it beneath a host modal.
     pub(super) header_animation: Option<bool>,
     pub(super) pending: Vec<Message>,
+    pub(super) card_versions: std::collections::HashMap<String, u64>,
     pub(super) emoji: bool,
     pub(super) delivered: Option<String>,
     /// ModelPicker with `hideSettings`: the model list opens on its own.
@@ -35,6 +36,25 @@ pub(crate) struct SteerFailed {
 impl EventEmitter<QueueChanged> for Conversation {}
 impl EventEmitter<Submitted> for Conversation {}
 impl EventEmitter<SteerFailed> for Conversation {}
+fn card_at(
+    rows: &[vorkspace_core::transcript::Row],
+    hint: usize,
+    id: &str,
+) -> Option<(usize, serde_json::Value)> {
+    let parse = |row: &vorkspace_core::transcript::Row| {
+        (row.role == "bot-card")
+            .then(|| serde_json::from_str::<serde_json::Value>(&row.text).ok())
+            .flatten()
+            .filter(|card| card["id"].as_str() == Some(id))
+    };
+    if let Some(card) = rows.get(hint).and_then(parse) {
+        return Some((hint, card));
+    }
+    rows.iter()
+        .enumerate()
+        .find_map(|(index, row)| parse(row).map(|card| (index, card)))
+}
+
 impl Conversation {
     pub(crate) fn show_bot_header(&mut self, animate: bool, cx: &mut Context<Self>) {
         if self.bot_ui.header_animation != Some(animate) {
@@ -277,33 +297,81 @@ impl Conversation {
         &mut self,
         index: usize,
         id: &str,
+        generation: u64,
+        expected: serde_json::Value,
         value: serde_json::Value,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        if !self.history_ready() || self.stopping {
-            self.load(cx);
-            return Err("Conversation history is loading; retry the update when ready".into());
-        }
-        let current = self
-            .transcript
-            .read(cx)
-            .source_rows()
-            .get(index)
-            .filter(|r| r.role == "bot-card")
-            .and_then(|r| serde_json::from_str::<serde_json::Value>(&r.text).ok());
-        if current.as_ref().and_then(|v| v["id"].as_str()) != Some(id) {
+        if self.submission_generation != generation {
             return Ok(());
         }
-        let row = vorkspace_core::transcript::Row {
-            role: "bot-card".into(),
-            text: value.to_string(),
-            first: true,
-            sent_at: self.transcript.read(cx).source_rows()[index].sent_at,
+        if !self.history_ready() || self.stopping {
+            return Err("Conversation history is loading; retry the update when ready".into());
+        }
+        // Row offsets are merely hints. Card IDs and the captured value own
+        // refresh identity, including PR metadata fetched before a later edit.
+        let current = card_at(self.transcript.read(cx).source_rows(), index, id);
+        if current.as_ref().map(|(_, card)| card) != Some(&expected)
+            || value["id"].as_str() != Some(id)
+        {
+            return Ok(());
+        }
+        if value == expected && !self.bot_ui.card_versions.contains_key(id) {
+            return Ok(());
+        }
+        let session = self.summary.id;
+        let Some(saved) = crate::runtime::card_persistence::admit(
+            cx,
+            self.store.clone(),
+            session,
+            expected.clone(),
+            value,
+        )?
+        else {
+            return Ok(());
         };
-        locked(&self.store)?.write_rows(self.summary.id, index, std::slice::from_ref(&row))?;
-        self.transcript
-            .update(cx, |t, cx| t.patch(index, vec![row], cx));
-        cx.notify();
+        let version = saved.version;
+        self.bot_ui.card_versions.insert(id.to_owned(), version);
+        let id = id.to_owned();
+        // Only the weak UI observer is detached. The application owns the save
+        // worker and drains accepted writes at quit, independently of this view.
+        cx.spawn(async move |this, cx| {
+            let Ok(result) = saved.recv().await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.bot_ui.card_versions.get(&id) != Some(&version) {
+                    return;
+                }
+                this.bot_ui.card_versions.remove(&id);
+                // Generation fences fetched metadata before admission. Once
+                // committed, the row belongs to the session across new turns;
+                // version and expected-value checks still protect newer cards.
+                if this.summary.id != session {
+                    return;
+                }
+                match result {
+                    Ok(Some(row)) if this.history_ready() => {
+                        if let Some((index, _)) =
+                            card_at(this.transcript.read(cx).source_rows(), index, &id)
+                                .filter(|(_, current)| *current == expected)
+                        {
+                            this.transcript
+                                .update(cx, |t, cx| t.patch(index, vec![row], cx));
+                            cx.notify();
+                        }
+                    }
+                    Err(_) => {
+                        // Refreshes are repeatable. Leave the old durable/UI
+                        // value and release admission so the next tick can retry.
+                        // Never log payloads or provider error strings.
+                        eprintln!("Bot card refresh could not be saved");
+                    }
+                    _ => {}
+                }
+            });
+        })
+        .detach();
         Ok(())
     }
     pub(crate) fn bot_status(&self) -> &str {
@@ -1045,13 +1113,8 @@ impl Conversation {
                             .group_hover("bot-emoji", |s| s.text_color(content(1.))),
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
-                        if cfg!(target_os = "macos") {
-                            window.focus(&this.input.focus_handle(cx), cx);
-                            window.show_character_palette();
-                            return;
-                        }
-                        this.bot_ui.emoji = !this.bot_ui.emoji;
-                        cx.notify();
+                        window.focus(&this.input.focus_handle(cx), cx);
+                        window.show_character_palette();
                     })),
             )
             .when(self.bot_ui.emoji, |d| {

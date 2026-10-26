@@ -3,6 +3,7 @@
 mod accounts;
 pub(super) mod blocks;
 mod bot_tables;
+mod card;
 mod edit;
 mod incremental;
 mod ordinary;
@@ -33,6 +34,8 @@ pub(super) struct Shared {
     snapshots: RefCell<HashMap<i64, HistoryRevision>>,
     incremental: RefCell<HashMap<i64, incremental::HistoryIndex>>,
     history_schema: std::cell::Cell<Option<i64>>,
+    card_revisions: RefCell<HashMap<i64, card::CardRevision>>,
+    refreshed_cards: RefCell<HashMap<i64, HashMap<String, HistoryRevision>>>,
     queues: RefCell<HashMap<i64, String>>,
     account_source: RefCell<Option<crate::accounts::Book>>,
     preferences: std::sync::Arc<crate::desktop_preferences::DesktopPreferences>,
@@ -364,6 +367,8 @@ impl Store {
                 extras: RefCell::new(extras),
                 extras_path,
                 snapshots: RefCell::new(HashMap::new()),
+                card_revisions: RefCell::new(HashMap::new()),
+                refreshed_cards: RefCell::new(HashMap::new()),
                 incremental: RefCell::new(HashMap::new()),
                 history_schema: std::cell::Cell::new(None),
                 queues: RefCell::new(HashMap::new()),
@@ -1055,6 +1060,18 @@ impl Store {
     }
 
     pub(super) fn shared_load(&self, id: i64) -> Result<Transcript, String> {
+        self.shared
+            .as_ref()
+            .unwrap()
+            .refreshed_cards
+            .borrow_mut()
+            .remove(&id);
+        self.shared
+            .as_ref()
+            .unwrap()
+            .card_revisions
+            .borrow_mut()
+            .remove(&id);
         let original = self.persisted_session_id(id)?;
         let indexed_query = self.shared_indexed_query(&original)?;
         if let Some(query) = indexed_query {
@@ -1255,6 +1272,7 @@ impl Store {
     ) -> Result<(), String> {
         self.shared_writable()?;
         self.shared_history_schema()?;
+        self.shared_card_rows_current(id, rows)?;
         if message_id.is_none() && self.shared_write_incremental(id, start, rows)? {
             return Ok(());
         }
@@ -1321,6 +1339,12 @@ impl Store {
                 .borrow_mut()
                 .insert(id, index);
         }
+        self.shared
+            .as_ref()
+            .unwrap()
+            .card_revisions
+            .borrow_mut()
+            .remove(&id);
         // The source appRequestId is the durable, transactional receipt.
         Ok(())
     }
@@ -1678,6 +1702,18 @@ impl Store {
             .as_ref()
             .unwrap()
             .queues
+            .borrow_mut()
+            .remove(&id);
+        self.shared
+            .as_ref()
+            .unwrap()
+            .card_revisions
+            .borrow_mut()
+            .remove(&id);
+        self.shared
+            .as_ref()
+            .unwrap()
+            .refreshed_cards
             .borrow_mut()
             .remove(&id);
         // SQL deletion has committed. Publish sidecar removal atomically too;

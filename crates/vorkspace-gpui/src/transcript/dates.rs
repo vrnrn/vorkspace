@@ -183,7 +183,7 @@ mod tests {
     fn bot_dates_survive_streaming_and_split_reactions_and_completion_runs(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let view = cx.new(|_| {
             let mut view = TranscriptView::new();
             view.bot_mode("cat", 0xe86b5f, "BotCat");
@@ -263,7 +263,7 @@ mod tests {
 
     #[gpui::test]
     fn bot_renders_date_pills_and_removes_the_session_outline(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(
                 gpui::WindowOptions {

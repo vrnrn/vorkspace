@@ -28,7 +28,7 @@ pub(crate) const CATEGORIES: [(&str, &str); 5] = [
 fn path_key(path: &str) -> String {
     let windows =
         path.as_bytes().get(1) == Some(&b':') || path.starts_with("\\\\") || path.starts_with("//");
-    let normalized = if windows || cfg!(target_os = "windows") {
+    let normalized = if windows {
         path.replace('\\', "/")
     } else {
         path.to_owned()

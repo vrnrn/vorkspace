@@ -14,7 +14,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
     let cwd = directory.path().to_string_lossy().to_string();
     let session = locked(&store).unwrap().create("codex", &cwd).unwrap().id;
     let window = cx.update(|cx| {
-        cx.set_reduce_motion(true);
+        crate::clock::use_test_clock(cx);
         input::bind(cx);
         cx.open_window(Default::default(), |window, cx| {
             window.activate_window();
@@ -200,7 +200,7 @@ fn bot_header_passes_selection_clicks_and_scroll_to_overlapped_chat(cx: &mut Tes
         }
     }
     let window = cx.update(|cx| {
-        cx.set_reduce_motion(true);
+        crate::clock::use_test_clock(cx);
         input::bind(cx);
         cx.open_window(Default::default(), |window, cx| {
             window.activate_window();
@@ -287,7 +287,6 @@ fn bot_header_passes_selection_clicks_and_scroll_to_overlapped_chat(cx: &mut Tes
     assert_eq!(visual.debug_bounds("bot-chat-header-idle").unwrap(), face);
 }
 
-#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "Requires Metal and VOKKY_BOT_HEADER_CAPTURE_DIR"]
 fn native_bot_header_three_state_capture() {
@@ -374,7 +373,7 @@ fn native_bot_header_three_state_capture() {
             )))
         },
     );
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(&cx);
     for light in [false, true] {
         let theme = if light { "light" } else { "dark" };
         crate::theme::configure(
@@ -426,6 +425,7 @@ fn native_bot_header_three_state_capture() {
                 })
                 .unwrap();
                 cx.run_until_parked();
+                crate::clock::settle_headless_animations(window, &mut cx);
                 cx.capture_screenshot(window.into())
                     .unwrap()
                     .save(output.join(format!("{status}-{theme}-{width:.0}x{height:.0}.png")))

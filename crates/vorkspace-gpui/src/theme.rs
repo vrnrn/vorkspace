@@ -17,7 +17,7 @@ pub(crate) const TRAFFIC_LIGHT_SAFE_INSET: f32 =
 pub(crate) const NO_TRAFFIC_LIGHTS: f32 = 10.;
 
 pub(crate) fn traffic_light_inset(ui_scale: f32, fullscreen: bool) -> f32 {
-    if cfg!(target_os = "macos") && !fullscreen {
+    if !fullscreen {
         TRAFFIC_LIGHT_SAFE_INSET / ui_scale
     } else {
         NO_TRAFFIC_LIGHTS
@@ -125,10 +125,7 @@ pub(crate) fn window_glass(
     system_light: bool,
     classic: bool,
 ) -> bool {
-    cfg!(target_os = "macos")
-        && (classic || p.inset_glass)
-        && p.theme != "light"
-        && !(p.theme == "system" && system_light)
+    (classic || p.inset_glass) && p.theme != "light" && !(p.theme == "system" && system_light)
 }
 pub(crate) fn accent_color() -> Hsla {
     TOKENS.with(|t| {
@@ -253,22 +250,14 @@ pub(crate) fn shell_fill() -> Hsla {
     if let Some(fill) = TOKENS.with(|t| t.borrow().as_ref().map(|t| t.shell)) {
         return fill;
     }
-    if cfg!(target_os = "macos") {
-        // #0d0d0d at 80%, with the stylesheet's #ebebeb 5% wash above it.
-        rgba(0x1b1b1bcf).into()
-    } else {
-        rgb(0x181818).into()
-    }
+    // #0d0d0d at 80%, with the stylesheet's #ebebeb 5% wash above it.
+    rgba(0x1b1b1bcf).into()
 }
 pub(crate) fn pane_fill() -> Hsla {
     if let Some(fill) = TOKENS.with(|t| t.borrow().as_ref().map(|t| t.pane)) {
         return fill;
     }
-    if cfg!(target_os = "macos") {
-        rgba(0x06060666).into()
-    } else {
-        rgb(CHAT).into()
-    }
+    rgba(0x06060666).into()
 }
 pub(crate) fn section_label(label: &'static str) -> Div {
     div()
@@ -551,14 +540,11 @@ mod composer_tests {
         for classic in [true, false] {
             configure(&preferences, false, classic);
             let alpha = TOKENS.with(|tokens| tokens.borrow().unwrap().shell.a);
-            assert_eq!(alpha, if cfg!(target_os = "macos") { 0.43 } else { 1. });
+            assert_eq!(alpha, 0.43);
         }
         preferences.inset_glass = false;
         assert!(!window_glass(&preferences, false, false));
-        assert_eq!(
-            window_glass(&preferences, false, true),
-            cfg!(target_os = "macos")
-        );
+        assert!(window_glass(&preferences, false, true));
         configure(&preferences, false, false);
         assert_eq!(TOKENS.with(|tokens| tokens.borrow().unwrap().shell.a), 1.);
         preferences.theme = "light".into();

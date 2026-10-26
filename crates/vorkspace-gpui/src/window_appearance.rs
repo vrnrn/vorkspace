@@ -2,7 +2,6 @@
 use gpui::{Window, WindowBackgroundAppearance};
 
 pub(crate) fn apply(window: &mut Window, glass: bool, radius: u32) {
-    #[cfg(target_os = "macos")]
     if macos::set_blur(window, if glass { radius.min(100) } else { 0 }) {
         // A native material would add another fixed blur over the user's radius.
         window.set_background_appearance(if glass {
@@ -12,8 +11,6 @@ pub(crate) fn apply(window: &mut Window, glass: bool, radius: u32) {
         });
         return;
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = radius;
     window.set_background_appearance(if glass {
         WindowBackgroundAppearance::Blurred
     } else {
@@ -21,7 +18,6 @@ pub(crate) fn apply(window: &mut Window, glass: bool, radius: u32) {
     });
 }
 
-#[cfg(target_os = "macos")]
 mod macos {
     use super::*;
     use objc2_app_kit::NSView;

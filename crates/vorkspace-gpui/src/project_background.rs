@@ -5,7 +5,6 @@ use gpui::{
     App, Asset, Bounds, Context, ObjectFit, RenderImage, Role, Window, canvas, div, img,
     prelude::*, px,
 };
-#[cfg(any(target_os = "macos", test))]
 use gpui::{Corners, Pixels};
 use image::Frame;
 use std::{
@@ -13,7 +12,6 @@ use std::{
     path::Path,
     sync::Arc,
 };
-#[cfg(target_os = "macos")]
 use vorkspace_core::project_appearance::background_texture;
 use vorkspace_core::project_appearance::{Background, Effect, read_image};
 
@@ -21,10 +19,6 @@ use vorkspace_core::project_appearance::{Background, Effect, read_image};
 struct Key {
     path: String,
     effect: Effect,
-    #[cfg(not(target_os = "macos"))]
-    empty: bool,
-    #[cfg(not(target_os = "macos"))]
-    preview: bool,
 }
 
 #[derive(Clone)]
@@ -57,15 +51,7 @@ impl Asset for BackgroundTexture {
 // Keep the UI-thread App out of the Send future run by the asset cache.
 async fn prepare_texture(request: TextureRequest) -> Result<PreparedTexture, String> {
     let source = read_image(Path::new(&request.key.path))?;
-    #[cfg(target_os = "macos")]
     let pixels = background_texture(&source, request.key.effect);
-    #[cfg(not(target_os = "macos"))]
-    let pixels = vorkspace_core::project_appearance::software_background_texture(
-        &source,
-        request.key.effect,
-        request.key.empty,
-        request.key.preview,
-    );
     Ok(PreparedTexture {
         image: render_image(pixels),
     })
@@ -149,7 +135,6 @@ impl ProjectBackground {
         canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                #[cfg(target_os = "macos")]
                 window.paint_quad(
                     gpui::fill(bounds, gpui::black())
                         .corner_radii(corners(
@@ -165,27 +150,6 @@ impl ProjectBackground {
                             begin, empty, haze, preview, opacity,
                         )),
                 );
-                #[cfg(not(target_os = "macos"))]
-                if !begin {
-                    // Other backends have an opaque chat surface. Reveal that
-                    // surface with the same view-relative stops while it resizes.
-                    use crate::theme::CHAT;
-                    use vorkspace_core::project_appearance::background_fade;
-                    let _ = (preview, &clip, opacity);
-                    let height = bounds.size.height.as_f32().ceil() as usize;
-                    for y in 0..height {
-                        let mut color: gpui::Hsla = gpui::rgb(CHAT).into();
-                        color.a =
-                            1. - background_fade((y as f32 + 0.5) / height as f32, empty, haze);
-                        window.paint_quad(gpui::fill(
-                            Bounds::new(
-                                gpui::point(bounds.left(), bounds.top() + px(y as f32)),
-                                gpui::size(bounds.size.width, px(1.)),
-                            ),
-                            color,
-                        ));
-                    }
-                }
             },
         )
         .absolute()
@@ -197,7 +161,6 @@ impl ProjectBackground {
 
 // Round only corners that meet the inset card's perimeter. Split headers,
 // review panes and terminal docks retain their straight interior boundaries.
-#[cfg(any(target_os = "macos", test))]
 fn corners(bounds: Bounds<Pixels>, preview: bool, card: Option<Bounds<Pixels>>) -> Corners<Pixels> {
     if preview {
         return Corners::all(px(11.));
@@ -228,10 +191,6 @@ impl Render for ProjectBackground {
         let key = Key {
             path: settings.path.clone(),
             effect: settings.effect,
-            #[cfg(not(target_os = "macos"))]
-            empty: settings.effect != Effect::GradientBlur || self.empty,
-            #[cfg(not(target_os = "macos"))]
-            preview: settings.effect == Effect::GradientBlur && self.preview,
         };
         if self.key.as_ref() != Some(&key) || self.loading {
             self.prepare(key, window, cx);
@@ -246,20 +205,7 @@ impl Render for ProjectBackground {
             .overflow_hidden()
             .when_some(self.image.clone(), |d, image| {
                 d.child(self.mask(true, &settings))
-                    .child(img(image).size_full().object_fit(ObjectFit::Cover).when(
-                        cfg!(not(target_os = "macos")),
-                        |image| {
-                            image.opacity(settings.opacity(self.empty)).rounded(px(
-                                if self.preview {
-                                    11.
-                                } else if self.clip.is_some() {
-                                    9.
-                                } else {
-                                    0.
-                                },
-                            ))
-                        },
-                    ))
+                    .child(img(image).size_full().object_fit(ObjectFit::Cover))
                     .child(self.mask(false, &settings))
             })
             .into_any_element()
@@ -436,10 +382,6 @@ mod tests {
                         key: Some(Key {
                             path: "prepared-artwork".into(),
                             effect: Effect::Dither,
-                            #[cfg(not(target_os = "macos"))]
-                            empty: true,
-                            #[cfg(not(target_os = "macos"))]
-                            preview: false,
                         }),
                         image: Some(image.clone()),
                         ..Default::default()
@@ -459,7 +401,6 @@ mod tests {
                             !background.loading,
                             "resize must not schedule image processing"
                         );
-                        #[cfg(target_os = "macos")]
                         {
                             let marker = gpui_apple::metal_renderer::background_mask_marker(
                                 false, true, false, true, 0.24,

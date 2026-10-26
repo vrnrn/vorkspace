@@ -3,6 +3,7 @@ use super::{
     TranscriptView,
     live_phase::{LiveScroll, live_phase},
 };
+use crate::clock::Instant;
 use crate::theme::*;
 use crate::{
     markdown, markdown_model,
@@ -14,7 +15,7 @@ use gpui::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use vorkspace_core::tool::{
     ToolCall, ToolState,
@@ -293,7 +294,7 @@ impl TranscriptView {
         let part = self.agent_panels.parts.entry(key).or_default();
         part.open = Some(open);
         part.source = start;
-        if self.visible && !cx.reduce_motion() {
+        if self.visible {
             let now = Instant::now();
             part.motion = Some(part.motion.as_ref().map_or_else(
                 || Motion::phase(start, open, now),
@@ -453,7 +454,7 @@ fn agent(
                                 content(1.)
                             })
                         })
-                        .child(if active && view.visible && !cx.reduce_motion() {
+                        .child(if active && view.visible {
                             crate::activity::shimmer(
                                 name.clone(),
                                 view.started_at.elapsed().as_secs_f32(),
@@ -638,12 +639,8 @@ fn agent_trail(
         if let Some(scroll) = view.agent_panels.scrolls.get_mut(&key) {
             scroll.enable(live && open && view.visible);
         }
-        view.agent_panels.observe_steps(
-            &key,
-            &phase.steps,
-            start,
-            live && open && view.visible && !cx.reduce_motion(),
-        );
+        view.agent_panels
+            .observe_steps(&key, &phase.steps, start, live && open && view.visible);
         let calls: Vec<_> = phase
             .steps
             .iter()
@@ -753,13 +750,20 @@ fn agent_trail(
                                 )
                             }),
                     )
-                    .child(div().flex_1().min_w_0().truncate().child(
-                        if live && view.visible && !cx.reduce_motion() {
-                            crate::activity::shimmer(title, view.started_at.elapsed().as_secs_f32())
-                        } else {
-                            div().child(title).into_any_element()
-                        },
-                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(if live && view.visible {
+                                crate::activity::shimmer(
+                                    title,
+                                    view.started_at.elapsed().as_secs_f32(),
+                                )
+                            } else {
+                                div().child(title).into_any_element()
+                            }),
+                    )
                     .hover(|s| s.text_color(content(0.8)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !inert {

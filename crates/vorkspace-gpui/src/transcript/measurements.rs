@@ -6,7 +6,6 @@ struct LayoutStyle {
     text: gpui::TextStyle,
     rem: Pixels,
     scale: f32,
-    reduced_motion: bool,
 }
 
 #[derive(Default)]
@@ -28,12 +27,11 @@ impl Measurements {
 }
 
 impl TranscriptView {
-    pub(super) fn begin_measurements(&mut self, window: &Window, cx: &Context<Self>) {
+    pub(super) fn begin_measurements(&mut self, window: &Window) {
         let style = LayoutStyle {
             text: window.text_style(),
             rem: window.rem_size(),
             scale: window.scale_factor(),
-            reduced_motion: cx.reduce_motion(),
         };
         if self.measurements.style.as_ref() != Some(&style) {
             // GPUI retains measured item heights independently of text styling.
@@ -239,7 +237,7 @@ mod tests {
         probe(window, cx, |view, window, cx| {
             let ix = answer(view);
             let scroll = view.list.logical_scroll_top();
-            view.begin_measurements(window, cx);
+            view.begin_measurements(window);
             let before = view.measurements.fresh;
             let retained = view.measure_row_height(ix, window, cx);
             assert_eq!(view.measurements.fresh, before);
@@ -252,7 +250,7 @@ mod tests {
                 view.list.logical_scroll_top().offset_in_item,
                 scroll.offset_in_item
             );
-            view.begin_measurements(window, cx);
+            view.begin_measurements(window);
             view.update_follow(window, cx);
             let after_follow = view.measurements.fresh;
             let first_footer = view.footer_height(window, cx);
@@ -275,7 +273,7 @@ mod tests {
             );
             view.motions.clear();
             let ix = answer(view);
-            view.begin_measurements(window, cx);
+            view.begin_measurements(window);
             let before = view.measurements.fresh;
             let grown = view.measure_row_height(ix, window, cx);
             assert!(grown > short);
@@ -294,7 +292,7 @@ mod tests {
             assert!(narrow > wide);
             assert!(wide > short);
             window.set_rem_size(px(22.));
-            view.begin_measurements(window, cx);
+            view.begin_measurements(window);
             let before = view.measurements.fresh;
             let _ = view.measure_row_height(ix, window, cx);
             assert_eq!(view.measurements.fresh, before + 1);
@@ -311,10 +309,10 @@ mod tests {
             view.motions
                 .insert(view.rows[ix].key, Motion::new(true, false, now));
             view.frame_now = now + Duration::from_millis(30);
-            view.begin_measurements(window, cx);
+            view.begin_measurements(window);
             let opening = view.measure_row_height(ix, window, cx);
             view.frame_now = now + Duration::from_millis(150);
-            view.begin_measurements(window, cx);
+            view.begin_measurements(window);
             let later = view.measure_row_height(ix, window, cx);
             assert!(opening < later);
             assert!(later < full);
@@ -334,7 +332,7 @@ mod tests {
                 cx,
             );
             view.motions.clear();
-            view.begin_measurements(window, cx);
+            view.begin_measurements(window);
             let indices: Vec<_> = view
                 .rows
                 .iter()
@@ -351,7 +349,7 @@ mod tests {
                 Motion::new(false, false, Instant::now() - Duration::from_secs(2)),
             );
             view.animate_frame(cx);
-            view.begin_measurements(window, cx);
+            view.begin_measurements(window);
             let before = view.measurements.fresh;
             assert_eq!(view.measure_row_height(indices[0], window, cx), long);
             assert_eq!(view.measurements.fresh, before + 1);

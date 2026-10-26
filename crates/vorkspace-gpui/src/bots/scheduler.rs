@@ -657,7 +657,7 @@ impl Bots {
                             format!("habit-report-{}-{}-{ix}", h.id, run.at).into(),
                             crate::markdown::Tone::Normal,
                             None,
-                            std::time::Instant::now(),
+                            crate::clock::Instant::now(),
                         ),
                     ));
                 }

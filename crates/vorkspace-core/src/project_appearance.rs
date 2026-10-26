@@ -803,6 +803,89 @@ fn lerp_rgb(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     ]
 }
 
+// Pose changes do not change the underlying texture. Keep exact rotation bits:
+// snapping here would change the public renderer's pixels, including previews.
+type TextureKey = ((u32, u8, bool, u32, u32, u32), u32);
+const TEXTURE_CACHE_BYTES: usize = 9 * 1024 * 1024;
+
+#[derive(Default)]
+struct TextureCache {
+    // Least recently used first. The byte budget holds at most 64 192px images.
+    entries: std::collections::VecDeque<(TextureKey, std::sync::Arc<RgbaImage>)>,
+    bytes: usize,
+}
+
+impl TextureCache {
+    fn get(&mut self, key: &TextureKey) -> Option<std::sync::Arc<RgbaImage>> {
+        let at = self
+            .entries
+            .iter()
+            .position(|(candidate, _)| candidate == key)?;
+        let entry = self.entries.remove(at)?;
+        let image = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(image)
+    }
+
+    fn insert(&mut self, key: TextureKey, image: std::sync::Arc<RgbaImage>) {
+        let bytes = image.as_raw().len();
+        // Oversized one-off images must not evict the hot working set.
+        if bytes > TEXTURE_CACHE_BYTES {
+            return;
+        }
+        if let Some(at) = self
+            .entries
+            .iter()
+            // Only the latest exact rotation of a look is useful to animation.
+            // Spinning one Bot must not evict every other look's warm texture.
+            .position(|(candidate, _)| candidate.0 == key.0)
+        {
+            self.bytes -= self.entries.remove(at).unwrap().1.as_raw().len();
+        }
+        while self.bytes + bytes > TEXTURE_CACHE_BYTES {
+            self.bytes -= self.entries.pop_front().unwrap().1.as_raw().len();
+        }
+        self.bytes += bytes;
+        self.entries.push_back((key, image));
+    }
+}
+
+fn cached_concentric_texture(
+    seed: u32,
+    grid: u8,
+    textured: bool,
+    bg_hex: u32,
+    fg_hex: u32,
+    bucket: u32,
+    rot_offset_deg: f32,
+) -> std::sync::Arc<RgbaImage> {
+    use std::sync::{Arc, LazyLock, Mutex};
+    static CACHE: LazyLock<Mutex<TextureCache>> =
+        LazyLock::new(|| Mutex::new(TextureCache::default()));
+    let key = (
+        (seed, grid, textured, bg_hex, fg_hex, bucket),
+        rot_offset_deg.to_bits(),
+    );
+    if let Some(texture) = CACHE.lock().ok().and_then(|mut cache| cache.get(&key)) {
+        return texture;
+    }
+    // Rasterization never holds the shared lock. Concurrent misses may duplicate
+    // computation but cannot block other lookups for a full rasterization.
+    let texture = Arc::new(render_concentric_texture(
+        seed,
+        grid,
+        textured,
+        bg_hex,
+        fg_hex,
+        bucket,
+        rot_offset_deg,
+    ));
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(key, texture.clone());
+    }
+    texture
+}
+
 /// Rasterize the concentric ring texture at `bucket x bucket` resolution.
 pub fn render_concentric_texture(
     seed: u32,
@@ -1135,7 +1218,7 @@ pub fn render_badge_or_bot(
     let s_u32 = pixel_side.max(16);
     let s = s_u32 as f32;
     let bucket = if s_u32 <= 64 { 96 } else { 192 };
-    let tex = render_concentric_texture(
+    let tex = cached_concentric_texture(
         seed,
         grid,
         textured,
@@ -1380,6 +1463,90 @@ pub fn render_badge_or_bot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn texture_cache_preserves_exact_pixels_across_look_and_rotation_changes() {
+        use std::sync::Arc;
+        let texture = |seed, grid, textured, bg, fg, bucket, rotation| {
+            cached_concentric_texture(seed, grid, textured, bg, fg, bucket, rotation)
+        };
+        let resting = texture(7, 3, true, 0x223344, 0xddeeff, 96, 0.);
+        assert!(Arc::ptr_eq(
+            &resting,
+            &texture(7, 3, true, 0x223344, 0xddeeff, 96, 0.)
+        ));
+        for (seed, grid, textured, bg, fg, bucket, rotation) in [
+            (7, 3, true, 0x223344, 0xddeeff, 96, 10.4),
+            (7, 3, true, 0x223344, 0xddeeff, 96, 9.6),
+            (8, 8, true, 0x223344, 0xddeeff, 192, -1.25),
+            (7, 2, false, 0x112233, 0x445566, 96, 360.),
+            (7, 3, true, 0x223344, 0xddeeff, 96, 0.),
+        ] {
+            assert_eq!(
+                *texture(seed, grid, textured, bg, fg, bucket, rotation),
+                render_concentric_texture(seed, grid, textured, bg, fg, bucket, rotation)
+            );
+        }
+    }
+
+    #[test]
+    fn texture_cache_evicts_by_bytes_without_flushing_hot_entries() {
+        use std::sync::Arc;
+        let mut cache = TextureCache::default();
+        let image = Arc::new(RgbaImage::new(192, 192));
+        let key = |seed| ((seed, 3, true, 0, 0, 192), 0);
+        for seed in 0..64 {
+            cache.insert(key(seed), image.clone());
+        }
+        assert_eq!(cache.bytes, TEXTURE_CACHE_BYTES);
+        assert!(cache.get(&key(0)).is_some());
+        cache.insert(key(64), image.clone());
+        assert!(cache.get(&key(1)).is_none());
+        assert!(cache.get(&key(0)).is_some());
+        assert_eq!(cache.entries.len(), 64);
+        cache.insert(key(0), image.clone());
+        assert_eq!(cache.bytes, TEXTURE_CACHE_BYTES);
+        for angle in 1..180 {
+            cache.insert((key(0).0, angle), image.clone());
+        }
+        assert_eq!(cache.bytes, TEXTURE_CACHE_BYTES);
+        assert_eq!(cache.entries.len(), 64);
+        assert!(cache.get(&(key(0).0, 179)).is_some());
+        assert!(cache.get(&key(2)).is_some());
+        cache.insert(key(65), Arc::new(RgbaImage::new(2048, 2048)));
+        assert_eq!(cache.bytes, TEXTURE_CACHE_BYTES);
+        assert!(cache.get(&(key(0).0, 179)).is_some());
+    }
+
+    #[test]
+    #[ignore = "explicit texture CPU benchmark"]
+    fn texture_cache_benchmark() {
+        use std::{hint::black_box, time::Instant};
+        for bucket in [96, 192] {
+            for _ in 0..5 {
+                let start = Instant::now();
+                for _ in 0..60 {
+                    black_box(render_concentric_texture(
+                        7, 4, true, 0x223344, 0xddeeff, bucket, 0.,
+                    ));
+                }
+                let baseline = start.elapsed();
+                black_box(cached_concentric_texture(
+                    7, 4, true, 0x223344, 0xddeeff, bucket, 0.,
+                ));
+                let start = Instant::now();
+                for _ in 0..60 {
+                    black_box(cached_concentric_texture(
+                        7, 4, true, 0x223344, 0xddeeff, bucket, 0.,
+                    ));
+                }
+                eprintln!(
+                    "texture bucket={bucket} samples=60 baseline_us={} cached_us={}",
+                    baseline.as_micros(),
+                    start.elapsed().as_micros()
+                );
+            }
+        }
+    }
 
     #[test]
     fn delete_hover_renders_crossed_eyes_without_changing_the_badge() {

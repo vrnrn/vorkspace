@@ -317,7 +317,6 @@ fn compact_footer_keeps_click_keyboard_focus_and_live_popover_anchor(cx: &mut Te
         .unwrap();
 }
 
-#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "Requires Metal and VOKKY_COMPACT_FOOTER_CAPTURE_DIR"]
 fn native_compact_footer_capture() {
@@ -365,7 +364,7 @@ fn native_compact_footer_capture() {
         },
     );
     cx.update(|cx| {
-        cx.set_reduce_motion(true);
+        crate::clock::use_test_clock(cx);
         crate::accounts::install(store, cx);
     });
     for multiple in [false, true] {

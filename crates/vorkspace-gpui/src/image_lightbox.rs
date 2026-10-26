@@ -5,7 +5,8 @@ use gpui::{
     ImageFormat, ImgResourceLoader, KeyBinding, MouseButton, Pixels, Point, RenderImage, Role,
     SharedString, Size, Window, actions, canvas, div, img, point, prelude::*, px, size,
 };
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::time::Instant;
+use std::{path::PathBuf, sync::Arc};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Source {
@@ -359,7 +360,6 @@ impl Render for ImageLightbox {
                     |_, _, _| {},
                     |bounds, _, window, _| {
                         let quad = gpui::fill(bounds, black(0.85));
-                        #[cfg(target_os = "macos")]
                         let quad =
                             quad.border_color(gpui_apple::metal_renderer::backdrop_blur_marker(
                                 4. * window.scale_factor(),
@@ -435,7 +435,6 @@ impl Render for ImageLightbox {
                         canvas(
                             |_, _, _| {},
                             |bounds, _, window, _| {
-                                #[cfg(target_os = "macos")]
                                 window.paint_quad(
                                     gpui::fill(bounds, gpui::transparent_black())
                                         .corner_radii(px(18.))
@@ -445,8 +444,6 @@ impl Render for ImageLightbox {
                                             ),
                                         ),
                                 );
-                                #[cfg(not(target_os = "macos"))]
-                                let _ = (bounds, window);
                             },
                         )
                         .absolute()
@@ -555,11 +552,7 @@ mod tests {
         })).unwrap());
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.refresh().unwrap();
-        let modifier = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
+        let modifier = "cmd";
         visual.simulate_keystrokes(&format!("{modifier}-="));
         window
             .update(visual, |view, _, _| assert_eq!(view.view.scale, 1.25))

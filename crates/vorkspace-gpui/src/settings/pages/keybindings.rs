@@ -316,14 +316,7 @@ pub(crate) fn command_shortcut(p: &Preferences, command: &str) -> Option<String>
         Some(None) => None,
         None => {
             let keys = BINDINGS.iter().find(|r| r.command == command)?.keys;
-            Some(if cfg!(target_os = "macos") {
-                keys.into()
-            } else {
-                keys.replace('⌘', "Ctrl+")
-                    .replace('⇧', "Shift+")
-                    .replace('⌥', "Alt+")
-                    .replace('⌃', "Ctrl+")
-            })
+            Some(keys.into())
         }
     }
 }
@@ -333,24 +326,9 @@ pub(crate) fn shortcut_label(shortcut: &str) -> String {
     for part in parts {
         label.push_str(&match part {
             "cmd" => "⌘".into(),
-            "ctrl" => if cfg!(target_os = "macos") {
-                "⌃"
-            } else {
-                "Ctrl+"
-            }
-            .into(),
-            "alt" => if cfg!(target_os = "macos") {
-                "⌥"
-            } else {
-                "Alt+"
-            }
-            .into(),
-            "shift" => if cfg!(target_os = "macos") {
-                "⇧"
-            } else {
-                "Shift+"
-            }
-            .into(),
+            "ctrl" => "⌃".into(),
+            "alt" => "⌥".into(),
+            "shift" => "⇧".into(),
             "space" => "Space".into(),
             "up" => "↑".into(),
             "down" => "↓".into(),
@@ -367,7 +345,6 @@ impl SettingsView {
         let query = self.keybinding_query.trim().to_lowercase();
         let rows: Vec<_> = BINDINGS
             .iter()
-            .filter(|r| cfg!(target_os = "macos") || r.command != "App: Quick Composer")
             .filter(|r| {
                 format!("{} {} {}", r.command, self.binding_label(r), r.when)
                     .to_lowercase()
@@ -634,14 +611,7 @@ impl SettingsView {
 fn default_shortcuts(row: &Binding) -> Vec<String> {
     let shortcut = row
         .keys
-        .replace(
-            '⌘',
-            if cfg!(target_os = "macos") {
-                "cmd-"
-            } else {
-                "ctrl-"
-            },
-        )
+        .replace('⌘', "cmd-")
         .replace('⌃', "ctrl-")
         .replace('⌥', "alt-")
         .replace('⇧', "shift-")

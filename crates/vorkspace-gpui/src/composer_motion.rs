@@ -1,14 +1,11 @@
 //! useComposerDockMotion.ts: move the first submitted composer's painted surface
 //! from its empty-session slot to the dock, without moving the transcript layout.
+use crate::clock::Instant;
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
     LayoutId, Pixels, Point, Window, point, px,
 };
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 const DURATION: Duration = Duration::from_millis(480);
 const LAUNCH_WINDOW: Duration = Duration::from_millis(1500);
@@ -34,14 +31,12 @@ impl ComposerMotion {
             child: child.into_any_element(),
         }
     }
-    fn offset(&self, to: Bounds<Pixels>, now: Instant, reduced: bool) -> (Point<Pixels>, bool) {
+    fn offset(&self, to: Bounds<Pixels>, now: Instant) -> (Point<Pixels>, bool) {
         let mut state = self.0.borrow_mut();
         let Some(launch) = state.as_mut() else {
             return (Point::default(), false);
         };
-        if reduced
-            || (launch.animation.is_none() && now.duration_since(launch.captured) > LAUNCH_WINDOW)
-        {
+        if launch.animation.is_none() && now.duration_since(launch.captured) > LAUNCH_WINDOW {
             *state = None;
             return (Point::default(), false);
         }
@@ -110,9 +105,7 @@ impl Element for Slide {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let (offset, active) = self
-            .motion
-            .offset(bounds, Instant::now(), cx.reduce_motion());
+        let (offset, active) = self.motion.offset(bounds, Instant::now());
         if active {
             window.request_animation_frame();
         }
@@ -147,36 +140,30 @@ mod tests {
         let to = Bounds::new(point(px(50.), px(700.)), size(px(700.), px(100.)));
         motion.capture(Some(from));
         let start = Instant::now();
-        assert_eq!(
-            motion.offset(to, start, false),
-            (point(px(0.), px(-400.)), true)
-        );
-        let (middle, active) = motion.offset(to, start + DURATION / 2, false);
+        assert_eq!(motion.offset(to, start), (point(px(0.), px(-400.)), true));
+        let (middle, active) = motion.offset(to, start + DURATION / 2);
         assert!(active && middle.y > px(-100.) && middle.y < px(0.));
         assert_eq!(
-            motion.offset(to, start + DURATION, false),
+            motion.offset(to, start + DURATION),
             (Point::default(), false)
         );
     }
     #[test]
-    fn history_reduced_motion_and_stale_launches_dock_without_motion() {
+    fn history_and_stale_launches_dock_without_motion() {
         let motion = ComposerMotion::default();
         let from = Bounds::new(point(px(0.), px(300.)), size(px(600.), px(100.)));
         let to = Bounds::new(point(px(0.), px(700.)), from.size);
-        assert!(!motion.offset(to, Instant::now(), false).1);
-        motion.capture(Some(from));
-        assert!(!motion.offset(to, Instant::now(), true).1);
+        assert!(!motion.offset(to, Instant::now()).1);
         motion.capture(Some(from));
         assert!(
             !motion
                 .offset(
                     to,
-                    Instant::now() + LAUNCH_WINDOW + Duration::from_millis(1),
-                    false
+                    Instant::now() + LAUNCH_WINDOW + Duration::from_millis(1)
                 )
                 .1
         );
         motion.capture(Some(to));
-        assert!(!motion.offset(to, Instant::now(), false).1);
+        assert!(!motion.offset(to, Instant::now()).1);
     }
 }

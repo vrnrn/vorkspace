@@ -1702,14 +1702,11 @@ fn blur() -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            #[cfg(target_os = "macos")]
             // Keep the tint on the blur quad itself. GPUI treats a fully
             // transparent fill as border-only and strips its interior.
             let quad = gpui::fill(bounds, content(0.02)).border_color(
                 gpui_apple::metal_renderer::backdrop_blur_marker(24. * window.scale_factor()),
             );
-            #[cfg(not(target_os = "macos"))]
-            let quad = gpui::fill(bounds, rgb(CHAT));
             window.paint_quad(quad);
         },
     )
@@ -1878,13 +1875,12 @@ impl Render for DiffView {
                             .items_center()
                             .justify_between()
                             .gap_3()
-                            .child(div().text_size(px(10.)).text_color(content(0.35)).child(
-                                if cfg!(target_os = "macos") {
-                                    "⌘↩ to add"
-                                } else {
-                                    "Ctrl+↩ to add"
-                                },
-                            ))
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(content(0.35))
+                                    .child("⌘↩ to add"),
+                            )
                             .child(
                                 div()
                                     .id("add-comment")
@@ -2186,7 +2182,6 @@ mod tests {
             })
             .unwrap();
     }
-    #[cfg(target_os = "macos")]
     #[gpui::test]
     fn sticky_header_retains_its_translucent_blur_surface(cx: &mut gpui::TestAppContext) {
         let long: String = (0..60).map(|i| format!("line {i}\n")).collect();

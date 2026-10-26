@@ -4,10 +4,8 @@
 use gpui::SharedString;
 use rquickjs::{Context, Function, Promise, Runtime};
 use serde::Deserialize;
-use std::{
-    ops::Range,
-    time::{Duration, Instant},
-};
+use std::time::Instant;
+use std::{ops::Range, time::Duration};
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub(crate) struct Analysis {

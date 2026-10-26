@@ -1,28 +1,18 @@
 //! Generated HTML lives in an opaque sandbox with no app bridge or network.
-#[cfg(not(target_os = "macos"))]
-use gpui::div;
 use gpui::{Context, Window, canvas, prelude::*};
-#[cfg(target_os = "macos")]
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
     runtime::ProtocolObject,
 };
-#[cfg(target_os = "macos")]
 use objc2_app_kit::{NSView, NSWindowOrderingMode};
-#[cfg(target_os = "macos")]
 use objc2_foundation::{NSObject, NSObjectProtocol};
-#[cfg(target_os = "macos")]
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-#[cfg(target_os = "macos")]
 use objc2_web_kit::{
     WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate, WKNavigationType,
     WKWebView, WKWebViewConfiguration, WKWebsiteDataStore,
 };
-#[cfg(target_os = "macos")]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-#[cfg(target_os = "macos")]
 use std::{cell::RefCell, rc::Rc, sync::Arc};
-#[cfg(target_os = "macos")]
 define_class!(
     #[unsafe(super(NSView))]
     #[name = "VorkspaceArtifactClip"]
@@ -44,7 +34,6 @@ define_class!(
         }
     }
 );
-#[cfg(target_os = "macos")]
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "VorkspaceArtifactNavigation"]
@@ -81,14 +70,12 @@ define_class!(
         }
     }
 );
-#[cfg(target_os = "macos")]
 struct Hosted {
     clip: Retained<ArtifactClip>,
     web: Retained<WKWebView>,
     _guard: Retained<NavigationGuard>,
     markup: Arc<str>,
 }
-#[cfg(target_os = "macos")]
 struct Markup {
     ink: gpui::Hsla,
     accent: gpui::Hsla,
@@ -97,9 +84,7 @@ struct Markup {
 pub(super) struct Html {
     body: String,
     interactive: bool,
-    #[cfg(target_os = "macos")]
     markup: Option<Markup>,
-    #[cfg(target_os = "macos")]
     view: Rc<RefCell<Option<Hosted>>>,
 }
 fn escape(text: &str) -> String {
@@ -140,13 +125,10 @@ impl Html {
         Self {
             body,
             interactive: true,
-            #[cfg(target_os = "macos")]
             markup: None,
-            #[cfg(target_os = "macos")]
             view: Rc::new(RefCell::new(None)),
         }
     }
-    #[cfg(target_os = "macos")]
     fn markup(&mut self) -> Arc<str> {
         let ink = crate::theme::content(1.);
         let accent = crate::theme::accent_color();
@@ -169,7 +151,6 @@ impl Html {
         }
     }
     pub(super) fn hide(&self) {
-        #[cfg(target_os = "macos")]
         if let Some(view) = self.view.borrow().as_ref() {
             view.clip.setHidden(true);
         }
@@ -177,7 +158,6 @@ impl Html {
 }
 impl gpui::Render for Html {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        #[cfg(target_os = "macos")]
         {
             let view = self.view.clone();
             let html = self.markup();
@@ -294,14 +274,8 @@ impl gpui::Render for Html {
             .size_full()
             .into_any_element()
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = cx;
-            div().p_4().child(self.body.clone()).into_any_element()
-        }
     }
 }
-#[cfg(target_os = "macos")]
 impl Drop for Html {
     fn drop(&mut self) {
         if let Some(view) = self.view.borrow_mut().take() {

@@ -1,7 +1,8 @@
 //! Channel conversations use the existing native input, Markdown and approval owners.
 use super::*;
+use crate::clock::Instant;
 use gpui::FontWeight;
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 impl Bots {
     pub(in crate::bots) fn send_channel_message(&mut self, channel: &str, cx: &mut Context<Self>) {

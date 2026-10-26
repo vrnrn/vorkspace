@@ -1,7 +1,5 @@
 use crate::settings::SettingsView;
-#[cfg(any(target_os = "macos", test))]
 use crate::settings::widgets::secondary_button;
-#[cfg(any(target_os = "macos", test))]
 use gpui::prelude::*;
 use gpui::{AnyElement, Context};
 
@@ -16,7 +14,6 @@ impl SettingsView {
             |this, on, cx| this.update(cx, |p| p.clipboard_history = on),
         )];
         let description = "Keep up to 50 text and image copies in memory. History is never saved to disk. Turning this off clears it. Very large copies are skipped.";
-        #[cfg(any(target_os = "macos", test))]
         let description = if let Some(service) = crate::clipboard::get(cx)
             && let Some(error) = &service.read(cx).error
         {
@@ -32,7 +29,6 @@ impl SettingsView {
             controls,
         );
         let rows = vec![row];
-        #[cfg(any(target_os = "macos", test))]
         let rows = {
             let mut rows = rows;
             rows.push(self.row(

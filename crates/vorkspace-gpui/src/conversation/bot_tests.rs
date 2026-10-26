@@ -32,7 +32,7 @@ fn peer_message() -> Message {
 
 fn chat(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     cx.update(|cx| {
-        cx.set_reduce_motion(true);
+        crate::clock::use_test_clock(cx);
         input::bind(cx);
         let store = Store::open(Path::new(":memory:")).unwrap();
         let summary = store.create("codex", "/private/tmp/bot-queue-ui").unwrap();
@@ -163,6 +163,7 @@ fn background_and_peer_errors_show_recovery_controls_once(cx: &mut TestAppContex
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.simulate_resize(size(px(360.), px(600.)));
     visual.run_until_parked();
+    crate::clock::settle_animations(window, visual);
     assert!(visual.debug_bounds("bot-background-update-error").is_some());
     assert!(visual.debug_bounds("bot-pending-peer").is_some());
     for selector in [
@@ -180,6 +181,7 @@ fn background_and_peer_errors_show_recovery_controls_once(cx: &mut TestAppContex
         );
         visual.simulate_click(button.center(), Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
     }
     assert_eq!(
         *events.borrow(),
@@ -198,6 +200,7 @@ fn background_and_peer_errors_show_recovery_controls_once(cx: &mut TestAppContex
         })
         .unwrap();
     visual.run_until_parked();
+    crate::clock::settle_animations(window, visual);
     assert!(visual.debug_bounds("bot-background-update-error").is_none());
     assert!(visual.debug_bounds("bot-pending-retry-peer").is_some());
     assert!(visual.debug_bounds("bot-pending-discard-peer").is_some());
@@ -273,4 +276,333 @@ fn a_final_update_keeps_the_accepted_steer_receipt(cx: &mut TestAppContext) {
             assert!(view.follow_ups.sending.is_none());
         })
         .unwrap();
+}
+
+fn card_fixture(
+    cx: &mut TestAppContext,
+) -> (
+    WindowHandle<Conversation>,
+    Database,
+    i64,
+    usize,
+    serde_json::Value,
+) {
+    let window = chat(cx);
+    let (store, id, index, card) = window.update(cx, |view, _, cx| {
+        let card = serde_json::json!({"id":"refresh-card","type":"pr","repo":"synthetic/repo","number":1,"title":"Old"});
+        let index = view.bot_rows(cx).len();
+        view.bot_post("bot-card", card.to_string(), cx).unwrap();
+        (view.store.clone(), view.summary.id, index, card)
+    }).unwrap();
+    (window, store, id, index, card)
+}
+
+#[gpui::test]
+fn card_save_admission_stays_responsive_and_publishes_latest_at_the_current_row(
+    cx: &mut TestAppContext,
+) {
+    let (window, store, id, index, card) = card_fixture(cx);
+    let guard = locked(&store).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            // This would deadlock if admission took the Store mutex on the UI.
+            view.bot_patch_card(
+                index,
+                "refresh-card",
+                view.submission_generation,
+                card.clone(),
+                card.clone(),
+                cx,
+            )
+            .unwrap();
+            assert!(view.bot_ui.card_versions.is_empty());
+            for title in ["One", "Two"] {
+                let mut next = card.clone();
+                next["title"] = serde_json::json!(title);
+                view.bot_patch_card(
+                    index,
+                    "refresh-card",
+                    view.submission_generation,
+                    card.clone(),
+                    next,
+                    cx,
+                )
+                .unwrap();
+            }
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&view.bot_rows(cx)[index].text).unwrap(),
+                card
+            );
+            view.input.update(cx, |input, cx| {
+                input.set_text("Still responsive".into(), cx)
+            });
+            // A reprojected row position cannot redirect the completion's identity.
+            let mut rows = view.bot_rows(cx).to_vec();
+            rows.insert(
+                0,
+                vorkspace_core::transcript::Row {
+                    role: "assistant".into(),
+                    text: "Synthetic prefix".into(),
+                    first: true,
+                    sent_at: None,
+                },
+            );
+            view.transcript.update(cx, |t, cx| t.patch(0, rows, cx));
+        })
+        .unwrap();
+    drop(guard);
+    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let (_, saved) = card_at(view.bot_rows(cx), index, "refresh-card").unwrap();
+            assert_eq!(saved["title"], "Two");
+            assert_eq!(view.bot_rows(cx)[0].text, "Synthetic prefix");
+            assert_eq!(view.input.read(cx).content, "Still responsive");
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &locked(&store).unwrap().load(id).unwrap().rows[index].text
+        )
+        .unwrap()["title"],
+        "Two"
+    );
+}
+
+#[gpui::test]
+fn committed_card_refresh_survives_a_new_submission_and_the_next_refresh(cx: &mut TestAppContext) {
+    for advance_before_commit in [true, false] {
+        let (window, store, session, index, original) = card_fixture(cx);
+        let mut committed = original.clone();
+        committed["title"] = serde_json::json!("Committed");
+        let guard = locked(&store).unwrap();
+        let generation = window
+            .update(cx, |view, _, cx| {
+                let generation = view.submission_generation;
+                view.bot_patch_card(
+                    index,
+                    "refresh-card",
+                    generation,
+                    original.clone(),
+                    committed.clone(),
+                    cx,
+                )
+                .unwrap();
+                if advance_before_commit {
+                    view.submission_generation += 1;
+                }
+                generation
+            })
+            .unwrap();
+        drop(guard);
+        // Wait for the actual worker's commit without handling the UI receipt
+        // or closing the worker that must perform the following refresh.
+        cx.update(|cx| crate::runtime::card_persistence::wait_for_saves_for_test(cx));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &locked(&store).unwrap().load(session).unwrap().rows[index].text
+            )
+            .unwrap(),
+            committed
+        );
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(
+                    card_at(view.bot_rows(cx), index, "refresh-card").unwrap().1,
+                    original
+                );
+                if !advance_before_commit {
+                    view.submission_generation += 1;
+                }
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(
+                    card_at(view.bot_rows(cx), index, "refresh-card").unwrap().1,
+                    committed
+                );
+                assert!(view.bot_ui.card_versions.is_empty());
+                assert_eq!(view.input.read(cx).content, "Unsent draft");
+                // A fetch begun in the old submission is still inadmissible,
+                // even though it now happens to match the reconciled base.
+                let mut delayed = committed.clone();
+                delayed["title"] = serde_json::json!("Obsolete fetch");
+                view.bot_patch_card(
+                    index,
+                    "refresh-card",
+                    generation,
+                    committed.clone(),
+                    delayed,
+                    cx,
+                )
+                .unwrap();
+                assert!(view.bot_ui.card_versions.is_empty());
+                let mut latest = committed.clone();
+                latest["title"] = serde_json::json!("Latest");
+                let expected = card_at(view.bot_rows(cx), index, "refresh-card").unwrap().1;
+                view.bot_patch_card(
+                    index,
+                    "refresh-card",
+                    view.submission_generation,
+                    expected,
+                    latest,
+                    cx,
+                )
+                .unwrap();
+                assert!(!view.bot_ui.card_versions.is_empty());
+            })
+            .unwrap();
+        cx.update(|cx| crate::runtime::card_persistence::wait_for_saves_for_test(cx));
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(
+                    card_at(view.bot_rows(cx), index, "refresh-card").unwrap().1["title"],
+                    "Latest"
+                );
+                assert!(view.bot_ui.card_versions.is_empty());
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &locked(&store).unwrap().load(session).unwrap().rows[index].text
+            )
+            .unwrap()["title"],
+            "Latest"
+        );
+    }
+    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+}
+
+#[gpui::test]
+fn card_save_completion_keeps_replacements_and_reconciles_new_submissions(cx: &mut TestAppContext) {
+    let first = card_fixture(cx);
+    let second = card_fixture(cx);
+    let guard1 = locked(&first.1).unwrap();
+    let guard2 = locked(&second.1).unwrap();
+    for (fixture, replacement) in [(&first, true), (&second, false)] {
+        let (window, _, _, index, card) = fixture;
+        window
+            .update(cx, |view, _, cx| {
+                let mut next = card.clone();
+                next["title"] = serde_json::json!("New");
+                view.bot_patch_card(
+                    *index,
+                    "refresh-card",
+                    view.submission_generation,
+                    card.clone(),
+                    next,
+                    cx,
+                )
+                .unwrap();
+                if replacement {
+                    let mut row = view.bot_rows(cx)[*index].clone();
+                    let mut new_card = card.clone();
+                    new_card["id"] = serde_json::json!("replacement");
+                    row.text = new_card.to_string();
+                    view.transcript
+                        .update(cx, |t, cx| t.patch(*index, vec![row], cx));
+                } else {
+                    view.submission_generation += 1;
+                }
+            })
+            .unwrap();
+    }
+    drop(guard1);
+    drop(guard2);
+    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+    cx.run_until_parked();
+    for (fixture, replacement) in [(&first, true), (&second, false)] {
+        let (window, store, id, index, _) = fixture;
+        window
+            .update(cx, |view, _, cx| {
+                let visible: serde_json::Value =
+                    serde_json::from_str(&view.bot_rows(cx)[*index].text).unwrap();
+                assert_eq!(visible["title"], if replacement { "Old" } else { "New" });
+                assert_eq!(
+                    visible["id"],
+                    if replacement {
+                        "replacement"
+                    } else {
+                        "refresh-card"
+                    }
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &locked(store).unwrap().load(*id).unwrap().rows[*index].text
+            )
+            .unwrap()["title"],
+            "New"
+        );
+    }
+}
+
+#[gpui::test]
+fn delayed_pr_reply_is_rejected_at_the_owning_card_before_admission(cx: &mut TestAppContext) {
+    let (window, store, id, index, card) = card_fixture(cx);
+    let mut newer = card.clone();
+    newer["title"] = serde_json::json!("Newer");
+    let row = locked(&store)
+        .unwrap()
+        .refresh_bot_card(id, &card, &newer)
+        .unwrap()
+        .unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.transcript
+                .update(cx, |t, cx| t.patch(index, vec![row], cx));
+            let mut delayed = card.clone();
+            delayed["title"] = serde_json::json!("Delayed");
+            view.bot_patch_card(
+                index,
+                "refresh-card",
+                view.submission_generation,
+                card,
+                delayed,
+                cx,
+            )
+            .unwrap();
+            assert!(view.bot_ui.card_versions.is_empty());
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&view.bot_rows(cx)[index].text).unwrap(),
+                newer
+            );
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &locked(&store).unwrap().load(id).unwrap().rows[index].text
+        )
+        .unwrap(),
+        newer
+    );
+}
+
+#[gpui::test]
+fn card_refresh_from_an_older_submission_is_rejected_before_store_admission(
+    cx: &mut TestAppContext,
+) {
+    let (window, store, _, index, card) = card_fixture(cx);
+    let guard = locked(&store).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            let generation = view.submission_generation;
+            view.submission_generation += 1;
+            let mut delayed = card.clone();
+            delayed["title"] = serde_json::json!("Delayed");
+            view.bot_patch_card(index, "refresh-card", generation, card.clone(), delayed, cx)
+                .unwrap();
+            assert!(view.bot_ui.card_versions.is_empty());
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&view.bot_rows(cx)[index].text).unwrap(),
+                card
+            );
+        })
+        .unwrap();
+    drop(guard);
 }

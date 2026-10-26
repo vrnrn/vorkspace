@@ -1536,10 +1536,7 @@ impl gpui::Render for Bots {
                 }
             }))
             .capture_any_mouse_down(|_, window, _| {
-                #[cfg(target_os = "macos")]
                 crate::traffic_lights::focus_content(window);
-                #[cfg(not(target_os = "macos"))]
-                let _ = window;
             })
             .child(
                 div()

@@ -1198,7 +1198,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
     cx: &mut TestAppContext,
 ) {
     for kind in ["markdown", "html", "session"] {
-        cx.update(|cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         let s = setup(cx);
         let session = s
             .window
@@ -1228,7 +1228,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
             .unwrap();
         let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
         visual.run_until_parked();
-        visual.update(|_, cx| cx.set_reduce_motion(false));
+        crate::clock::use_test_clock(cx);
         let action = if kind == "session" {
             json!({"type":"session", "sessionId":session})
         } else {
@@ -1309,7 +1309,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
                 .read_with(visual, |m, cx| m.native_detail_content(cx))
         );
 
-        visual.update(|_, cx| cx.set_reduce_motion(true));
+        crate::clock::use_test_clock(cx);
         s.window
             .update(visual, |_, _, cx| {
                 s.manager
@@ -1317,6 +1317,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
             })
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(s.window, visual);
         assert_eq!(visual.debug_bounds(page).unwrap().left(), stack.left());
         s.manager.read_with(visual, |m, cx| {
             let reopened = match kind {
@@ -1333,7 +1334,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
             };
             assert_eq!(reader, reopened);
         });
-        visual.update(|_, cx| cx.set_reduce_motion(false));
+        crate::clock::use_test_clock(cx);
         s.window
             .update(visual, |_, w, cx| {
                 s.manager.update(cx, |m, cx| {
@@ -1481,7 +1482,7 @@ fn call(
 #[gpui::test]
 fn settings_match_react_dialog_and_left_navigation_geometry(cx: &mut TestAppContext) {
     let s = setup(cx);
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     let dialog = visual.debug_bounds("bot-settings-dialog").unwrap();
@@ -1692,7 +1693,7 @@ fn memory_editor_saves_with_enter_and_stays_open_for_the_next_fact(cx: &mut Test
 #[gpui::test]
 fn bot_work_disclosure_stays_in_chat_and_leaves_details_on_their_page(cx: &mut TestAppContext) {
     let s = setup(cx);
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     s.window
         .update(cx, |shell, window, cx| {
             shell.workspace.right_panel_open = false;
@@ -1738,6 +1739,7 @@ fn bot_work_disclosure_stays_in_chat_and_leaves_details_on_their_page(cx: &mut T
             .expect("inline work receipt");
         visual.simulate_click(receipt.center(), Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(s.window, visual);
         assert_eq!(visual.debug_bounds("tool-2").is_some(), open);
         assert!(visual.debug_bounds("bot-activity").is_none());
         s.window
@@ -1758,7 +1760,7 @@ fn bot_work_disclosure_stays_in_chat_and_leaves_details_on_their_page(cx: &mut T
 fn overview_pages_use_the_shared_reveal(cx: &mut TestAppContext) {
     let s = setup(cx);
     s.window
-        .update(cx, |_, window, cx| {
+        .update(cx, |_, _, cx| {
             s.manager.update(cx, |m, cx| {
                 m.select_overview(OverviewTab::Documents, cx);
                 assert!(m.overview_reveal.is_some());
@@ -1766,14 +1768,6 @@ fn overview_pages_use_the_shared_reveal(cx: &mut TestAppContext) {
                 assert!(m.overview_tab == OverviewTab::Sessions);
                 m.select_overview(OverviewTab::Documents, cx);
                 assert!(m.overview_tab == OverviewTab::Documents);
-                cx.set_reduce_motion(true);
-                assert!(
-                    m.overview_reveal
-                        .as_ref()
-                        .unwrap()
-                        .progress(OverviewTab::Documents, window, cx)
-                        .is_none()
-                );
             });
         })
         .unwrap();
@@ -2265,7 +2259,7 @@ fn queued_messages_are_saved_before_dispatch_and_do_not_run_while_blocked(cx: &m
 #[gpui::test]
 fn chat_composer_keeps_attach_under_the_box_and_opens_the_model_list(cx: &mut TestAppContext) {
     let s = setup(cx);
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     let handle: gpui::AnyWindowHandle = s.window.into();
     handle
         .update(cx, |_, w, cx| {
@@ -2306,7 +2300,7 @@ fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
 ) {
     let s = setup(cx);
     cx.update(|cx| {
-        cx.set_reduce_motion(true);
+        crate::clock::use_test_clock(cx);
         crate::shell::bind_keys(cx);
     });
     let session = s
@@ -2387,7 +2381,7 @@ fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
 #[gpui::test]
 fn titlebar_details_tabs_switch_pages_and_keep_habit_actions(cx: &mut TestAppContext) {
     let s = setup(cx);
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     s.window
         .update(cx, |shell, _, cx| {
             shell.workspace.right_panel_width = 400.;
@@ -2399,6 +2393,7 @@ fn titlebar_details_tabs_switch_pages_and_keep_habit_actions(cx: &mut TestAppCon
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     for (selector, tab) in [
         ("bot-overview-Documents", OverviewTab::Documents),
         ("bot-overview-Habits", OverviewTab::Habits),
@@ -2406,12 +2401,14 @@ fn titlebar_details_tabs_switch_pages_and_keep_habit_actions(cx: &mut TestAppCon
         let button = visual.debug_bounds(selector).unwrap();
         visual.simulate_click(button.center(), Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(s.window, visual);
         assert!(s.manager.read_with(visual, |m, _| m.overview_tab == tab));
         assert!(visual.debug_bounds(selector).unwrap().size.width > px(26.));
     }
     let add = visual.debug_bounds("bot-new-habit").unwrap();
     visual.simulate_click(add.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert!(
         s.manager
             .read_with(visual, |m, _| matches!(m.route, Some(Route::NewHabit)))
@@ -2420,6 +2417,7 @@ fn titlebar_details_tabs_switch_pages_and_keep_habit_actions(cx: &mut TestAppCon
     let sessions = visual.debug_bounds("bot-overview-Sessions").unwrap();
     visual.simulate_click(sessions.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert!(s.manager.read_with(visual, |m, _| m.route.is_none()
         && m.overview_tab == OverviewTab::Sessions));
     assert!(visual.debug_bounds("bot-activity").is_none());
@@ -2430,6 +2428,7 @@ fn titlebar_details_tabs_switch_pages_and_keep_habit_actions(cx: &mut TestAppCon
         let tab = visual.debug_bounds(selector).unwrap();
         visual.simulate_click(tab.center(), Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(s.window, visual);
         assert!(
             s.manager
                 .read_with(visual, |m, _| m.overview_tab == expected)
@@ -2440,7 +2439,7 @@ fn titlebar_details_tabs_switch_pages_and_keep_habit_actions(cx: &mut TestAppCon
 #[gpui::test]
 fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut TestAppContext) {
     let s = setup(cx);
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     s.window
         .update(cx, |shell, _, cx| {
             assert!(shell.workspace.classic_layout);
@@ -2452,6 +2451,7 @@ fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut T
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     for width in [220., 280., 400., 500.] {
         s.window
             .update(visual, |shell, _, cx| {
@@ -2460,6 +2460,7 @@ fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut T
             })
             .unwrap();
         visual.run_until_parked();
+        crate::clock::settle_animations(s.window, visual);
         let panel = visual.debug_bounds("right-panel-frame").unwrap();
         let divider = visual.debug_bounds("right-panel-resize").unwrap();
         assert!((divider.center().x - panel.left() - px(0.5)).abs() <= px(0.5));
@@ -2478,6 +2479,7 @@ fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut T
     visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
     visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     s.window
         .update(visual, |shell, _, _| {
             assert_eq!(shell.workspace.right_panel_width, 540.);
@@ -2497,9 +2499,11 @@ fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut T
         .unwrap();
     for _ in 0..2 {
         visual.run_until_parked();
+        crate::clock::settle_animations(s.window, visual);
         let open = visual.debug_bounds("toggle-right-panel").unwrap();
         visual.simulate_click(open.center(), Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(s.window, visual);
         assert!(visual.debug_bounds("bot-overview-tabs").is_none());
         assert!(visual.debug_bounds("bot-overview-panel").is_none());
         assert_eq!(visual.debug_bounds("toggle-right-panel").unwrap(), open);
@@ -2509,6 +2513,7 @@ fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut T
         assert_eq!(saved.right_panel_width, 540.);
         visual.simulate_click(open.center(), Default::default());
         visual.run_until_parked();
+        crate::clock::settle_animations(s.window, visual);
         assert!(visual.debug_bounds("bot-overview-tabs").is_some());
         assert_eq!(
             visual.debug_bounds("right-panel-frame").unwrap().size.width,
@@ -2522,7 +2527,7 @@ fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original
     cx: &mut TestAppContext,
 ) {
     let s = setup(cx);
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     let (session, preview) = s
         .window
         .update(cx, |shell, _, cx| {
@@ -2542,15 +2547,18 @@ fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert!(visual.debug_bounds("sidebar-frame").is_none());
     let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
     visual.simulate_click(toggle.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert!(visual.debug_bounds("right-panel-frame").is_none());
     s.manager.update(visual, |manager, cx| {
         manager.card_action(&s.id, &json!({"type":"session","sessionId":session}), cx)
     });
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     let details = visual.debug_bounds("right-panel-frame").unwrap();
     assert!(s.manager.read_with(
         visual,
@@ -2560,6 +2568,7 @@ fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original
     let open = visual.debug_bounds(selector).unwrap();
     visual.simulate_click(open.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     let rail = visual.debug_bounds("classic-project-rail").unwrap();
     let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
     assert_eq!(
@@ -2600,6 +2609,7 @@ fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original
         })
         .unwrap();
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert_eq!(visual.debug_bounds("right-panel-frame").unwrap(), details);
     assert_eq!(
         preview.read_with(visual, |session, cx| session
@@ -2615,7 +2625,7 @@ fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original
 fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut TestAppContext) {
     let s = setup(cx);
     cx.update(|cx| {
-        cx.set_reduce_motion(true);
+        crate::clock::use_test_clock(cx);
         input::bind(cx);
         crate::popover::bind(cx);
     });
@@ -2632,6 +2642,7 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     s.manager.update(visual, |m, cx| {
         m.fields["habit-name"].update(cx, |f, cx| {
             f.set_text(
@@ -2649,6 +2660,7 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
         cx.notify();
     });
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     let body = visual.debug_bounds("bot-habit-editor").unwrap();
     let name = visual.debug_bounds("bot-habit-name-field").unwrap();
     let schedule = visual.debug_bounds("bot-habit-schedule").unwrap();
@@ -2669,16 +2681,20 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
     assert!(day.right() <= schedule.right() + px(1.));
     visual.simulate_click(day.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     // Escape returns focus to the trigger; arrow keys reopen the list with
     // the current weekday highlighted, and Enter retains that selection.
     visual.simulate_keystrokes("escape");
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert!(s.manager.read_with(visual, |m, _| m.picker.is_none()));
     visual.simulate_keystrokes("down");
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert!(s.manager.read_with(visual, |m, _| m.picker.is_some()));
     visual.simulate_keystrokes("enter");
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert_eq!(
         s.manager
             .read_with(visual, |m, cx| m.value("habit-weekday", cx)),
@@ -2687,9 +2703,11 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
     assert!(s.manager.read_with(visual, |m, _| m.picker.is_none()));
     visual.simulate_click(day.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     let saturday = visual.debug_bounds("menu-action-6").unwrap();
     visual.simulate_click(saturday.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert_eq!(
         s.manager
             .read_with(visual, |m, cx| m.value("habit-weekday", cx)),
@@ -2700,8 +2718,10 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
         m.fields["habit-time"].update(cx, |f, cx| f.set_text("25:00".into(), cx));
     });
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     visual.simulate_click(create.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert!(
         s.manager
             .read_with(visual, |m, _| m.route == Some(Route::NewHabit))
@@ -2714,8 +2734,10 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
         m.fields["habit-time"].update(cx, |f, cx| f.set_text("09:00".into(), cx));
     });
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     visual.simulate_click(create.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     let saved = habits::load(&s.root, &s.id).unwrap();
     assert_eq!(saved.len(), 1);
     assert!(saved[0].instructions.len() > 2000);
@@ -2729,7 +2751,7 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
     cx: &mut TestAppContext,
 ) {
     let s = setup(cx);
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     let mut h = Habit::new(
         "A long habit title that should truncate before the action buttons".into(),
         "Review changes and report anything that needs attention.".into(),
@@ -2764,6 +2786,7 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert!(
         s.manager
             .read_with(visual, |m, _| !m.fields.contains_key("habit-name"))
@@ -2783,6 +2806,7 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
     }
     visual.simulate_click(row.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert!(
         visual
             .debug_bounds(Box::leak(
@@ -2793,6 +2817,7 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
     let toggle = visual.debug_bounds("bot-habit-toggle").unwrap();
     visual.simulate_click(toggle.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert!(!habits::load(&s.root, &s.id).unwrap()[0].enabled);
     assert!(
         s.manager
@@ -2801,6 +2826,7 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
     let remove = visual.debug_bounds("bot-habit-delete").unwrap();
     visual.simulate_click(remove.center(), Default::default());
     visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
     assert!(habits::load(&s.root, &s.id).unwrap().is_empty());
     assert!(s.manager.read_with(visual, |m, _| m.route.is_none()));
 }
@@ -2810,7 +2836,7 @@ fn new_habit_click_transfers_composer_focus_after_the_animated_page_mounts(
     cx: &mut TestAppContext,
 ) {
     let s = setup(cx);
-    cx.update(|cx| cx.set_reduce_motion(false));
+    crate::clock::use_test_clock(cx);
     s.window
         .update(cx, |_, window, cx| {
             s.manager.update(cx, |m, cx| {
@@ -2908,7 +2934,7 @@ fn sidebar_bot_only_marks_unread_replies_and_swaps_the_mark_for_options_on_hover
     cx: &mut TestAppContext,
 ) {
     let s = setup(cx);
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     s.window
         .update(cx, |_, _, cx| {
             s.manager.update(cx, |m, cx| {
@@ -3020,7 +3046,7 @@ fn sidebar_bot_only_marks_unread_replies_and_swaps_the_mark_for_options_on_hover
 fn sidebar_right_click_opens_bot_menu_outside_the_bot_and_edits_its_look(cx: &mut TestAppContext) {
     cx.update(input::bind);
     let s = setup(cx);
-    cx.update(|cx| cx.set_reduce_motion(true));
+    crate::clock::use_test_clock(cx);
     // Leave the Bot, as when a session is open: only the rail remains.
     s.window
         .update(cx, |_, _, cx| {

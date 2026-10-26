@@ -20,6 +20,7 @@ mod response_menu;
 mod submission_tests;
 mod ticket_context;
 mod title;
+use crate::clock::Instant;
 use crate::{
     composer_motion::ComposerMotion,
     git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
@@ -50,7 +51,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Instant,
 };
 use vorkspace_core::{
     agent::{AccessMode, Approval, Control, Decision, Settings},
@@ -441,6 +441,8 @@ impl Conversation {
     }
 
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
+        #[cfg(test)]
+        crate::clock::use_test_clock(cx);
         let input = cx.new(input::Input::new);
         // A new tab shows its folder's checkout from the first frame; the
         // load below confirms it rather than popping it in.
@@ -2955,7 +2957,6 @@ impl Conversation {
                             |_, _, _| {},
                             move |bounds, _, window, _| {
                                 let surface = gpui::fill(bounds, fill).corner_radii(px(radius - 1.));
-                                #[cfg(target_os = "macos")]
                                 let surface = if blur > 0. {
                                     surface.border_color(
                                         gpui_apple::metal_renderer::backdrop_blur_marker(
@@ -2965,8 +2966,6 @@ impl Conversation {
                                 } else {
                                     surface
                                 };
-                                #[cfg(not(target_os = "macos"))]
-                                let _ = blur;
                                 window.paint_quad(surface);
                             },
                         )
@@ -3550,7 +3549,7 @@ mod composer_motion_tests {
         crate::theme::configure(&preferences, false, true);
         cx.update(|cx| {
             cx.set_global(preferences);
-            cx.set_reduce_motion(true);
+            crate::clock::use_test_clock(cx);
         });
         for width in [480., 1000.] {
             let window = window(cx, width);
@@ -3605,13 +3604,10 @@ mod composer_motion_tests {
                                             <= 2.
                                 })
                                 .expect("the composer paints React's content-3% surface");
-                            #[cfg(target_os = "macos")]
                             assert_eq!(
                                 surface.border_color,
                                 gpui_apple::metal_renderer::backdrop_blur_marker(24. * scale)
                             );
-                            #[cfg(not(target_os = "macos"))]
-                            let _ = surface;
                             assert!(window.painted_quads().iter().any(|quad| {
                                 quad.border_color == content(0.2)
                                     && (quad.bounds.size.width.0 / scale
@@ -3719,17 +3715,6 @@ mod composer_motion_tests {
         cx.refresh().unwrap();
         cx.run_until_parked();
         history
-            .update(cx, |c, _, _| {
-                assert!(c.composer_anchor.get().unwrap().top() > from.top() + px(100.));
-            })
-            .unwrap();
-    }
-    #[gpui::test]
-    fn reduced_motion_docks_the_first_submit_immediately(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
-        let window = window(cx, 1000.);
-        let from = begin(window, cx);
-        window
             .update(cx, |c, _, _| {
                 assert!(c.composer_anchor.get().unwrap().top() > from.top() + px(100.));
             })
@@ -4273,7 +4258,7 @@ mod menu_tests {
         cx.update(|cx| {
             input::bind(cx);
             crate::popover::bind(cx);
-            cx.set_reduce_motion(true);
+            crate::clock::use_test_clock(cx);
         });
         let cwd = "/nonexistent/vorkspace-composer-existing-submenu";
         let feature = format!("{cwd}-feature-b");
