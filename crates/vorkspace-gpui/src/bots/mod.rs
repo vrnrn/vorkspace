@@ -856,10 +856,12 @@ impl Bots {
                 bot.outbox.retain(|m| m.id != id);
             } else if let Some(message) = bot.outbox.iter_mut().find(|m| m.id == id) {
                 // A retry is a new explicit submission, never a replay of the
-                // provider receipt from a failed or interrupted turn.
-                if message.peer.is_some() {
-                    message.id = format!("peer:retry:{}", bot::new_id());
-                }
+                // provider receipt from a failed or interrupted turn or steer.
+                message.id = if message.peer.is_some() {
+                    format!("peer:retry:{}", bot::new_id())
+                } else {
+                    bot::new_id()
+                };
                 message.error = None;
             }
         }

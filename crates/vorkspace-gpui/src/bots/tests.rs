@@ -3501,6 +3501,13 @@ fn a_users_message_steers_the_running_turn_but_never_a_peer_turn(cx: &mut TestAp
     s.manager.update(cx, |m, cx| {
         let queued = &m.roster.get(&s.id).unwrap().outbox[0];
         assert_eq!(queued.error.as_deref(), Some("turn is closing"));
+        m.queue_changed(&s.id, &failed.id, false, cx);
+        let retried = &m.roster.get(&s.id).unwrap().outbox[0];
+        assert!(retried.error.is_none());
+        assert_ne!(
+            retried.id, failed.id,
+            "Retry must not reuse the uncertain steer's submission identity"
+        );
         m.roster.get_mut(&s.id).unwrap().outbox.clear();
         let peer = bot::peers::Peer {
             from: "merlin".into(),

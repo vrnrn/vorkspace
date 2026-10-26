@@ -255,3 +255,22 @@ fn only_the_users_own_message_steers_a_running_bot_turn(cx: &mut TestAppContext)
         [("next".to_owned(), "turn is closing".to_owned())]
     );
 }
+
+#[gpui::test]
+fn a_final_update_keeps_the_accepted_steer_receipt(cx: &mut TestAppContext) {
+    let window = chat(cx);
+    let (controls, _received) = std::sync::mpsc::channel();
+    window
+        .update(cx, |view, _, cx| {
+            view.busy = true;
+            view.controls = Some(controls);
+            view.follow_ups.ready = true;
+            assert!(view.bot_steer(&message("steer", "Change course", false), cx));
+            // A stop can skip the intermediate acknowledgement. The final
+            // update then carries the turn's initial receipt and the steer.
+            view.apply_receipts(Some("initial".into()), vec!["steer".into()], Vec::new(), cx);
+            assert_eq!(view.bot_delivered(), Some("steer"));
+            assert!(view.follow_ups.sending.is_none());
+        })
+        .unwrap();
+}
