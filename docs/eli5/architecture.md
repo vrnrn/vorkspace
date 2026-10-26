@@ -18,4 +18,4 @@ As a reply arrives, only changed chat blocks are saved. The screen can show a sm
 
 Every supported agent has an output size limit before it is buffered. A fast agent waits when the app is still handling earlier output. An individual response that is too large produces a clear error rather than silently losing part of its text. Stopping the connection also releases waiting readers.
 
-Interface zoom makes the whole workspace larger or smaller. Clicking, typing, native previews, and screen-reader controls follow the same zoom level, including after moving the window to a different display.
+Interface zoom makes the whole workspace larger or smaller, from 60% to 160%. Clicking, typing, native previews, and screen-reader controls follow the same zoom level, including after moving the window to a different display.

@@ -100,7 +100,10 @@ impl Bots {
         let selected = self.channels.selected.clone();
         if selected.is_none() {
             let form = self.channel_form(cx);
-            return surface.child(form).into_any_element();
+            return surface
+                .child(form)
+                .children(self.options_surface(cx))
+                .into_any_element();
         }
         let id = selected.unwrap();
         self.mark_visible_channel_read(cx);
@@ -230,7 +233,7 @@ impl Bots {
                         .iter()
                         .take(4)
                         .filter_map(|id| self.roster.get(id))
-                        .map(|bot| avatar::avatar(&bot.mascot, bot.color, "idle", 20., true)),
+                        .map(|bot| avatar::bot_avatar(bot, "idle", 20., true)),
                 ),
             )
             .child(
@@ -303,7 +306,7 @@ impl Bots {
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM);
             if let Some(bot) = bot {
-                heading = heading.child(avatar::avatar(&bot.mascot, bot.color, "idle", 20., true));
+                heading = heading.child(avatar::bot_avatar(bot, "idle", 20., true));
             }
             heading = heading.child(label).when_some(time, |d, time| {
                 d.child(
@@ -527,7 +530,8 @@ impl Bots {
         let surface = surface
             .child(header)
             .child(list)
-            .child(footer.child(composer));
+            .child(footer.child(composer))
+            .children(self.options_surface(cx));
         if self.channels.editing {
             let form = self.channel_form(cx);
             let weak = cx.weak_entity();
@@ -605,7 +609,7 @@ impl Bots {
                     .gap_3()
                     .bg(content(if chosen { 0.08 } else { 0.02 }))
                     .hover(|s| s.bg(content(0.1)))
-                    .child(avatar::avatar(&bot.mascot, bot.color, "idle", 24., true))
+                    .child(avatar::bot_avatar(bot, "idle", 24., true))
                     .child(div().flex_1().child(bot.label()))
                     .child(if chosen { "✓" } else { "" })
                     .on_click(cx.listener(move |this, _, _, cx| {

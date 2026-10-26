@@ -1527,6 +1527,75 @@ fn settings_match_react_dialog_and_left_navigation_geometry(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn settings_sidebar_delete_confirms_and_preserves_sessions(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let sessions = locked(&s.store)
+        .unwrap()
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .map(|session| session.id)
+        .collect::<Vec<_>>();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    for (width, height) in [(1400., 900.), (640., 540.)] {
+        visual.simulate_resize(gpui::size(px(width), px(height)));
+        visual.run_until_parked();
+        for section in ["General", "Soul", "Memory"] {
+            let selector = Box::leak(format!("bot-settings-{section}").into_boxed_str());
+            let tab = visual.debug_bounds(selector).unwrap();
+            visual.simulate_click(tab.center(), Default::default());
+            visual.run_until_parked();
+            let nav = visual.debug_bounds("bot-settings-navigation").unwrap();
+            let delete = visual.debug_bounds("bot-delete").unwrap();
+            assert!(delete.left() >= nav.left() && delete.right() <= nav.right());
+            assert!(delete.bottom() <= nav.bottom());
+            assert!(delete.top() > nav.bottom() - px(48.));
+        }
+    }
+    let delete = visual.debug_bounds("bot-delete").unwrap();
+    visual.simulate_click(delete.center(), Default::default());
+    visual.run_until_parked();
+    assert!(visual.has_pending_prompt());
+    assert_eq!(visual.pending_prompt().unwrap().0, "Delete bot?");
+    visual.simulate_prompt_answer("Cancel");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-settings-dialog").is_some());
+    s.manager.read_with(visual, |manager, _| {
+        assert!(manager.roster.get(&s.id).is_some());
+        assert_eq!(manager.active.as_deref(), Some(s.id.as_str()));
+    });
+    assert!(
+        Roster::load(&locked(&s.store).unwrap())
+            .unwrap()
+            .get(&s.id)
+            .is_some()
+    );
+
+    let delete = visual.debug_bounds("bot-delete").unwrap();
+    visual.simulate_click(delete.center(), Default::default());
+    visual.run_until_parked();
+    visual.simulate_prompt_answer("Delete");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-settings-dialog").is_none());
+    s.manager.read_with(visual, |manager, _| {
+        assert!(manager.roster.get(&s.id).is_none());
+        assert!(manager.active.is_none());
+        assert!(manager.settings.is_none());
+        assert!(!manager.chats.contains_key(&s.id));
+    });
+    let db = locked(&s.store).unwrap();
+    assert!(Roster::load(&db).unwrap().get(&s.id).is_none());
+    assert_eq!(
+        db.sessions()
+            .unwrap()
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<Vec<_>>(),
+        sessions
+    );
+}
+
+#[gpui::test]
 fn settings_color_popover_follows_its_mascot_when_the_window_resizes(cx: &mut TestAppContext) {
     let s = setup(cx);
     cx.update(|cx| {
@@ -2972,42 +3041,99 @@ fn sidebar_right_click_opens_bot_menu_outside_the_bot_and_edits_its_look(cx: &mu
         click_count: 1,
     });
     visual.run_until_parked();
-    // BotMenu opens beside the pointer with ten mascots and nine presets
-    // plus the custom swatch, all in single rows.
+    // BotMenu opens beside the pointer with 5 3D face styles, shape dropdown,
+    // texture toggle switch, grid scale slider, and nine circular presets.
     let first = visual
         .debug_bounds("bot-mascot-0")
         .expect("right-click opens the Bot's menu");
-    let last = visual.debug_bounds("bot-mascot-9").unwrap();
+    let last = visual.debug_bounds("bot-mascot-4").unwrap();
     assert_eq!(first.top(), last.top());
     assert_eq!(first.size.height, px(32.));
     assert!(first.left() >= at.x);
-    let custom = visual.debug_bounds("bot-custom-color").unwrap();
+    let shape_dd = visual.debug_bounds("bot-shape-dropdown").unwrap();
+    visual.simulate_click(shape_dd.center(), Default::default());
+    visual.run_until_parked();
+    let shape = visual.debug_bounds("bot-shape-4").unwrap();
+    visual.simulate_click(shape.center(), Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-custom-color").is_none());
     assert_eq!(
         visual.debug_bounds("bot-color-0").unwrap().top(),
-        custom.top()
+        visual.debug_bounds("bot-color-8").unwrap().top()
     );
     let pink = visual.debug_bounds("bot-color-4").unwrap().center();
     visual.simulate_click(pink, Default::default());
     visual.run_until_parked();
-    let color = s
-        .manager
-        .read_with(visual, |m, _| m.roster.get(&s.id).unwrap().color);
-    assert_eq!(color, bot::COLORS_BOT[4]);
-    // Enter in the name field commits and closes the menu.
-    let name = visual.debug_bounds("bot-options-name").unwrap();
-    visual.simulate_click(name.center(), Default::default());
-    visual.simulate_keystrokes("enter");
+    let bg_btn = visual.debug_bounds("bot-bg-color-button").unwrap();
+    let fg_btn = visual.debug_bounds("bot-fg-color-button").unwrap();
+    assert_eq!(bg_btn.top(), fg_btn.top());
+    assert!(bg_btn.bottom() <= visual.debug_bounds("bot-color-0").unwrap().top());
+    assert!(visual.debug_bounds("menu-action-delete").is_none());
+    let settings_row = visual.debug_bounds("menu-action-settings").unwrap();
+    let card = s.manager.read_with(visual, |m, cx| {
+        m.menu
+            .as_ref()
+            .unwrap()
+            .1
+            .read(cx)
+            .surface_region()
+            .get()
+            .unwrap()
+    });
+    let name_bounds = visual.debug_bounds("bot-options-name").unwrap();
+    assert_eq!(name_bounds.top() - card.top(), px(9.));
+    assert_eq!(card.bottom() - settings_row.bottom(), px(9.));
+    let die = visual.debug_bounds("bot-randomize-seed").unwrap();
+    let grid_slider = visual.debug_bounds("bot-grid-slider").unwrap();
+    assert!(die.bottom() <= grid_slider.top());
+    visual.simulate_click(bg_btn.center(), Default::default());
     visual.run_until_parked();
-    s.manager
-        .read_with(visual, |m, _| assert!(m.menu.is_none()));
-    visual.refresh().unwrap();
-    visual
-        .update_window(s.window.into(), |_, window, cx| {
-            window.simulate_next_frame(cx);
-            window.draw(cx).clear(cx);
-        })
-        .unwrap();
-    assert!(visual.debug_bounds("bot-mascot-0").is_none());
+    assert!(visual.debug_bounds("bot-custom-color-picker").is_some());
+    let (color, badge_shape) = s.manager.read_with(visual, |m, _| {
+        let bot = m.roster.get(&s.id).unwrap();
+        (bot.color, bot.shape.clone())
+    });
+    assert_eq!(color, bot::COLORS_BOT[4]);
+    assert_eq!(badge_shape, "hex");
+    // Opening Background image from the Bot menu keeps the effect dropdown above the modal.
+    s.manager.update(visual, |m, cx| {
+        m.roster.get_mut(&s.id).unwrap().background =
+            Some(vorkspace_core::project_appearance::Background {
+                path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vorkspace.png").into(),
+                ..Default::default()
+            });
+        m.save(cx);
+    });
+    let bg_action = visual.debug_bounds("menu-action-background").unwrap();
+    visual.simulate_click(bg_action.center(), Default::default());
+    visual.run_until_parked();
+    assert!(
+        s.manager
+            .read_with(visual, |m, _| m.menu.is_none() && m.background.is_some())
+    );
+    let effect_trigger = visual.debug_bounds("project-background-effect").unwrap();
+    visual.simulate_click(effect_trigger.center(), Default::default());
+    visual.run_until_parked();
+    let blur_option = visual.debug_bounds("project-settings-Haze").unwrap();
+    visual.simulate_click(blur_option.center(), Default::default());
+    visual.run_until_parked();
+    assert_eq!(
+        s.manager.read_with(visual, |m, _| {
+            m.roster
+                .get(&s.id)
+                .unwrap()
+                .background
+                .as_ref()
+                .unwrap()
+                .effect
+        }),
+        vorkspace_core::project_appearance::Effect::GradientBlur
+    );
+    assert!(s.manager.read_with(visual, |m, _| m.background.is_some()));
+    let close_bg = visual.debug_bounds("close-project-background").unwrap();
+    visual.simulate_click(close_bg.center(), Default::default());
+    visual.run_until_parked();
+    assert!(s.manager.read_with(visual, |m, _| m.background.is_none()));
 }
 
 #[gpui::test]
@@ -3050,6 +3176,7 @@ fn new_bot_setup_focuses_name_and_cancel_keeps_storage_and_current_bot_unchanged
         .unwrap();
     assert!(visual.debug_bounds("bot-create").is_some());
     assert!(visual.debug_bounds("bot-reset").is_none());
+    assert!(visual.debug_bounds("bot-delete").is_none());
     visual.simulate_input("   ");
     visual.run_until_parked();
     let create = visual.debug_bounds("bot-create").unwrap();

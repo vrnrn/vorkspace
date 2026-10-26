@@ -4,7 +4,7 @@ pub(crate) mod avatar;
 pub(crate) mod cards;
 mod changes;
 mod channels;
-mod color_picker;
+pub(crate) mod color_picker;
 mod creation;
 mod files;
 mod filters;
@@ -132,7 +132,6 @@ pub(crate) struct Bots {
     background: Option<(
         Entity<crate::project_settings::BackgroundDialog>,
         Subscription,
-        gpui::Point<gpui::Pixels>,
     )>,
     backgrounds: HashMap<String, Entity<crate::project_background::ProjectBackground>>,
     drag: Option<(String, gpui::Point<gpui::Pixels>, Option<String>)>,
@@ -1271,7 +1270,7 @@ impl Bots {
                     .opacity(if active { 1. } else { 0.65 })
                     .when(active, |d| d.bg(content(0.1)))
                     .hover(|s| s.bg(content(0.08)).opacity(1.))
-                    .child(avatar::avatar(&bot.mascot, bot.color, state, 16., true))
+                    .child(avatar::bot_avatar(&bot, state, 16., false))
                     .child(
                         div()
                             .flex_1()
@@ -1351,9 +1350,8 @@ impl Bots {
             }))
             // BotRailSection owns its menu and background dialog; the Bot
             // view paints them instead while it is open.
-            .when(self.current().is_none(), |d| {
+            .when(self.current().is_none() && !self.channels.open, |d| {
                 d.children(self.options_surface(cx))
-                    .children(self.background_modal())
             })
             .into_any_element()
     }
@@ -1386,7 +1384,7 @@ impl Bots {
                         .group_hover(group.clone(), move |s| {
                             s.opacity(1.).bg(title_tab_fill(active, true))
                         })
-                        .child(avatar::avatar(&bot.mascot, bot.color, "idle", 16., true))
+                        .child(avatar::bot_avatar(bot, "idle", 16., true))
                         .child(
                             div()
                                 .flex_1()
@@ -1518,7 +1516,6 @@ impl gpui::Render for Bots {
             .children(self.settings_modal(&bot, window, cx))
             .when(!self.creating(), |d| d.children(self.picker_surface(cx)))
             .children(self.options_surface(cx))
-            .children(self.background_modal())
             .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, _| {
                 if let Some((_, start, over)) = &mut this.drag
                     && (event.position - *start).magnitude() > 5.

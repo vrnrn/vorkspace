@@ -289,7 +289,7 @@ impl Shell {
                         .update(cx, |notice, cx| notice.check_now(hidden, cx));
                 }
                 SettingsEvent::Changed(prefs) => {
-                    window.set_ui_scale(prefs.ui_scale.clamp(50, 200) as f32 / 100., cx);
+                    window.set_ui_scale(prefs.interface_scale(), cx);
                     this.workspace.preferences = *prefs.clone();
                     this.apply_preferences(cx);
                     this.persist(cx);
@@ -387,6 +387,10 @@ impl Shell {
             .unwrap_or(Kind::Codex)
     }
     pub(super) fn apply_preferences(&mut self, cx: &mut Context<Self>) {
+        self.workspace.preferences.ui_scale = self.workspace.preferences.ui_scale.clamp(
+            crate::settings::Preferences::MIN_UI_SCALE_PERCENT,
+            crate::settings::Preferences::MAX_UI_SCALE_PERCENT,
+        );
         #[cfg(any(target_os = "macos", test))]
         crate::clipboard::configure(self.workspace.preferences.clipboard_history, cx);
         if let Some(vox) = &self.vox {

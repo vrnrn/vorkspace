@@ -402,8 +402,8 @@ pub(crate) struct TranscriptView {
     prepared_parsers: HashMap<usize, MarkdownParser>,
     bot: bool,
     bot_groups: std::cell::RefCell<HashMap<usize, usize>>,
-    /// The Bot's mascot, colour and name, which sign its turns.
-    bot_look: Option<(String, u32, SharedString)>,
+    /// The Bot's look configuration and name, which sign its turns.
+    bot_look: Option<(crate::bots::avatar::BotLookConfig, SharedString)>,
     /// The turn whose actions show, and since when, as `.turn-actions-hover`.
     hovered_turn: Option<(usize, Instant)>,
     /// The prompt message whose copy action shows.
@@ -521,8 +521,19 @@ impl TranscriptView {
         self.side_question = true;
     }
     /// AgentTranscript with `agentMascot`, `bottomAligned` and `inlineWork`.
+    #[cfg(test)]
     pub(crate) fn bot_mode(&mut self, mascot: &str, color: u32, name: &str) {
-        self.bot_look = Some((mascot.into(), color, name.to_owned().into()));
+        self.bot_mode_with_look(
+            crate::bots::avatar::BotLookConfig::from_legacy(mascot, color),
+            name,
+        );
+    }
+    pub(crate) fn bot_mode_with_look(
+        &mut self,
+        look: crate::bots::avatar::BotLookConfig,
+        name: &str,
+    ) {
+        self.bot_look = Some((look, name.to_owned().into()));
         if self.bot {
             return;
         }
@@ -867,7 +878,7 @@ impl TranscriptView {
     }
     /// The Bot signs a group of turns; each run owns its inline work receipt.
     fn bot_turn_header(&self, turn: usize) -> gpui::AnyElement {
-        let Some((mascot, color, name)) = self.bot_look.clone() else {
+        let Some((look, name)) = self.bot_look.clone() else {
             return div().into_any_element();
         };
         let pill = div()
@@ -883,14 +894,9 @@ impl TranscriptView {
             .py(px(2.))
             .pl_2()
             .pr_3()
-            .child(
-                div()
-                    .size(px(14.))
-                    .flex_shrink_0()
-                    .child(crate::bots::avatar::avatar(
-                        &mascot, color, "idle", 14., true,
-                    )),
-            )
+            .child(div().size(px(14.)).flex_shrink_0().child(
+                crate::bots::avatar::avatar_with_look(look, "idle", 14., true),
+            ))
             .child(
                 div()
                     .min_w_0()

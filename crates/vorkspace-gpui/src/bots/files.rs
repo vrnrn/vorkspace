@@ -327,6 +327,8 @@ impl Bots {
                 this.roster.bots.retain(|m| m.id != id);
                 if this.active.as_ref() == Some(&id) {
                     this.active = None;
+                    this.settings = None;
+                    this.picker = None;
                 }
                 this.save(cx);
             });

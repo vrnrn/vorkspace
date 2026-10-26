@@ -44,6 +44,7 @@ pub(crate) struct Preferences {
     pub chat_background_empty: u32,
     pub chat_background_session: u32,
     pub collapsed_project_rail: String,
+    #[serde(deserialize_with = "deserialize_ui_scale")]
     pub ui_scale: u32,
     pub show_excluded_files: bool,
     // Chat
@@ -85,9 +86,28 @@ pub(crate) struct Preferences {
     pub keybindings: HashMap<String, Option<String>>,
 }
 
-pub(crate) const UI_SCALE_PERCENTS: [u32; 16] = [
-    50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200,
+pub(crate) const UI_SCALE_PERCENTS: [u32; 11] = [
+    Preferences::MIN_UI_SCALE_PERCENT,
+    70,
+    80,
+    90,
+    100,
+    110,
+    120,
+    130,
+    140,
+    150,
+    Preferences::MAX_UI_SCALE_PERCENT,
 ];
+
+fn deserialize_ui_scale<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
+    Ok(u32::deserialize(deserializer)?.clamp(
+        Preferences::MIN_UI_SCALE_PERCENT,
+        Preferences::MAX_UI_SCALE_PERCENT,
+    ))
+}
 
 impl Default for Preferences {
     fn default() -> Self {
@@ -162,6 +182,15 @@ impl Default for Preferences {
 }
 
 impl Preferences {
+    pub(crate) const MIN_UI_SCALE_PERCENT: u32 = 60;
+    pub(crate) const MAX_UI_SCALE_PERCENT: u32 = 160;
+
+    pub(crate) fn interface_scale(&self) -> f32 {
+        self.ui_scale
+            .clamp(Self::MIN_UI_SCALE_PERCENT, Self::MAX_UI_SCALE_PERCENT) as f32
+            / 100.
+    }
+
     pub(crate) fn chat_background_settings(
         &self,
     ) -> Option<vorkspace_core::project_appearance::Background> {

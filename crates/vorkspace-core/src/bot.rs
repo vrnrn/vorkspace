@@ -16,7 +16,10 @@ pub(crate) use desktop::codex_home;
 mod tests;
 
 use crate::{
-    project_appearance::{Background, COLORS, MASCOTS},
+    project_appearance::{
+        default_foreground_color, default_seed_for, normalize_badge_shape, normalize_bot_face,
+        Background, BOT_FACES, COLORS, MASCOTS,
+    },
     store::Store,
     transcript::Row,
 };
@@ -35,6 +38,18 @@ pub const DEFAULT_SOUL: &str =
 pub fn new_id() -> String {
     format!("{:032x}", rand::random::<u128>())
 }
+fn default_bot_shape() -> String {
+    "squircle".into()
+}
+fn default_bot_textured() -> bool {
+    true
+}
+fn is_true(value: &bool) -> bool {
+    *value
+}
+fn is_default_shape(shape: &str) -> bool {
+    shape.is_empty() || shape == "squircle"
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Bot {
@@ -50,7 +65,20 @@ pub struct Bot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_configuration: Option<Box<InitialConfiguration>>,
     pub mascot: String,
+    #[serde(
+        default = "default_bot_shape",
+        skip_serializing_if = "is_default_shape"
+    )]
+    pub shape: String,
     pub color: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg_color: Option<u32>,
+    #[serde(default = "default_bot_textured", skip_serializing_if = "is_true")]
+    pub textured: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<u8>,
     pub projects: Vec<String>,
     pub show_started_sessions_in_sidebar: bool,
     pub use_sidebar_folders: bool,
@@ -76,7 +104,12 @@ impl Default for Bot {
             name: String::new(),
             initial_configuration: None,
             mascot: MASCOTS[0].into(),
+            shape: "squircle".into(),
             color: COLORS_BOT[0],
+            fg_color: None,
+            textured: true,
+            seed: None,
+            grid: None,
             projects: Vec::new(),
             show_started_sessions_in_sidebar: false,
             use_sidebar_folders: false,
@@ -115,6 +148,25 @@ impl Bot {
         };
         format!("Bot{name}")
     }
+    pub fn face_style(&self) -> &'static str {
+        normalize_bot_face(&self.mascot)
+    }
+    pub fn badge_shape(&self) -> &'static str {
+        normalize_badge_shape(&self.shape)
+    }
+    pub fn resolved_fg_color(&self) -> u32 {
+        self.fg_color
+            .filter(|c| *c <= 0xffffff)
+            .unwrap_or_else(|| default_foreground_color(self.color))
+    }
+    pub fn resolved_seed(&self) -> u32 {
+        self.seed
+            .filter(|&s| s > 0)
+            .unwrap_or_else(|| default_seed_for(&self.id))
+    }
+    pub fn resolved_grid(&self) -> u8 {
+        self.grid.unwrap_or(4).clamp(2, 8)
+    }
     pub fn works_on(&self, project: &str) -> bool {
         self.projects
             .iter()
@@ -151,12 +203,16 @@ impl Bot {
     }
     pub fn normalize(&mut self) {
         self.name = self.name.trim().chars().take(40).collect();
-        if !MASCOTS.contains(&self.mascot.as_str()) {
+        if !MASCOTS.contains(&self.mascot.as_str()) && !BOT_FACES.contains(&self.mascot.as_str()) {
             self.mascot = MASCOTS[0].into();
         }
+        self.shape = normalize_badge_shape(&self.shape).into();
         if self.color > 0xffffff {
             self.color = COLORS_BOT[0];
         }
+        self.fg_color = self.fg_color.filter(|c| *c <= 0xffffff);
+        self.seed = self.seed.filter(|&s| s > 0);
+        self.grid = self.grid.map(|g| g.clamp(2, 8));
         let mut seen = HashSet::new();
         self.projects
             .retain(|p| !p.trim().is_empty() && seen.insert(crate::files::path_key(p)));

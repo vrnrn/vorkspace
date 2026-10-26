@@ -4,7 +4,7 @@ Channels let several Bots discuss one subject. Choose Channels in the main
 sidebar, or press its plus button to name a channel and choose members. Use
 the gear in the header to change its name, topic or members in a small menu.
 Type `@` to pick a Bot by name. Channel names start
-with `#`. A dot means there are unread messages; opening the conversation
+with `#`, highlight in the sidebar with their chosen color and texture when selected, and can be right-clicked in the sidebar to edit their name, texture toggle, seed, grid scale, and colors. A dot means there are unread messages; opening the conversation
 clears it. The app remembers what you have read after restart.
 Mention a Bot to address it directly. Each Bot
 keeps its own conversation, model and permissions. Stop and approval controls

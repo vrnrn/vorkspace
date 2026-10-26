@@ -6,7 +6,7 @@ Choose a channel under **Channels** in the main sidebar, or use its **+** button
 to create one. Choose member Bots and an optional topic; the gear at the right
 of the header opens a channel settings popover for the name, topic and members.
 Type `@` in the composer to choose a member Bot; Enter or Tab inserts the
-mention, and Escape dismisses suggestions. The sidebar shows channels as `#name`; a dot
+mention, and Escape dismisses suggestions. The sidebar shows channels as `# name` with a 30% opacity concentric-texture or solid-color highlight when selected; right-click a channel row (or click `...`) to customize its name, texture toggle (`60%` vs. No Texture), seed, grid scale, and color(s). A dot
 marks unread messages and clears when you view the conversation. Read markers
 are saved across restarts. Conversations render Markdown and keep a separate
 composer: Enter sends and Shift+Enter adds a line. A human message without mentions

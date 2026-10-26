@@ -1,192 +1,427 @@
-//! PixelMascot.tsx / pixelMascots.ts rendered as native quads.
-use gpui::{AnyElement, Hsla, canvas, prelude::*, px, rgb, rgba};
-use serde::Deserialize;
-use std::{sync::LazyLock, time::Instant};
-#[derive(Deserialize)]
-struct Sprite {
-    name: String,
-    rest: Vec<String>,
-    talk: Vec<String>,
-    eyes: [Vec<[u32; 2]>; 2],
-}
-static SPRITES: LazyLock<Vec<Sprite>> =
-    LazyLock::new(|| serde_json::from_str(include_str!("sprites.json")).unwrap());
+//! 3D curved Bot avatars (`80%` spherical curvature, direct backing, `4` rings/cell
+//! concentric texture at `60%` opacity) + sidebar cursor gaze tracking & textured pills.
+use gpui::{
+    AnyElement, Bounds, Corners, DispatchPhase, ObjectFit, Pixels, Point, RenderImage, Window,
+    canvas, img, prelude::*, px,
+};
+use image::Frame;
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock, Mutex},
+    time::Instant,
+};
+use vorkspace_core::{
+    bot::Bot,
+    project_appearance::{
+        BotAnimState, default_foreground_color, default_seed_for, normalize_badge_shape,
+        normalize_bot_face, render_badge_or_bot, render_textured_pill,
+    },
+};
+
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
-fn tone(mut c: Hsla, t: f32) -> Hsla {
-    c.l = if t >= 0. {
-        c.l + (1. - c.l) * t
-    } else {
-        c.l * (1. + t)
-    };
-    c
+
+#[derive(Default)]
+struct SidebarCursorState {
+    rail_bounds: Option<Bounds<Pixels>>,
+    mouse_pos: Option<Point<Pixels>>,
 }
-fn material(name: &str, x: usize, y: usize, base: Hsla) -> Hsla {
-    match name {
-        "ghost" if y >= 6 => tone(base, -0.08),
-        "robot" => match y {
-            0 => rgb(0xf0d9b1).into(),
-            2 | 3 => tone(base, 0.26),
-            4 => tone(base, -0.24),
-            _ => base,
-        },
-        "cat" if (x == 2 || x == 5) && y == 1 => rgb(0xd78f8b).into(),
-        "cat" if y <= 1 => tone(base, -0.03),
-        "cat" if y == 5 || y == 6 => tone(base, 0.07),
-        "crab" if y <= 1 => tone(base, 0.05),
-        "mushroom" if y >= 5 => rgb(0xf1e3be).into(),
-        "rocket" if y >= 6 => rgb(0xf9c081).into(),
-        "rocket" if y == 5 => tone(base, -0.25),
-        "dino" if y == 2 && x >= 5 => rgb(0xece0ae).into(),
-        "frog" if y == 4 => tone(rgb(0xf5e7ad).into(), -0.03),
-        _ => base,
-    }
-}
-fn paint_sprite(
-    sprite: &Sprite,
-    color: u32,
-    talk: bool,
-    blink: bool,
-    needs_you: bool,
-    mut draw: impl FnMut(f32, f32, f32, f32, Hsla),
-) {
-    let rows = if talk { &sprite.talk } else { &sprite.rest };
-    let mut base: Hsla = rgb(color).into();
-    base.s *= 0.55;
-    base.l += (0.82 - base.l) * 0.55;
-    let filled = |x: isize, y: isize| {
-        x >= 0
-            && y >= 0
-            && rows
-                .get(y as usize)
-                .and_then(|s| s.as_bytes().get(x as usize))
-                == Some(&b'#')
-    };
-    for depth in [true, false] {
-        for (y, row) in rows.iter().enumerate() {
-            for (x, pixel) in row.bytes().enumerate() {
-                if pixel != b'#' {
-                    continue;
-                }
-                let face = tone(
-                    material(&sprite.name, x, y, base),
-                    0.04 + (7. - y as f32) * 0.009 + (3. - x as f32) * 0.006,
-                );
-                let offset = if depth { 0.14 } else { 0. };
-                draw(
-                    2. + (x as f32 + offset) * 1.5,
-                    2. + (y as f32 + offset * 0.66) * 1.5,
-                    1.5,
-                    1.5,
-                    if depth { tone(face, -0.32) } else { face },
-                );
-                if !depth {
-                    if !filled(x as isize, y as isize - 1) {
-                        draw(
-                            2. + x as f32 * 1.5,
-                            2. + y as f32 * 1.5,
-                            1.5,
-                            0.12,
-                            rgba(0xffffed3d).into(),
-                        );
-                    }
-                    if !filled(x as isize - 1, y as isize) {
-                        draw(
-                            2. + x as f32 * 1.5,
-                            2. + y as f32 * 1.5,
-                            0.09,
-                            1.5,
-                            rgba(0xffffed21).into(),
-                        );
-                    }
-                }
-            }
-        }
-    }
-    for &[x, y] in &sprite.eyes[usize::from(talk)] {
-        let x = 2. + x as f32 * 1.5;
-        let y = 2. + y as f32 * 1.5;
-        if blink {
-            draw(x, y + 0.825, 1.5, 0.375, rgb(0x263331).into());
-        } else {
-            draw(
-                x,
-                y,
-                1.5,
-                1.5,
-                rgb(if sprite.name == "rocket" {
-                    0x243e51
-                } else {
-                    0x263331
-                })
-                .into(),
-            );
-            draw(x + 0.225, y + 0.225, 0.375, 0.375, rgba(0xfffff4bf).into());
-        }
-    }
-    if sprite.name == "mushroom" {
-        for (x, y, w, h) in [
-            (3., 0.42, 0.6, 0.35),
-            (1.65, 1.4, 0.5, 0.38),
-            (5.5, 1.7, 0.35, 0.4),
-        ] {
-            draw(
-                2. + x * 1.5,
-                2. + (y + if talk { 1. } else { 0. }) * 1.5,
-                w * 1.5,
-                h * 1.5,
-                rgba(0xfff8e2a8).into(),
-            );
-        }
-    }
-    if needs_you {
-        draw(12.5, -2.5, 3., 3., rgb(0xffd24a).into());
-        draw(13.25, 0.5, 1.5, 1., rgb(0x8c8680).into());
-    }
-}
-pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: bool) -> AnyElement {
-    let index = SPRITES.iter().position(|m| m.name == name).unwrap_or(1);
-    let status = status.to_string();
+static SIDEBAR_CURSOR: LazyLock<Mutex<SidebarCursorState>> =
+    LazyLock::new(|| Mutex::new(SidebarCursorState::default()));
+
+/// Record the sidebar rail bounds and track global mouse movement so Bot avatars
+/// smoothly look toward the cursor whenever it enters the sidebar.
+pub(crate) fn sidebar_cursor_tracker() -> AnyElement {
     canvas(
         |_, _, _| {},
-        move |bounds, _, window, cx| {
-            let t = START.elapsed().as_secs_f32();
-            let animate = !cx.reduce_motion() && (!still || status == "working");
-            if animate {
+        move |bounds, _, window, _| {
+            if let Ok(mut state) = SIDEBAR_CURSOR.lock() {
+                state.rail_bounds = Some(bounds);
+            }
+            window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, _| {
+                if phase == DispatchPhase::Capture
+                    && let Ok(mut state) = SIDEBAR_CURSOR.lock()
+                {
+                    state.mouse_pos = Some(event.position);
+                }
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
+    .into_any_element()
+}
+
+pub(crate) fn to_render_image(mut pixels: image::RgbaImage) -> Arc<RenderImage> {
+    for pixel in pixels.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Arc::new(RenderImage::new(vec![Frame::new(pixels)]))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct BotLookConfig {
+    pub shape: String,
+    pub face: String,
+    pub textured: bool,
+    pub seed: u32,
+    pub grid: u8,
+    pub bg_color: u32,
+    pub fg_color: u32,
+}
+impl BotLookConfig {
+    pub fn from_bot(bot: &Bot) -> Self {
+        Self {
+            shape: bot.badge_shape().into(),
+            face: bot.face_style().into(),
+            textured: bot.textured,
+            seed: bot.resolved_seed(),
+            grid: bot.resolved_grid(),
+            bg_color: bot.color,
+            fg_color: bot.resolved_fg_color(),
+        }
+    }
+    pub fn from_legacy(mascot: &str, color: u32) -> Self {
+        let seed = default_seed_for(&format!("{mascot}:{color:06x}"));
+        Self {
+            shape: "squircle".into(),
+            face: normalize_bot_face(mascot).into(),
+            textured: true,
+            seed,
+            grid: 4,
+            bg_color: color,
+            fg_color: default_foreground_color(color),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct FrameCacheKey {
+    is_bot: bool,
+    shape: String,
+    face: String,
+    needs_you: bool,
+    textured: bool,
+    seed: u32,
+    grid: u8,
+    bg_color: u32,
+    fg_color: u32,
+    pixel_side: u32,
+    yaw_q: i16,
+    pitch_q: i16,
+    blink_q: i16,
+    squash_x_q: i16,
+    squash_y_q: i16,
+    hop_y_q: i16,
+    wide_q: i16,
+    tex_rot_q: i16,
+}
+
+static FRAME_CACHE: LazyLock<Mutex<HashMap<FrameCacheKey, Arc<RenderImage>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct PillCacheKey {
+    seed: u32,
+    grid: u8,
+    textured: bool,
+    bg_color: u32,
+    fg_color: u32,
+    width: u32,
+    height: u32,
+}
+
+static PILL_CACHE: LazyLock<Mutex<HashMap<PillCacheKey, Arc<RenderImage>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) fn cached_badge_or_bot_image(
+    is_bot: bool,
+    look: &BotLookConfig,
+    needs_you: bool,
+    pixel_side: u32,
+    anim: BotAnimState,
+) -> Arc<RenderImage> {
+    let key = FrameCacheKey {
+        is_bot,
+        shape: normalize_badge_shape(&look.shape).into(),
+        face: normalize_bot_face(&look.face).into(),
+        needs_you,
+        textured: look.textured,
+        seed: look.seed,
+        grid: look.grid,
+        bg_color: look.bg_color,
+        fg_color: look.fg_color,
+        pixel_side,
+        yaw_q: (anim.yaw * 40.0).round() as i16,
+        pitch_q: (anim.pitch * 40.0).round() as i16,
+        blink_q: (anim.blink * 25.0).round() as i16,
+        squash_x_q: (anim.squash_x * 100.0).round() as i16,
+        squash_y_q: (anim.squash_y * 100.0).round() as i16,
+        hop_y_q: (anim.hop_y * 100.0).round() as i16,
+        wide_q: (anim.wide * 50.0).round() as i16,
+        tex_rot_q: (anim.tex_rot * 0.5).round() as i16,
+    };
+    if let Ok(cache) = FRAME_CACHE.lock()
+        && let Some(img) = cache.get(&key)
+    {
+        return img.clone();
+    }
+    let rendered = to_render_image(render_badge_or_bot(
+        is_bot,
+        &key.shape,
+        &key.face,
+        needs_you,
+        look.textured,
+        look.seed,
+        look.grid,
+        look.bg_color,
+        look.fg_color,
+        pixel_side,
+        anim,
+    ));
+    if let Ok(mut cache) = FRAME_CACHE.lock() {
+        if cache.len() > 512 {
+            cache.clear();
+        }
+        cache.insert(key, rendered.clone());
+    }
+    rendered
+}
+
+/// Render a 30% opacity full-button concentric texture / color highlight pill for
+/// selected Project and Channel rows in the sidebar.
+pub(crate) fn sidebar_selection_pill(
+    seed: u32,
+    grid: u8,
+    textured: bool,
+    bg_color: u32,
+    fg_color: u32,
+) -> AnyElement {
+    let key = PillCacheKey {
+        seed,
+        grid: grid.clamp(2, 8),
+        textured,
+        bg_color,
+        fg_color,
+        width: 360,
+        height: 64,
+    };
+    let image = if let Ok(cache) = PILL_CACHE.lock()
+        && let Some(found) = cache.get(&key)
+    {
+        found.clone()
+    } else {
+        let rendered = to_render_image(render_textured_pill(
+            key.seed,
+            key.grid,
+            key.textured,
+            key.bg_color,
+            key.fg_color,
+            key.width,
+            key.height,
+        ));
+        if let Ok(mut cache) = PILL_CACHE.lock() {
+            if cache.len() > 128 {
+                cache.clear();
+            }
+            cache.insert(key, rendered.clone());
+        }
+        rendered
+    };
+    img(image)
+        .absolute()
+        .inset_0()
+        .size_full()
+        .rounded_md()
+        .object_fit(ObjectFit::Fill)
+        .into_any_element()
+}
+
+fn compute_bot_anim(
+    seed: u32,
+    status: &str,
+    bounds: Bounds<Pixels>,
+    animate: bool,
+) -> (BotAnimState, bool) {
+    let offset = (seed % 97) as f32 * 0.17;
+    if !animate {
+        return (
+            BotAnimState {
+                yaw: 0.25,
+                pitch: -0.18,
+                blink: 1.0,
+                squash_x: 1.0,
+                squash_y: 1.0,
+                hop_y: 0.0,
+                wide: if status == "needs-you" { 1.14 } else { 1.0 },
+                tex_rot: 0.0,
+            },
+            false,
+        );
+    }
+
+    let now = START.elapsed().as_secs_f32();
+    let t = now + offset;
+    let mut anim = BotAnimState::default();
+
+    let blink_cycle = (t * 0.22).rem_euclid(1.0);
+    if status != "needs-you" && blink_cycle > 0.94 {
+        let u = (blink_cycle - 0.94) / 0.06;
+        anim.blink = (u * std::f32::consts::PI).cos().abs().max(0.08);
+    }
+
+    let mut following_cursor = false;
+    if let Ok(cursor) = SIDEBAR_CURSOR.lock()
+        && let (Some(rail), Some(mouse)) = (cursor.rail_bounds, cursor.mouse_pos)
+        && rail.contains(&mouse)
+        && rail.contains(&bounds.center())
+    {
+        following_cursor = true;
+        let cx = bounds.center().x.as_f32();
+        let cy = bounds.center().y.as_f32();
+        let mx = mouse.x.as_f32();
+        let my = mouse.y.as_f32();
+        anim.yaw = ((mx - cx) / 140.0).clamp(-0.78, 0.78);
+        anim.pitch = ((my - cy) / 140.0).clamp(-0.68, 0.68);
+    }
+
+    if !following_cursor {
+        if status == "working" {
+            // Working: Rhythmic Nod + Half-Speed Texture Flow (14 deg/sec)
+            let pulse = (t * 5.2).sin();
+            anim.yaw = (t * 1.3).sin() * 0.28;
+            anim.pitch = pulse * 0.28;
+            anim.squash_x = 1.0 + pulse * 0.045;
+            anim.squash_y = 1.0 - pulse * 0.045;
+            anim.hop_y = -pulse.abs() * 0.025;
+            anim.tex_rot = (now * 14.0).rem_euclid(360.0);
+        } else if status == "needs-you" {
+            anim.yaw = (t * 6.0).sin() * 0.05;
+            anim.pitch = -0.12;
+            anim.wide = 1.14;
+            anim.hop_y = -(t * 3.2).sin().abs() * 0.035;
+        } else {
+            // Auto 3D Gaze (idle)
+            let s1 = (t * 0.75).sin() + 0.45 * (t * 1.9).sin();
+            let s2 = (t * 0.6).cos() - 0.35 * (t * 1.4).sin();
+            anim.yaw = (s1 * 0.38).clamp(-0.68, 0.68);
+            anim.pitch = (s2 * 0.30 - 0.08).clamp(-0.55, 0.55);
+        }
+    } else if status == "working" {
+        anim.tex_rot = (now * 14.0).rem_euclid(360.0);
+    }
+
+    (anim, true)
+}
+
+pub(crate) fn bot_avatar(bot: &Bot, status: &str, side: f32, still: bool) -> AnyElement {
+    avatar_with_look(BotLookConfig::from_bot(bot), status, side, still)
+}
+
+pub(crate) fn avatar_with_look(
+    look: BotLookConfig,
+    status: &str,
+    side: f32,
+    still: bool,
+) -> AnyElement {
+    let status = status.to_string();
+    let pixel_side = ((side * 2.0).round() as u32).clamp(28, 128);
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window: &mut Window, cx| {
+            let sidebar_hovered = SIDEBAR_CURSOR.lock().ok().is_some_and(|c| {
+                c.rail_bounds.zip(c.mouse_pos).is_some_and(|(rail, pos)| {
+                    rail.contains(&pos) && rail.contains(&bounds.center())
+                })
+            });
+            let animate = !cx.reduce_motion() && (!still || status == "working" || sidebar_hovered);
+            let (anim, needs_frame) = compute_bot_anim(look.seed, &status, bounds, animate);
+            if needs_frame {
                 window.request_animation_frame();
             }
-            let talk = animate && status == "working" && (t * 3.).floor() as u64 % 2 == 1;
-            let hop = if animate {
-                if status == "working" {
-                    -(t * 9.).sin().abs() * 0.9
-                } else if status == "needs-you" {
-                    0.
-                } else {
-                    (t * 2.5).sin() * 0.25
-                }
-            } else {
-                0.
-            };
-            let blink = animate && status != "needs-you" && (t + index as f32 * 0.37) % 5.2 > 5.05;
-            let unit = bounds.size.width / 16.;
-            paint_sprite(
-                &SPRITES[index],
-                color,
-                talk,
-                blink,
-                status == "needs-you",
-                |x, y, w, h, color| {
-                    window.paint_quad(gpui::fill(
-                        gpui::Bounds::new(
-                            bounds.origin + gpui::point(unit * x, unit * (y + hop)),
-                            gpui::size(unit * w, unit * h),
-                        ),
-                        color,
-                    ));
-                },
-            );
+            let image =
+                cached_badge_or_bot_image(true, &look, status == "needs-you", pixel_side, anim);
+            let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
         },
     )
     .size(px(side))
     .flex_shrink_0()
     .into_any_element()
+}
+
+pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: bool) -> AnyElement {
+    avatar_with_look(BotLookConfig::from_legacy(name, color), status, side, still)
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct SwatchCacheKey {
+    bg: u32,
+    fg: Option<u32>,
+    pixel_side: u32,
+}
+
+static SWATCH_CACHE: LazyLock<Mutex<HashMap<SwatchCacheKey, Arc<RenderImage>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Render a crisp, anti-aliased circular color swatch (solid `bg` when `fg` is `None`,
+/// or vertically split left=`bg` / right=`fg` when `fg` is `Some`).
+pub(crate) fn color_swatch_circle(bg: u32, fg: Option<u32>, side: f32) -> AnyElement {
+    let pixel_side = ((side * 2.0).round() as u32).clamp(24, 64);
+    let key = SwatchCacheKey { bg, fg, pixel_side };
+    let image = if let Ok(cache) = SWATCH_CACHE.lock()
+        && let Some(found) = cache.get(&key)
+    {
+        found.clone()
+    } else {
+        let mut buf = image::RgbaImage::new(pixel_side, pixel_side);
+        let center = pixel_side as f32 * 0.5;
+        let radius = center - 0.75;
+        let bg_rgb = (
+            ((bg >> 16) & 0xff) as f32,
+            ((bg >> 8) & 0xff) as f32,
+            (bg & 0xff) as f32,
+        );
+        let fg_rgb = fg
+            .map(|c| {
+                (
+                    ((c >> 16) & 0xff) as f32,
+                    ((c >> 8) & 0xff) as f32,
+                    (c & 0xff) as f32,
+                )
+            })
+            .unwrap_or(bg_rgb);
+        for py in 0..pixel_side {
+            let dy = py as f32 + 0.5 - center;
+            for px_x in 0..pixel_side {
+                let dx = px_x as f32 + 0.5 - center;
+                let dist = (dx * dx + dy * dy).sqrt();
+                let cov = (radius + 0.5 - dist).clamp(0.0, 1.0);
+                if cov <= 0.0 {
+                    continue;
+                }
+                let t = if fg.is_some() {
+                    (dx + 0.5).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let r = (bg_rgb.0 * (1.0 - t) + fg_rgb.0 * t).round() as u8;
+                let g = (bg_rgb.1 * (1.0 - t) + fg_rgb.1 * t).round() as u8;
+                let b = (bg_rgb.2 * (1.0 - t) + fg_rgb.2 * t).round() as u8;
+                let a = (cov * 255.0).round() as u8;
+                buf.put_pixel(px_x, py, image::Rgba([r, g, b, a]));
+            }
+        }
+        let rendered = to_render_image(buf);
+        if let Ok(mut cache) = SWATCH_CACHE.lock() {
+            if cache.len() > 128 {
+                cache.clear();
+            }
+            cache.insert(key, rendered.clone());
+        }
+        rendered
+    };
+    img(image)
+        .size(px(side))
+        .object_fit(ObjectFit::Contain)
+        .flex_shrink_0()
+        .into_any_element()
 }

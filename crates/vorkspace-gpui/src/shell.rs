@@ -1694,7 +1694,14 @@ impl Shell {
         let scale = if delta == 0 {
             100
         } else {
-            (self.workspace.preferences.ui_scale as i32 + delta).clamp(50, 200) as u32
+            self.workspace
+                .preferences
+                .ui_scale
+                .saturating_add_signed(delta)
+                .clamp(
+                    crate::settings::Preferences::MIN_UI_SCALE_PERCENT,
+                    crate::settings::Preferences::MAX_UI_SCALE_PERCENT,
+                )
         };
         if self.workspace.preferences.ui_scale == scale {
             return;
@@ -7056,7 +7063,7 @@ fn enter_from(leaf: &LayoutLeaf) -> (Edge, Rect) {
 }
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let scale = self.workspace.preferences.ui_scale.clamp(50, 200) as f32 / 100.;
+        let scale = self.workspace.preferences.interface_scale();
         if window.ui_scale() != scale {
             window.set_ui_scale(scale, cx);
             self.close_preview(cx);
@@ -8508,8 +8515,12 @@ mod tests {
             .expect("appearance controls in the flyout");
         visual.simulate_click(color.center(), Default::default());
         visual.run_until_parked();
-        let mascot = visual.debug_bounds("project-mascot-3").unwrap();
-        visual.simulate_click(mascot.center(), Default::default());
+        let grid_slider = visual.debug_bounds("project-grid-slider").unwrap();
+        let click_x = grid_slider.left() + grid_slider.size.width * (4. / 6.);
+        visual.simulate_click(
+            gpui::point(click_x, grid_slider.center().y),
+            Default::default(),
+        );
         visual.run_until_parked();
         visual.simulate_keystrokes("escape");
         visual.run_until_parked();
@@ -8523,7 +8534,7 @@ mod tests {
                     .get_mut("/work/vorkspace")
                     .unwrap();
                 assert_eq!(appearance.color, Some(COLORS[4]));
-                assert_eq!(appearance.mascot.as_deref(), Some("cat"));
+                assert_eq!(appearance.grid, Some(6));
                 appearance.background = Some(Background {
                     path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vorkspace.png").into(),
                     ..Default::default()

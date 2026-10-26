@@ -25,7 +25,7 @@ impl TranscriptView {
         let recipient = self
             .bot_look
             .as_ref()
-            .map_or("Bot", |(_, _, name)| name.as_ref());
+            .map_or("Bot", |(_, name)| name.as_ref());
         div()
             .id("bot-peer-message-label")
             .debug_selector(|| "bot-peer-message-label".into())

@@ -1,7 +1,11 @@
 //! Durable channel intent. A claimed delivery is never automatically replayed
 //! after a crash: its provider may already have performed external effects.
 use super::{Bot, Roster};
-use crate::{store::Store, time::now_ms};
+use crate::{
+    project_appearance::{default_foreground_color, default_seed_for, COLORS},
+    store::Store,
+    time::now_ms,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -10,12 +14,29 @@ const KEY: &str = "bot-channels-native-v1";
 pub const MAX_HOPS: u8 = 4;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+fn default_channel_textured() -> bool {
+    true
+}
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Channel {
     pub id: String,
     pub name: String,
     pub topic: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg_color: Option<u32>,
+    #[serde(default = "default_channel_textured", skip_serializing_if = "is_true")]
+    pub textured: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<u8>,
     pub member_ids: Vec<String>,
     pub member_sessions: BTreeMap<String, i64>,
     pub messages: Vec<Value>,
@@ -24,6 +45,60 @@ pub struct Channel {
     pub updated_at: u64,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+impl Default for Channel {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            topic: String::new(),
+            color: None,
+            fg_color: None,
+            textured: true,
+            seed: None,
+            grid: None,
+            member_ids: Vec::new(),
+            member_sessions: BTreeMap::new(),
+            messages: Vec::new(),
+            deliveries: Vec::new(),
+            created_at: 0,
+            updated_at: 0,
+            extra: BTreeMap::new(),
+        }
+    }
+}
+impl Channel {
+    pub fn resolved_color(&self) -> u32 {
+        self.color.filter(|c| *c <= 0xffffff).unwrap_or_else(|| {
+            let key = if self.id.is_empty() {
+                &self.name
+            } else {
+                &self.id
+            };
+            let hash = key
+                .encode_utf16()
+                .fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(c.into()));
+            COLORS[(hash as usize % (COLORS.len() - 1)) + 1]
+        })
+    }
+    pub fn resolved_fg_color(&self) -> u32 {
+        self.fg_color
+            .filter(|c| *c <= 0xffffff)
+            .unwrap_or_else(|| default_foreground_color(self.resolved_color()))
+    }
+    pub fn resolved_seed(&self) -> u32 {
+        self.seed.filter(|&s| s > 0).unwrap_or_else(|| {
+            let key = if self.id.is_empty() {
+                &self.name
+            } else {
+                &self.id
+            };
+            default_seed_for(key)
+        })
+    }
+    pub fn resolved_grid(&self) -> u8 {
+        self.grid.unwrap_or(4).clamp(2, 8)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
