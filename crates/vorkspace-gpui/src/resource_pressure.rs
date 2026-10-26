@@ -3,7 +3,7 @@
 use crate::{popover::AnchorSlot, right_panel::spinner, theme::*};
 use gpui::{
     AnyElement, Context, EventEmitter, FocusHandle, FontWeight, Role, ScrollHandle, SharedString,
-    Task, Window, div, prelude::*, px, rgb,
+    Task, Window, div, prelude::*, px,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -13,9 +13,6 @@ use vorkspace_core::resources::{self, OwnedProcess, Pressure, Sample};
 
 const TICK: Duration = Duration::from_millis(500);
 const POLL: Duration = Duration::from_secs(3);
-const AMBER: u32 = 0xfbbf24;
-const EMERALD: u32 = 0x10b981;
-const RED: u32 = 0xf87171;
 
 /// What the dialog shows for a session that owns running work.
 pub(crate) struct SessionInfo {
@@ -292,7 +289,7 @@ impl ResourceMonitor {
                 .role(Role::Alert)
                 .mt_3()
                 .text_size(px(12.))
-                .text_color(rgb(RED))
+                .text_color(status(StatusColor::Danger, 1.))
                 .child(text)
         };
         div()
@@ -355,9 +352,9 @@ impl ResourceMonitor {
                             .py(px(10.))
                             .child(
                                 div().mt(px(2.)).child(if active {
-                                    icon("circle-alert", 16.).text_color(rgb(AMBER))
+                                    icon("circle-alert", 16.).text_color(status(StatusColor::Warning, 1.))
                                 } else {
-                                    icon("check", 16.).text_color(rgb(EMERALD))
+                                    icon("check", 16.).text_color(status(StatusColor::Success, 1.))
                                 }),
                             )
                             .child(
@@ -542,7 +539,10 @@ impl ResourceMonitor {
                                         d.opacity(0.4)
                                     } else {
                                         d.cursor_pointer()
-                                            .hover(|s| s.bg(red(0.1)).text_color(rgb(RED)))
+                                            .hover(|s| {
+                                                s.bg(status(StatusColor::Danger, 0.1))
+                                                    .text_color(status(StatusColor::Danger, 1.))
+                                            })
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.stop_session(id, cx)
                                             }))
@@ -685,7 +685,10 @@ impl ResourceMonitor {
                             d.opacity(0.4)
                         } else {
                             d.cursor_pointer()
-                                .hover(|s| s.bg(red(0.1)).text_color(rgb(RED)))
+                                .hover(|s| {
+                                    s.bg(status(StatusColor::Danger, 0.1))
+                                        .text_color(status(StatusColor::Danger, 1.))
+                                })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if agent {
                                         this.stop_session(session, cx);
@@ -743,7 +746,9 @@ impl Render for ResourceMonitor {
                             }
                         })
                         .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                        .child(icon("circle-alert", 14.).text_color(rgb(AMBER)))
+                        .child(
+                            icon("circle-alert", 14.).text_color(status(StatusColor::Warning, 1.)),
+                        )
                         .when(!self.compact, |d| d.child("High usage"))
                         .on_click(cx.listener(|this, _, window, cx| this.open(window, cx)))
                         .on_key_down(cx.listener(
@@ -757,12 +762,6 @@ impl Render for ResourceMonitor {
                 )
             })
     }
-}
-
-fn red(alpha: f32) -> gpui::Hsla {
-    let mut color: gpui::Hsla = rgb(RED).into();
-    color.a = alpha;
-    color
 }
 
 /// Keep controls under the pointer while CPU usage changes between polls:

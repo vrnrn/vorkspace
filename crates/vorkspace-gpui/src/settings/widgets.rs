@@ -10,14 +10,11 @@ use gpui::{
     SharedString, Stateful, div, prelude::*, px, relative, rgb,
 };
 
-pub(super) const RED: u32 = 0xf87171;
 /// `text-[12px] leading-relaxed` and `text-[13px]` line boxes.
 const RELAXED_12: f32 = 19.5;
 
 pub(super) fn red(alpha: f32) -> Hsla {
-    let mut color: Hsla = rgb(RED).into();
-    color.a = alpha;
-    color
+    status(StatusColor::Danger, alpha)
 }
 pub(super) fn accent(alpha: f32) -> Hsla {
     let mut color: Hsla = accent_color();
@@ -70,14 +67,11 @@ pub(crate) fn secondary_button(
 ) -> Stateful<Div> {
     button_base(id, label).map(|d| {
         if disabled {
-            d.opacity(0.4).text_color(if danger {
-                rgb(RED).into()
-            } else {
-                content(0.7)
-            })
+            d.opacity(0.4)
+                .text_color(if danger { red(1.) } else { content(0.7) })
         } else if danger {
             d.cursor_pointer()
-                .text_color(rgb(RED))
+                .text_color(red(1.))
                 .hover(|s| s.border_color(red(0.4)).bg(red(0.1)))
         } else {
             d.cursor_pointer()

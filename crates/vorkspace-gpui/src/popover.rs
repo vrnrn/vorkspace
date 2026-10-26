@@ -907,9 +907,28 @@ const MENU_WIDTH: f32 = 228.;
 const MENU_MIN_WIDTH: f32 = 160.;
 // Tailwind v4 reds.
 const RED_300: u32 = 0xffa2a2;
-/// Danger ink on a light surface; ThemeColor::Negative's light value.
-const RED_LIGHT_INK: u32 = 0xb9313d;
 const RED_500: u32 = 0xfb2c36;
+
+// Dark menus intentionally use softer resting ink and a stronger fill than
+// danger buttons. Light menus need dark ink even when keyboard-highlighted:
+// their red wash is translucent, not an opaque red selection background.
+fn danger_ink(highlighted: bool) -> Hsla {
+    if is_light() {
+        status(StatusColor::Danger, 1.)
+    } else {
+        let ink: Hsla = rgb(RED_300).into();
+        ink.opacity(if highlighted { 1. } else { 0.9 })
+    }
+}
+
+fn danger_fill(highlighted: bool) -> Hsla {
+    let fill = if is_light() {
+        status(StatusColor::Danger, 1.)
+    } else {
+        rgb(RED_500).into()
+    };
+    fill.opacity(if highlighted { 0.2 } else { 0.15 })
+}
 
 /// ExplorerMenu and its siblings: takes focus on open, highlights under the
 /// pointer and with the arrow keys, and opens one level of submenu or flyout.
@@ -1198,20 +1217,13 @@ impl Menu {
         in_submenu: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // A highlighted danger row sits on a red fill, so it keeps the pale ink.
-        let red: Hsla = rgb(if is_light() && !highlighted {
-            RED_LIGHT_INK
-        } else {
-            RED_300
-        })
-        .into();
         let rich = matches!(style, MenuStyle::Composer | MenuStyle::Access);
         // The plus menu dims a disabled row whole; the others grey its ink.
         let dim = action.disabled && (rich || style == MenuStyle::Git);
         let ink = if action.disabled && !dim {
             content(0.3)
         } else if action.danger {
-            red.opacity(if highlighted { 1. } else { 0.9 })
+            danger_ink(highlighted)
         } else {
             content(1.)
         };
@@ -1221,20 +1233,11 @@ impl Menu {
             || (style == MenuStyle::Switcher && open);
         let fill = match style {
             MenuStyle::Switcher => content(0.08),
-            _ if action.danger => rgb(RED_500).into(),
+            _ if action.danger => danger_fill(true),
             _ => content(0.1),
         };
-        let fill = if action.danger && style != MenuStyle::Switcher {
-            fill.opacity(0.2)
-        } else {
-            fill
-        };
         let hover = match style {
-            _ if action.danger => {
-                let mut c: Hsla = rgb(RED_500).into();
-                c.a = 0.15;
-                c
-            }
+            _ if action.danger => danger_fill(false),
             MenuStyle::Switcher => content(0.08),
             MenuStyle::Composer | MenuStyle::Git => content(0.1),
             _ => content(0.05),
@@ -1862,6 +1865,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn danger_rows_keep_readable_ink_when_highlighted_or_hovered() {
+        for appearance in ["dark", "light"] {
+            let preferences = crate::settings::Preferences {
+                theme: appearance.into(),
+                ..Default::default()
+            };
+            let _restore = test_appearance(&preferences, false, false);
+            for highlighted in [false, true] {
+                let ink = danger_ink(highlighted);
+                for fill in [
+                    content(0.),
+                    danger_fill(false),
+                    danger_fill(true),
+                    content(0.08),
+                ] {
+                    let background = floating_fill().blend(fill);
+                    let contrast = test_contrast(ink, background);
+                    assert!(
+                        contrast >= 4.5,
+                        "{appearance}, highlighted={highlighted}, fill={fill:?}: {contrast}"
+                    );
+                }
+                if appearance == "dark" {
+                    let original: Hsla = rgb(RED_300).into();
+                    assert_eq!(ink, original.opacity(if highlighted { 1. } else { 0.9 }));
+                    let original_fill: Hsla = rgb(RED_500).into();
+                    assert_eq!(danger_fill(true), original_fill.opacity(0.2));
+                    assert_eq!(danger_fill(false), original_fill.opacity(0.15));
+                } else {
+                    assert_eq!(ink, status(StatusColor::Danger, 1.));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn entrance_uses_react_timing_and_the_resolved_side() {
         assert_eq!(entrance(0.), 0.);
         assert_eq!(entrance(MENU_IN), 1.);
@@ -2037,6 +2076,64 @@ mod tests {
             div()
                 .size_full()
                 .child(menu_popover(&self.menu, Anchor::Point(self.anchor), cx))
+        }
+    }
+
+    #[gpui::test]
+    fn selected_danger_row_repaints_on_theme_change_without_losing_focus(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        crate::clock::use_test_clock(cx);
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.new(|cx| MenuHost {
+                    menu: cx.new(|cx| {
+                        Menu::new(
+                            "Actions",
+                            vec![
+                                MenuAction::new("delete", "Delete conversation")
+                                    .danger()
+                                    .into(),
+                            ],
+                            window,
+                            cx,
+                        )
+                    }),
+                    anchor: point(px(100.), px(100.)),
+                })
+            })
+            .unwrap()
+        });
+        let mut previous_bounds = None;
+        for appearance in ["dark", "light", "dark"] {
+            let preferences = crate::settings::Preferences {
+                theme: appearance.into(),
+                ..Default::default()
+            };
+            let _restore = test_appearance(&preferences, false, false);
+            window.update(cx, |_, _, cx| cx.notify()).unwrap();
+            cx.refresh().unwrap();
+            crate::clock::settle_animations(window, cx);
+            window
+                .update(cx, |host, window, cx| {
+                    let menu = host.menu.read(cx);
+                    assert_eq!(menu.active, Some(0));
+                    assert!(menu.focus.is_focused(window));
+                    let bounds = menu.rows[0].get().expect("danger row stays visible");
+                    if let Some(previous) = previous_bounds {
+                        assert_eq!(bounds, previous, "theme changes preserve menu geometry");
+                    }
+                    previous_bounds = Some(bounds);
+                    let fill = gpui::Background::from(danger_fill(true));
+                    assert!(
+                        window
+                            .painted_quads()
+                            .iter()
+                            .any(|quad| quad.background == fill),
+                        "selected danger wash must repaint for {appearance}"
+                    );
+                })
+                .unwrap();
         }
     }
 

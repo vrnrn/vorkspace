@@ -33,6 +33,7 @@ use crate::{
         menu_popover, popover,
     },
     response_actions::{Request as ResponseRequest, Transfer},
+    right_panel::AMBER_400,
     runtime::{Database, locked, run_turn},
     theme::*,
     transcript::TranscriptView,
@@ -94,7 +95,6 @@ const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
 const YELLOW_300: u32 = 0xffdf20;
 const SKY_300: u32 = 0x74d4ff;
 const FUCHSIA_300: u32 = 0xf4a8ff;
-const AMBER_400: u32 = 0xffb900;
 fn tint(color: u32, alpha: f32) -> gpui::Hsla {
     let mut c: gpui::Hsla = gpui::rgb(color).into();
     c.a = alpha;
