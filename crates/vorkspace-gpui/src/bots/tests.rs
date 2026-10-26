@@ -1524,6 +1524,17 @@ fn settings_match_react_dialog_and_left_navigation_geometry(cx: &mut TestAppCont
         visual.debug_bounds("bot-name-field").unwrap().size,
         gpui::size(px(160.), px(32.))
     );
+    // Real input runs outside the drawing context. The preview must repaint
+    // without asking for the current rendering view from this event handler.
+    for pointer in [
+        visual.debug_bounds("bot-look").unwrap().center(),
+        visual.debug_bounds("bot-delete").unwrap().center(),
+        nav.center(),
+    ] {
+        visual.simulate_mouse_move(pointer, None, Default::default());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+    }
 }
 
 #[gpui::test]
@@ -3420,6 +3431,8 @@ fn new_bot_footer_remains_visible_at_narrow_window_sizes(cx: &mut TestAppContext
         let look = visual.debug_bounds("bot-look").unwrap();
         let name = visual.debug_bounds("bot-name-field").unwrap();
         assert!(name.top() >= look.bottom());
+        visual.simulate_mouse_move(look.center(), None, Default::default());
+        visual.run_until_parked();
         if viewport.width >= px(780.) {
             let model = visual.debug_bounds("bot-model-settings").unwrap();
             assert!(model.left() > name.right());

@@ -383,9 +383,12 @@ pub(super) fn settings_preview(
                 window.request_animation_frame();
             }
             // Direct pointer feedback remains live with reduced motion enabled.
-            window.on_mouse_event(|_: &gpui::MouseMoveEvent, phase, window, _| {
+            // Capture the drawing owner now: input dispatch has no rendering
+            // context, so request_animation_frame cannot be called there.
+            let view = window.current_view();
+            window.on_mouse_event(move |_: &gpui::MouseMoveEvent, phase, _, cx| {
                 if phase == DispatchPhase::Capture {
-                    window.request_animation_frame();
+                    cx.notify(view);
                 }
             });
             let pixel_side = (bounds.size.width.as_f32() * window.scale_factor())
