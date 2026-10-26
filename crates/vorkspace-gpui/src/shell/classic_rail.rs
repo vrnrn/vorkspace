@@ -80,6 +80,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let width = self.classic_rail_width();
+        // Early-return layouts must stop the card's presentation clock too.
+        if width <= 0. || self.settings.is_some() {
+            self.live_agents.update(cx, |activity, _| activity.hide());
+        }
         if width <= 0. {
             return div()
                 .id("classic-project-rail")
@@ -325,6 +329,7 @@ impl Shell {
                 },
             )
             .child(div().mx_2().child(self.resources.clone()))
+            .children(self.live_agents_preview(false, cx))
             .when(self.workspace.sidebar_subscriptions_visible, |d| {
                 d.child(div().px_2().child(self.usage_footer.clone()))
             })
@@ -796,6 +801,7 @@ impl Shell {
                         }),
                 ),
         )
+        .children(self.live_agents_preview(true, cx))
         .child(compact_footer(
             self.resources.clone(),
             self.workspace

@@ -11,6 +11,7 @@ mod idle_agents;
 #[cfg(test)]
 mod image_lightbox_tests;
 mod layout;
+mod live_agents;
 mod notifications;
 mod orchestration;
 mod picker_preferences;
@@ -523,6 +524,7 @@ pub(crate) struct Shell {
     notification_state: notifications::State,
     quick: crate::quick_composer::Controller,
     unseen_finished: HashSet<i64>,
+    live_agents: Entity<live_agents::LiveAgents>,
     archiving: HashSet<i64>,
     groups: HashMap<String, vorkspace_core::session_groups::Groups>,
     reminders: Vec<vorkspace_core::store::Reminder>,
@@ -805,6 +807,8 @@ impl Shell {
         let worktree_focus = workspace.worktree_focus.clone();
         let session_worktrees = sidebar_metadata.worktrees;
         let notification_state = notifications::State::new(&workspace, cx);
+        let owner = cx.weak_entity();
+        let live_agents = cx.new(|_| live_agents::LiveAgents::new(owner));
         let mut this = Self {
             #[cfg(not(test))]
             status_menu: None,
@@ -849,6 +853,7 @@ impl Shell {
             notification_state,
             quick: Default::default(),
             unseen_finished: HashSet::new(),
+            live_agents,
             archiving: HashSet::new(),
             groups: sidebar_metadata.groups,
             reminders: sidebar_metadata.reminders,
@@ -1245,7 +1250,11 @@ impl Shell {
         };
         let session = view.read(cx);
         let busy = session.responding();
-        let focused = !self.app_view_open() && self.workspace.active == Some(id);
+        let focused = !self.app_view_open()
+            && !self.bot_active(cx)
+            && self.settings.is_none()
+            && self.app_search.is_none()
+            && self.workspace.active == Some(id);
         if busy {
             self.busy_sessions.insert(id);
             self.unseen_finished.remove(&id);
@@ -1275,6 +1284,9 @@ impl Shell {
             state
         };
         let provider = session.summary.provider.clone();
+        self.live_agents.update(cx, |activity, _| {
+            activity.record(id, busy, self.unseen_finished.contains(&id));
+        });
         self.session_marks[&id].update(cx, |mark, cx| mark.set(&provider, state, cx));
         self.tab_marks[&id].update(cx, |mark, cx| mark.set(&provider, tab_state, cx));
     }
@@ -1388,6 +1400,7 @@ impl Shell {
         .detach();
     }
     fn notify_sidebar(&self, cx: &mut Context<Self>) {
+        self.sync_live_agents(cx);
         self.sidebar_list.invalidate_structure();
         self.sidebar_frame.update(cx, |_, cx| cx.notify());
         self.project_rail_frame.update(cx, |_, cx| cx.notify());

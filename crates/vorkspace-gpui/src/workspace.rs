@@ -241,7 +241,7 @@ pub(crate) struct Workspace {
     pub sidebar_automations_visible: bool,
     pub sidebar_terminal_visible: bool,
     pub sidebar_inbox_visible: bool,
-    /// Inert legacy preference for the retired Activity card.
+    /// Show qualifying running and unseen finished sessions in the project rail.
     pub sidebar_activity_visible: bool,
     pub sidebar_subscriptions_visible: bool,
     /// The inset right panel: open state, tab, width and tab order.
