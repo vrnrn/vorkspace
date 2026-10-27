@@ -196,3 +196,30 @@ fn dropping_gateway_closes_admitted_sockets_and_its_listener() {
         result => panic!("socket remained open after gateway shutdown: {result:?}"),
     }
 }
+
+#[test]
+fn supports_any_gpt_model_with_major_version_six_or_newer() {
+    for id in [
+        "gpt-6-luna",
+        "gpt-6.1-sol",
+        "gpt-6-astra",
+        "gpt-7",
+        "gpt-10.2-x",
+    ] {
+        assert!(protocol::supported(id), "{id}");
+        assert_eq!(protocol::model_id(&format!("copilot/{id}")), Ok(id));
+    }
+    for id in [
+        "gpt-5.6-luna",
+        "gpt-5",
+        "gpt-",
+        "gpt-x-6",
+        "kimi-k3",
+        "claude-6",
+        "gpt-60x",
+        "",
+    ] {
+        assert!(!protocol::supported(id), "{id}");
+    }
+    assert!(protocol::model_id("copilot/gpt-5.6-luna").is_err());
+}

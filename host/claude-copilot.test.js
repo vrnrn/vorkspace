@@ -214,6 +214,47 @@ describe("Copilot Responses to Claude Messages", () => {
       vi.unstubAllGlobals();
     }
   });
+  it("lists any GPT model with major version 6 or newer and nothing older", async () => {
+    const row = (id) => ({
+      id,
+      name: id,
+      supported_endpoints: ["/responses"],
+      capabilities: {
+        limits: {
+          max_context_window_tokens: 1_000_000,
+          max_prompt_tokens: 872_000,
+        },
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          data: ["gpt-6-astra", "gpt-7", "gpt-5.6-luna", "kimi-k3"].map(row),
+        }),
+      ),
+    );
+    try {
+      expect((await listModels("fixture-credential")).map((m) => m.id)).toEqual(
+        ["gpt-6-astra", "gpt-7"],
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it("requires COPILOT_GITHUB_TOKEN instead of falling back to gh", async () => {
+    const previous = process.env.COPILOT_GITHUB_TOKEN;
+    delete process.env.COPILOT_GITHUB_TOKEN;
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await expect(listModels()).rejects.toThrow("COPILOT_GITHUB_TOKEN");
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      if (previous !== undefined) process.env.COPILOT_GITHUB_TOKEN = previous;
+    }
+  });
   it("reserves the output budget inside each 1M context window", async () => {
     vi.stubGlobal(
       "fetch",

@@ -37,8 +37,8 @@ If you have more than one **Claude Code** or **Codex** account (for example, a p
 
 ## 4. Bonus: Using GitHub Copilot Models Inside Claude Code
 
-If you have a GitHub Copilot subscription (`gh auth login` or `COPILOT_GITHUB_TOKEN`) and Claude Code installed, Vorkspace has a neat trick:
-- It starts a small, private Rust translator on your computer that lets Claude Code use **GPT-6.1 Sol (1M)** and **GPT-6 Luna (1M)** through your Copilot account!
+If you have a GitHub Copilot subscription, you have set `COPILOT_GITHUB_TOKEN` yourself (being logged in with `gh` is not enough on purpose), and Claude Code is installed, Vorkspace has a neat trick:
+- It starts a small, private Rust translator on your computer that lets Claude Code use Copilot's GPT models (any GPT-6 or newer, like **GPT-6.1 Sol (1M)** and **GPT-6 Luna (1M)**) through your Copilot account!
 - That translator stays with the running Claude process, including pauses between turns, and never alters your normal Claude settings.
 - And if your company uses **AWS Bedrock** for Claude Code, Vorkspace uses that setup and shows **AWS Bedrock** in the sidebar's Subscriptions section. It won't ask you to sign into a Claude subscription or show made-up subscription percentages. Set up AWS access in Claude Code first, then restart Vorkspace.
 
