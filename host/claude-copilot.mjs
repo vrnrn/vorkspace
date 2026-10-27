@@ -1,26 +1,21 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 
 const API = "https://api.githubcopilot.com";
-const MODELS = new Set(["gpt-6.1-sol", "gpt-6-luna"]);
+// Any GPT model whose major version is 6 or newer; gpt-5.6-* stays excluded.
+const supported = (id) => {
+  const major = /^gpt-(\d+)(?:[.-]|$)/.exec(id ?? "")?.[1];
+  return major !== undefined && Number(major) >= 6;
+};
 
+// Copilot access is opt-in: a gh login alone must not enable it.
 function token() {
   const inherited = process.env.COPILOT_GITHUB_TOKEN?.trim();
   if (inherited) return inherited;
-  try {
-    const value = execFileSync("gh", ["auth", "token"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5_000,
-    }).trim();
-    if (value) return value;
-  } catch {
-    /* Report one credential error without token output. */
-  }
-  throw new Error("Export COPILOT_GITHUB_TOKEN or sign in with gh auth login.");
+  throw new Error("Export COPILOT_GITHUB_TOKEN to use Copilot models.");
 }
 
 function headers(credential) {
@@ -66,7 +61,7 @@ export async function listModels(credential = token()) {
   return data
     .filter(
       (model) =>
-        MODELS.has(model.id) &&
+        supported(model.id) &&
         model.supported_endpoints?.includes("/responses") &&
         model.capabilities?.limits?.max_context_window_tokens >= 1_000_000 &&
         Number.isSafeInteger(model.capabilities?.limits?.max_prompt_tokens) &&
@@ -87,7 +82,7 @@ export async function listModels(credential = token()) {
 
 function modelId(model) {
   const id = model?.replace(/^copilot\//, "");
-  if (!MODELS.has(id)) throw new Error(`Unsupported Copilot model: ${model}`);
+  if (!supported(id)) throw new Error(`Unsupported Copilot model: ${model}`);
   return id;
 }
 

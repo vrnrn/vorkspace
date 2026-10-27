@@ -1,11 +1,18 @@
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
-pub(super) const MODELS: [&str; 2] = ["gpt-6.1-sol", "gpt-6-luna"];
+/// Any GPT model whose major version is 6 or newer (`gpt-6-luna`,
+/// `gpt-6.1-sol`, `gpt-7-…`). `gpt-5.6-…` is major 5 and stays excluded.
+pub(super) fn supported(id: &str) -> bool {
+    id.strip_prefix("gpt-")
+        .map(|rest| rest.split(['.', '-']).next().unwrap_or_default())
+        .filter(|major| !major.is_empty() && major.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|major| major.parse::<u32>().ok())
+        .is_some_and(|major| major >= 6)
+}
 pub(super) fn model_id(value: &str) -> Result<&str, String> {
     let id = value.strip_prefix("copilot/").unwrap_or(value);
-    MODELS
-        .contains(&id)
+    supported(id)
         .then_some(id)
         .ok_or_else(|| format!("Unsupported Copilot model: {value}"))
 }

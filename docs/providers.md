@@ -37,9 +37,9 @@ Export `COPILOT_GITHUB_TOKEN` in your shell configuration before you start vorks
 ## Copilot GPT models in Claude Code
 
 The desktop gateway runs in Rust alongside the installed Claude Code CLI. Remote hosts include their own Node gateway.
-Export `COPILOT_GITHUB_TOKEN="$(gh auth token 2>/dev/null)"`, or sign in with `gh auth login`.
+Copilot models appear only when `COPILOT_GITHUB_TOKEN` is set; a `gh auth login` session alone does not enable them. For example, export `COPILOT_GITHUB_TOKEN="$(gh auth token 2>/dev/null)"` in your shell configuration.
 Restart vorkspace after you change the credential.
-Select **Claude Code**, then select **GPT-6.1 Sol (1M)** or **GPT-6 Luna (1M)**.
+Select **Claude Code**, then select a Copilot model such as **GPT-6.1 Sol (1M)** or **GPT-6 Luna (1M)**. Every GPT model whose major version is 6 or newer is eligible.
 Use the effort selector beside the model to select a supported level.
 
 vorkspace lists these models only when the Copilot API reports access and a context window of at least one million tokens.

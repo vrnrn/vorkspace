@@ -10,7 +10,6 @@ use serde_json::{json, Value};
 use std::{
     io::{BufRead, BufReader, Read},
     process::{Command, Stdio},
-    sync::mpsc,
     time::Duration,
 };
 use subtle::ConstantTimeEq;
@@ -20,43 +19,22 @@ const MAX_JSON: u64 = 64 * 1024 * 1024;
 pub(super) struct Gateway {
     _server: local_http::Server,
 }
+/// Copilot access is opt-in: only an explicit `COPILOT_GITHUB_TOKEN` enables it.
+/// A `gh` login alone must not surface Copilot models in the Claude picker.
 fn credential() -> Result<String, String> {
-    let mut cmd = Command::new(shell::resolve_gui_binary("gh").unwrap_or_else(|| "gh".into()));
-    shell::apply_gui_env(&mut cmd);
+    // Only carries the login-shell value of the variable; never spawned.
+    let mut cmd = Command::new("true");
     shell::apply_copilot_env(&mut cmd);
-    let inherited = std::env::var("COPILOT_GITHUB_TOKEN").ok().or_else(|| {
-        cmd.get_envs()
-            .find(|(key, _)| *key == "COPILOT_GITHUB_TOKEN")
-            .and_then(|(_, v)| v.and_then(|v| v.to_str()).map(str::to_owned))
-    });
-    if let Some(value) = inherited.filter(|v| !v.trim().is_empty()) {
-        return Ok(value.trim().into());
-    }
-    cmd.args(["auth", "token"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    process::isolate(&mut cmd);
-    let mut child = cmd
-        .spawn()
-        .map_err(|_| "Export COPILOT_GITHUB_TOKEN or sign in with gh auth login.")?;
-    let _registered = process::register(child.id());
-    let output = child.stdout.take().ok_or("Missing credential output")?;
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut text = String::new();
-        let result = output.take(16385).read_to_string(&mut text).map(|_| text);
-        let _ = tx.send(result);
-    });
-    let result = rx.recv_timeout(Duration::from_secs(5));
-    process::terminate(&mut child);
-    let text = result
-        .map_err(|_| "GitHub authentication timed out")?
-        .map_err(|_| "GitHub authentication unavailable")?;
-    if text.trim().is_empty() || text.len() > 16384 {
-        return Err("Export COPILOT_GITHUB_TOKEN or sign in with gh auth login.".into());
-    }
-    Ok(text.trim().into())
+    std::env::var("COPILOT_GITHUB_TOKEN")
+        .ok()
+        .or_else(|| {
+            cmd.get_envs()
+                .find(|(key, _)| *key == "COPILOT_GITHUB_TOKEN")
+                .and_then(|(_, v)| v.and_then(|v| v.to_str()).map(str::to_owned))
+        })
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Export COPILOT_GITHUB_TOKEN to use Copilot models.".into())
 }
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
@@ -121,7 +99,7 @@ fn catalog(credential: &str) -> Result<Vec<Value>, String> {
 }
 fn catalog_rows(value: &Value) -> Result<Vec<Value>, String> {
     Ok(value["data"].as_array().ok_or("Invalid Copilot catalog")?.iter().filter(|m|{
-        m["id"].as_str().is_some_and(|id|protocol::MODELS.contains(&id))&&m["supported_endpoints"].as_array().is_some_and(|v|v.iter().any(|s|s=="/responses"))&&m["capabilities"]["limits"]["max_context_window_tokens"].as_u64().is_some_and(|v|v>=1_000_000)&&m["capabilities"]["limits"]["max_prompt_tokens"].as_u64().is_some_and(|v|v>0&&v<=9_007_199_254_740_991)&&(m["policy"].is_null()||m["policy"]["state"]=="enabled")
+        m["id"].as_str().is_some_and(|id|protocol::supported(id))&&m["supported_endpoints"].as_array().is_some_and(|v|v.iter().any(|s|s=="/responses"))&&m["capabilities"]["limits"]["max_context_window_tokens"].as_u64().is_some_and(|v|v>=1_000_000)&&m["capabilities"]["limits"]["max_prompt_tokens"].as_u64().is_some_and(|v|v>0&&v<=9_007_199_254_740_991)&&(m["policy"].is_null()||m["policy"]["state"]=="enabled")
     }).map(|m|json!({"id":m["id"],"name":format!("{} (1M)",m["name"].as_str().unwrap_or_default()),"contextWindow":m["capabilities"]["limits"]["max_prompt_tokens"],"supportedEffortLevels":m["capabilities"]["supports"]["reasoning_effort"]})).collect())
 }
 pub(crate) fn models() -> Result<Vec<Model>, String> {
