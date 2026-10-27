@@ -415,6 +415,13 @@ impl Shell {
                 .icon("ghost")
                 .toggle(self.workspace.preferences.bots)
                 .into(),
+            MenuAction::new("sidebar-activity", "Activity")
+                .icon("response-activity")
+                .toggle(
+                    self.workspace.sidebar_activity_visible
+                        && self.workspace.preferences.working_agents,
+                )
+                .into(),
             MenuAction::new("sidebar-subscriptions", "Subscriptions")
                 .icon("chart-square")
                 .toggle(self.workspace.sidebar_subscriptions_visible)
@@ -450,6 +457,20 @@ impl Shell {
     }
 
     pub(super) fn change_sidebar_option(&mut self, action: &str, cx: &mut Context<Self>) {
+        if action == "sidebar-activity" {
+            let shown = self.workspace.sidebar_activity_visible
+                && self.workspace.preferences.working_agents;
+            self.workspace.sidebar_activity_visible = !shown;
+            // An explicit Show also enables an older saved Working agents opt-out.
+            if !shown {
+                self.workspace.preferences.working_agents = true;
+            }
+            self.sync_settings(cx);
+            self.invalidate_chrome(cx);
+            self.persist(cx);
+            cx.notify();
+            return;
+        }
         if let Some(provider) = action.strip_prefix("sidebar-").and_then(Connector::from_id) {
             // This shortcut preference never reaches the connector Settings owner.
             if !self.enabled_connectors(cx).contains(&provider) {
@@ -673,7 +694,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn sidebar_retired_density_and_activity_preferences_are_inert(cx: &mut TestAppContext) {
+    fn sidebar_density_stays_inert_while_activity_visibility_is_restored(cx: &mut TestAppContext) {
         let (window, a, b) = super::super::tests::window(cx);
         let card = window
             .update(cx, |shell, _, cx| {
@@ -702,19 +723,25 @@ mod tests {
         visual.run_until_parked();
         let selector: &'static str = Box::leak(format!("sidebar-session-{card}").into_boxed_str());
         assert_eq!(visual.debug_bounds(selector).unwrap().size.height, px(32.));
-        assert!(visual.debug_bounds("sidebar-activity-card").is_none());
-        window.update(visual, |shell, _, cx| {
-            let loaded = shell.sessions.len();
-            shell.change_sidebar_option("compact-session-cards", cx);
-            shell.change_sidebar_option("sidebar-activity", cx);
-            assert!(!shell.workspace.compact_session_cards);
-            assert!(shell.workspace.sidebar_activity_visible);
-            assert_eq!(shell.sessions.len(), loaded);
-            assert!(shell.unseen_finished.contains(&a));
-            for id in [a, b] { assert!(shell.sessions[&id].read(cx).responding()); }
-            let items = shell.sidebar_options_menu_items(cx);
-            assert!(!items.iter().any(|item| matches!(item, MenuItem::Action(a) if a.id == "compact-session-cards" || a.id == "sidebar-activity")));
-        }).unwrap();
+        assert!(visual.debug_bounds("sidebar-activity-card").is_some());
+        window
+            .update(visual, |shell, _, cx| {
+                let loaded = shell.sessions.len();
+                shell.change_sidebar_option("compact-session-cards", cx);
+                shell.change_sidebar_option("sidebar-activity", cx);
+                assert!(!shell.workspace.compact_session_cards);
+                assert!(!shell.workspace.sidebar_activity_visible);
+                assert_eq!(shell.sessions.len(), loaded);
+                assert!(shell.unseen_finished.contains(&a));
+                for id in [a, b] {
+                    assert!(shell.sessions[&id].read(cx).responding());
+                }
+                let items = shell.sidebar_options_menu_items(cx);
+                assert!(!items.iter().any(
+                    |item| matches!(item, MenuItem::Action(a) if a.id == "compact-session-cards")
+                ));
+            })
+            .unwrap();
     }
 
     #[gpui::test]
@@ -750,7 +777,7 @@ mod tests {
         assert!(
             visual
                 .debug_bounds("menu-action-sidebar-activity")
-                .is_none()
+                .is_some()
         );
         assert!(
             visual

@@ -29,10 +29,7 @@ impl<T: Copy + PartialEq> TabReveal<T> {
         if t < 1. {
             window.request_animation_frame();
         }
-        Some((
-            self.closing,
-            crate::reveal::bezier(t.clamp(0., 1.), 0., 0., 0.58, 1.),
-        ))
+        Some((self.closing, crate::reveal::ease_out(t.clamp(0., 1.))))
     }
 }
 

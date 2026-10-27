@@ -175,38 +175,22 @@ impl gpui::Render for ChannelLookEditor {
                             .child("Texture"),
                     )
                     .child(
-                        div()
-                            .id("channel-texture-toggle")
-                            .debug_selector(|| "channel-texture-toggle".into())
-                            .role(Role::Switch)
-                            .aria_label("Texture")
-                            .aria_selected(textured)
-                            .w(px(36.))
-                            .h(px(20.))
-                            .flex_shrink_0()
-                            .rounded_full()
-                            .bg(if textured {
-                                accent_color()
-                            } else {
-                                content(0.2)
-                            })
-                            .child(
-                                div()
-                                    .size(px(16.))
-                                    .mt(px(2.))
-                                    .ml(px(if textured { 18. } else { 2. }))
-                                    .rounded_full()
-                                    .bg(gpui::white()),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.channel.textured = !this.channel.textured;
-                                if !this.channel.textured
-                                    && this.editing_color == Some(EditingChannelColor::Foreground)
-                                {
-                                    this.editing_color = None;
-                                }
-                                this.emit(cx);
-                            })),
+                        crate::controls::switch(
+                            "channel-texture-toggle",
+                            "Texture",
+                            textured,
+                            true,
+                        )
+                        .debug_selector(|| "channel-texture-toggle".into())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.channel.textured = !this.channel.textured;
+                            if !this.channel.textured
+                                && this.editing_color == Some(EditingChannelColor::Foreground)
+                            {
+                                this.editing_color = None;
+                            }
+                            this.emit(cx);
+                        })),
                     ),
             )
             // Grid Scale Slider + Seed Die when textured

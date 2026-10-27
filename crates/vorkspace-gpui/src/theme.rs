@@ -59,7 +59,6 @@ struct Tokens {
     user_accent: Option<Hsla>,
     shell: Hsla,
     pane: Hsla,
-    inset_pane: Hsla,
     syntax: [u32; 11],
     diff: [u32; 4],
     diff_strong: bool,
@@ -90,12 +89,6 @@ pub(crate) fn configure(
     );
     let mut pane = shell;
     pane.a = if glass && p.body_glass { 0.28 } else { 1. };
-    // The window already paints its glass tint. A glass content card reveals
-    // that layer directly; adding another tint would hide the desktop twice.
-    // Solid content keeps its deeper dark tone or white light appearance.
-    let mut inset_pane = shell;
-    inset_pane.l = if light { 1. } else { shell.l * 0.45 };
-    inset_pane.a = if glass && p.body_glass { 0. } else { 1. };
     let custom = p
         .accent_color
         .as_deref()
@@ -108,7 +101,6 @@ pub(crate) fn configure(
         user_accent: custom.map(|color| rgb(color).into()),
         shell,
         pane,
-        inset_pane,
         diff: diff_palette(&p.diff_palette, light),
         diff_strong: p.diff_palette == "high-contrast",
         syntax: syntax_palette(&p.workspace_theme, light),
@@ -148,6 +140,26 @@ pub(crate) fn content(alpha: f32) -> Hsla {
 
 pub(crate) fn is_light() -> bool {
     TOKENS.with(|tokens| tokens.borrow().as_ref().is_some_and(|tokens| tokens.light))
+}
+
+/// Semantic state ink and translucent washes. Dark ink preserves the native UI
+/// palette. Light ink starts from the artifact palette, with deeper danger and
+/// success shades to keep contrast over tinted surfaces and status washes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum StatusColor {
+    Danger,
+    Warning,
+    Success,
+}
+
+pub(crate) fn status(role: StatusColor, alpha: f32) -> Hsla {
+    let (dark, light) = match role {
+        StatusColor::Danger => (0xf87171, 0xa52632),
+        StatusColor::Warning => (0xfbbf24, 0x845c0e),
+        StatusColor::Success => (0x10b981, 0x166c49),
+    };
+    let color: Hsla = rgb(if is_light() { light } else { dark }).into();
+    color.opacity(alpha)
 }
 
 pub(crate) fn floating_fill() -> Hsla {
@@ -462,8 +474,126 @@ pub(crate) fn diff_background(add: bool, gutter: bool) -> Hsla {
 }
 
 #[cfg(test)]
+pub(crate) fn test_appearance(
+    preferences: &crate::settings::Preferences,
+    system_light: bool,
+    classic: bool,
+) -> impl Drop {
+    struct Restore(Option<Tokens>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TOKENS.with(|tokens| *tokens.borrow_mut() = self.0);
+        }
+    }
+    let restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
+    configure(preferences, system_light, classic);
+    restore
+}
+
+#[cfg(test)]
+pub(crate) fn test_contrast(ink: Hsla, background: Hsla) -> f32 {
+    let background = background.to_rgb();
+    let foreground = background.blend(ink.to_rgb());
+    let luminance = |color: gpui::Rgba| {
+        let linear = |v: f32| {
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+    };
+    let (a, b) = (luminance(foreground), luminance(background));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+#[cfg(test)]
 mod composer_tests {
     use super::*;
+
+    #[test]
+    fn status_ink_follows_appearance_and_has_contrast_on_solid_surfaces() {
+        for preset in ["default", "harbor", "moss"] {
+            for (appearance, system_light, light) in [
+                ("dark", true, false),
+                ("light", false, true),
+                ("system", true, true),
+                ("system", false, false),
+            ] {
+                for glass in [false, true] {
+                    for accent in [None, Some("#ffff00".into())] {
+                        let mut preferences = crate::settings::Preferences {
+                            theme: appearance.into(),
+                            inset_glass: glass,
+                            body_glass: glass,
+                            accent_color: accent,
+                            ..Default::default()
+                        };
+                        preferences.apply_workspace_theme(preset.into());
+                        let _restore = test_appearance(&preferences, system_light, false);
+                        assert_eq!(is_light(), light);
+                        for role in [
+                            StatusColor::Danger,
+                            StatusColor::Warning,
+                            StatusColor::Success,
+                        ] {
+                            let ink = status(role, 1.);
+                            assert_eq!(status(role, 0.1), ink.opacity(0.1));
+                            // Solid panes/cards, floating menus and existing confirmation washes.
+                            let mut pane = pane_fill();
+                            pane.a = 1.;
+                            let card = pane.blend(content(0.03));
+                            let wash = if matches!(role, StatusColor::Danger) {
+                                0.2
+                            } else {
+                                0.1
+                            };
+                            for background in [
+                                pane,
+                                card,
+                                floating_fill(),
+                                pane.blend(ink.opacity(wash)),
+                                card.blend(ink.opacity(wash)),
+                            ] {
+                                let contrast = test_contrast(ink, background);
+                                assert!(
+                                    contrast >= 4.5,
+                                    "{role:?}: {contrast}, {preset}, {appearance}, light={light}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn status_dark_palette_is_preserved_and_light_palette_is_distinct() {
+        let preferences = crate::settings::Preferences {
+            theme: "dark".into(),
+            ..Default::default()
+        };
+        let _restore = test_appearance(&preferences, false, true);
+        for (role, expected) in [
+            (StatusColor::Danger, 0xf87171),
+            (StatusColor::Warning, 0xfbbf24),
+            (StatusColor::Success, 0x10b981),
+        ] {
+            let dark = status(role, 1.);
+            assert_eq!(dark, rgb(expected).into());
+            let light_preferences = crate::settings::Preferences {
+                theme: "light".into(),
+                ..Default::default()
+            };
+            {
+                let _light = test_appearance(&light_preferences, false, true);
+                assert_ne!(dark, status(role, 1.));
+            }
+            assert_eq!(dark, status(role, 1.));
+        }
+    }
 
     #[test]
     fn cached_diff_tokens_follow_live_light_dark_and_custom_palettes() {

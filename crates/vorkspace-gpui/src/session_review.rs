@@ -171,10 +171,7 @@ impl SessionReview {
 
 /// The header's text buttons: h-7 px-2.5 at 11px, ink 50%.
 fn text_button(id: &'static str, label: &'static str, enabled: bool) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(label)
+    crate::controls::button(id, label, enabled)
         .h(px(28.))
         .px(px(10.))
         .flex()

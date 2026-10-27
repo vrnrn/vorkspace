@@ -1,4 +1,5 @@
 //! Local, allowlisted post-hoc foreground timing records. No application payloads.
+mod active_task;
 mod storage;
 
 use gpui::{
@@ -34,22 +35,28 @@ pub(super) fn start(cx: &mut App, path: PathBuf) {
 fn callback(cx: &App, path: PathBuf) -> impl FnMut(HangMonitorPoll) + Send + 'static + use<> {
     let startup = cx.background_executor().now();
     let run = Run::new();
+    let mut active_task = active_task::Observer::new();
     let mut sink = Sink::new(path);
     move |poll: HangMonitorPoll| {
         if sink.disabled {
             return;
         }
+        let active = active_task.poll(&run);
+        let completed_limit = MAX_RECORDS_PER_POLL - usize::from(active.is_some());
         let elided = poll
             .incidents
             .iter()
             .filter(|i| qualifies(i))
             .count()
-            .saturating_sub(MAX_RECORDS_PER_POLL);
+            .saturating_sub(completed_limit);
+        if let Some(active) = active {
+            sink.record(&active);
+        }
         for incident in poll
             .incidents
             .iter()
             .filter(|i| qualifies(i))
-            .take(MAX_RECORDS_PER_POLL)
+            .take(completed_limit)
         {
             if sink.disabled {
                 break;
@@ -357,7 +364,7 @@ impl Write for BoundedBuffer {
         Ok(())
     }
 }
-fn encode(record: &Record<'_>) -> io::Result<Vec<u8>> {
+fn encode(record: &impl Serialize) -> io::Result<Vec<u8>> {
     let mut buffer = BoundedBuffer(Vec::with_capacity(MAX_RECORD_BYTES));
     serde_json::to_writer(&mut buffer, record)?;
     buffer.0.push(b'\n');
@@ -377,7 +384,7 @@ impl Sink {
             disabled: false,
         }
     }
-    fn record(&mut self, record: &Record<'_>) {
+    fn record(&mut self, record: &impl Serialize) {
         if self.disabled {
             return;
         }
@@ -385,7 +392,7 @@ impl Sink {
             self.disable();
         }
     }
-    fn write(&mut self, record: &Record<'_>) -> io::Result<()> {
+    fn write(&mut self, record: &impl Serialize) -> io::Result<()> {
         let bytes = encode(record)?;
         if self.writer.is_none() {
             self.writer = Some(storage::Log::open(&self.path)?);

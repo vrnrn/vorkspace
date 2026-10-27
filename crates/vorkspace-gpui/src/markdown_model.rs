@@ -130,6 +130,8 @@ fn mend_prose(source: &str) -> String {
     let mut brackets = Vec::new();
     let mut code = None;
     let mut at = 0;
+    let mut line_checked = 0;
+    let mut line_blank = true;
     while at < text.len() {
         let byte = text.as_bytes()[at];
         if byte == b'\\' {
@@ -206,19 +208,26 @@ fn mend_prose(source: &str) -> String {
             let n = text[at..].bytes().take_while(|b| *b == byte).count();
             let previous = text[..at].chars().next_back();
             let next = text[at + n..].chars().next();
-            let line_start = text[..at]
-                .rsplit('\n')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .is_empty();
-            let line_rest = text[at..].split('\n').next().unwrap_or("");
+            // Scan each prefix byte only once, including text skipped by
+            // escapes, code and links. Rescanning the line at every delimiter
+            // makes long lines of identifiers quadratic during live repair.
+            for ch in text[line_checked..at].chars() {
+                line_blank = if ch == '\n' {
+                    true
+                } else {
+                    line_blank && ch.is_whitespace()
+                };
+            }
+            line_checked = at;
             let rule = n >= 3
-                && line_start
-                && line_rest
+                && line_blank
+                && text[at..]
+                    .split('\n')
+                    .next()
+                    .unwrap_or("")
                     .chars()
                     .all(|c| c == byte as char || c.is_whitespace());
-            let list = line_start && n == 1 && byte == b'*' && next.is_none_or(char::is_whitespace);
+            let list = line_blank && n == 1 && byte == b'*' && next.is_none_or(char::is_whitespace);
             let intraword = byte == b'_'
                 && previous.is_some_and(char::is_alphanumeric)
                 && next.is_some_and(char::is_alphanumeric);
@@ -531,5 +540,58 @@ mod note_break_tests {
             panic!("expected code")
         };
         assert_eq!(code, "one\ntwo\n");
+    }
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+
+    #[test]
+    fn line_context_survives_escaped_newlines_code_links_and_unicode_whitespace() {
+        for (source, expected) in [
+            ("identifier_name *tail", "identifier_name *tail*"),
+            ("prefix\n\t* item\n**tail", "prefix\n\t* item\n**tail**"),
+            ("prefix\\\n* item", "prefix\\\n* item"),
+            ("`code\n_` **tail", "`code\n_` **tail**"),
+            (
+                "[label](path\nvalue_name) *tail",
+                "[label](path\nvalue_name) *tail*",
+            ),
+            (" \u{2003}___\n**tail", " \u{2003}___\n**tail**"),
+            ("prefix\u{2028}***", "prefix\u{2028}***"),
+            (" \t*** \n* item", " \t*** \n* item"),
+        ] {
+            assert_eq!(mend_prose(source), expected, "source={source:?}");
+        }
+    }
+
+    #[test]
+    fn long_identifier_lines_keep_literal_underscores_and_streaming_repairs() {
+        let line = "synthetic_value_name ".repeat(25_000);
+        assert_eq!(mend_prose(&line), line);
+        let unfinished = format!("{line}**tail");
+        assert_eq!(mend_prose(&unfinished), format!("{unfinished}**"));
+        let fenced = format!("```text\n{unfinished}\n```\n");
+        assert_eq!(mend_stream(&fenced), fenced);
+    }
+
+    #[test]
+    #[ignore = "explicit live Markdown repair CPU scaling measurement"]
+    fn repair_scaling() {
+        for bytes in [16_384, 65_536, 262_144, 524_288] {
+            let source = "synthetic_value_name ".repeat(bytes / 21);
+            for sample in 0..3 {
+                let start = std::time::Instant::now();
+                let repaired = mend_prose(std::hint::black_box(&source));
+                let elapsed = start.elapsed();
+                assert_eq!(repaired, source);
+                eprintln!(
+                    "repair bytes={} sample={sample} elapsed_us={}",
+                    source.len(),
+                    elapsed.as_micros()
+                );
+            }
+        }
     }
 }

@@ -1753,17 +1753,8 @@ fn tool_button(
 ) -> gpui::Stateful<gpui::Div> {
     let id = id.into();
     let group: SharedString = format!("diff-tool-{id:?}").into();
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(label)
+    crate::controls::icon_button(id, label, enabled)
         .group(group.clone())
-        .size(px(24.))
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_md()
         .when(!enabled, |d| d.opacity(0.3))
         .when(enabled, |d| d.hover(|s| s.bg(content(0.05))))
         .child(

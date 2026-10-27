@@ -9,7 +9,7 @@ mod creation;
 mod files;
 mod filters;
 mod header;
-pub(crate) use header::chat_surface;
+pub(crate) use header::{ChatHeader, chat_surface};
 #[cfg(test)]
 mod header_tests;
 mod host;

@@ -10,6 +10,7 @@ pub(super) struct ChatState {
     /// Standalone Bot chats opt into identity decoration. Channels keep None;
     /// Some(false) retains the header but freezes it beneath a host modal.
     pub(super) header_animation: Option<bool>,
+    pub(super) header: Option<Entity<crate::bots::ChatHeader>>,
     pub(super) pending: Vec<Message>,
     pub(super) card_versions: std::collections::HashMap<String, u64>,
     pub(super) emoji: bool,
@@ -374,7 +375,7 @@ impl Conversation {
         .detach();
         Ok(())
     }
-    pub(crate) fn bot_status(&self) -> &str {
+    pub(crate) fn bot_status(&self) -> &'static str {
         if self.needs_approval() || self.settings.usage_limit.is_some() {
             "needs-you"
         } else if self.responding() {
@@ -566,7 +567,11 @@ impl Conversation {
             div()
                 .flex_1()
                 .min_h_0()
-                .child(self.transcript.clone())
+                .child(
+                    self.transcript
+                        .clone()
+                        .cached(gpui::StyleRefinement::default().size_full()),
+                )
                 .into_any_element()
         };
         self.attachment_drop_target("bot-chat", cx)
@@ -598,6 +603,8 @@ impl Conversation {
                     &bot,
                     self.bot_status(),
                     self.bot_ui.header_animation,
+                    &mut self.bot_ui.header,
+                    cx,
                 ),
             )
             .child(

@@ -607,7 +607,7 @@ impl Conversation {
                     } else {
                         let (steer, edit, remove) = (id.clone(), id.clone(), id);
                         row.child(div().flex_1().min_w_0().py_1().child(div().id("queued-message-text").role(Role::Label).aria_label(message.label()).truncate().text_color(content(0.75)).child(message.label())).when_some(message.error.clone(), |d, error| d.child(div().id("queue-error").role(Role::Alert).text_color(gpui::rgb(0xf87171)).child(error))))
-                            .when(Kind::from_id(&self.summary.provider).can_steer(), |d| d.child(queue_button("queue-steer", "Steer queued message", "queue-steer").w_auto().px_2().gap(px(6.)).opacity(if sending { 0.4 } else { 1. }).child("Steer").on_click(cx.listener(move |this, _, _, cx| {
+                            .when(Kind::from_id(&self.summary.provider).can_steer(), |d| d.child(queue_button("queue-steer", "Steer queued message", "queue-steer").w_auto().px_2().gap(px(6.)).tab_stop(!sending).opacity(if sending { 0.4 } else { 1. }).child("Steer").on_click(cx.listener(move |this, _, _, cx| {
                                 if !sending && let Some(message) = this.follow_ups.state.messages.iter_mut().find(|m| m.id == steer) {
                                     if !message.can_steer() && this.busy { return; }
                                     message.steer = true;
@@ -616,8 +616,8 @@ impl Conversation {
                                     this.save_follow_ups(cx);
                                 }
                             }))))
-                            .child(queue_button("queue-edit", "Edit queued message", "pencil-edit").opacity(if sending { 0.4 } else { 1. }).on_click(cx.listener(move |this, _, window, cx| { if !sending { this.edit_queued(edit.clone(), window, cx); } })))
-                            .child(queue_button("queue-remove", "Remove queued message", "trash").opacity(if sending { 0.4 } else { 1. }).on_click(cx.listener(move |this, _, _, cx| {
+                            .child(queue_button("queue-edit", "Edit queued message", "pencil-edit").tab_stop(!sending).opacity(if sending { 0.4 } else { 1. }).on_click(cx.listener(move |this, _, window, cx| { if !sending { this.edit_queued(edit.clone(), window, cx); } })))
+                            .child(queue_button("queue-remove", "Remove queued message", "trash").tab_stop(!sending).opacity(if sending { 0.4 } else { 1. }).on_click(cx.listener(move |this, _, _, cx| {
                                 if !sending {
                                     this.follow_ups.state.messages.retain(|m| m.id != remove);
                                     this.follow_ups.continuations.retain(|id| id != &remove);
@@ -639,16 +639,7 @@ fn queue_button(
     label: &'static str,
     glyph: &'static str,
 ) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(label)
-        .size(px(24.))
-        .flex_shrink_0()
-        .rounded_md()
-        .flex()
-        .items_center()
-        .justify_center()
+    crate::controls::icon_button(id, label, true)
         .text_color(content(0.5))
         .hover(|s| s.bg(content(0.08)).text_color(content(0.9)))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

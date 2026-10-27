@@ -10,6 +10,7 @@ mod clock;
 mod composer_completion;
 mod composer_motion;
 mod context_meter;
+mod controls;
 mod conversation;
 mod dev_reload;
 mod diff_view;

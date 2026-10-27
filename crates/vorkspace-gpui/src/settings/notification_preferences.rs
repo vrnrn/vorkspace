@@ -722,37 +722,17 @@ impl SettingsView {
                         .text_color(content(0.7))
                         .child(*label)
                         .child(
-                            div()
-                                .id(gpui::SharedString::from(format!(
+                            crate::controls::switch(
+                                gpui::SharedString::from(format!(
                                     "notification-category-{id}-{cat}"
-                                )))
-                                .role(Role::Switch)
-                                .aria_label(format!("{label} for {}", project.name))
-                                .aria_toggled(if enabled {
-                                    gpui::Toggled::True
-                                } else {
-                                    gpui::Toggled::False
-                                })
-                                .cursor_pointer()
-                                .w(px(36.))
-                                .h(px(20.))
-                                .relative()
-                                .rounded_full()
-                                .bg(if enabled {
-                                    accent_color()
-                                } else {
-                                    content(0.2)
-                                })
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .top(px(2.))
-                                        .left(px(if enabled { 18. } else { 2. }))
-                                        .size(px(16.))
-                                        .rounded_full()
-                                        .bg(gpui::rgb(0xffffff)),
-                                )
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                                )),
+                                format!("{label} for {}", project.name),
+                                enabled,
+                                true,
+                            )
+                            .cursor_pointer()
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.update(cx, |p| {
                                         p.set_category(
                                             &project_id,
@@ -761,7 +741,8 @@ impl SettingsView {
                                             vorkspace_core::time::now_ms(),
                                         )
                                     })
-                                })),
+                                },
+                            )),
                         )
                         .into_any_element(),
                 );

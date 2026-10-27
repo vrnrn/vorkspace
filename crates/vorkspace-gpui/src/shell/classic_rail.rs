@@ -80,6 +80,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let width = self.classic_rail_width();
+        // Early-return layouts must stop the card's presentation clock too.
+        if width <= 0. || self.settings.is_some() {
+            self.live_agents.update(cx, |activity, _| activity.hide());
+        }
         if width <= 0. {
             return div()
                 .id("classic-project-rail")
@@ -259,7 +263,6 @@ impl Shell {
         });
         let navigation = self.sidebar_navigation(cx);
         rail = rail
-            .child(navigation)
             .child(
                 div()
                     .id("classic-project-rail-scroll")
@@ -268,6 +271,9 @@ impl Shell {
                     .min_h_0()
                     .overflow_y_scroll()
                     .pb_2()
+                    // Share the existing rail scroller so a short window can
+                    // always reach navigation as well as the Working card/footer.
+                    .child(navigation)
                     .children(bots)
                     .when(!pinned_projects.is_empty(), |d| {
                         d.child(section_label("Pinned").mx_2()).child(
@@ -313,6 +319,7 @@ impl Shell {
                         ),
                     ),
             )
+            .children(self.live_agents_preview(false, cx))
             .when(
                 self.notification_state.installed.read(cx).is_visible(),
                 |d| {
@@ -796,6 +803,7 @@ impl Shell {
                         }),
                 ),
         )
+        .children(self.live_agents_preview(true, cx))
         .child(compact_footer(
             self.resources.clone(),
             self.workspace

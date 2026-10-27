@@ -8,11 +8,8 @@ use gpui::{
 fn action(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Stateful<Div> {
     let id: SharedString = id.into();
     let label = label.into();
-    div()
-        .id(id.clone())
+    crate::controls::button(id.clone(), label.clone(), true)
         .debug_selector(move || id.to_string())
-        .role(Role::Button)
-        .aria_label(label.clone())
         .h(px(28.))
         .px(px(10.))
         .flex()
@@ -36,11 +33,8 @@ fn icon_action_ink(
     ink: Hsla,
 ) -> Stateful<Div> {
     let id: SharedString = id.into();
-    div()
-        .id(id.clone())
+    crate::controls::button(id.clone(), label.to_owned(), true)
         .debug_selector(move || id.to_string())
-        .role(Role::Button)
-        .aria_label(label.to_owned())
         .h(px(28.))
         .px(px(10.))
         .flex()

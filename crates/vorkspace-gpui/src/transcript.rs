@@ -1542,13 +1542,7 @@ impl TranscriptView {
             .is_some_and(|next| !dates::opens_stretch(next.sent_at, message.sent_at));
         let (mut opacity, mut rise) = (1., 0.);
         if let Some(born) = self.pending_entrances.get(&message.id) {
-            let t = crate::reveal::bezier(
-                (born.elapsed().as_secs_f32() / 0.36).min(1.),
-                0.22,
-                1.,
-                0.36,
-                1.,
-            );
+            let t = crate::reveal::ease_move((born.elapsed().as_secs_f32() / 0.36).min(1.));
             opacity = t;
             rise = 16. * (1. - t);
         }
@@ -4802,14 +4796,14 @@ impl TranscriptView {
         {
             let elapsed = self.frame_now.saturating_duration_since(born).as_secs_f32();
             if message_start == prompt {
-                let rise = crate::reveal::bezier((elapsed / 0.56).min(1.), 0.22, 1., 0.36, 1.);
-                let fade = crate::reveal::bezier((elapsed / 0.48).min(1.), 0., 0., 0.58, 1.);
+                let rise = crate::reveal::ease_move((elapsed / 0.56).min(1.));
+                let fade = crate::reveal::ease_out((elapsed / 0.48).min(1.));
                 translate_y =
                     (f32::from(self.viewport.size.height) * 0.3 - TOP_INSET).max(0.) * (1. - rise);
                 opacity *= fade;
             } else {
                 let t = ((elapsed - 0.56) / 0.32).clamp(0., 1.);
-                let reveal = crate::reveal::bezier(t, 0.22, 1., 0.36, 1.);
+                let reveal = crate::reveal::ease_move(t);
                 translate_y = 10. * (1. - reveal);
                 opacity *= reveal;
             }
@@ -4822,17 +4816,13 @@ impl TranscriptView {
             // useBottomChatMotion's entrance: a sent message rises 16px over
             // 360ms, a reply 10px over 280ms.
             let (rise, duration) = if user { (16., 0.36) } else { (10., 0.28) };
-            let t = crate::reveal::bezier(
+            let t = crate::reveal::ease_move(
                 (self
                     .frame_now
                     .saturating_duration_since(*born)
                     .as_secs_f32()
                     / duration)
                     .min(1.),
-                0.22,
-                1.,
-                0.36,
-                1.,
             );
             translate_y += rise * (1. - t);
             opacity *= t;

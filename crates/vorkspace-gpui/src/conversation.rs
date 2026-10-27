@@ -13,6 +13,8 @@ mod follow_up;
 mod history;
 mod local_submissions;
 mod notifications;
+#[cfg(test)]
+pub(crate) mod receive_tests;
 mod remote;
 pub(crate) mod remote_plans;
 mod response_menu;
@@ -94,7 +96,6 @@ const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
 const YELLOW_300: u32 = 0xffdf20;
 const SKY_300: u32 = 0x74d4ff;
 const FUCHSIA_300: u32 = 0xf4a8ff;
-const AMBER_400: u32 = 0xffb900;
 fn tint(color: u32, alpha: f32) -> gpui::Hsla {
     let mut c: gpui::Hsla = gpui::rgb(color).into();
     c.a = alpha;
@@ -120,6 +121,8 @@ struct OpenMenu {
 }
 use response_menu::ResponseMenu;
 pub(crate) struct SessionChanged;
+/// A tool label changed; token/output changes do not wake session discovery.
+pub(crate) struct SessionActivityChanged;
 pub(crate) struct ChooseFolder(pub(crate) AnchorSlot);
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::review::ReviewTab);
@@ -160,6 +163,7 @@ pub(crate) struct Conversation {
     orchestration_error: Option<String>,
     pub(crate) orchestration_progress: Option<String>,
     status: String,
+    pub(crate) activity: Option<String>,
     loaded: bool,
     history_unloaded: bool,
     loaded_history_revision: Option<i64>,
@@ -565,6 +569,7 @@ impl Conversation {
             store,
             bot_turn: 0,
             submission_generation: 0,
+            activity: None,
             settings_write_cancel: Arc::new(AtomicBool::new(false)),
             bot_ui: bot::ChatState::default(),
             transcript,
@@ -1271,6 +1276,8 @@ impl Conversation {
                                 completion.set_native_commands(commands, cx)
                             });
                         }
+                        let activity_changed = this.activity != update.activity;
+                        this.activity = update.activity;
                         let needed_approval = this.needs_approval();
                         let incoming_notification_input = !stopping
                             && (!update.approvals.is_empty() || !update.questions.is_empty());
@@ -1518,6 +1525,9 @@ impl Conversation {
                         {
                             cx.emit(SessionChanged);
                         }
+                        if activity_changed {
+                            cx.emit(SessionActivityChanged);
+                        }
                         this.pump_follow_ups(cx);
                         cx.notify();
                     })
@@ -1525,6 +1535,14 @@ impl Conversation {
                 {
                     break;
                 }
+                // recv().await need not suspend: a producer can refill even a
+                // bounded channel while we patch. Return to the native event
+                // loop between atomic updates so input and frames can run.
+                // A positive timer also avoids immediately requeueing a ready
+                // continuation onto the main dispatch queue.
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1))
+                    .await;
             }
             if !completed {
                 let _ = this.update(cx, |this, cx| this.turn_updates_closed(generation, cx));
@@ -1615,6 +1633,7 @@ impl Conversation {
         if !self.summary.has_messages {
             self.composer_motion.capture(self.composer_anchor.get());
         }
+        self.activity = None;
         self.busy = true;
         self.stopping = false;
         self.notification_cancelled = false;
@@ -1632,6 +1651,7 @@ impl Conversation {
 }
 
 impl EventEmitter<SessionChanged> for Conversation {}
+impl EventEmitter<SessionActivityChanged> for Conversation {}
 impl EventEmitter<ChooseFolder> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
@@ -3087,7 +3107,7 @@ impl Conversation {
                                                     if self.settings.access
                                                         == AccessMode::FullAccess
                                                     {
-                                                        tint(AMBER_400, 0.9)
+                                                        status(StatusColor::Warning, 1.)
                                                     } else {
                                                         content(1.)
                                                     },

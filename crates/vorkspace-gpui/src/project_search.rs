@@ -2,12 +2,12 @@
 use crate::{
     file_icons::file_type_icon,
     input::{self, Input},
-    right_panel::{RED_400, spinner, stroke, tabular},
+    right_panel::{spinner, stroke, tabular},
     theme::*,
 };
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle, Role,
-    ScrollHandle, StyledText, Subscription, Task, Window, div, point, prelude::*, px, rgb,
+    ScrollHandle, StyledText, Subscription, Task, Window, div, point, prelude::*, px,
 };
 use std::{
     collections::HashMap,
@@ -594,7 +594,7 @@ impl Render for ProjectSearch {
                     .py(px(6.))
                     .text_size(px(11.))
                     .text_color(if self.error.is_some() {
-                        rgb(RED_400).into()
+                        crate::theme::status(StatusColor::Danger, 1.)
                     } else {
                         content(0.45)
                     })

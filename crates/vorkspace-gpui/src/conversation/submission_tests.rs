@@ -346,7 +346,7 @@ fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &m
                 rows[0].sent_at
             })
             .unwrap();
-        cx.run_until_parked();
+        super::receive_tests::settle_turn(window, cx);
         window
             .update(cx, |view, _, cx| {
                 assert!(!view.busy);
@@ -389,7 +389,7 @@ fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &m
                 );
             })
             .unwrap();
-        cx.run_until_parked();
+        super::receive_tests::settle_turn(window, cx);
         window
             .update(cx, |view, _, cx| {
                 let rows = view.transcript.read(cx).source_rows();
@@ -442,7 +442,7 @@ fn worktree_setup_shows_the_prompt_immediately_and_preserves_it_on_failure(
                 .update(cx, |input, cx| input.set_text("Unsent draft".into(), cx));
         })
         .unwrap();
-    cx.run_until_parked();
+    super::receive_tests::settle_turn(window, cx);
     window
         .update(cx, |view, _, cx| {
             assert!(!view.busy && !view.preparing_worktree);

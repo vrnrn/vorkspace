@@ -43,6 +43,7 @@ read them only through these helpers:
 | `text_selection()` | Text selection highlight |
 | `shell_fill()`, `pane_fill()`, `floating_fill()`, `composer_fill()` | Surfaces (§4) |
 | `syntax_color()`, `diff_foreground()`, `diff_background()` | Code and diffs; these follow the workspace theme and diff palette preferences |
+| `status(StatusColor, alpha)` | Danger, warning and success ink or washes, paired for light and dark |
 | `is_light()` | Only when a value genuinely cannot be expressed as ink alpha |
 
 `white(a)` and `black(a)` are for literal-contrast cases only, such as ink on a
@@ -76,21 +77,27 @@ Interaction states:
 
 ### Status colors
 
-The app uses Tailwind-400 hues for status on dark surfaces:
+Shared UI status colors live in `theme.rs`; use `status(StatusColor::Danger,
+alpha)` (or `Warning`, `Success`) for ink and translucent washes.
 
-| Role | Value | Current owner |
+| Role | Dark | Light |
 |---|---|---|
-| Danger / error | `#f87171` | `settings/widgets.rs` `RED`, `red(a)` |
-| Warning | `#fbbf24` | |
-| Success | `#34d399` | |
-| Info | `#38bdf8` | |
+| Danger / error | `#f87171` | `#a52632` |
+| Warning | `#fbbf24` | `#845c0e` |
+| Success | `#10b981` | `#166c49` |
 
-Status hues need a light-theme pair; `visuals.rs` `ThemeColor` is the reference
-(for example Negative `#e76f73` dark / `#b9313d` light). Rules:
-
-- Reuse the existing helper for a hue. When you need one outside its module,
-  promote it to `theme.rs` with a light/dark pair rather than adding another
-  local `const`.
+- Status colors follow the resolved app appearance, including System, and do
+  not depend on the custom accent. Use full-opacity status ink on light surfaces.
+- `settings::widgets::red(a)` delegates to the shared danger token. The light
+  danger shade supports text over existing 20% confirmation-button washes;
+  warning reuses the visual artifact palette's light ink, while success is
+  slightly deeper to retain contrast on tinted surfaces and status washes.
+- Menus keep their distinct pale dark-mode danger ink and stronger red wash.
+  In light mode both resting and highlighted danger rows use shared dark red
+  ink: a translucent highlight cannot support pale text.
+- Git decoration constants in `right_panel.rs`, diff palettes and visual
+  artifact `ThemeColor` have separate semantics. Do not replace them merely
+  because a hue resembles a status color.
 - Danger buttons: red ink; hover `red(0.1)` fill with `red(0.4)` border.
 - Status color is never the only signal; pair it with text or an icon.
 - Brand marks (provider and service logos) keep their own colors.
@@ -142,6 +149,9 @@ From back to front:
   floating surfaces and the composer; 16 for modals; `rounded_full` for pills,
   avatars, switches and dots.
 - **Shadows** belong to floating layers only; flat panes and cards have none.
+  Popovers and their modal variant share the layered pair in `popover.rs`.
+  Toasts, tooltips, image previews and dragged content can have different
+  elevation; do not normalize their shadows solely by preset name.
 
 ---
 
@@ -172,10 +182,13 @@ old call sites at it, instead of copying it.
 | Need | Primitive |
 |---|---|
 | Icon-only chrome button | `theme::icon_button`, `icon_button_hover`, `icon_button_enabled` (24px, 14px icon) |
-| Text button | `settings::widgets::secondary_button` (danger and disabled variants) |
+| Shared button behavior | `controls::button` (role, name, keyboard focus and pointer focus retention); wrappers keep their surface-specific styling |
+| Compact icon frame | `controls::icon_button` (24px; includes a visible tooltip) |
+| Settings text button | `settings::widgets::secondary_button` (danger and disabled variants) |
 | Primary button | `settings::widgets::primary_button` |
 | Compact icon action | `settings::widgets::icon_action` (20 or 24px) |
-| Switch | `SettingsView::toggle` (36×20, `Role::Switch`, `aria_toggled`) |
+| Switch | `controls::switch` (36×20) or `controls::compact_switch` (28×16); Settings uses `SettingsView::toggle` |
+| Compact icon hint | `controls::Tooltip`; it supplements the accessible name |
 | Segmented choice | `SettingsView::segmented` (`RadioGroup`/`RadioButton`) |
 | Text input | `input::Input::field` and its variants (`multiline_field`, `commit_message`, `channel_message`) |
 | Menu, dropdown, flyout | `popover::popover` with `MenuAction` items; pick the closest `MenuStyle` |
@@ -202,10 +215,9 @@ Behavior rules for controls:
 
 ## 7. Motion
 
-- Easing comes from `reveal::bezier`. Use the established curves:
-  - `(0.16, 1, 0.3, 1)`: entrances (popovers, reveals).
-  - `(0.22, 1, 0.36, 1)`: content moving into place.
-  - `(0, 0, 0.58, 1)`: simple fades and ease-out.
+- Use the named curves in `reveal.rs`: `ease_entrance` for entrances,
+  `ease_move` for content moving into place, and `ease_out` for simple fades.
+  Keep `bezier` for transitions with genuinely different curves.
 - Durations: 120–200ms for state changes and small entrances, 200–320ms for
   panels, rails and word reveal. Name a duration as a constant beside its owner.
 - Physical motion (pane slides, resize settle) uses the springs in
@@ -225,7 +237,10 @@ Behavior rules for controls:
 - State uses the matching attribute: `aria_toggled` for switches and checkboxes,
   `aria_selected` for tabs and list selection, `aria_expanded` for disclosures.
 - Keyboard: menus and popovers support arrows, Return and Escape. Controls that
-  can be reached by keyboard show a visible focus state.
+  can be reached by keyboard show a visible focus state. Shared buttons and
+  switches use GPUI's Return/Space click path, exclude disabled controls from
+  tab traversal, and keep input focus on pointer clicks. Hover-hidden actions
+  also appear on keyboard focus.
 - Contrast: body text uses ink ≥ 0.7; never put meaning only in color; check
   both light and dark themes, glass and solid surfaces.
 

@@ -22,6 +22,21 @@ impl State {
 }
 
 impl Conversation {
+    #[cfg(test)]
+    pub(crate) fn sidebar_test_approval(&mut self, required: bool, cx: &mut Context<Self>) {
+        self.approvals.clear();
+        if required {
+            self.approvals.push_back(Approval {
+                id: "sidebar-fixture".into(),
+                title: "Approve fixture command".into(),
+                detail: String::new(),
+                can_remember: false,
+            });
+        }
+        cx.emit(SessionChanged);
+        cx.notify();
+    }
+
     pub(super) fn approval_shelf(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let width = self.composer_anchor.get().map(|bounds| bounds.size.width);
         self.approval_ui.sync(

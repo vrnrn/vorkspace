@@ -28,6 +28,7 @@ fn require_ticket_context(descriptor: &Value) -> Result<(), String> {
 fn update(status: impl Into<String>, finished: bool) -> Update {
     Update {
         source_len: None,
+        activity: None,
         worktree_cwd: None,
         commands: None,
         provider_turn_id: None,
@@ -704,6 +705,7 @@ pub(crate) fn run_with_client(
             .clone()
             .ok_or("No remote session has been started")?;
         let mut known = None;
+        let mut activity = super::activity::ToolActivity::default();
         let mut seen_approvals = HashSet::new();
         let mut seen_questions = HashSet::new();
         let mut control_commands = Vec::<Value>::new();
@@ -738,8 +740,10 @@ pub(crate) fn run_with_client(
                 next.start = prefix;
                 next.source_len = Some(history.rows.len());
                 next.rows = history.rows[prefix..].to_vec();
+                activity.snapshot(&history.rows, prefix, &binding.project.cwd);
                 latest_rows = history.rows;
             }
+            next.activity = activity.label();
             next.provider_id = snapshot["session"]["providerSessionId"]
                 .as_str()
                 .map(str::to_owned);

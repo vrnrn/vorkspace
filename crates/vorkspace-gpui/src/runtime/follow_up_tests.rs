@@ -36,6 +36,8 @@ for line in sys.stdin:
         send({'id': value['id'], 'result': {'thread': {'id': 'thread'}}})
     elif method == 'turn/start':
         send({'id': value['id'], 'result': {'turn': {'id': 'turn'}}})
+        send({'method': 'item/started', 'params': {'item': {'id': 'tool', 'type': 'commandExecution', 'command': 'cargo check', 'status': 'inProgress'}}})
+        send({'method': 'item/completed', 'params': {'item': {'id': 'tool', 'type': 'commandExecution', 'command': 'cargo check', 'status': 'completed', 'aggregatedOutput': 'Checked'}}})
         send({'method': 'item/agentMessage/delta', 'params': {'itemId': 'before', 'delta': 'Before'}})
     elif method == 'turn/steer':
         send({'id': value['id'], 'result': {}})
@@ -95,10 +97,15 @@ for line in sys.stdin:
         );
     });
     let mut receipt_seen = false;
+    let mut tool_seen = false;
     let final_status = loop {
         let update = receive
             .recv_blocking()
             .expect("Runtime closed before its final update");
+        if update.rows.iter().any(|row| row.role == "tool") && !receipt_seen {
+            assert_eq!(update.activity.as_deref(), Some("Run cargo check"));
+            tool_seen = true;
+        }
         if update.turn_ready {
             controls
                 .send(Control {
@@ -108,6 +115,10 @@ for line in sys.stdin:
                 .unwrap();
         }
         if !update.finished && update.follow_up_delivered.contains(&message.id) {
+            assert!(
+                update.activity.is_none(),
+                "a delivered steer resets latest tool activity"
+            );
             let prompt = update.rows.iter().position(Row::is_prompt).unwrap();
             let response = update.rows.last().unwrap();
             assert_eq!(response.role, "assistant");
@@ -139,6 +150,7 @@ for line in sys.stdin:
     };
     worker.join().unwrap();
     assert_eq!(final_status, "Ready");
+    assert!(tool_seen);
     assert!(receipt_seen);
     assert!(
         locked(&store)

@@ -145,17 +145,14 @@ fn habit_icon_button(
     id: SharedString,
     label: &'static str,
     glyph: &'static str,
+    page: bool,
 ) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(label)
-        .flex_shrink_0()
-        .size(px(24.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_md()
+    crate::controls::icon_button(id, label, true)
+        .when(!page, |d| {
+            d.opacity(0.)
+                .group_hover("bot-habit", |s| s.opacity(1.))
+                .focus_visible(|s| s.opacity(1.).bg(content(0.15)))
+        })
         .text_color(content(0.5))
         .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
         .child(icon(glyph, 14.))
@@ -322,9 +319,6 @@ impl Bots {
             format!("-{}", h.id)
         };
         div()
-            .when(!page, |d| {
-                d.opacity(0.).group_hover("bot-habit", |s| s.opacity(1.))
-            })
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -339,12 +333,19 @@ impl Bots {
                         "Run now"
                     },
                     "zap",
+                    page,
                 )
                 .debug_selector({
                     let suffix = suffix.clone();
                     move || format!("bot-habit-run{suffix}")
                 })
-                .when(busy, |d| d.opacity(0.35))
+                .tab_stop(!busy)
+                .when(busy, |d| {
+                    d.opacity(if page { 0.35 } else { 0. }).when(!page, |d| {
+                        d.group_hover("bot-habit", |s| s.opacity(0.35))
+                            .focus_visible(|s| s.opacity(0.35).bg(content(0.15)))
+                    })
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if !busy {
                         this.request_habit(&run, cx);
@@ -360,6 +361,7 @@ impl Bots {
                     } else {
                         "queue-play"
                     },
+                    page,
                 )
                 .debug_selector({
                     let suffix = suffix.clone();
@@ -372,6 +374,7 @@ impl Bots {
                     SharedString::from(format!("bot-habit-delete{suffix}")),
                     "Remove",
                     "trash",
+                    page,
                 )
                 .debug_selector(move || format!("bot-habit-delete{suffix}"))
                 .on_click(cx.listener(move |this, _, _, cx| this.remove_habit(&remove, cx))),
@@ -1467,6 +1470,55 @@ impl Bots {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    // Hover-only actions must also paint when reached without moving the mouse.
+    #[gpui::test]
+    fn habit_action_is_visible_for_keyboard_focus_and_activates_once(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        struct Action {
+            clicks: usize,
+        }
+        impl Render for Action {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().child(
+                    habit_icon_button("keyboard-habit".into(), "Pause", "queue-pause", false)
+                        .debug_selector(|| "keyboard-habit".into())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.clicks += 1;
+                            cx.notify();
+                        })),
+                )
+            }
+        }
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| cx.new(|_| Action { clicks: 0 }))
+                .unwrap()
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let before = visual.debug_bounds("keyboard-habit").unwrap();
+        window
+            .update(visual, |_, window, cx| window.focus_next(cx))
+            .unwrap();
+        visual.run_until_parked();
+        visual.simulate_keystrokes("right");
+        visual.refresh().unwrap();
+        assert_eq!(visual.debug_bounds("keyboard-habit").unwrap(), before);
+        visual.update(|window, _| {
+            assert!(
+                window
+                    .painted_quads()
+                    .iter()
+                    .any(|q| q.background == gpui::Background::from(content(0.15))),
+                "focus paints the action even without row hover"
+            );
+        });
+        crate::controls::tests::press_key(visual, "space");
+        window
+            .update(visual, |view, _, _| assert_eq!(view.clicks, 1))
+            .unwrap();
+    }
 
     #[test]
     fn habits_list_groups_today_with_running_first_and_paused_last() {

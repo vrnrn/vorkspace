@@ -177,7 +177,7 @@ pub(crate) fn access_options(provider: Kind, access: AccessMode, busy: bool) -> 
             .description(hint)
             .checked(access.id() == *id);
         MenuItem::from(if *id == "full-access" {
-            action.icon_color(tint(AMBER_400, 0.9))
+            action.icon_color(status(StatusColor::Warning, 1.))
         } else {
             action
         })

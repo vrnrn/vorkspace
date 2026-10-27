@@ -38,7 +38,7 @@ struct Tween {
 impl Tween {
     fn at(&self, now: Instant) -> (f32, f32) {
         let t = now.saturating_duration_since(self.start).as_secs_f32() / BAR_TRANSITION;
-        let k = crate::reveal::bezier(t.clamp(0., 1.), 0., 0., 0.58, 1.);
+        let k = crate::reveal::ease_out(t.clamp(0., 1.));
         (
             self.from.0 + (self.to.0 - self.from.0) * k,
             self.from.1 + (self.to.1 - self.from.1) * k,

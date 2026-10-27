@@ -96,6 +96,20 @@ impl SettingsView {
                     }),
                 ],
             ),
+            self.row(
+                Some("working-agents"),
+                false,
+                "Working agents",
+                Some("Show running sessions and unseen replies above Subscriptions.".into()),
+                vec![self.toggle(
+                    "working-agents",
+                    "Working agents",
+                    p.working_agents,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.working_agents = on),
+                )],
+            ),
         ];
         {
             workspace.push(self.row(

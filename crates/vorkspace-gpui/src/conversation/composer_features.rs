@@ -392,7 +392,7 @@ impl Conversation {
                     d.child(
                         div()
                             .text_size(px(11.))
-                            .text_color(tint(AMBER_400, 0.9))
+                            .text_color(status(StatusColor::Warning, 1.))
                             .child(error),
                     )
                 })
@@ -576,7 +576,11 @@ impl Conversation {
         }
         if let Some(error) = &self.orchestration_error {
             card = card
-                .child(div().text_color(tint(AMBER_400, 0.9)).child(error.clone()))
+                .child(
+                    div()
+                        .text_color(status(StatusColor::Warning, 1.))
+                        .child(error.clone()),
+                )
                 .child(
                     tool_pill("dismiss-plan-error", "Dismiss")
                         .child("Dismiss")

@@ -42,7 +42,6 @@ pub(crate) const DIFF_DEL: u32 = 0xfda4af;
 // Tailwind v4.
 pub(crate) const AMBER_400: u32 = 0xffb900;
 pub(crate) const SKY_400: u32 = 0x00bcff;
-pub(crate) const RED_400: u32 = 0xff6467;
 /// `--color-background-base` in the default dark theme, hsl(240 0% 9%).
 pub(crate) const BACKGROUND_BASE: u32 = 0x171717;
 
@@ -116,10 +115,9 @@ pub(crate) fn icon_action(
 ) -> Stateful<gpui::Div> {
     let id = id.into();
     let group: SharedString = format!("icon-action-{id:?}").into();
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(label.into())
+    let label = label.into();
+    crate::controls::button(id, label.clone(), enabled)
+        .tooltip(move |_, cx| cx.new(|_| crate::controls::Tooltip(label.clone())).into())
         .group(group.clone())
         .size(px(20.))
         .flex_shrink_0()
