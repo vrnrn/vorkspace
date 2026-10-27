@@ -156,6 +156,7 @@ fn bot_header_passes_selection_clicks_and_scroll_to_overlapped_chat(cx: &mut Tes
         scroll: gpui::ScrollHandle,
         clicks: usize,
         decoration: Option<bool>,
+        header: Option<Entity<header::ChatHeader>>,
     }
     impl gpui::Render for Surface {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -196,6 +197,8 @@ fn bot_header_passes_selection_clicks_and_scroll_to_overlapped_chat(cx: &mut Tes
                     &Bot::default(),
                     "idle",
                     self.decoration,
+                    &mut self.header,
+                    cx,
                 ))
         }
     }
@@ -216,6 +219,7 @@ fn bot_header_passes_selection_clicks_and_scroll_to_overlapped_chat(cx: &mut Tes
                 scroll: Default::default(),
                 clicks: 0,
                 decoration: Some(false),
+                header: None,
             })
         })
         .unwrap()
@@ -296,9 +300,10 @@ fn native_bot_header_three_state_capture() {
         light: bool,
         transcript: Entity<crate::transcript::TranscriptView>,
         input: Entity<Input>,
+        header: Option<Entity<header::ChatHeader>>,
     }
     impl gpui::Render for Surface {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             div()
                 .size_full()
                 .font_family(crate::fonts::UI)
@@ -348,6 +353,8 @@ fn native_bot_header_three_state_capture() {
                     &self.bot,
                     self.status,
                     Some(true),
+                    &mut self.header,
+                    cx,
                 ))
                 .child(
                     div()
@@ -421,7 +428,7 @@ fn native_bot_header_three_state_capture() {
                         view
                     });
                     let input = cx.new(Input::new);
-                    cx.new(|_| Surface { bot, status, light, transcript, input })
+                    cx.new(|_| Surface { bot, status, light, transcript, input, header: None })
                 })
                 .unwrap();
                 cx.run_until_parked();

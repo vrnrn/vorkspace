@@ -20,8 +20,8 @@ use vorkspace_core::{
 
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-/// Autonomous avatar motion is slow, but each frame re-renders the avatar's
-/// owning view (a whole chat or sidebar). Bound that work to about 30 fps.
+/// Bound autonomous avatar motion to about 30 fps. Chat headers have their own
+/// rendering owner, so decorative ticks never notify the conversation.
 const AVATAR_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 
 type PendingFrameKey = (gpui::AnyWindowHandle, gpui::EntityId);
@@ -401,8 +401,12 @@ pub(crate) fn bot_avatar(bot: &Bot, status: &str, side: f32, still: bool) -> Any
 
 /// Chat identity has explicitly no pointer gaze. Unlike `avatar_with_look` and
 /// `settings_preview`, this path never consults a cursor or installs a listener.
-pub(super) fn header_avatar(bot: &Bot, status: &str, side: f32, visible: bool) -> AnyElement {
-    let look = BotLookConfig::from_bot(bot);
+pub(super) fn header_avatar(
+    look: BotLookConfig,
+    status: &str,
+    side: f32,
+    visible: bool,
+) -> AnyElement {
     let status = status.to_owned();
     canvas(
         |_, _, _| {},

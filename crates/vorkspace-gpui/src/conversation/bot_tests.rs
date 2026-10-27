@@ -61,6 +61,102 @@ fn chat(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
 }
 
 #[gpui::test]
+fn typing_keeps_the_unchanged_bot_transcript_rendered(cx: &mut TestAppContext) {
+    let window = chat(cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(size(px(900.), px(680.)));
+    window
+        .update(visual, |view, window, cx| {
+            window.focus(&view.input.focus_handle(cx), cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    // Establish the nonempty composer and its final geometry before measuring.
+    visual.simulate_input("a");
+    visual.run_until_parked();
+    let (transcript, draft, source, renders) = window
+        .read_with(visual, |view, cx| {
+            let transcript = view.transcript.read(cx);
+            (
+                view.transcript.clone(),
+                view.input.read(cx).content.to_string(),
+                transcript.source_rows().to_vec(),
+                transcript.render_passes,
+            )
+        })
+        .unwrap();
+    for _ in 0..60 {
+        visual.simulate_input("a");
+        visual.run_until_parked();
+    }
+    transcript.read_with(visual, |view, _| {
+        assert_eq!(view.render_passes, renders);
+        assert_eq!(view.source_rows(), source);
+    });
+    window
+        .update(visual, |view, window, cx| {
+            assert_eq!(
+                view.input.read(cx).content.as_ref(),
+                draft + &"a".repeat(60)
+            );
+            assert!(view.input.focus_handle(cx).is_focused(window));
+        })
+        .unwrap();
+
+    window
+        .update(visual, |view, _, cx| {
+            view.bot_post("assistant", "A newly published reply.".into(), cx)
+                .unwrap();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    transcript.read_with(visual, |view, _| {
+        assert!(view.render_passes > renders);
+        assert_eq!(
+            view.source_rows().last().unwrap().text,
+            "A newly published reply."
+        );
+    });
+}
+
+#[gpui::test]
+fn header_ticks_do_not_notify_the_chat_or_rebuild_its_transcript(cx: &mut TestAppContext) {
+    use std::cell::Cell;
+    let window = chat(cx);
+    window
+        .update(cx, |view, _, cx| view.show_bot_header(true, cx))
+        .unwrap();
+    cx.run_until_parked();
+    let (header, transcript) = window
+        .read_with(cx, |view, _| {
+            (view.bot_ui.header.clone().unwrap(), view.transcript.clone())
+        })
+        .unwrap();
+    let chat = window.entity(cx).unwrap();
+    let notifications = Rc::new(Cell::new(0));
+    let observed = notifications.clone();
+    let _subscription =
+        cx.update(|cx| cx.observe(&chat, move |_, _| observed.set(observed.get() + 1)));
+    let renders = transcript.read_with(cx, |view, _| view.render_passes);
+    for _ in 0..60 {
+        // The real animation timer notifies precisely this retained owner.
+        // Perpetual timers stay suppressed on the deterministic test clock.
+        header.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    assert_eq!(notifications.get(), 0);
+    assert_eq!(
+        transcript.read_with(cx, |view, _| view.render_passes),
+        renders
+    );
+    window
+        .read_with(cx, |view, _| {
+            assert_eq!(view.bot_ui.header.as_ref().unwrap(), &header);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn automatic_updates_stay_quiet_and_peer_delivery_keeps_one_transcript_message(
     cx: &mut TestAppContext,
 ) {

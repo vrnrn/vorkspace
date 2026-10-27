@@ -36,9 +36,10 @@ a crash during renames can leave fewer generations.
 
 The byte cap excludes filesystem block rounding, directory metadata and the lock
 file's metadata. Each JSONL record is at most 32 KiB, with at most eight
-contributors and 160 UTF-8 bytes per source/type string. At most eight incidents
-are written per poll; `incidents_elided_in_poll` reports further qualifying
-incidents discarded from that poll. No unbounded application buffering or
+contributors and 160 UTF-8 bytes per source/type string. At most eight records
+are written per poll, including any unfinished-task candidate;
+`incidents_elided_in_poll` reports further qualifying completed incidents
+discarded from that poll. No unbounded application buffering or
 cross-poll backlog is introduced.
 
 ## Measurement and interpretation
@@ -83,11 +84,42 @@ individual threshold event remains useful.
 The longest contributor provides timing attribution, **not a stack trace**.
 Nested durations overlap and must not be summed across depths. Events are
 usually published when work completes, and an incident needs a sealing boundary.
-A beachball that recovers may be recorded later; force quitting, a permanent
-stall, or journal overwrite can leave no record. Restart does not reconstruct
+A beachball that recovers may be recorded later; force quitting or journal
+overwrite can leave no completed-incident record. Restart does not reconstruct
 missing events. Wall-clock observation time can change with system clock
 adjustments; monotonic timings relative to this monitor's startup are used for
 stall durations.
+
+### Unfinished foreground task candidates
+
+The same one-second worker poll also checks GPUI's current foreground task.
+Once a single executor poll has been running for **five seconds**, it writes
+one candidate with `record_kind: "active_task"`, even if that task has not
+returned and its journal interval has not closed. The record contains the
+existing run identity, observation time, five-second threshold, elapsed duration
+and allowlisted compile-time source location. A continued freeze does not emit
+another candidate for that same poll; a later task can qualify independently.
+
+These candidates have their own explicit schema and omit completed-interval
+fields such as `sealed_by`, `during_active_use` and frame timings. A source
+location identifies the enclosing task, not the blocking call inside it.
+Elapsed time is not CPU time, proof of active use, or a suspend-aware sealed
+hang measurement. Readers must distinguish `active_task` candidates from the
+existing completed-incident records, which have no `record_kind` field.
+
+The observer captures the foreground thread identity at startup. It uses
+nonblocking profiler locks and skips a check when either lock is busy. It reads
+only the active poll; it does not copy historical task timing buffers, schedule
+foreground work, or add a heartbeat. Candidates share the existing private
+writer, byte caps, per-poll record cap, rotation and failure disablement.
+
+A local debugger can watch for a candidate and sample its `run.pid` while the
+freeze is still happening, for example `sample PID 5 -file /private/tmp/hang.txt`.
+The app does not launch the sampler itself. A raw macOS sample is a separate
+debug artifact and may include filesystem paths and process metadata; the
+allowlisted JSONL record does not gain those fields. Candidates cannot cover
+work outside an active GPUI executor poll, and a blocked profiler lock or a
+force quit before the threshold can still prevent capture.
 
 ## Failure and lifecycle
 

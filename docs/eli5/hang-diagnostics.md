@@ -36,9 +36,22 @@ a misleading result.
 The recorder checks once a second and ignores ordinary short frame delays.
 Work normally becomes visible to it only after that work finishes and GPUI
 closes the timing interval. If a beachball recovers, a useful record may follow.
-If the app never recovers or is force quit first, there may be no record. The
+If the app is force quit first, there may be no completed record. The
 recorder also misses startup work before GPUI starts and delays made from many
 smaller tasks that never individually reach half a second.
+
+There is also an early warning for a foreground task that has been running
+for five seconds without returning. The recorder writes that warning while the
+task is still running, rather than waiting for the beachball to clear. It gives
+the process number and the code location where that task started. A local
+debugger can then capture what the app is doing during the freeze. The app
+does not start a debugger or upload anything itself.
+
+That early warning is a clue, not a full explanation: elapsed time is not CPU
+time and does not prove the app was in front. It uses a distinct record type and
+does not invent drawing or activity measurements. It writes only once for the
+same stuck task and shares the existing file limits. It uses the existing
+background check, skips busy recorder locks, and never asks the UI to respond.
 
 The app writes files on the recorder's own thread. It keeps at most eight causes
 per record, limits text lengths and record size, and writes at most eight records
