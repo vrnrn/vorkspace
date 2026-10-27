@@ -263,7 +263,6 @@ impl Shell {
         });
         let navigation = self.sidebar_navigation(cx);
         rail = rail
-            .child(navigation)
             .child(
                 div()
                     .id("classic-project-rail-scroll")
@@ -272,6 +271,9 @@ impl Shell {
                     .min_h_0()
                     .overflow_y_scroll()
                     .pb_2()
+                    // Share the existing rail scroller so a short window can
+                    // always reach navigation as well as the Working card/footer.
+                    .child(navigation)
                     .children(bots)
                     .when(!pinned_projects.is_empty(), |d| {
                         d.child(section_label("Pinned").mx_2()).child(
@@ -317,6 +319,7 @@ impl Shell {
                         ),
                     ),
             )
+            .children(self.live_agents_preview(false, cx))
             .when(
                 self.notification_state.installed.read(cx).is_visible(),
                 |d| {
@@ -329,7 +332,6 @@ impl Shell {
                 },
             )
             .child(div().mx_2().child(self.resources.clone()))
-            .children(self.live_agents_preview(false, cx))
             .when(self.workspace.sidebar_subscriptions_visible, |d| {
                 d.child(div().px_2().child(self.usage_footer.clone()))
             })

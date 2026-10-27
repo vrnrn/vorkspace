@@ -398,12 +398,12 @@ fn elapsed_clock_is_local_bounded_and_stops_for_hidden_compact_and_finished_card
 }
 
 #[gpui::test]
-fn paging_bounds_rows_and_preserves_footer_under_pressure_in_both_layouts(cx: &mut TestAppContext) {
+fn four_rows_expand_to_bounded_scrolling_and_preserve_footer_and_focus(cx: &mut TestAppContext) {
     let (window, a, b) = fixture(cx);
     let ids = window
         .update(cx, |shell, _, cx| {
             let mut ids = vec![a, b];
-            for _ in 0..7 {
+            for _ in 0..98 {
                 let summary = locked(&shell.store)
                     .unwrap()
                     .create("codex", "/work/elsewhere")
@@ -421,50 +421,138 @@ fn paging_bounds_rows_and_preserves_footer_under_pressure_in_both_layouts(cx: &m
         busy(window, id, true, cx);
     }
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_resize(gpui::size(px(1300.), px(700.)));
+    visual.simulate_resize(gpui::size(px(1300.), px(900.)));
     visual.run_until_parked();
     for compact in [false, true] {
         window
-            .update(visual, |shell, _, cx| {
+            .update(visual, |shell, w, cx| {
                 shell.workspace.project_rail_open = !compact;
-                shell
-                    .live_agents
-                    .update(cx, |activity, _| activity.page = 0);
+                shell.live_agents.update(cx, |activity, _| {
+                    activity.expanded = false;
+                    activity
+                        .scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .set_offset(Point::default());
+                });
+                shell.sessions[&b].update(cx, |view, cx| {
+                    view.input.update(cx, |input, cx| {
+                        input.set_text("Do not lose this draft".into(), cx)
+                    });
+                });
+                let input = shell.sessions[&b].read(cx).input.clone();
+                w.focus(&input.focus_handle(cx), cx);
                 shell.invalidate_chrome(cx);
                 cx.notify();
             })
             .unwrap();
         visual.run_until_parked();
+        let shown = ids
+            .iter()
+            .filter(|id| bounds(visual, format!("live-agent-{id}")).is_some())
+            .count();
+        assert_eq!(shown, DEFAULT_ROWS);
+        let focus = visual.update(|w, cx| w.focused(cx));
+        let more = visual.debug_bounds("live-agents-more").unwrap();
+        visual.simulate_click(more.center(), Default::default());
+        visual.run_until_parked();
+        assert_eq!(
+            visual.update(|w, cx| w.focused(cx)),
+            focus,
+            "pointer disclosure must retain composer focus"
+        );
+        window
+            .update(visual, |shell, _, cx| {
+                let activity = shell.live_agents.read(cx);
+                assert!(activity.expanded);
+                assert_eq!(activity.shown_count(), ids.len());
+                assert_eq!(shell.workspace.active, Some(b));
+                assert_eq!(
+                    shell.sessions[&b].read(cx).input.read(cx).content,
+                    "Do not lose this draft"
+                );
+            })
+            .unwrap();
+        window
+            .update(visual, |shell, w, cx| {
+                let focus = shell.live_agents.read(cx).list_focus.clone();
+                w.focus(&focus, cx)
+            })
+            .unwrap();
+        visual.simulate_keystrokes("end");
+        visual.refresh().unwrap();
+        visual.run_until_parked();
+        let last = window
+            .update(visual, |shell, _, cx| {
+                shell.live_agents.read(cx).agents.last().unwrap().id
+            })
+            .unwrap();
+        assert!(bounds(visual, format!("live-agent-{last}")).is_some());
+        let mounted = ids
+            .iter()
+            .filter(|id| bounds(visual, format!("live-agent-{id}")).is_some())
+            .count();
+        assert!(
+            mounted < 16,
+            "virtual rows must be bounded by the viewport: {mounted}"
+        );
+        if !compact {
+            let anchor = window
+                .update(visual, |shell, _, cx| {
+                    let activity = shell.live_agents.read(cx);
+                    let offset = activity.scroll.0.borrow().base_handle.offset();
+                    let top = (-f32::from(offset.y) / activity.row_height()).floor() as usize;
+                    activity.agents[top].id
+                })
+                .unwrap();
+            busy(window, a, false, visual);
+            window
+                .update(visual, |shell, _, cx| {
+                    let activity = shell.live_agents.read(cx);
+                    let offset = activity.scroll.0.borrow().base_handle.offset();
+                    let top = (-f32::from(offset.y) / activity.row_height()).floor() as usize;
+                    assert_eq!(
+                        activity.agents[top].id, anchor,
+                        "completion above the viewport retains its top session"
+                    );
+                })
+                .unwrap();
+            busy(window, a, true, visual);
+        }
+        // Short windows keep both the scrollable list and its disclosure above
+        // the existing resource/subscription/settings footer, in either rail.
+        visual.simulate_resize(gpui::size(px(1300.), px(520.)));
+        visual.run_until_parked();
         let activity = visual.debug_bounds("sidebar-activity-card").unwrap();
         let subscriptions = visual.debug_bounds("subscriptions").unwrap();
         let resources = visual.debug_bounds("resource-pressure-chip").unwrap();
         let settings = visual.debug_bounds("classic-rail-settings").unwrap();
+        assert!(activity.top() >= px(TITLE_BAR_HEIGHT));
+        assert!(activity.bottom() <= resources.top());
         assert!(activity.bottom() <= subscriptions.top());
         assert!(subscriptions.bottom() <= settings.top());
-        assert!(activity.top() >= px(TITLE_BAR_HEIGHT));
-        assert!(if compact {
-            activity.bottom() <= resources.top()
-        } else {
-            resources.bottom() <= activity.top()
-        });
-        let mut seen = HashSet::new();
-        for page in 0..3 {
-            let shown: Vec<_> = ids
-                .iter()
-                .copied()
-                .filter(|id| bounds(visual, format!("live-agent-{id}")).is_some())
-                .collect();
-            assert_eq!(shown.len(), if page < 2 { PAGE_SIZE } else { 1 });
-            for id in shown {
-                assert!(seen.insert(id));
-            }
-            if page < 2 {
-                let next = visual.debug_bounds("activity-next").unwrap();
-                visual.simulate_click(next.center(), Default::default());
-                visual.run_until_parked();
-            }
-        }
-        assert_eq!(seen.len(), ids.len());
+        assert!(
+            settings.bottom() <= px(520.),
+            "settings must remain inside the window, compact={compact}: {settings:?}"
+        );
+        let more = visual.debug_bounds("live-agents-more").unwrap();
+        assert!(more.bottom() <= activity.bottom());
+        visual.simulate_click(more.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                let activity = shell.live_agents.read(cx);
+                assert!(!activity.expanded);
+                assert_eq!(activity.shown_count(), DEFAULT_ROWS);
+                assert_eq!(
+                    activity.scroll.0.borrow().base_handle.offset(),
+                    Point::default()
+                );
+            })
+            .unwrap();
+        visual.simulate_resize(gpui::size(px(1300.), px(900.)));
+        visual.run_until_parked();
     }
 }
 
@@ -607,42 +695,71 @@ fn native_activity_capture() {
         },
     );
     cx.update(|cx| crate::clock::use_test_clock(cx));
-    let window = cx
-        .open_window(gpui::size(px(1280.), px(800.)), |_, cx| {
-            cx.new(|cx| Shell::new(store, summaries, "/work/vorkspace".into(), None, cx))
-        })
-        .unwrap();
-    cx.run_until_parked();
-    window
-        .update(&mut cx, |shell, _, cx| {
-            for id in shell.order.clone() {
-                let view = shell.ensure_session(id, cx).unwrap();
-                view.update(cx, |view, cx| {
-                    view.busy = true;
-                    cx.emit(SessionChanged);
-                });
-            }
-            shell
-                .resources
-                .update(cx, |resources, cx| resources.saturate(cx));
-        })
-        .unwrap();
-    cx.run_until_parked();
-    window
-        .update(&mut cx, |shell, _, cx| {
-            let id = shell.order[0];
-            shell.sessions[&id].update(cx, |view, cx| view.sidebar_test_approval(true, cx));
-            let id = shell.order[1];
-            shell.sessions[&id].update(cx, |view, cx| {
-                view.busy = false;
-                cx.emit(SessionChanged);
-            });
-        })
-        .unwrap();
     for theme in ["dark", "light", "harbor"] {
-        for compact in [false, true] {
+        for (name, compact, expanded, height, single) in [
+            ("expanded", false, false, 800., false),
+            ("compact", true, false, 800., false),
+            ("all", false, true, 800., false),
+            ("bottom", false, true, 800., false),
+            ("short", false, true, 520., false),
+            ("compact-all", true, true, 800., false),
+            ("compact-short", true, true, 520., false),
+            ("single", false, false, 800., true),
+        ] {
+            if theme != "dark" && !matches!(name, "expanded" | "compact") {
+                continue;
+            }
+            // TestWindow::resize only changes its backing image size. Opening
+            // at the target viewport gives honest native short-window captures.
+            let window = cx
+                .open_window(gpui::size(px(1280.), px(height)), |_, cx| {
+                    cx.new(|cx| {
+                        Shell::new(
+                            store.clone(),
+                            summaries.clone(),
+                            "/work/vorkspace".into(),
+                            None,
+                            cx,
+                        )
+                    })
+                })
+                .unwrap();
+            cx.run_until_parked();
             window
                 .update(&mut cx, |shell, _, cx| {
+                    for (ix, id) in shell.order.clone().into_iter().enumerate() {
+                        let view = shell.ensure_session(id, cx).unwrap();
+                        view.update(cx, |view, cx| {
+                            view.busy = !single || ix == 2;
+                            view.activity = Some(
+                                if view.summary.provider == "codex" {
+                                    "Run cargo test"
+                                } else {
+                                    "Read src/main.rs"
+                                }
+                                .into(),
+                            );
+                            cx.emit(SessionChanged);
+                        });
+                    }
+                    shell
+                        .resources
+                        .update(cx, |resources, cx| resources.saturate(cx));
+                })
+                .unwrap();
+            cx.run_until_parked();
+            window
+                .update(&mut cx, |shell, _, cx| {
+                    if !single {
+                        let id = shell.order[0];
+                        shell.sessions[&id]
+                            .update(cx, |view, cx| view.sidebar_test_approval(true, cx));
+                        let id = shell.order[1];
+                        shell.sessions[&id].update(cx, |view, cx| {
+                            view.busy = false;
+                            cx.emit(SessionChanged);
+                        });
+                    }
                     shell.workspace.preferences.theme =
                         if theme == "light" { "light" } else { "dark" }.into();
                     shell.workspace.preferences.workspace_theme = if theme == "harbor" {
@@ -652,19 +769,169 @@ fn native_activity_capture() {
                     }
                     .into();
                     shell.workspace.project_rail_open = !compact;
+                    shell.live_agents.update(cx, |activity, cx| {
+                        activity.expanded = expanded;
+                        cx.notify();
+                    });
                     shell.invalidate_chrome(cx);
                     cx.notify();
                 })
                 .unwrap();
             cx.run_until_parked();
+            if name == "bottom" {
+                window
+                    .update(&mut cx, |shell, _, cx| {
+                        shell.live_agents.update(cx, |activity, cx| {
+                            activity.scroll.scroll_to_bottom();
+                            cx.notify();
+                        })
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+            }
             crate::clock::settle_headless_animations(window, &mut cx);
             cx.capture_screenshot(window.into())
                 .unwrap()
-                .save(output.join(format!(
-                    "activity-{theme}-{}.png",
-                    if compact { "compact" } else { "expanded" }
-                )))
+                .save(output.join(format!("working-{theme}-{name}.png")))
                 .unwrap();
+            window.update(&mut cx, |_, w, _| w.remove_window()).unwrap();
         }
     }
+}
+
+#[test]
+fn historical_elapsed_format_handles_rounding_and_whole_units() {
+    for (ms, label) in [
+        (0, "1s"),
+        (499, "1s"),
+        (1499, "1s"),
+        (1500, "2s"),
+        (60_000, "1m"),
+        (61_000, "1m 1s"),
+        (3_600_000, "1h"),
+        (3_660_000, "1h 1m"),
+    ] {
+        assert_eq!(live_elapsed(Duration::from_millis(ms)), label);
+    }
+}
+
+#[gpui::test]
+fn historical_three_line_card_geometry_and_single_session_disclosure(cx: &mut TestAppContext) {
+    let (window, a, _) = fixture(cx);
+    busy(window, a, true, cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(gpui::size(px(1300.), px(1000.)));
+    visual.run_until_parked();
+    let header = visual.debug_bounds("live-agents-working-header").unwrap();
+    let row = bounds(visual, format!("live-agent-{a}")).unwrap();
+    let title = bounds(visual, format!("live-agent-{a}-title")).unwrap();
+    let activity = bounds(visual, format!("live-agent-{a}-activity")).unwrap();
+    let project = bounds(visual, format!("live-agent-{a}-project")).unwrap();
+    let elapsed = bounds(visual, format!("live-agent-{a}-elapsed")).unwrap();
+    assert_eq!(
+        row.size.height,
+        px(66.),
+        "original 18/14/14px lines, two 4px gaps and 12px padding"
+    );
+    assert!(header.bottom() <= row.top());
+    assert_eq!(activity.top() - title.bottom(), px(4.));
+    assert_eq!(project.top() - activity.bottom(), px(4.));
+    assert_eq!(project.top(), elapsed.top());
+    assert_eq!(
+        project.left(),
+        title.left() + px(18.),
+        "metadata provider icon remains below title"
+    );
+    assert!(visual.debug_bounds("live-agents-more").is_none());
+    assert!(visual.debug_bounds("activity-next").is_none());
+    window
+        .update(visual, |shell, _, cx| {
+            let activity = shell.live_agents.read(cx);
+            assert_eq!(activity.agents.len(), 1);
+            assert_eq!(activity.activity_label(&activity.agents[0]), "Working");
+            assert_eq!(activity.elapsed(&activity.agents[0]).as_deref(), Some("1s"));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clock(
+    cx: &mut TestAppContext,
+) {
+    use crate::conversation::receive_tests::sidebar_tool_update;
+    let (window, a, b) = fixture(cx);
+    let tx = window
+        .update(cx, |shell, w, cx| {
+            let input = shell.sessions[&b].read(cx).input.clone();
+            input.update(cx, |input, cx| {
+                input.set_text("Keep my unfinished thought".into(), cx)
+            });
+            w.focus(&input.focus_handle(cx), cx);
+            shell.sessions[&a].update(cx, |view, cx| view.sidebar_test_receiver(cx))
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    crate::clock::settle_animations(window, visual);
+    let focus = visual.update(|w, cx| w.focused(cx));
+    let (snapshots, started) = window
+        .update(visual, |shell, _, cx| {
+            let activity = shell.live_agents.read(cx);
+            (activity.snapshots, activity.runs[&a].started)
+        })
+        .unwrap();
+    for label in [
+        Some("Run cargo check"),
+        Some("Read src/main.rs"),
+        Some("Read src/main.rs"),
+        None,
+    ] {
+        tx.try_send(sidebar_tool_update(label)).unwrap();
+        visual.executor().advance_clock(Duration::from_millis(1));
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                assert_eq!(shell.sessions[&a].read(cx).activity.as_deref(), label);
+                let activity = shell.live_agents.read(cx);
+                assert_eq!(
+                    activity.activity_label(&activity.agents[0]),
+                    label.unwrap_or("Working")
+                );
+                assert_eq!(
+                    activity.snapshots, snapshots,
+                    "tool and output receipts must not resnapshot the registry"
+                );
+                assert_eq!(activity.runs[&a].started, started);
+                assert_eq!(shell.workspace.active, Some(b));
+                assert_eq!(
+                    shell.sessions[&b].read(cx).input.read(cx).content,
+                    "Keep my unfinished thought"
+                );
+            })
+            .unwrap();
+        assert_eq!(visual.update(|w, cx| w.focused(cx)), focus);
+    }
+    // Replacing the run revokes the previous receiver's authority, even if it
+    // publishes a plausible label after a new run has started.
+    let successor = window
+        .update(visual, |shell, _, cx| {
+            shell.sessions[&a].update(cx, |view, cx| view.sidebar_test_receiver(cx))
+        })
+        .unwrap();
+    tx.try_send(sidebar_tool_update(Some("Run stale command")))
+        .unwrap();
+    successor
+        .try_send(sidebar_tool_update(Some("Run current command")))
+        .unwrap();
+    visual.executor().advance_clock(Duration::from_millis(1));
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, cx| {
+            let activity = shell.live_agents.read(cx);
+            assert_eq!(
+                activity.activity_label(&activity.agents[0]),
+                "Run current command"
+            );
+        })
+        .unwrap();
 }

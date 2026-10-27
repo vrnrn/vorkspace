@@ -5,6 +5,7 @@ use vorkspace_core::{store::Store, transcript::Row};
 fn update(index: usize, finished: bool) -> crate::runtime::Update {
     crate::runtime::Update {
         source_len: None,
+        activity: None,
         worktree_cwd: None,
         commands: None,
         provider_turn_id: None,
@@ -213,4 +214,32 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
             assert!(view.approvals.is_empty());
         })
         .unwrap();
+}
+
+// Drive the real guarded receiver from the sidebar integration tests.
+impl Conversation {
+    pub(crate) fn sidebar_test_receiver(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> async_channel::Sender<crate::runtime::Update> {
+        self.begin_turn(cx);
+        let (tx, rx) = async_channel::bounded(8);
+        self.receive_turn_updates(
+            rx,
+            self.submission_generation,
+            self.summary.provider.clone(),
+            self.settings.account.id.clone(),
+            None,
+            cx,
+        );
+        cx.emit(SessionChanged);
+        tx
+    }
+}
+
+pub(crate) fn sidebar_tool_update(label: Option<&str>) -> crate::runtime::Update {
+    let mut update = update(0, false);
+    update.rows.clear();
+    update.activity = label.map(str::to_owned);
+    update
 }

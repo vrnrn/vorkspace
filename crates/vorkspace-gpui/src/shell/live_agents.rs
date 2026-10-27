@@ -2,9 +2,13 @@
 //! presentation clock: ticking never hydrates history or rebuilds the session snapshot.
 use super::*;
 use crate::clock::Instant;
+use gpui::{UniformListScrollHandle, uniform_list};
 use std::time::Duration;
+use vorkspace_core::project_appearance::ProjectAppearance;
 
-const PAGE_SIZE: usize = 4;
+const DEFAULT_ROWS: usize = 4;
+const ROW_HEIGHT: f32 = 67.;
+const COMPACT_ROW_HEIGHT: f32 = 36.;
 const ELAPSED_TICK: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -16,7 +20,7 @@ enum Status {
 impl Status {
     fn label(self) -> &'static str {
         match self {
-            Self::Approval => "Needs approval",
+            Self::Approval => "Need approval",
             Self::Working => "Working",
             Self::Done => "Done",
         }
@@ -25,16 +29,19 @@ impl Status {
         match self {
             Self::Approval => "alert-circle",
             Self::Working => "response-activity",
-            Self::Done => "check-circle-2",
+            Self::Done => "check",
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Agent {
     id: i64,
     title: String,
     project: String,
+    cwd: String,
+    appearance: ProjectAppearance,
+    activity: Option<String>,
     provider: String,
     status: Status,
     selected: bool,
@@ -50,10 +57,12 @@ pub(super) struct LiveAgents {
     owner: gpui::WeakEntity<Shell>,
     agents: Vec<Agent>,
     runs: HashMap<i64, Run>,
-    page: usize,
+    expanded: bool,
     compact: bool,
     visible: bool,
-    scroll: ScrollHandle,
+    scroll: UniformListScrollHandle,
+    list_focus: gpui::FocusHandle,
+    bounds_subscription: Option<Subscription>,
     tick: Option<gpui::Task<()>>,
     #[cfg(test)]
     ticks: usize,
@@ -62,15 +71,17 @@ pub(super) struct LiveAgents {
 }
 
 impl LiveAgents {
-    pub(super) fn new(owner: gpui::WeakEntity<Shell>) -> Self {
+    pub(super) fn new(owner: gpui::WeakEntity<Shell>, cx: &mut Context<Self>) -> Self {
         Self {
             owner,
             agents: Vec::new(),
             runs: HashMap::new(),
-            page: 0,
+            expanded: false,
             compact: false,
             visible: false,
-            scroll: ScrollHandle::new(),
+            scroll: UniformListScrollHandle::new(),
+            list_focus: cx.focus_handle(),
+            bounds_subscription: None,
             tick: None,
             #[cfg(test)]
             ticks: 0,
@@ -111,16 +122,80 @@ impl LiveAgents {
         self.tick = None;
     }
 
-    fn page_agents(&self) -> &[Agent] {
-        let start = (self.page * PAGE_SIZE).min(self.agents.len());
-        &self.agents[start..(start + PAGE_SIZE).min(self.agents.len())]
+    fn shown_count(&self) -> usize {
+        if self.expanded {
+            self.agents.len()
+        } else {
+            self.agents.len().min(DEFAULT_ROWS)
+        }
+    }
+
+    pub(super) fn set_activity(&mut self, id: i64, label: Option<String>, cx: &mut Context<Self>) {
+        if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == id)
+            && agent.activity != label
+        {
+            agent.activity = label;
+            cx.notify();
+        }
+    }
+
+    fn activity_label<'a>(&self, agent: &'a Agent) -> &'a str {
+        if agent.status == Status::Working {
+            agent.activity.as_deref().unwrap_or("Working")
+        } else {
+            agent.status.label()
+        }
+    }
+
+    fn row_height(&self) -> f32 {
+        if self.compact {
+            COMPACT_ROW_HEIGHT
+        } else {
+            ROW_HEIGHT
+        }
+    }
+
+    fn scroll_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        let handle = self.scroll.0.borrow();
+        let base = &handle.base_handle;
+        let offset = base.offset();
+        let step = self.row_height();
+        let y = match event.keystroke.key.as_str() {
+            "up" => offset.y + px(step),
+            "down" => offset.y - px(step),
+            "pageup" => offset.y + px(step * DEFAULT_ROWS as f32),
+            "pagedown" => offset.y - px(step * DEFAULT_ROWS as f32),
+            "home" => px(0.),
+            "end" => -base.max_offset().y,
+            _ => return,
+        };
+        base.set_offset(gpui::point(
+            offset.x,
+            y.min(px(0.)).max(-base.max_offset().y),
+        ));
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn toggle_expanded(&mut self, cx: &mut Context<Self>) {
+        self.expanded = !self.expanded;
+        // Disclosure is deliberate navigation. Ordinary semantic updates retain
+        // the scroll anchor; collapsing returns to the original four sessions.
+        if !self.expanded {
+            self.scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(Point::default());
+        }
+        self.sync_timer(cx);
+        cx.notify();
     }
 
     fn sync_timer(&mut self, cx: &mut Context<Self>) {
         let ticking = self.visible
             && !self.compact
-            && self
-                .page_agents()
+            && self.agents[..self.shown_count()]
                 .iter()
                 .any(|agent| agent.status != Status::Done && self.runs.contains_key(&agent.id));
         if !ticking {
@@ -173,8 +248,30 @@ impl LiveAgents {
             )
         });
         if self.agents != agents {
-            // Keep the current page through title, group and selection updates.
-            self.page = self.page.min(agents.len().saturating_sub(1) / PAGE_SIZE);
+            // Preserve the top session and fractional offset when approvals or
+            // completions reorder rows above a deliberately scrolled position.
+            let handle = self.scroll.0.borrow();
+            let offset = handle.base_handle.offset();
+            let top = ((-f32::from(offset.y)).max(0.) / self.row_height()).floor() as usize;
+            if let Some(id) = self.agents.get(top).map(|agent| agent.id)
+                && let Some(next) = agents.iter().position(|agent| agent.id == id)
+                && next != top
+                && offset.y < px(0.)
+            {
+                handle.base_handle.set_offset(gpui::point(
+                    offset.x,
+                    offset.y + px((top as f32 - next as f32) * self.row_height()),
+                ));
+            }
+            drop(handle);
+            if agents.is_empty() {
+                self.expanded = false;
+                self.scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(Point::default());
+            }
             self.agents = agents;
             cx.notify();
         }
@@ -187,7 +284,15 @@ impl LiveAgents {
             return false;
         }
         if self.compact != compact || !self.visible {
+            let old_height = self.row_height();
             self.compact = compact;
+            let handle = self.scroll.0.borrow();
+            let offset = handle.base_handle.offset();
+            handle.base_handle.set_offset(gpui::point(
+                offset.x,
+                offset.y * (self.row_height() / old_height),
+            ));
+            drop(handle);
             self.visible = true;
             cx.notify();
         }
@@ -200,15 +305,8 @@ impl LiveAgents {
             let elapsed = run
                 .finished
                 .unwrap_or_else(Instant::now)
-                .saturating_duration_since(run.started)
-                .as_secs();
-            if elapsed < 60 {
-                format!("{elapsed}s")
-            } else if elapsed < 3600 {
-                format!("{}m {}s", elapsed / 60, elapsed % 60)
-            } else {
-                format!("{}h {}m", elapsed / 3600, elapsed / 60 % 60)
-            }
+                .saturating_duration_since(run.started);
+            live_elapsed(elapsed)
         })
     }
 
@@ -216,43 +314,56 @@ impl LiveAgents {
         let id = agent.id;
         let owner = self.owner.clone();
         let elapsed = self.elapsed(agent);
-        let label = format!(
-            "{}, {}, {}{}",
-            agent.title,
-            agent.project,
-            agent.status.label(),
-            elapsed
-                .as_ref()
-                .map(|time| format!(", {time}"))
-                .unwrap_or_default()
-        );
+        let activity = self.activity_label(agent);
+        let label = [
+            Some(agent.title.clone()),
+            Some(agent.project.clone()),
+            Some(activity.to_owned()),
+            elapsed.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
         let status_selector = format!("live-agent-{id}-{:?}", agent.status).to_lowercase();
-        let row = div()
-            .id(("live-agent", id as usize))
+        let row = crate::controls::button(("live-agent", id as usize), label, true)
             .debug_selector(move || format!("live-agent-{id}"))
-            .role(Role::Button)
             .flex_shrink_0()
-            .aria_label(label)
             .aria_selected(agent.selected)
-            .focusable()
-            .tab_stop(true)
             .cursor(CursorStyle::Arrow)
             .rounded_md()
             .when(agent.selected, |d| d.bg(content(0.1)))
-            .hover(|s| s.bg(content(0.08)))
-            .focus(|s| s.bg(content(0.1)))
+            .when(!agent.selected, |d| d.hover(|s| s.bg(content(0.08))))
             .on_click(move |_, window, cx| {
                 let _ = owner.update(cx, |shell, cx| {
+                    shell.selected_sessions.clear();
+                    shell.selection_anchor = Some(id);
                     shell.open(id, window, cx);
                     shell.invalidate_chrome(cx);
+                    cx.notify();
                 });
             });
-        let status = icon(agent.status.glyph(), 12.)
+        let ink = match agent.status {
+            Status::Approval => crate::theme::status(crate::theme::StatusColor::Warning, 1.),
+            Status::Done => crate::theme::status(crate::theme::StatusColor::Success, 1.),
+            Status::Working => content(0.5),
+        };
+        let status = div()
             .debug_selector(move || status_selector.clone())
-            .text_color(if agent.status == Status::Working {
-                content(0.7)
+            .size(px(12.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(if agent.status == Status::Working {
+                // Keep the historical grid, without restoring per-row 30fps
+                // timers. The one card clock owns elapsed presentation only.
+                crate::session_mark::spinner_dots(400).into_any_element()
             } else {
-                accent_color()
+                icon(agent.status.glyph(), 12.)
+                    .text_color(ink)
+                    .into_any_element()
             });
         if self.compact {
             return row
@@ -264,155 +375,270 @@ impl LiveAgents {
                 .into_any_element();
         }
         row.w_full()
+            .h(px(ROW_HEIGHT - 1.))
             .px_2()
             .py_1p5()
             .flex()
             .flex_col()
-            .gap_1()
             .child(
                 div()
+                    .min_w_0()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .min_w_0()
-                    .child(provider_icon(&agent.provider, 12.))
+                    .child(crate::project_settings::project_icon(
+                        &agent.appearance,
+                        &agent.cwd,
+                        8.,
+                    ))
                     .child(
                         div()
+                            .debug_selector(move || format!("live-agent-{id}-title"))
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(12.))
+                            .text_size(px(13.))
+                            .line_height(px(18.))
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(content(1.))
                             .child(agent.title.clone()),
                     ),
             )
             .child(
                 div()
+                    .mt_1()
+                    .pl_4()
+                    .min_w_0()
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .min_w_0()
                     .text_size(px(11.))
-                    .text_color(content(0.7))
+                    .line_height(px(14.))
+                    .text_color(ink)
                     .child(status)
-                    .child(agent.status.label())
                     .child(
                         div()
+                            .debug_selector(move || format!("live-agent-{id}-activity"))
+                            .min_w_0()
+                            .truncate()
+                            .child(activity.to_owned()),
+                    ),
+            )
+            .child(
+                div()
+                    .mt_1()
+                    .pl_4()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .text_size(px(11.))
+                    .line_height(px(14.))
+                    .text_color(content(0.45))
+                    .child(provider_icon(&agent.provider, 12.))
+                    .child(
+                        div()
+                            .debug_selector(move || format!("live-agent-{id}-project"))
                             .flex_1()
                             .min_w_0()
                             .truncate()
                             .child(agent.project.clone()),
                     )
-                    .children(elapsed.map(|time| div().flex_shrink_0().child(time))),
+                    .children(elapsed.map(|time| {
+                        div()
+                            .debug_selector(move || format!("live-agent-{id}-elapsed"))
+                            .flex_shrink_0()
+                            .child(time)
+                    })),
             )
             .into_any_element()
     }
 }
 
+// Same rounded, minimum-one-second and whole-unit formatting as the original.
+fn live_elapsed(elapsed: Duration) -> String {
+    let seconds = ((elapsed.as_millis().saturating_add(500) / 1000) as u64).max(1);
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    let (minutes, rest) = (seconds / 60, seconds % 60);
+    if minutes < 60 {
+        return if rest > 0 {
+            format!("{minutes}m {rest}s")
+        } else {
+            format!("{minutes}m")
+        };
+    }
+    let (hours, rest) = (minutes / 60, minutes % 60);
+    if rest > 0 {
+        format!("{hours}h {rest}m")
+    } else {
+        format!("{hours}h")
+    }
+}
+
 impl Render for LiveAgents {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.bounds_subscription.is_none() {
+            self.bounds_subscription =
+                Some(cx.observe_window_bounds(window, |_, _, cx| cx.notify()));
+        }
         let count = self.agents.len();
+        let extra = count.saturating_sub(DEFAULT_ROWS);
         let compact = self.compact;
-        let pages = count.div_ceil(PAGE_SIZE);
+        let expanded = self.expanded;
+        let entity = cx.entity();
+        let shown = self.shown_count();
+        let height = px(shown as f32 * self.row_height())
+            .min(px(360.))
+            .min((window.viewport_size().height * 0.36).max(px(48.)));
+        let header = div()
+            .debug_selector(|| "live-agents-working-header".into())
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px(px(14.))
+            .py_1p5()
+            .child(
+                div()
+                    .size(px(6.))
+                    .flex_shrink_0()
+                    .rounded_full()
+                    .bg(accent_color())
+                    .shadow(vec![
+                        BoxShadow::new(px(0.), px(0.), accent_color()).blur_radius(px(8.)),
+                    ]),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(12.))
+                    .text_color(content(0.5))
+                    .child("Working"),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(content(0.4))
+                    .child(count.to_string()),
+            );
+        let rows = div()
+            .id("activity-rows")
+            .debug_selector(|| "activity-rows".into())
+            .role(Role::List)
+            .aria_label(
+                "Working sessions. Use arrow keys, Page Up, Page Down, Home or End to scroll.",
+            )
+            .track_focus(&self.list_focus)
+            .tab_stop(true)
+            .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+                window.prevent_default()
+            })
+            .focus_visible(|s| s.bg(content(0.08)))
+            .on_key_down(cx.listener(|this, event, _, cx| this.scroll_key(event, cx)))
+            .when(!compact, |d| d.px_1())
+            .when(extra == 0 && !compact, |d| d.pb_1())
+            .h(height
+                + if extra == 0 && !compact {
+                    px(4.)
+                } else {
+                    px(0.)
+                })
+            .min_h_0()
+            .flex_shrink_1()
+            .child(
+                uniform_list("live-agents-list", shown, move |range, _, cx| {
+                    entity.update(cx, |this, _| {
+                        range
+                            .map(|ix| {
+                                div()
+                                    .h(px(this.row_height()))
+                                    .w_full()
+                                    .child(this.row(&this.agents[ix]))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .track_scroll(&self.scroll)
+                .h_full()
+                .w_full(),
+            );
+        let more = (extra > 0).then(|| {
+            crate::controls::button(
+                "live-agents-more",
+                if expanded {
+                    "Show fewer working sessions".to_owned()
+                } else {
+                    format!("Show {extra} more working sessions")
+                },
+                true,
+            )
+            .debug_selector(|| "live-agents-more".into())
+            .flex_shrink_0()
+            .group("live-agents-more")
+            .aria_expanded(expanded)
+            .cursor(CursorStyle::Arrow)
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .px_2()
+            .py_1p5()
+            .text_size(px(11.))
+            .text_color(content(0.5))
+            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+            .child(
+                icon(
+                    if expanded {
+                        "chevron-up"
+                    } else {
+                        "chevron-down"
+                    },
+                    12.,
+                )
+                .text_color(content(0.5))
+                .group_hover("live-agents-more", |s| s.text_color(content(1.))),
+            )
+            .when(!compact, |d| {
+                d.child(if expanded {
+                    "Show less".to_owned()
+                } else {
+                    format!("{extra} more")
+                })
+            })
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_expanded(cx)))
+        });
         div()
             .id("live-agents")
             .debug_selector(|| "sidebar-activity-card".into())
             .role(Role::Group)
-            .aria_label(format!("Activity, {count} sessions"))
-            .flex_shrink_0()
+            .aria_label(format!("Working, {count} sessions"))
+            // The rail owns the available height. Keep header/disclosure and
+            // footer reachable while the list yields space in short windows.
+            .flex()
+            .flex_col()
+            .flex_shrink_1()
+            .min_h(px(if compact { 44. } else { 100. }) + if extra > 0 { px(26.) } else { px(0.) })
             .w_full()
             .px_2()
             .pb_2()
             .child(
                 div()
                     .w_full()
+                    .min_h_0()
+                    .flex_shrink_1()
                     .rounded_lg()
                     .overflow_hidden()
-                    .when(!compact, |d| d.bg(content(0.03)).p_1())
-                    .when(!compact, |d| {
-                        d.child(
-                            section_label("Activity")
-                                .child(div().text_size(px(11.)).child(count.to_string())),
-                        )
-                    })
+                    .when(!compact, |d| d.bg(content(0.05)))
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .id("activity-rows")
-                            .debug_selector(|| "activity-rows".into())
-                            .max_h((window.viewport_size().height * 0.28).max(px(48.)))
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.scroll)
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .children(self.page_agents().iter().map(|agent| self.row(agent))),
-                    )
-                    .when(pages > 1, |d| {
-                        d.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .gap_1()
-                                .child(
-                                    icon_button_enabled(
-                                        "activity-previous",
-                                        "Previous active sessions",
-                                        "chevron-left",
-                                        self.page > 0,
-                                    )
-                                    .debug_selector(|| "activity-previous".into())
-                                    .focusable()
-                                    .tab_stop(true)
-                                    .when(self.page > 0, |d| {
-                                        d.on_click(cx.listener(|this, _, _, cx| {
-                                            this.page -= 1;
-                                            this.scroll.set_offset(Point::default());
-                                            this.sync_timer(cx);
-                                            cx.notify();
-                                        }))
-                                    }),
-                                )
-                                .when(!compact, |d| {
-                                    d.child(
-                                        div().text_size(px(11.)).text_color(content(0.7)).child(
-                                            format!(
-                                                "{}–{} of {count}",
-                                                self.page * PAGE_SIZE + 1,
-                                                ((self.page + 1) * PAGE_SIZE).min(count)
-                                            ),
-                                        ),
-                                    )
-                                })
-                                .child(
-                                    icon_button_enabled(
-                                        "activity-next",
-                                        "Next active sessions",
-                                        "chevron-right",
-                                        self.page + 1 < pages,
-                                    )
-                                    .debug_selector(|| "activity-next".into())
-                                    .focusable()
-                                    .tab_stop(true)
-                                    .when(
-                                        self.page + 1 < pages,
-                                        |d| {
-                                            d.on_click(cx.listener(|this, _, _, cx| {
-                                                this.page += 1;
-                                                this.scroll.set_offset(Point::default());
-                                                this.sync_timer(cx);
-                                                cx.notify();
-                                            }))
-                                        },
-                                    ),
-                                )
-                                .when(compact, |d| d.flex_col()),
-                        )
-                    }),
+                    .when(!compact, |d| d.child(header))
+                    .child(rows)
+                    .children(more),
             )
     }
 }
@@ -454,6 +680,12 @@ impl Shell {
                     id,
                     title: metadata.display_title(),
                     project: self.project_label(&metadata.summary.cwd),
+                    cwd: metadata.summary.cwd.clone(),
+                    appearance: self.appearance(&metadata.summary.cwd),
+                    activity: self
+                        .sessions
+                        .get(&id)
+                        .and_then(|view| view.read(cx).activity.clone()),
                     provider: metadata.summary.provider.clone(),
                     status,
                     selected: self.workspace.active == Some(id)

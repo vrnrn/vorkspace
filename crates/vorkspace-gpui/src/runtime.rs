@@ -9,6 +9,7 @@ use vorkspace_core::{
     store::{Session, Store},
     transcript::{Row, Transcript},
 };
+mod activity;
 pub(crate) mod card_persistence;
 #[cfg(all(test, unix))]
 mod follow_up_tests;
@@ -29,6 +30,8 @@ struct TurnInput {
     settings: Settings,
 }
 pub(crate) struct Update {
+    /// Full, bounded latest-tool label for this run; None means no known tool.
+    pub(crate) activity: Option<String>,
     /// Present only when rows describe the complete authoritative snapshot tail.
     pub(crate) source_len: Option<usize>,
     pub(crate) worktree_cwd: Option<String>,
@@ -138,6 +141,7 @@ fn run_turn_using(
     let mut accepted_messages = Vec::new();
     let mut provider_id = summary.provider_id.clone();
     let mut turn_start = 0;
+    let mut activity = activity::ToolActivity::default();
     let mut turn_receipt: Option<(usize, vorkspace_core::agent::TurnInfo)> = None;
     let mut bot_fingerprint = None;
     let mut visual_introduction = None;
@@ -248,6 +252,7 @@ fn run_turn_using(
             &cancel,
             Update {
                 source_len: None,
+                activity: activity.label(),
                 worktree_cwd: None,
                 commands: None,
                 provider_turn_id: None,
@@ -302,6 +307,7 @@ fn run_turn_using(
                 &cancel,
                 Update {
                     source_len: None,
+                    activity: activity.label(),
                     worktree_cwd: Some(cwd),
                     commands: None,
                     provider_turn_id: None,
@@ -355,6 +361,7 @@ fn run_turn_using(
                 &cancel,
                 Update {
                     source_len: None,
+                    activity: activity.label(),
                     worktree_cwd: None,
                     commands: None,
                     provider_turn_id: None,
@@ -535,6 +542,7 @@ fn run_turn_using(
             model: settings.model.clone(),
             settings,
         };
+        let activity_cwd = request.cwd.to_string_lossy().into_owned();
         let mut tool_rows = std::collections::HashMap::new();
         if cancel.load(Ordering::Relaxed) {
             return Err("Stopped".into());
@@ -606,6 +614,7 @@ fn run_turn_using(
                         }
                         Event::FollowUp(message) => {
                             let at = transcript.begin("user");
+                            activity.prompt(at);
                             start = start.min(at);
                             transcript.append(&message.text);
                             transcript.attach_files(&message.attachments);
@@ -685,6 +694,7 @@ fn run_turn_using(
                             let ix = *tool_rows
                                 .entry(tool.id.clone())
                                 .or_insert_with(|| transcript.begin("tool"));
+                            activity.tool(ix, &tool, &activity_cwd);
                             transcript.rows[ix].text =
                                 serde_json::to_string(&tool).map_err(|e| e.to_string())?;
                             start = start.min(ix);
@@ -828,6 +838,7 @@ fn run_turn_using(
                         &cancel,
                         Update {
                             source_len: None,
+                            activity: activity.label(),
                             worktree_cwd: None,
                             commands,
                             provider_turn_id,
@@ -1024,6 +1035,7 @@ fn run_turn_using(
     // the receiver, so the worker never keeps a closed viewport alive.
     let _ = tx.send_blocking(Update {
         source_len: None,
+        activity: activity.label(),
         // A stop can make the UI skip intermediate updates. Keep the created
         // checkout in the final receipt so the next Send cannot create it twice.
         worktree_cwd: created_worktree,

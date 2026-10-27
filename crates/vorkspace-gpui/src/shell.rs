@@ -808,7 +808,7 @@ impl Shell {
         let session_worktrees = sidebar_metadata.worktrees;
         let notification_state = notifications::State::new(&workspace, cx);
         let owner = cx.weak_entity();
-        let live_agents = cx.new(|_| live_agents::LiveAgents::new(owner));
+        let live_agents = cx.new(|cx| live_agents::LiveAgents::new(owner, cx));
         let mut this = Self {
             #[cfg(not(test))]
             status_menu: None,
@@ -1196,6 +1196,14 @@ impl Shell {
                 this.invalidate_chrome(cx);
                 cx.notify();
             }));
+        self.observations.push(cx.subscribe(
+            &view,
+            move |this, view, _: &crate::conversation::SessionActivityChanged, cx| {
+                let label = view.read(cx).activity.clone();
+                this.live_agents
+                    .update(cx, |activity, cx| activity.set_activity(id, label, cx));
+            },
+        ));
         self.observations
             .push(cx.subscribe(&view, |this, _, transfer: &Transfer, cx| {
                 this.transfer_response(transfer.clone(), cx)
