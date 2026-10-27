@@ -13,7 +13,7 @@ pub(crate) use std::time::Instant;
 pub(crate) fn suppress_endless_animation_frames() -> bool {
     #[cfg(test)]
     {
-        fake::EXECUTOR.with(|executor| executor.borrow().is_some())
+        fake::EXECUTOR.with(|executor| executor.borrow().is_some()) && !fake::ENDLESS_FRAMES.get()
     }
     #[cfg(not(test))]
     {
@@ -57,7 +57,40 @@ impl TestClockContext for gpui::VisualTestContext {
 }
 #[cfg(test)]
 pub(crate) fn use_test_clock(cx: &impl TestClockContext) {
-    fake::EXECUTOR.with(|executor| *executor.borrow_mut() = Some(cx.animation_executor()));
+    let next = cx.animation_executor();
+    let changed = fake::EXECUTOR.with(|executor| {
+        let mut executor = executor.borrow_mut();
+        let changed = executor.as_ref().is_none_or(|previous| {
+            !std::sync::Arc::ptr_eq(
+                previous.scheduler_executor().scheduler(),
+                next.scheduler_executor().scheduler(),
+            )
+        });
+        *executor = Some(next);
+        changed
+    });
+    if changed {
+        crate::bots::avatar::reset_test_clock();
+    }
+    fake::ENDLESS_FRAMES.set(false);
+}
+
+/// Bind the executor clock and keep perpetual decorative frames, so a test can
+/// measure their cadence itself. Suppression returns when the guard drops.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn use_test_clock_with_endless_frames(cx: &impl TestClockContext) -> EndlessFrames {
+    use_test_clock(cx);
+    fake::ENDLESS_FRAMES.set(true);
+    EndlessFrames
+}
+#[cfg(test)]
+pub(crate) struct EndlessFrames;
+#[cfg(test)]
+impl Drop for EndlessFrames {
+    fn drop(&mut self) {
+        fake::ENDLESS_FRAMES.set(false);
+    }
 }
 
 /// Paint the initial state, then finish a finite pane transition and its body
@@ -120,6 +153,7 @@ mod fake {
 
     thread_local! {
         pub(super) static EXECUTOR: RefCell<Option<gpui::BackgroundExecutor>> = const { RefCell::new(None) };
+        pub(super) static ENDLESS_FRAMES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

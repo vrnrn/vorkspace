@@ -1549,6 +1549,31 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "explicit avatar raster CPU benchmark"]
+    fn avatar_raster_benchmark() {
+        use std::{hint::black_box, time::Instant};
+        for side in [32, 48, 128, 256] {
+            for _ in 0..3 {
+                let start = Instant::now();
+                for i in 0..60 {
+                    let anim = BotAnimState {
+                        yaw: (i as f32 * 0.37).sin() * 0.5,
+                        pitch: (i as f32 * 0.21).cos() * 0.4,
+                        ..Default::default()
+                    };
+                    black_box(render_badge_or_bot(
+                        true, "squircle", "dots", false, true, 7, 4, 0x223344, 0xddeeff, side, anim,
+                    ));
+                }
+                eprintln!(
+                    "avatar side={side} samples=60 per_frame_us={}",
+                    start.elapsed().as_micros() / 60
+                );
+            }
+        }
+    }
+
+    #[test]
     fn delete_hover_renders_crossed_eyes_without_changing_the_badge() {
         let render = |crossed_eyes| {
             render_badge_or_bot(

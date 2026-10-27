@@ -10,9 +10,9 @@ use crate::{
     theme::*,
 };
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, MouseButton,
+    AnyElement, App, Context, Corners, Entity, EventEmitter, FocusHandle, Focusable, MouseButton,
     MouseDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Role, SharedString, Subscription,
-    Window, div, img, prelude::*, px, rgb,
+    Window, canvas, div, img, prelude::*, px, rgb,
 };
 use std::path::PathBuf;
 use vorkspace_core::project_appearance::{
@@ -48,13 +48,24 @@ pub(crate) fn project_icon(appearance: &ProjectAppearance, project: &str, side: 
                 bg_color: appearance.color(project),
                 fg_color: appearance.fg_color(project),
             };
-            let image =
-                cached_badge_or_bot_image(false, &look, false, pixel_side, BotAnimState::default());
-            img(image)
-                .size(px(side))
-                .object_fit(ObjectFit::Contain)
-                .flex_shrink_0()
-                .into_any_element()
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, cx| {
+                    let image = cached_badge_or_bot_image(
+                        false,
+                        &look,
+                        false,
+                        pixel_side,
+                        BotAnimState::default(),
+                        window,
+                        cx,
+                    );
+                    let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
+                },
+            )
+            .size(px(side))
+            .flex_shrink_0()
+            .into_any_element()
         }
     }
 }
