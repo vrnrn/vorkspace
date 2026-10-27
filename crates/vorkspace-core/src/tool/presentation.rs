@@ -463,12 +463,43 @@ fn anchored(dir: Option<&str>, path: &str) -> String {
         _ => path.into(),
     }
 }
-fn enter(dir: &mut Option<String>, requested: String) {
-    *dir = Some(if requested.starts_with(['/', '~']) {
-        requested
-    } else {
-        anchored(dir.as_deref(), &requested)
-    });
+/// Where later stages run. `Unknown` means a `cd` may or may not have taken
+/// effect (`cd x || ...`, `cd -`, bare `cd`), so a relative file target cannot
+/// be trusted and gets no chip.
+enum Dir {
+    Known(Option<String>),
+    Unknown,
+}
+/// Apply one `cd`. Only `[start|&&|;] cd dir &&` definitely moves the stages that
+/// follow; inside a pipeline it runs in a subshell and changes nothing.
+fn cd_effect(dir: &mut Dir, requested: Option<String>, before: Option<&str>, after: Option<&str>) {
+    if before == Some("|") || after == Some("|") {
+        return;
+    }
+    let definite = matches!(before, None | Some("&&" | ";" | "\n")) && after == Some("&&");
+    *dir = match (definite, requested, &*dir) {
+        (true, Some(requested), Dir::Known(current)) => {
+            Dir::Known(Some(if requested.starts_with(['/', '~']) {
+                requested
+            } else {
+                anchored(current.as_deref(), &requested)
+            }))
+        }
+        _ => Dir::Unknown,
+    };
+}
+fn is_cd(part: &str) -> bool {
+    shlex::split(part).is_some_and(|args| args.first().is_some_and(|bin| bin == "cd"))
+}
+/// Anchor a freshly produced intent. False when its directory is unknowable.
+fn place(intent: &mut Intent, dir: &Dir) -> bool {
+    match dir {
+        Dir::Known(dir) => {
+            reanchor(intent, dir.as_deref());
+            true
+        }
+        Dir::Unknown => intent.action == "Find",
+    }
 }
 fn reanchor(intent: &mut Intent, dir: Option<&str>) {
     if intent.action != "Find" {
@@ -552,16 +583,19 @@ fn command_steps(command: &str, cwd: Option<&str>) -> Vec<CommandStep> {
     if parts.len() < 2 {
         return Vec::new();
     }
-    let mut dir: Option<String> = None;
+    let mut dir = Dir::Known(None);
+    let ops: Vec<_> = parts.iter().map(|(op, _)| *op).collect();
     parts
         .into_iter()
         .enumerate()
         .map(|(index, (op, part))| {
             let mut intent = shell_intent(part);
-            if let Some(requested) = cd_target(part) {
-                enter(&mut dir, requested);
-            } else if let Some(intent) = intent.as_mut() {
-                reanchor(intent, dir.as_deref());
+            if is_cd(part) {
+                let before = (index > 0).then_some(op.unwrap_or(";"));
+                let after = ops.get(index + 1).map(|op| op.unwrap_or(";"));
+                cd_effect(&mut dir, cd_target(part), before, after);
+            } else if intent.as_mut().is_some_and(|intent| !place(intent, &dir)) {
+                intent = None;
             }
             CommandStep {
                 op: (index > 0).then_some(op.unwrap_or(";")),
@@ -589,7 +623,8 @@ fn shell_intent(command: &str) -> Option<Intent> {
     if command.len() > 2000 {
         return None;
     }
-    let mut stages = Vec::new();
+    let mut stages: Vec<(String, &str)> = Vec::new();
+    let mut pending = String::new();
     let mut start = 0;
     let mut quote = None;
     let mut escaped = false;
@@ -621,8 +656,9 @@ fn shell_intent(command: &str) -> Option<Intent> {
         }
         if matches!(ch, ';' | '|' | '&' | '\n') {
             if !command[start..at].trim().is_empty() {
-                stages.push(command[start..at].trim());
+                stages.push((std::mem::take(&mut pending), command[start..at].trim()));
             }
+            pending.push(ch);
             start = at + ch.len_utf8();
         }
     }
@@ -630,13 +666,15 @@ fn shell_intent(command: &str) -> Option<Intent> {
         return None;
     }
     if !command[start..].trim().is_empty() {
-        stages.push(command[start..].trim());
+        stages.push((std::mem::take(&mut pending), command[start..].trim()));
     }
     let mut last = None;
-    let mut dir: Option<String> = None;
-    for stage in stages {
-        if let Some(requested) = cd_target(stage) {
-            enter(&mut dir, requested);
+    let mut dir = Dir::Known(None);
+    for (index, (before, stage)) in stages.iter().enumerate() {
+        let before = (index > 0).then_some(before.as_str());
+        let after = stages.get(index + 1).map(|(op, _)| op.as_str());
+        if is_cd(stage) {
+            cd_effect(&mut dir, cd_target(stage), before, after);
         }
         let args = shlex::split(stage)?;
         let bin = args.first()?.rsplit('/').next()?;
@@ -677,8 +715,13 @@ fn shell_intent(command: &str) -> Option<Intent> {
                 positional.push(arg.clone());
             }
         }
+        let mut fresh = true;
         last = match bin {
-            "cd" | "pwd" | "echo" | "printf" | "true" | "wc" => last,
+            "cd" | "pwd" | "echo" | "printf" | "true" | "wc" => {
+                // A retained intent keeps the directory its read ran in.
+                fresh = false;
+                last
+            }
             "cat" | "bat" | "batcat" | "nl" | "less" | "more" | "tac" | "head" | "tail" => {
                 // Multiple files need their real command, not a misleading single-file caption.
                 if positional.len() != 1 {
@@ -728,13 +771,8 @@ fn shell_intent(command: &str) -> Option<Intent> {
             }
             _ => return None,
         };
-        if let Some(intent) = last.as_mut() {
-            // Stages before a `cd` were already anchored to their own directory.
-            if cd_target(stage).is_none()
-                && !matches!(bin, "pwd" | "echo" | "printf" | "true" | "wc")
-            {
-                reanchor(intent, dir.as_deref());
-            }
+        if fresh && last.as_mut().is_some_and(|intent| !place(intent, &dir)) {
+            return None;
         }
     }
     last
@@ -801,6 +839,53 @@ mod tests {
         }
         let shown = call("WebSearch", json!({"query":"foo|bar"})).presentation();
         assert_eq!(shown.search_patterns(), ["foo|bar"]);
+    }
+    #[test]
+    fn cd_only_moves_later_stages_when_execution_establishes_it() {
+        let path = |command: &str| {
+            call("Bash", json!({"command": command, "cwd":"/repo"}))
+                .presentation_in(Some("/repo"))
+                .file_path
+        };
+        assert_eq!(path("cd sub && cat f.rs").as_deref(), Some("sub/f.rs"));
+        // The read happened before the final directory change.
+        assert_eq!(
+            path("cd sub && cat f.rs && cd -").as_deref(),
+            Some("sub/f.rs")
+        );
+        assert_eq!(
+            path("cd sub && cat f.rs && cd").as_deref(),
+            Some("sub/f.rs")
+        );
+        assert_eq!(
+            path("cd sub && cat f.rs && cd -- ..").as_deref(),
+            Some("sub/f.rs")
+        );
+        // A pipeline cd runs in a subshell.
+        assert_eq!(path("cd sub | cat README.md").as_deref(), Some("README.md"));
+        // The directory change may have failed or never run: no trustworthy path.
+        for command in [
+            "cd missing || cat README.md",
+            "cd sub; cat README.md",
+            "false || cd sub && cat README.md",
+            "cd - && cat README.md",
+            "cd && cat README.md",
+        ] {
+            assert_eq!(path(command), None, "{command}");
+        }
+        let steps = |command: &str| {
+            call("Bash", json!({"command": command, "cwd":"/repo"}))
+                .presentation_in(Some("/repo"))
+                .steps
+                .into_iter()
+                .map(|step| step.file_path)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            steps("cd sub && cat f.rs && cd - && npm test"),
+            [None, Some("sub/f.rs".into()), None, None]
+        );
+        assert_eq!(steps("cd sub || cat f.rs && npm test"), [None, None, None]);
     }
     #[test]
     fn relative_file_targets_follow_a_preceding_cd() {
