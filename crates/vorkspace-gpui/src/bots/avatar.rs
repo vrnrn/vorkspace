@@ -2,13 +2,15 @@
 //! concentric texture at `60%` opacity) + sidebar cursor gaze tracking & textured pills.
 use crate::clock::Instant;
 use gpui::{
-    AnyElement, Bounds, Corners, DispatchPhase, ObjectFit, Pixels, Point, RenderImage, Window,
-    canvas, img, prelude::*, px,
+    AnyElement, Bounds, Corners, DispatchPhase, Pixels, Point, RenderImage, Window, canvas,
+    prelude::*, px,
 };
 use image::Frame;
 use std::{
     collections::HashMap,
+    hash::Hash,
     sync::{Arc, LazyLock, Mutex},
+    time::Duration,
 };
 use vorkspace_core::{
     bot::Bot,
@@ -18,49 +20,220 @@ use vorkspace_core::{
     },
 };
 
+/// Origin of every avatar clock. Idle beats and status ticks are absolute
+/// offsets from it, so avatars in different views wake at the same instants and
+/// GPUI coalesces their notifications into one window frame.
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-/// Bound autonomous avatar motion to about 30 fps. Chat headers have their own
-/// rendering owner, so decorative ticks never notify the conversation.
-const AVATAR_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
+/// Bound avatar motion to about 30 fps. Chat headers have their own rendering
+/// owner, so decorative ticks never notify the conversation.
+const AVATAR_FRAME: Duration = Duration::from_millis(33);
 
 type PendingFrameKey = (gpui::AnyWindowHandle, gpui::EntityId);
+
+/// The earliest admitted wake of one window and rendering owner.
+struct PendingWake {
+    generation: u64,
+    deadline: Instant,
+    /// Held so a sooner wake cancels this timer instead of leaving it to
+    /// expire silently. `None` until the spawned task is attached.
+    task: Option<gpui::Task<()>>,
+}
+
 thread_local! {
-    static PENDING_FRAMES: std::cell::RefCell<std::collections::HashSet<PendingFrameKey>> =
+    static PENDING_FRAMES: std::cell::RefCell<HashMap<PendingFrameKey, PendingWake>> =
         Default::default();
+    static FRAME_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 // Own admission inside the future, so dropping it before its first poll or at
 // any await releases the slot. A cancelled repaint must never freeze a view.
-struct PendingAvatarFrame(PendingFrameKey);
+struct PendingAvatarFrame {
+    key: PendingFrameKey,
+    generation: u64,
+}
 impl PendingAvatarFrame {
-    fn acquire(view: PendingFrameKey) -> Option<Self> {
-        PENDING_FRAMES.with(|pending| pending.borrow_mut().insert(view).then(|| Self(view)))
+    /// Admit a wake unless an earlier or equal one is already pending. A sooner
+    /// deadline supersedes and cancels a later one.
+    fn acquire(key: PendingFrameKey, deadline: Instant) -> Option<Self> {
+        let generation = FRAME_GENERATION.with(|counter| {
+            counter.set(counter.get() + 1);
+            counter.get()
+        });
+        let superseded = PENDING_FRAMES.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            if pending
+                .get(&key)
+                .is_some_and(|wake| wake.deadline <= deadline)
+            {
+                return Err(());
+            }
+            let wake = PendingWake {
+                generation,
+                deadline,
+                task: None,
+            };
+            Ok(pending.insert(key, wake))
+        });
+        // Cancelling drops the superseded future, whose guard re-enters the
+        // map; it must run after the borrow above is released.
+        drop(superseded.ok()?);
+        Some(Self { key, generation })
+    }
+    fn is_current(&self) -> bool {
+        PENDING_FRAMES.with(|pending| {
+            pending
+                .borrow()
+                .get(&self.key)
+                .is_some_and(|wake| wake.generation == self.generation)
+        })
+    }
+    /// Let a later admission cancel `task`. If this admission was already
+    /// superseded, the task is dropped (cancelled) outside the map borrow.
+    fn attach_to(key: PendingFrameKey, generation: u64, task: gpui::Task<()>) {
+        let stale = PENDING_FRAMES.with(|pending| match pending.borrow_mut().get_mut(&key) {
+            Some(wake) if wake.generation == generation => wake.task.replace(task),
+            _ => Some(task),
+        });
+        drop(stale);
     }
 }
 impl Drop for PendingAvatarFrame {
     fn drop(&mut self) {
         // The executor may drop cancelled tasks during thread-local teardown.
-        let _ = PENDING_FRAMES.try_with(|pending| {
-            pending.borrow_mut().remove(&self.0);
-        });
+        let released = PENDING_FRAMES
+            .try_with(|pending| {
+                let mut pending = pending.borrow_mut();
+                pending
+                    .get(&self.key)
+                    .is_some_and(|wake| wake.generation == self.generation)
+                    .then(|| pending.remove(&self.key))
+                    .flatten()
+            })
+            .ok()
+            .flatten();
+        // This guard lives inside the very task being released: detach rather
+        // than cancel it from within its own poll.
+        if let Some(task) = released.and_then(|wake| wake.task) {
+            task.detach();
+        }
     }
 }
 
-/// Every avatar painted by a view shares one pending repaint. Window context
-/// validation prevents publication into a closed window.
-fn request_avatar_frame(window: &Window, cx: &gpui::App) {
+/// Wake the painting view when the avatar clock reaches `at` (an offset from
+/// `START`). Every avatar painted by a view shares the earliest pending wake.
+/// Window context validation prevents publication into a closed window.
+fn request_avatar_frame(window: &Window, cx: &gpui::App, at: Duration) {
     let view = window.current_view();
-    let Some(pending) = PendingAvatarFrame::acquire((window.window_handle(), view)) else {
+    let deadline = *START + at;
+    let Some(pending) = PendingAvatarFrame::acquire((window.window_handle(), view), deadline)
+    else {
         return;
     };
-    window
-        .spawn(cx, async move |cx| {
-            cx.background_executor().timer(AVATAR_FRAME).await;
-            drop(pending);
+    let delay = deadline.saturating_duration_since(Instant::now());
+    let generation = pending.generation;
+    let key = pending.key;
+    let task = window.spawn(cx, async move |cx| {
+        cx.background_executor().timer(delay).await;
+        let current = pending.is_current();
+        drop(pending);
+        if current {
             let _ = cx.update(|_, cx| cx.notify(view));
-        })
-        .detach();
+        }
+    });
+    PendingAvatarFrame::attach_to(key, generation, task);
+}
+
+/// The next status tick on the shared avatar frame grid.
+fn next_tick(elapsed: Duration) -> Duration {
+    let frame = AVATAR_FRAME.as_millis() as u64;
+    Duration::from_millis((elapsed.as_millis() as u64 / frame + 1) * frame)
+}
+
+/// Idle life is sparse: every beat, a Bot may glance somewhere new and/or
+/// blink. Motion happens only in the first few hundred milliseconds of a beat
+/// and the pose is held until the next beat that changes it, so an idle avatar
+/// asks for about ten frames on an eventful beat and none in between. Beats are
+/// window-wide; any number of idle avatars share the same frames.
+const IDLE_BEAT_MS: u64 = 4_000;
+const IDLE_GLANCE_MS: u64 = 300;
+const IDLE_BLINK_MS: u64 = 200;
+const IDLE_REST: (f32, f32) = (0.25, -0.18);
+const IDLE_LOOKS: [(f32, f32); 5] = [
+    (-0.38, -0.12),
+    (0.52, -0.06),
+    (-0.22, 0.2),
+    (0.36, 0.24),
+    (0.05, -0.36),
+];
+
+/// The look held during `beat` and whether it opens with a blink.
+fn idle_beat(seed: u32, beat: u64) -> ((f32, f32), bool) {
+    // SplitMix64 finalizer: decorrelates neighbouring seeds and beats.
+    let mut h = ((seed as u64) << 32 ^ beat).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    h = (h ^ (h >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h = (h ^ (h >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    h ^= h >> 31;
+    let look = if h.is_multiple_of(3) {
+        IDLE_LOOKS[(h >> 8) as usize % IDLE_LOOKS.len()]
+    } else {
+        IDLE_REST
+    };
+    (look, (h >> 16).is_multiple_of(3))
+}
+
+fn idle_look_before(seed: u32, beat: u64) -> (f32, f32) {
+    beat.checked_sub(1)
+        .map_or(IDLE_REST, |previous| idle_beat(seed, previous).0)
+}
+
+/// How long `beat` moves the avatar, in milliseconds (zero for a quiet beat).
+fn idle_motion_ms(seed: u32, beat: u64) -> u64 {
+    let (look, blinks) = idle_beat(seed, beat);
+    let glance = if look != idle_look_before(seed, beat) {
+        IDLE_GLANCE_MS
+    } else {
+        0
+    };
+    glance.max(if blinks { IDLE_BLINK_MS } else { 0 })
+}
+
+struct IdleLife {
+    look: (f32, f32),
+    blink: f32,
+    /// When the pose next changes, as an offset from `START`.
+    next: Duration,
+}
+
+fn idle_life(seed: u32, elapsed: Duration) -> IdleLife {
+    let ms = elapsed.as_millis() as u64;
+    let (beat, local) = (ms / IDLE_BEAT_MS, ms % IDLE_BEAT_MS);
+    let (to, blinks) = idle_beat(seed, beat);
+    let from = idle_look_before(seed, beat);
+    let look = if from != to && local < IDLE_GLANCE_MS {
+        let u = local as f32 / IDLE_GLANCE_MS as f32;
+        let e = u * u * (3. - 2. * u);
+        (from.0 + (to.0 - from.0) * e, from.1 + (to.1 - from.1) * e)
+    } else {
+        to
+    };
+    let blink = if blinks && local < IDLE_BLINK_MS {
+        let u = local as f32 / IDLE_BLINK_MS as f32;
+        (u * std::f32::consts::PI).cos().abs().max(0.08)
+    } else {
+        1.
+    };
+    // While moving, tick; the first tick past the motion paints the settled
+    // pose. Then sleep until the next beat that moves this avatar at all.
+    let next = if local < idle_motion_ms(seed, beat) {
+        next_tick(elapsed)
+    } else {
+        let beat = (beat + 1..beat + 64)
+            .find(|&beat| idle_motion_ms(seed, beat) > 0)
+            .unwrap_or(beat + 64);
+        Duration::from_millis(beat * IDLE_BEAT_MS)
+    };
+    IdleLife { look, blink, next }
 }
 
 #[derive(Default)]
@@ -111,6 +284,181 @@ pub(crate) fn to_render_image(mut pixels: image::RgbaImage) -> Arc<RenderImage> 
         pixel.0.swap(0, 2);
     }
     Arc::new(RenderImage::new(vec![Frame::new(pixels)]))
+}
+
+thread_local! {
+    // An evicted image may still appear in a cached GPUI view. Its keyed pins
+    // live as long as that view's scene, including when GPUI replays it.
+    static RETIRED_IMAGES: std::cell::RefCell<HashMap<gpui::ImageId, Arc<RenderImage>>> = Default::default();
+}
+
+struct SceneImagePin(Option<Arc<RenderImage>>);
+
+fn pin_scene_image(window: &mut Window, cx: &mut gpui::App, image: &Arc<RenderImage>) {
+    let handle = window.window_handle();
+    let key = format!(
+        "avatar-scene-image:{:?}:{:?}",
+        window.current_view(),
+        image.id
+    );
+    window.use_keyed_state(key, cx, |_, cx| {
+        cx.on_release(move |pin: &mut SceneImagePin, cx| {
+            let Some(image) = pin.0.take() else { return };
+            let retired = RETIRED_IMAGES.with(|images| images.borrow().contains_key(&image.id));
+            drop(image);
+            if retired {
+                // The owner may still be drawing; wait until it is returned to
+                // App before asking for a frame in which to release the tile.
+                cx.defer(move |cx| {
+                    if handle
+                        .update(cx, |_, window, _| schedule_retired_images(window))
+                        .is_err()
+                    {
+                        release_retired_images(cx, None);
+                    }
+                });
+            }
+        })
+        .detach();
+        SceneImagePin(Some(image.clone()))
+    });
+}
+
+fn release_retired_images(cx: &mut gpui::App, window: Option<&mut Window>) {
+    let images = RETIRED_IMAGES.with(|retired| {
+        let mut retired = retired.borrow_mut();
+        let ready: Vec<_> = retired
+            .iter()
+            .filter_map(|(id, image)| (Arc::strong_count(image) == 1).then_some(*id))
+            .collect();
+        ready
+            .into_iter()
+            .filter_map(|id| retired.remove(&id))
+            .collect::<Vec<_>>()
+    });
+    let mut window = window;
+    for image in images {
+        cx.drop_image(image, window.as_deref_mut());
+    }
+}
+
+fn schedule_retired_images(window: &Window) {
+    window.on_next_frame(|window, cx| release_retired_images(cx, Some(window)));
+}
+
+/// Eviction removes the CPU cache entry immediately. Atlas tiles are released
+/// only after every retained scene has released its pin.
+fn retire_images(window: &Window, images: Vec<Arc<RenderImage>>) {
+    if images.is_empty() {
+        return;
+    }
+    RETIRED_IMAGES.with(|retired| {
+        let mut retired = retired.borrow_mut();
+        for image in images {
+            retired.insert(image.id, image);
+        }
+    });
+    schedule_retired_images(window);
+}
+
+/// Rasterized images under a byte budget, least recently used evicted first.
+/// Callers retire every returned image through `retire_images`.
+struct ImageCache<K> {
+    entries: HashMap<K, (Arc<RenderImage>, u64)>,
+    bytes: usize,
+    budget: usize,
+    uses: u64,
+}
+impl<K: Hash + Eq> ImageCache<K> {
+    fn new(budget: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            bytes: 0,
+            budget,
+            uses: 0,
+        }
+    }
+
+    fn get(&mut self, key: &K) -> Option<Arc<RenderImage>> {
+        self.uses += 1;
+        let (image, used) = self.entries.get_mut(key)?;
+        *used = self.uses;
+        Some(image.clone())
+    }
+
+    /// Insert `image` and return the evicted images. Eviction trims to three
+    /// quarters of the budget so a stream of new poses sorts rarely. An image
+    /// larger than the whole budget is painted once and returned for retirement
+    /// rather than evicting the hot working set.
+    #[must_use]
+    fn insert(&mut self, key: K, image: Arc<RenderImage>) -> Vec<Arc<RenderImage>> {
+        let bytes = image_bytes(&image);
+        if bytes > self.budget {
+            return vec![image];
+        }
+        self.uses += 1;
+        let mut evicted = Vec::new();
+        if let Some((previous, _)) = self.entries.insert(key, (image, self.uses)) {
+            self.bytes -= image_bytes(&previous);
+            evicted.push(previous);
+        }
+        self.bytes += bytes;
+        if self.bytes > self.budget {
+            let mut by_age: Vec<(u64, usize)> = self
+                .entries
+                .values()
+                .map(|(image, used)| (*used, image_bytes(image)))
+                .collect();
+            by_age.sort_unstable();
+            // Use stamps are unique: evict everything at or before `cutoff`.
+            let mut cutoff = 0;
+            for (used, bytes) in by_age {
+                if self.bytes <= self.budget / 4 * 3 || used == self.uses {
+                    break;
+                }
+                self.bytes -= bytes;
+                cutoff = used;
+            }
+            self.entries.retain(|_, (image, used)| {
+                let keep = *used > cutoff;
+                if !keep {
+                    evicted.push(image.clone());
+                }
+                keep
+            });
+        }
+        evicted
+    }
+}
+
+fn image_bytes(image: &RenderImage) -> usize {
+    (0..image.frame_count())
+        .map(|frame| {
+            let size = image.size(frame);
+            size.width.0.max(0) as usize * size.height.0.max(0) as usize * 4
+        })
+        .sum()
+}
+
+/// Look up or rasterize an image in `cache`, retiring whatever it evicts.
+fn cached_image<K: Hash + Eq>(
+    cache: &Mutex<ImageCache<K>>,
+    key: K,
+    window: &mut Window,
+    cx: &mut gpui::App,
+    render: impl FnOnce() -> Arc<RenderImage>,
+) -> Arc<RenderImage> {
+    let cached = cache.lock().ok().and_then(|mut cache| cache.get(&key));
+    let image = cached.unwrap_or_else(|| {
+        // Rasterization never holds the shared lock.
+        let image = render();
+        if let Ok(mut cache) = cache.lock() {
+            retire_images(window, cache.insert(key, image.clone()));
+        }
+        image
+    });
+    pin_scene_image(window, cx, &image);
+    image
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -172,8 +520,11 @@ struct FrameCacheKey {
     crossed_eyes: bool,
 }
 
-static FRAME_CACHE: LazyLock<Mutex<HashMap<FrameCacheKey, Arc<RenderImage>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// About 3,000 sidebar poses or 250 header poses: every idle pose of a full
+/// sidebar stays warm, while working motion and pointer gaze recycle.
+const FRAME_CACHE_BYTES: usize = 16 * 1024 * 1024;
+static FRAME_CACHE: LazyLock<Mutex<ImageCache<FrameCacheKey>>> =
+    LazyLock::new(|| Mutex::new(ImageCache::new(FRAME_CACHE_BYTES)));
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct PillCacheKey {
@@ -186,8 +537,8 @@ struct PillCacheKey {
     height: u32,
 }
 
-static PILL_CACHE: LazyLock<Mutex<HashMap<PillCacheKey, Arc<RenderImage>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static PILL_CACHE: LazyLock<Mutex<ImageCache<PillCacheKey>>> =
+    LazyLock::new(|| Mutex::new(ImageCache::new(4 * 1024 * 1024)));
 
 fn frame_cache_key(
     is_bot: bool,
@@ -219,39 +570,35 @@ fn frame_cache_key(
     }
 }
 
+fn render_frame(key: &FrameCacheKey, look: &BotLookConfig, anim: BotAnimState) -> Arc<RenderImage> {
+    to_render_image(render_badge_or_bot(
+        key.is_bot,
+        &key.shape,
+        &key.face,
+        key.needs_you,
+        look.textured,
+        look.seed,
+        look.grid,
+        look.bg_color,
+        look.fg_color,
+        key.pixel_side,
+        anim,
+    ))
+}
+
 pub(crate) fn cached_badge_or_bot_image(
     is_bot: bool,
     look: &BotLookConfig,
     needs_you: bool,
     pixel_side: u32,
     anim: BotAnimState,
+    window: &mut Window,
+    cx: &mut gpui::App,
 ) -> Arc<RenderImage> {
     let key = frame_cache_key(is_bot, look, needs_you, pixel_side, anim);
-    if let Ok(cache) = FRAME_CACHE.lock()
-        && let Some(img) = cache.get(&key)
-    {
-        return img.clone();
-    }
-    let rendered = to_render_image(render_badge_or_bot(
-        is_bot,
-        &key.shape,
-        &key.face,
-        needs_you,
-        look.textured,
-        look.seed,
-        look.grid,
-        look.bg_color,
-        look.fg_color,
-        pixel_side,
-        anim,
-    ));
-    if let Ok(mut cache) = FRAME_CACHE.lock() {
-        if cache.len() > 512 {
-            cache.clear();
-        }
-        cache.insert(key, rendered.clone());
-    }
-    rendered
+    cached_image(&FRAME_CACHE, key.clone(), window, cx, || {
+        render_frame(&key, look, anim)
+    })
 }
 
 /// Render a 30% opacity full-button concentric texture / color highlight pill for
@@ -272,45 +619,29 @@ pub(crate) fn sidebar_selection_pill(
         width: 360,
         height: 64,
     };
-    let image = if let Ok(cache) = PILL_CACHE.lock()
-        && let Some(found) = cache.get(&key)
-    {
-        found.clone()
-    } else {
-        let rendered = to_render_image(render_textured_pill(
-            key.seed,
-            key.grid,
-            key.textured,
-            key.bg_color,
-            key.fg_color,
-            key.width,
-            key.height,
-        ));
-        if let Ok(mut cache) = PILL_CACHE.lock() {
-            if cache.len() > 128 {
-                cache.clear();
-            }
-            cache.insert(key, rendered.clone());
-        }
-        rendered
-    };
-    img(image)
-        .absolute()
-        .inset_0()
-        .size_full()
-        .rounded_md()
-        .object_fit(ObjectFit::Fill)
-        .into_any_element()
-}
-
-fn blink_at(t: f32) -> f32 {
-    let cycle = (t * 0.22).rem_euclid(1.0);
-    if cycle > 0.94 {
-        let u = (cycle - 0.94) / 0.06;
-        (u * std::f32::consts::PI).cos().abs().max(0.08)
-    } else {
-        1.
-    }
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let image = cached_image(&PILL_CACHE, key.clone(), window, cx, || {
+                to_render_image(render_textured_pill(
+                    key.seed,
+                    key.grid,
+                    key.textured,
+                    key.bg_color,
+                    key.fg_color,
+                    key.width,
+                    key.height,
+                ))
+            });
+            // `rounded_md`, stretched to fill the row.
+            let radius = Corners::all(window.rem_size() * 0.375);
+            let _ = window.paint_image(bounds, bounds, radius, image, 0, false);
+        },
+    )
+    .absolute()
+    .inset_0()
+    .size_full()
+    .into_any_element()
 }
 
 fn compute_bot_anim(
@@ -318,7 +649,7 @@ fn compute_bot_anim(
     status: &str,
     bounds: Bounds<Pixels>,
     animate: bool,
-) -> (BotAnimState, bool) {
+) -> (BotAnimState, Option<Duration>) {
     let gaze = if animate {
         SIDEBAR_CURSOR.lock().ok().and_then(|cursor| {
             let (rail, mouse) = cursor.rail_bounds.zip(cursor.mouse_pos)?;
@@ -332,49 +663,52 @@ fn compute_bot_anim(
     } else {
         None
     };
-    bot_anim_at(seed, status, animate, START.elapsed().as_secs_f32(), gaze)
+    bot_anim_at(seed, status, animate, START.elapsed(), gaze)
 }
 
-// Pointer input belongs to the sidebar only. The header shares status motion
-// without reading or registering any pointer state.
-fn header_anim_at(seed: u32, status: &str, animate: bool, now: f32) -> (BotAnimState, bool) {
-    bot_anim_at(seed, status, animate, now, None)
+// Pointer input belongs to the sidebar only. The header shares idle life and
+// status motion without reading or registering any pointer state.
+fn header_anim_at(
+    seed: u32,
+    status: &str,
+    animate: bool,
+    elapsed: Duration,
+) -> (BotAnimState, Option<Duration>) {
+    bot_anim_at(seed, status, animate, elapsed, None)
 }
 
+/// The pose at `elapsed` and when it next changes (`None`: only input or a
+/// status change can change it). Pointer gaze is published by input events.
 fn bot_anim_at(
     seed: u32,
     status: &str,
     animate: bool,
-    now: f32,
+    elapsed: Duration,
     gaze: Option<(f32, f32)>,
-) -> (BotAnimState, bool) {
-    let offset = (seed % 97) as f32 * 0.17;
-    // Idle identity is static. Even a tiny continuous idle animation redraws
-    // the whole native window. Pointer gaze is published by input events;
-    // only working/attention states need a clock between those events.
-    if !animate || !matches!(status, "working" | "needs-you") {
-        let (yaw, pitch) = if animate {
-            gaze.unwrap_or((0.25, -0.18))
-        } else {
-            (0.25, -0.18)
+) -> (BotAnimState, Option<Duration>) {
+    let rest = BotAnimState {
+        yaw: IDLE_REST.0,
+        pitch: IDLE_REST.1,
+        wide: if status == "needs-you" { 1.14 } else { 1.0 },
+        ..Default::default()
+    };
+    if !animate {
+        return (rest, None);
+    }
+    if !matches!(status, "working" | "needs-you") {
+        let life = idle_life(seed, elapsed);
+        let (yaw, pitch) = gaze.unwrap_or(life.look);
+        let anim = BotAnimState {
+            yaw,
+            pitch,
+            blink: life.blink,
+            ..rest
         };
-        return (
-            BotAnimState {
-                yaw,
-                pitch,
-                blink: 1.0,
-                squash_x: 1.0,
-                squash_y: 1.0,
-                hop_y: 0.0,
-                wide: if status == "needs-you" { 1.14 } else { 1.0 },
-                tex_rot: 0.0,
-                crossed_eyes: false,
-            },
-            false,
-        );
+        return (anim, Some(life.next));
     }
 
-    let t = now + offset;
+    let now = elapsed.as_secs_f32();
+    let t = now + (seed % 97) as f32 * 0.17;
     let mut anim = BotAnimState::default();
 
     if status != "needs-you" {
@@ -396,7 +730,7 @@ fn bot_anim_at(
             anim.squash_y = 1.0 - pulse * 0.045;
             anim.hop_y = -pulse.abs() * 0.025;
             anim.tex_rot = (now * 14.0).rem_euclid(360.0);
-        } else if status == "needs-you" {
+        } else {
             anim.yaw = (t * 6.0).sin() * 0.05;
             anim.pitch = -0.12;
             anim.wide = 1.14;
@@ -406,7 +740,25 @@ fn bot_anim_at(
         anim.tex_rot = (now * 14.0).rem_euclid(360.0);
     }
 
-    (anim, true)
+    (anim, Some(next_tick(elapsed)))
+}
+
+fn blink_at(t: f32) -> f32 {
+    let cycle = (t * 0.22).rem_euclid(1.0);
+    if cycle > 0.94 {
+        let u = (cycle - 0.94) / 0.06;
+        (u * std::f32::consts::PI).cos().abs().max(0.08)
+    } else {
+        1.
+    }
+}
+
+fn schedule(window: &Window, cx: &gpui::App, next: Option<Duration>) {
+    if let Some(at) = next
+        && !crate::clock::suppress_endless_animation_frames()
+    {
+        request_avatar_frame(window, cx, at);
+    }
 }
 
 pub(crate) fn bot_avatar(bot: &Bot, status: &str, side: f32, still: bool) -> AnyElement {
@@ -428,16 +780,20 @@ pub(super) fn header_avatar(
             let animate = visible
                 && window.is_window_active()
                 && bounds.intersects(&window.content_mask().bounds);
-            let (anim, needs_frame) =
-                header_anim_at(look.seed, &status, animate, START.elapsed().as_secs_f32());
-            if needs_frame && !crate::clock::suppress_endless_animation_frames() {
-                request_avatar_frame(window, cx);
-            }
+            let (anim, next) = header_anim_at(look.seed, &status, animate, START.elapsed());
+            schedule(window, cx, next);
             let pixel_side = (bounds.size.width.as_f32() * window.scale_factor())
                 .ceil()
                 .clamp(28., 128.) as u32;
-            let image =
-                cached_badge_or_bot_image(true, &look, status == "needs-you", pixel_side, anim);
+            let image = cached_badge_or_bot_image(
+                true,
+                &look,
+                status == "needs-you",
+                pixel_side,
+                anim,
+                window,
+                cx,
+            );
             let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
         },
     )
@@ -446,13 +802,25 @@ pub(super) fn header_avatar(
     .into_any_element()
 }
 
-fn preview_anim(bounds: Bounds<Pixels>, mouse: Point<Pixels>, crossed_eyes: bool) -> BotAnimState {
+fn preview_anim(
+    seed: u32,
+    bounds: Bounds<Pixels>,
+    mouse: Point<Pixels>,
+    crossed_eyes: bool,
+    elapsed: Duration,
+) -> (BotAnimState, Option<Duration>) {
     let mut anim = BotAnimState::default();
     let center = bounds.center();
     anim.yaw = ((mouse.x - center.x).as_f32() / 240.).clamp(-0.78, 0.78);
     anim.pitch = ((mouse.y - center.y).as_f32() / 240.).clamp(-0.68, 0.68);
     anim.crossed_eyes = crossed_eyes;
-    anim
+    if crossed_eyes {
+        return (anim, None);
+    }
+    // Gaze follows the pointer; only the idle blinks need the clock.
+    let life = idle_life(seed, elapsed);
+    anim.blink = life.blink;
+    (anim, Some(life.next))
 }
 
 /// A large preview follows this window's pointer rather than the sidebar's
@@ -466,17 +834,49 @@ pub(super) fn settings_preview(
     cx: &mut gpui::App,
 ) -> AnyElement {
     let look = BotLookConfig::from_bot(bot);
+    let handle = window.window_handle();
     let frame = window.use_keyed_state(
         gpui::SharedString::from(format!("bot-settings-preview:{}", bot.id)),
         cx,
-        |_, _| None::<(FrameCacheKey, Arc<RenderImage>)>,
+        |_, cx| {
+            // The retained frame owns its atlas tile.
+            cx.on_release(
+                move |frame: &mut Option<(FrameCacheKey, Arc<RenderImage>)>, cx| {
+                    if let Some((_, image)) = frame.take() {
+                        cx.defer(move |cx| {
+                            let mut image = Some(image);
+                            if handle
+                                .update(cx, |_, window, _| {
+                                    retire_images(window, vec![image.take().unwrap()]);
+                                })
+                                .is_err()
+                            {
+                                if let Some(image) = image.take() {
+                                    RETIRED_IMAGES.with(|retired| {
+                                        retired.borrow_mut().insert(image.id, image);
+                                    });
+                                }
+                                release_retired_images(cx, None);
+                            }
+                        });
+                    }
+                },
+            )
+            .detach();
+            None::<(FrameCacheKey, Arc<RenderImage>)>
+        },
     );
     canvas(
         |_, _, _| {},
         move |bounds, _, window: &mut Window, cx| {
             let mouse = window.mouse_position();
             let crossed_eyes = delete_anchor.get().is_some_and(|b| b.contains(&mouse));
-            let anim = preview_anim(bounds, mouse, crossed_eyes);
+            let animate = window.is_window_active();
+            let (anim, next) =
+                preview_anim(look.seed, bounds, mouse, crossed_eyes, START.elapsed());
+            if animate {
+                schedule(window, cx, next);
+            }
             // Capture the drawing owner now: input dispatch has no rendering context.
             let view = window.current_view();
             window.on_mouse_event(move |_: &gpui::MouseMoveEvent, phase, _, cx| {
@@ -494,22 +894,15 @@ pub(super) fn settings_preview(
                 .filter(|(previous, _)| previous == &key)
                 .map(|(_, image)| image.clone());
             let image = cached.unwrap_or_else(|| {
-                let image = to_render_image(render_badge_or_bot(
-                    true,
-                    &look.shape,
-                    &look.face,
-                    false,
-                    look.textured,
-                    look.seed,
-                    look.grid,
-                    look.bg_color,
-                    look.fg_color,
-                    pixel_side,
-                    anim,
-                ));
-                frame.update(cx, |frame, _| *frame = Some((key, image.clone())));
+                let image = render_frame(&key, &look, anim);
+                let previous = frame.update(cx, |frame, _| frame.replace((key, image.clone())));
+                retire_images(
+                    window,
+                    previous.into_iter().map(|(_, image)| image).collect(),
+                );
                 image
             });
+            pin_scene_image(window, cx, &image);
             let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
         },
     )
@@ -537,12 +930,17 @@ pub(crate) fn avatar_with_look(
             let animate = window.is_window_active()
                 && bounds.intersects(&window.content_mask().bounds)
                 && (!still || status == "working" || sidebar_hovered);
-            let (anim, needs_frame) = compute_bot_anim(look.seed, &status, bounds, animate);
-            if needs_frame && !crate::clock::suppress_endless_animation_frames() {
-                request_avatar_frame(window, cx);
-            }
-            let image =
-                cached_badge_or_bot_image(true, &look, status == "needs-you", pixel_side, anim);
+            let (anim, next) = compute_bot_anim(look.seed, &status, bounds, animate);
+            schedule(window, cx, next);
+            let image = cached_badge_or_bot_image(
+                true,
+                &look,
+                status == "needs-you",
+                pixel_side,
+                anim,
+                window,
+                cx,
+            );
             let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
         },
     )
@@ -562,71 +960,68 @@ struct SwatchCacheKey {
     pixel_side: u32,
 }
 
-static SWATCH_CACHE: LazyLock<Mutex<HashMap<SwatchCacheKey, Arc<RenderImage>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static SWATCH_CACHE: LazyLock<Mutex<ImageCache<SwatchCacheKey>>> =
+    LazyLock::new(|| Mutex::new(ImageCache::new(1024 * 1024)));
 
 /// Render a crisp, anti-aliased circular color swatch (solid `bg` when `fg` is `None`,
 /// or vertically split left=`bg` / right=`fg` when `fg` is `Some`).
 pub(crate) fn color_swatch_circle(bg: u32, fg: Option<u32>, side: f32) -> AnyElement {
     let pixel_side = ((side * 2.0).round() as u32).clamp(24, 64);
     let key = SwatchCacheKey { bg, fg, pixel_side };
-    let image = if let Ok(cache) = SWATCH_CACHE.lock()
-        && let Some(found) = cache.get(&key)
-    {
-        found.clone()
-    } else {
-        let mut buf = image::RgbaImage::new(pixel_side, pixel_side);
-        let center = pixel_side as f32 * 0.5;
-        let radius = center - 0.75;
-        let bg_rgb = (
-            ((bg >> 16) & 0xff) as f32,
-            ((bg >> 8) & 0xff) as f32,
-            (bg & 0xff) as f32,
-        );
-        let fg_rgb = fg
-            .map(|c| {
-                (
-                    ((c >> 16) & 0xff) as f32,
-                    ((c >> 8) & 0xff) as f32,
-                    (c & 0xff) as f32,
-                )
-            })
-            .unwrap_or(bg_rgb);
-        for py in 0..pixel_side {
-            let dy = py as f32 + 0.5 - center;
-            for px_x in 0..pixel_side {
-                let dx = px_x as f32 + 0.5 - center;
-                let dist = (dx * dx + dy * dy).sqrt();
-                let cov = (radius + 0.5 - dist).clamp(0.0, 1.0);
-                if cov <= 0.0 {
-                    continue;
-                }
-                let t = if fg.is_some() {
-                    (dx + 0.5).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let r = (bg_rgb.0 * (1.0 - t) + fg_rgb.0 * t).round() as u8;
-                let g = (bg_rgb.1 * (1.0 - t) + fg_rgb.1 * t).round() as u8;
-                let b = (bg_rgb.2 * (1.0 - t) + fg_rgb.2 * t).round() as u8;
-                let a = (cov * 255.0).round() as u8;
-                buf.put_pixel(px_x, py, image::Rgba([r, g, b, a]));
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let image = cached_image(&SWATCH_CACHE, key, window, cx, || {
+                render_swatch(bg, fg, pixel_side)
+            });
+            let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
+        },
+    )
+    .size(px(side))
+    .flex_shrink_0()
+    .into_any_element()
+}
+
+fn render_swatch(bg: u32, fg: Option<u32>, pixel_side: u32) -> Arc<RenderImage> {
+    let mut buf = image::RgbaImage::new(pixel_side, pixel_side);
+    let center = pixel_side as f32 * 0.5;
+    let radius = center - 0.75;
+    let bg_rgb = (
+        ((bg >> 16) & 0xff) as f32,
+        ((bg >> 8) & 0xff) as f32,
+        (bg & 0xff) as f32,
+    );
+    let fg_rgb = fg
+        .map(|c| {
+            (
+                ((c >> 16) & 0xff) as f32,
+                ((c >> 8) & 0xff) as f32,
+                (c & 0xff) as f32,
+            )
+        })
+        .unwrap_or(bg_rgb);
+    for py in 0..pixel_side {
+        let dy = py as f32 + 0.5 - center;
+        for px_x in 0..pixel_side {
+            let dx = px_x as f32 + 0.5 - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let cov = (radius + 0.5 - dist).clamp(0.0, 1.0);
+            if cov <= 0.0 {
+                continue;
             }
+            let t = if fg.is_some() {
+                (dx + 0.5).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let r = (bg_rgb.0 * (1.0 - t) + fg_rgb.0 * t).round() as u8;
+            let g = (bg_rgb.1 * (1.0 - t) + fg_rgb.1 * t).round() as u8;
+            let b = (bg_rgb.2 * (1.0 - t) + fg_rgb.2 * t).round() as u8;
+            let a = (cov * 255.0).round() as u8;
+            buf.put_pixel(px_x, py, image::Rgba([r, g, b, a]));
         }
-        let rendered = to_render_image(buf);
-        if let Ok(mut cache) = SWATCH_CACHE.lock() {
-            if cache.len() > 128 {
-                cache.clear();
-            }
-            cache.insert(key, rendered.clone());
-        }
-        rendered
-    };
-    img(image)
-        .size(px(side))
-        .object_fit(ObjectFit::Contain)
-        .flex_shrink_0()
-        .into_any_element()
+    }
+    to_render_image(buf)
 }
 
 #[cfg(test)]
@@ -634,12 +1029,14 @@ mod header_tests {
     use super::*;
 
     #[gpui::test]
-    fn pending_avatar_frame_releases_admission_on_cancellation(cx: &mut gpui::TestAppContext) {
+    fn pending_avatar_frame_keeps_the_earliest_wake_and_releases_on_cancellation(
+        cx: &mut gpui::TestAppContext,
+    ) {
         let first = cx.new(|_| ());
         let second = cx.new(|_| ());
         let open = |cx: &mut gpui::App| -> gpui::AnyWindowHandle {
             cx.open_window(Default::default(), |_, cx| {
-                cx.new(|_| AvatarFrameTestView(false))
+                cx.new(|_| AvatarFrameTestView(None))
             })
             .unwrap()
             .into()
@@ -647,19 +1044,27 @@ mod header_tests {
         let window: gpui::AnyWindowHandle = cx.update(open);
         let other_window: gpui::AnyWindowHandle = cx.update(open);
         let id = (window, first.entity_id());
-        let pending = PendingAvatarFrame::acquire(id).unwrap();
-        assert!(PendingAvatarFrame::acquire(id).is_none());
-        assert!(PendingAvatarFrame::acquire(id).is_none());
-        // Another owning view is independently admitted.
-        let other = PendingAvatarFrame::acquire((window, second.entity_id())).unwrap();
+        let at = |ms| *START + Duration::from_millis(ms);
+        let pending = PendingAvatarFrame::acquire(id, at(100)).unwrap();
+        // An equal or later wake is already covered.
+        assert!(PendingAvatarFrame::acquire(id, at(100)).is_none());
+        assert!(PendingAvatarFrame::acquire(id, at(4_000)).is_none());
+        // A sooner wake supersedes; the superseded owner can no longer
+        // notify, and its cancellation must not release its successor.
+        let sooner = PendingAvatarFrame::acquire(id, at(33)).unwrap();
+        assert!(!pending.is_current() && sooner.is_current());
+        drop(pending);
+        assert!(PendingAvatarFrame::acquire(id, at(66)).is_none());
+        // Other owning views and windows are independently admitted.
+        let other = PendingAvatarFrame::acquire((window, second.entity_id()), at(100)).unwrap();
         let another_window =
-            PendingAvatarFrame::acquire((other_window, first.entity_id())).unwrap();
+            PendingAvatarFrame::acquire((other_window, first.entity_id()), at(100)).unwrap();
         let unpolled = async move {
-            let _pending = pending;
+            let _pending = sooner;
             std::future::pending::<()>().await;
         };
         drop(unpolled);
-        let replacement = PendingAvatarFrame::acquire(id).unwrap();
+        let replacement = PendingAvatarFrame::acquire(id, at(4_000)).unwrap();
         // Also cancel after a poll reached an await boundary.
         let mut polled = Box::pin(async move {
             let _pending = replacement;
@@ -668,29 +1073,40 @@ mod header_tests {
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(std::future::Future::poll(polled.as_mut(), &mut context).is_pending());
         drop(polled);
-        assert!(PendingAvatarFrame::acquire(id).is_some());
+        assert!(PendingAvatarFrame::acquire(id, at(4_000)).is_some());
         drop(other);
         drop(another_window);
         PENDING_FRAMES.with(|pending| assert!(pending.borrow().is_empty()));
     }
 
     #[gpui::test]
-    fn avatar_frame_coalesces_and_releases_after_timer(cx: &mut gpui::TestAppContext) {
+    fn avatar_frame_coalesces_supersedes_and_releases_after_timer(cx: &mut gpui::TestAppContext) {
+        let renders = std::rc::Rc::new(std::cell::Cell::new(0));
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
-                cx.new(|_| AvatarFrameTestView(true))
+                cx.new(|_| AvatarFrameTestView(Some(vec![AVATAR_FRAME * 30, AVATAR_FRAME])))
             })
             .unwrap()
         });
+        let counter = renders.clone();
+        let view = window.root(cx).unwrap();
+        let _observer =
+            cx.update(|cx| cx.observe(&view, move |_, _| counter.set(counter.get() + 1)));
         cx.refresh().unwrap();
         cx.run_until_parked();
         PENDING_FRAMES.with(|pending| assert_eq!(pending.borrow().len(), 1));
-        cx.background_executor.advance_clock(AVATAR_FRAME);
+        // The sooner of the two wakes notifies once; the superseded timer is
+        // silent when it later expires.
+        cx.background_executor.advance_clock(AVATAR_FRAME * 2);
         cx.run_until_parked();
+        assert_eq!(renders.get(), 1);
         PENDING_FRAMES.with(|pending| assert!(pending.borrow().is_empty()));
+        cx.background_executor.advance_clock(AVATAR_FRAME * 30);
+        cx.run_until_parked();
+        assert_eq!(renders.get(), 1);
         window
             .update(cx, |view, _, cx| {
-                view.0 = true;
+                view.0 = Some(vec![AVATAR_FRAME]);
                 cx.notify();
             })
             .unwrap();
@@ -700,25 +1116,25 @@ mod header_tests {
         window
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();
-        cx.background_executor.advance_clock(AVATAR_FRAME);
+        cx.background_executor.advance_clock(AVATAR_FRAME * 2);
         cx.run_until_parked();
         PENDING_FRAMES.with(|pending| assert!(pending.borrow().is_empty()));
     }
 
-    struct AvatarFrameTestView(bool);
+    /// Requests each listed delay (relative to now) on its next paint.
+    struct AvatarFrameTestView(Option<Vec<Duration>>);
     impl gpui::Render for AvatarFrameTestView {
         fn render(
             &mut self,
             _: &mut Window,
             _: &mut gpui::Context<Self>,
         ) -> impl gpui::IntoElement {
-            let schedule = std::mem::take(&mut self.0);
+            let delays = self.0.take().unwrap_or_default();
             gpui::canvas(
                 |_, _, _| {},
                 move |_, _, window, cx| {
-                    if schedule {
-                        request_avatar_frame(window, cx);
-                        request_avatar_frame(window, cx);
+                    for delay in &delays {
+                        request_avatar_frame(window, cx, START.elapsed() + *delay);
                     }
                 },
             )
@@ -727,23 +1143,25 @@ mod header_tests {
     }
 
     #[test]
-    fn header_modes_share_status_motion_without_pointer_gaze() {
+    fn header_modes_share_motion_without_pointer_gaze() {
         let look = BotLookConfig::from_legacy("robot", 0x3b82f6);
+        let at = Duration::from_secs(6);
         for status in ["idle", "working", "needs-you"] {
-            let (header, moving) = header_anim_at(look.seed, status, true, 6.);
-            let (autonomous, _) = bot_anim_at(look.seed, status, true, 6., None);
-            let (tracking, _) = bot_anim_at(look.seed, status, true, 6., Some((0.78, 0.68)));
+            let (header, next) = header_anim_at(look.seed, status, true, at);
+            let (autonomous, _) = bot_anim_at(look.seed, status, true, at, None);
+            let (tracking, _) = bot_anim_at(look.seed, status, true, at, Some((0.78, 0.68)));
             let key = |anim| frame_cache_key(true, &look, status == "needs-you", 128, anim);
-            assert_eq!(moving, status != "idle");
+            assert!(next.is_some_and(|next| next > at));
             assert!(key(header) == key(autonomous));
             assert!(key(header) != key(tracking));
             assert_eq!(tracking.yaw, 0.78);
             assert_eq!(tracking.pitch, 0.68);
             assert!(!header.crossed_eyes);
         }
-        let (working, _) = header_anim_at(look.seed, "working", true, 6.);
-        let (attention, _) = header_anim_at(look.seed, "needs-you", true, 6.);
+        let (working, next) = header_anim_at(look.seed, "working", true, at);
+        let (attention, _) = header_anim_at(look.seed, "needs-you", true, at);
         assert_eq!(working.tex_rot, 84.);
+        assert_eq!(next, Some(Duration::from_millis(6_006)));
         assert_eq!(attention.wide, 1.14);
     }
 
@@ -751,9 +1169,10 @@ mod header_tests {
     fn header_hidden_state_is_frozen_without_frame_requests() {
         let look = BotLookConfig::from_legacy("cat", 0xe86b5f);
         for status in ["idle", "working", "needs-you"] {
-            let (first, moving) = header_anim_at(look.seed, status, false, 0.);
-            let (later, later_moving) = header_anim_at(look.seed, status, false, 900.);
-            assert!(!moving && !later_moving);
+            let (first, next) = header_anim_at(look.seed, status, false, Duration::ZERO);
+            let (later, later_next) =
+                header_anim_at(look.seed, status, false, Duration::from_secs(900));
+            assert!(next.is_none() && later_next.is_none());
             assert!(
                 frame_cache_key(true, &look, status == "needs-you", 128, first)
                     == frame_cache_key(true, &look, status == "needs-you", 128, later)
@@ -776,19 +1195,26 @@ mod preview_tests {
             gpui::size(px(128.), px(128.)),
         );
         let look = BotLookConfig::from_legacy("robot", 0x3b82f6);
-        let left = preview_anim(bounds, gpui::point(px(0.), px(0.)), false);
-        let right = preview_anim(bounds, gpui::point(px(600.), px(400.)), false);
+        // Between beats the preview holds a still, open-eyed pose.
+        let quiet = Duration::from_millis(IDLE_BEAT_MS * 3 + 2_000);
+        let preview = |mouse, crossed| preview_anim(look.seed, bounds, mouse, crossed, quiet);
+        let (left, _) = preview(gpui::point(px(0.), px(0.)), false);
+        let (right, _) = preview(gpui::point(px(600.), px(400.)), false);
         assert!(left.yaw < 0. && left.pitch < 0.);
         assert!(right.yaw > 0. && right.pitch > 0.);
-        let crossed = preview_anim(bounds, bounds.center(), true);
-        let restored = preview_anim(bounds, bounds.center(), false);
+        let (crossed, crossed_next) = preview(bounds.center(), true);
+        let (restored, restored_next) = preview(bounds.center(), false);
         assert!(crossed.crossed_eyes && !restored.crossed_eyes);
+        // Crossed eyes never blink; the restored face resumes idle blinks.
+        assert!(crossed_next.is_none());
+        assert!(restored_next.is_some_and(|next| next > quiet));
         assert!(
             frame_cache_key(true, &look, false, 256, crossed)
                 != frame_cache_key(true, &look, false, 256, restored)
         );
         assert_eq!(restored.yaw, 0.);
         assert_eq!(restored.pitch, 0.);
+        assert_eq!(restored.blink, 1.);
         assert_eq!(look.face, "visor");
     }
 }
