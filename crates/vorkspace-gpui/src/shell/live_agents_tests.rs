@@ -1329,3 +1329,64 @@ fn mixed_height_activity_updates_and_reordering_keep_the_semantic_scroll_anchor(
         assert!(card.expanded);
     });
 }
+
+#[gpui::test]
+fn removing_the_scrolled_session_keeps_the_nearest_surviving_session(cx: &mut TestAppContext) {
+    for (removed, expected) in [
+        (vec![20], 21),
+        (vec![20, 21], 19),
+        (vec![0, 1, 2, 3, 4, 20], 21),
+        (vec![18, 19, 20, 21], 22),
+    ] {
+        let window = motion_fixture(cx, 40);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let card = window
+            .update(visual, |host, _, cx| {
+                host.card.update(cx, |card, cx| {
+                    // Done entries disappear when they are opened and marked
+                    // seen; archiving any session uses the same publication.
+                    card.publish(
+                        (0..40)
+                            .map(|id| sample_agent(id, Status::Done, None))
+                            .collect(),
+                        cx,
+                    );
+                    card.toggle_expanded(cx);
+                    card.scroll.scroll_to(ListOffset {
+                        item_ix: 20,
+                        offset_in_item: px(7.),
+                    });
+                    cx.notify();
+                });
+                host.card.clone()
+            })
+            .unwrap();
+        visual.run_until_parked();
+        card.update(visual, |card, cx| {
+            let agents = card
+                .agents
+                .iter()
+                .filter(|agent| !removed.contains(&agent.id))
+                .cloned()
+                .collect();
+            card.publish(agents, cx);
+        });
+        visual.run_until_parked();
+        card.read_with(visual, |card, _| {
+            let top = card.scroll.logical_scroll_top();
+            assert_eq!(card.agents[top.item_ix].id, expected, "removed={removed:?}");
+            assert_eq!(top.offset_in_item, px(7.));
+            assert!(card.expanded);
+        });
+        // An empty list has no surviving anchor and must reset disclosure.
+        card.update(visual, |card, cx| card.publish(Vec::new(), cx));
+        visual.run_until_parked();
+        card.read_with(visual, |card, _| {
+            assert!(!card.expanded);
+            let top = card.scroll.logical_scroll_top();
+            assert_eq!(top.item_ix, 0);
+            assert_eq!(top.offset_in_item, px(0.));
+        });
+    }
+}

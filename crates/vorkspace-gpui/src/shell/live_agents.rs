@@ -322,10 +322,17 @@ impl LiveAgents {
             )
         });
         if self.agents != agents {
-            // Preserve the top session and fractional offset when approvals or
-            // completions reorder rows above a deliberately scrolled position.
+            // Preserve the top session and fractional offset. If it disappears,
+            // use the closest surviving old neighbor, preferring the following
+            // session on a tie, instead of jumping to the start of the list.
             let top = self.scroll.logical_scroll_top();
-            let anchor = self.agents.get(top.item_ix).map(|agent| agent.id);
+            let anchor = self
+                .agents
+                .iter()
+                .enumerate()
+                .filter(|(_, agent)| retained.contains(&agent.id))
+                .min_by_key(|(ix, _)| (ix.abs_diff(top.item_ix), *ix < top.item_ix))
+                .map(|(_, agent)| agent.id);
             if agents.is_empty() {
                 self.expanded = false;
             }
@@ -334,7 +341,10 @@ impl LiveAgents {
             self.scroll.reset(self.shown_count());
             if let Some(item_ix) = next.filter(|_| top.item_ix != 0 || top.offset_in_item != px(0.))
             {
-                self.scroll.scroll_to(ListOffset { item_ix, ..top });
+                self.scroll.scroll_to(ListOffset {
+                    item_ix: item_ix.min(self.shown_count().saturating_sub(1)),
+                    ..top
+                });
             }
             cx.notify();
         }
