@@ -68,6 +68,15 @@ struct SidebarCursorState {
     rail_bounds: Option<Bounds<Pixels>>,
     mouse_pos: Option<Point<Pixels>>,
 }
+impl SidebarCursorState {
+    fn track(&mut self, position: Point<Pixels>) -> bool {
+        let previous = self.mouse_pos.replace(position);
+        previous != Some(position)
+            && self.rail_bounds.is_some_and(|rail| {
+                rail.contains(&position) || previous.is_some_and(|pos| rail.contains(&pos))
+            })
+    }
+}
 static SIDEBAR_CURSOR: LazyLock<Mutex<SidebarCursorState>> =
     LazyLock::new(|| Mutex::new(SidebarCursorState::default()));
 
@@ -80,11 +89,14 @@ pub(crate) fn sidebar_cursor_tracker() -> AnyElement {
             if let Ok(mut state) = SIDEBAR_CURSOR.lock() {
                 state.rail_bounds = Some(bounds);
             }
-            window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, _| {
+            let view = window.current_view();
+            window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, cx| {
                 if phase == DispatchPhase::Capture
-                    && let Ok(mut state) = SIDEBAR_CURSOR.lock()
+                    && SIDEBAR_CURSOR
+                        .lock()
+                        .is_ok_and(|mut state| state.track(event.position))
                 {
-                    state.mouse_pos = Some(event.position);
+                    cx.notify(view);
                 }
             });
         },
@@ -323,8 +335,8 @@ fn compute_bot_anim(
     bot_anim_at(seed, status, animate, START.elapsed().as_secs_f32(), gaze)
 }
 
-// Pointer input belongs to the sidebar only. The header shares these three
-// autonomous animations without reading or registering any pointer state.
+// Pointer input belongs to the sidebar only. The header shares status motion
+// without reading or registering any pointer state.
 fn header_anim_at(seed: u32, status: &str, animate: bool, now: f32) -> (BotAnimState, bool) {
     bot_anim_at(seed, status, animate, now, None)
 }
@@ -337,11 +349,19 @@ fn bot_anim_at(
     gaze: Option<(f32, f32)>,
 ) -> (BotAnimState, bool) {
     let offset = (seed % 97) as f32 * 0.17;
-    if !animate {
+    // Idle identity is static. Even a tiny continuous idle animation redraws
+    // the whole native window. Pointer gaze is published by input events;
+    // only working/attention states need a clock between those events.
+    if !animate || !matches!(status, "working" | "needs-you") {
+        let (yaw, pitch) = if animate {
+            gaze.unwrap_or((0.25, -0.18))
+        } else {
+            (0.25, -0.18)
+        };
         return (
             BotAnimState {
-                yaw: 0.25,
-                pitch: -0.18,
+                yaw,
+                pitch,
                 blink: 1.0,
                 squash_x: 1.0,
                 squash_y: 1.0,
@@ -381,12 +401,6 @@ fn bot_anim_at(
             anim.pitch = -0.12;
             anim.wide = 1.14;
             anim.hop_y = -(t * 3.2).sin().abs() * 0.035;
-        } else {
-            // Auto 3D Gaze (idle)
-            let s1 = (t * 0.75).sin() + 0.45 * (t * 1.9).sin();
-            let s2 = (t * 0.6).cos() - 0.35 * (t * 1.4).sin();
-            anim.yaw = (s1 * 0.38).clamp(-0.68, 0.68);
-            anim.pitch = (s2 * 0.30 - 0.08).clamp(-0.55, 0.55);
         }
     } else if status == "working" {
         anim.tex_rot = (now * 14.0).rem_euclid(360.0);
@@ -432,21 +446,13 @@ pub(super) fn header_avatar(
     .into_any_element()
 }
 
-fn preview_anim(
-    seed: u32,
-    bounds: Bounds<Pixels>,
-    mouse: Point<Pixels>,
-    crossed_eyes: bool,
-) -> (BotAnimState, bool) {
+fn preview_anim(bounds: Bounds<Pixels>, mouse: Point<Pixels>, crossed_eyes: bool) -> BotAnimState {
     let mut anim = BotAnimState::default();
     let center = bounds.center();
     anim.yaw = ((mouse.x - center.x).as_f32() / 240.).clamp(-0.78, 0.78);
     anim.pitch = ((mouse.y - center.y).as_f32() / 240.).clamp(-0.68, 0.68);
     anim.crossed_eyes = crossed_eyes;
-    if !crossed_eyes {
-        anim.blink = blink_at(START.elapsed().as_secs_f32() + (seed % 97) as f32 * 0.17);
-    }
-    (anim, true)
+    anim
 }
 
 /// A large preview follows this window's pointer rather than the sidebar's
@@ -470,12 +476,8 @@ pub(super) fn settings_preview(
         move |bounds, _, window: &mut Window, cx| {
             let mouse = window.mouse_position();
             let crossed_eyes = delete_anchor.get().is_some_and(|b| b.contains(&mouse));
-            let (anim, needs_frame) = preview_anim(look.seed, bounds, mouse, crossed_eyes);
-            if needs_frame && !crate::clock::suppress_endless_animation_frames() {
-                window.request_animation_frame();
-            }
-            // Capture the drawing owner now: input dispatch has no rendering
-            // context, so request_animation_frame cannot be called there.
+            let anim = preview_anim(bounds, mouse, crossed_eyes);
+            // Capture the drawing owner now: input dispatch has no rendering context.
             let view = window.current_view();
             window.on_mouse_event(move |_: &gpui::MouseMoveEvent, phase, _, cx| {
                 if phase == DispatchPhase::Capture {
@@ -532,7 +534,9 @@ pub(crate) fn avatar_with_look(
                     rail.contains(&pos) && rail.contains(&bounds.center())
                 })
             });
-            let animate = !still || status == "working" || sidebar_hovered;
+            let animate = window.is_window_active()
+                && bounds.intersects(&window.content_mask().bounds)
+                && (!still || status == "working" || sidebar_hovered);
             let (anim, needs_frame) = compute_bot_anim(look.seed, &status, bounds, animate);
             if needs_frame && !crate::clock::suppress_endless_animation_frames() {
                 request_avatar_frame(window, cx);
@@ -723,14 +727,14 @@ mod header_tests {
     }
 
     #[test]
-    fn header_modes_share_autonomous_animation_without_pointer_gaze() {
+    fn header_modes_share_status_motion_without_pointer_gaze() {
         let look = BotLookConfig::from_legacy("robot", 0x3b82f6);
         for status in ["idle", "working", "needs-you"] {
             let (header, moving) = header_anim_at(look.seed, status, true, 6.);
             let (autonomous, _) = bot_anim_at(look.seed, status, true, 6., None);
             let (tracking, _) = bot_anim_at(look.seed, status, true, 6., Some((0.78, 0.68)));
             let key = |anim| frame_cache_key(true, &look, status == "needs-you", 128, anim);
-            assert!(moving);
+            assert_eq!(moving, status != "idle");
             assert!(key(header) == key(autonomous));
             assert!(key(header) != key(tracking));
             assert_eq!(tracking.yaw, 0.78);
@@ -772,12 +776,12 @@ mod preview_tests {
             gpui::size(px(128.), px(128.)),
         );
         let look = BotLookConfig::from_legacy("robot", 0x3b82f6);
-        let (left, _) = preview_anim(look.seed, bounds, gpui::point(px(0.), px(0.)), false);
-        let (right, _) = preview_anim(look.seed, bounds, gpui::point(px(600.), px(400.)), false);
+        let left = preview_anim(bounds, gpui::point(px(0.), px(0.)), false);
+        let right = preview_anim(bounds, gpui::point(px(600.), px(400.)), false);
         assert!(left.yaw < 0. && left.pitch < 0.);
         assert!(right.yaw > 0. && right.pitch > 0.);
-        let (crossed, _) = preview_anim(look.seed, bounds, bounds.center(), true);
-        let (restored, _) = preview_anim(look.seed, bounds, bounds.center(), false);
+        let crossed = preview_anim(bounds, bounds.center(), true);
+        let restored = preview_anim(bounds, bounds.center(), false);
         assert!(crossed.crossed_eyes && !restored.crossed_eyes);
         assert!(
             frame_cache_key(true, &look, false, 256, crossed)
@@ -788,3 +792,6 @@ mod preview_tests {
         assert_eq!(look.face, "visor");
     }
 }
+
+#[cfg(test)]
+mod idle_tests;
