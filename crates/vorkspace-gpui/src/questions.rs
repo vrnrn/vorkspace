@@ -14,6 +14,10 @@ pub(crate) struct KeptOpen {
 }
 pub(crate) struct QuestionCard {
     request: Question,
+    /// Fixed for the card's life. Interacting clears the deadline, but the
+    /// footer row it showed must keep its height: a mouse-down that shrinks the
+    /// card moves the pinned options before the click completes.
+    optional: bool,
     selected: Vec<Vec<String>>,
     fields: Vec<Entity<input::Input>>,
     _events: Vec<Subscription>,
@@ -59,6 +63,7 @@ impl QuestionCard {
             })
         });
         Self {
+            optional: request.auto_resolve_at.is_some(),
             request,
             selected,
             fields,
@@ -222,8 +227,21 @@ impl Render for QuestionCard {
                     .gap_3()
                     .children(items),
             )
-            .when_some(self.request.auto_resolve_at, |card, deadline| {
-                let remaining = deadline.saturating_sub(vorkspace_core::time::now_ms());
+            .when(self.optional, |card| {
+                let status = match self.request.auto_resolve_at {
+                    Some(deadline) => {
+                        let remaining = deadline.saturating_sub(vorkspace_core::time::now_ms());
+                        if remaining > 60_000 {
+                            "Optional question".to_owned()
+                        } else {
+                            format!(
+                                "Continues without an answer in {}s",
+                                remaining.div_ceil(1000)
+                            )
+                        }
+                    }
+                    None => "Waiting for your answer".to_owned(),
+                };
                 card.child(
                     div()
                         .mt_2()
@@ -232,14 +250,7 @@ impl Render for QuestionCard {
                         .gap_2()
                         .text_size(px(11.))
                         .text_color(content(0.5))
-                        .child(if remaining > 60_000 {
-                            "Optional question".to_owned()
-                        } else {
-                            format!(
-                                "Continues without an answer in {}s",
-                                remaining.div_ceil(1000)
-                            )
-                        }),
+                        .child(status),
                 )
             })
             .child(
@@ -393,5 +404,44 @@ mod tests {
                 vec!["A".to_owned(), "B".to_owned(), "Custom extra".to_owned()]
             ])]
         );
+    }
+
+    #[gpui::test]
+    fn pressing_an_option_of_an_optional_question_does_not_move_the_card(cx: &mut TestAppContext) {
+        let request = Question {
+            id: "r".into(),
+            title: "Optional".into(),
+            auto_resolve_at: Some(vorkspace_core::time::now_ms() + 600_000),
+            items: vec![QuestionItem {
+                id: "one".into(),
+                prompt: "Choose".into(),
+                multiple: false,
+                allow_custom: false,
+                options: vec![QuestionOption {
+                    id: "a".into(),
+                    label: "First".into(),
+                    description: String::new(),
+                }],
+            }],
+        };
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| QuestionCard::new(request, cx))
+            })
+            .unwrap()
+        });
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        let option = visual.debug_bounds("question-option-0-0").unwrap();
+        let submit = visual.debug_bounds("question-answer").unwrap();
+        visual.simulate_mouse_down(option.center(), gpui::MouseButton::Left, Default::default());
+        visual.refresh().unwrap();
+        window
+            .update(visual, |card, _, _| {
+                assert!(card.request.auto_resolve_at.is_none())
+            })
+            .unwrap();
+        assert_eq!(visual.debug_bounds("question-option-0-0"), Some(option));
+        assert_eq!(visual.debug_bounds("question-answer"), Some(submit));
     }
 }
