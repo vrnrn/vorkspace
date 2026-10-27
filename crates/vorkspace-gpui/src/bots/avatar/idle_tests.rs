@@ -5,6 +5,7 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 struct Avatars {
     status: &'static str,
     renders: Rc<Cell<usize>>,
+    preview: bool,
 }
 
 impl Render for Avatars {
@@ -23,7 +24,9 @@ impl Render for Avatars {
                 true,
             ))
             .child(bot_avatar(&bot, self.status, 24., false))
-            .child(settings_preview(&bot, 128., Default::default(), window, cx))
+            .when(self.preview, |d| {
+                d.child(settings_preview(&bot, 128., Default::default(), window, cx))
+            })
     }
 }
 
@@ -41,6 +44,7 @@ fn open(
             cx.new(|_| Avatars {
                 status: "idle",
                 renders: renders.clone(),
+                preview: true,
             })
         })
         .unwrap()
@@ -52,6 +56,40 @@ fn open(
         .update(cx, |_, window, _| assert!(window.is_window_active()))
         .unwrap();
     (window, view, renders)
+}
+
+#[gpui::test]
+fn sidebar_pointer_events_notify_the_painted_owner_without_an_idle_clock(cx: &mut TestAppContext) {
+    let (window, view, _) = open(cx);
+    // Isolate the rail listener: the preview has its own pointer listener.
+    view.update(cx, |view, cx| {
+        view.preview = false;
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    let notices = Rc::new(Cell::new(0));
+    let observed = notices.clone();
+    let _observer = cx.update(|cx| cx.observe(&view, move |_, _| observed.set(observed.get() + 1)));
+    let bounds = SIDEBAR_CURSOR.lock().unwrap().rail_bounds.unwrap();
+    SIDEBAR_CURSOR.lock().unwrap().mouse_pos = None;
+    let inside = bounds.center();
+    let outside = gpui::point(bounds.right() + px(100.), bounds.center().y);
+    for (position, notify) in [
+        (inside, true),
+        (inside, false),
+        (outside, true),
+        (outside, false),
+    ] {
+        let before = notices.get();
+        window
+            .update(cx, |_, w, cx| w.simulate_mouse_move(position, cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(notices.get(), before + usize::from(notify));
+        assert_eq!(SIDEBAR_CURSOR.lock().unwrap().mouse_pos, Some(position));
+        PENDING_FRAMES.with(|pending| assert!(pending.borrow().is_empty()));
+    }
 }
 
 #[gpui::test]
