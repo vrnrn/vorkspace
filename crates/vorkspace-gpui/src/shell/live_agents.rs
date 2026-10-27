@@ -2,12 +2,14 @@
 //! presentation clock: ticking never hydrates history or rebuilds the session snapshot.
 use super::*;
 use crate::clock::Instant;
-use gpui::{UniformListScrollHandle, uniform_list};
+use gpui::{ListAlignment, ListOffset, ListState, list};
 use std::time::Duration;
 use vorkspace_core::project_appearance::ProjectAppearance;
 
 const DEFAULT_ROWS: usize = 4;
-const ROW_HEIGHT: f32 = 67.;
+const ROW_HEIGHT: f32 = 49.;
+const ACTIVITY_ROW_HEIGHT: f32 = 67.;
+const FRAME_TICK: Duration = Duration::from_millis(33);
 const COMPACT_ROW_HEIGHT: f32 = 36.;
 const ELAPSED_TICK: Duration = Duration::from_secs(1);
 
@@ -60,7 +62,13 @@ pub(super) struct LiveAgents {
     expanded: bool,
     compact: bool,
     visible: bool,
-    scroll: UniformListScrollHandle,
+    scroll: ListState,
+    window_visible: bool,
+    visibility_subscription: Option<Subscription>,
+    animation: Option<gpui::Task<()>>,
+    animation_started: Instant,
+    #[cfg(test)]
+    frames: usize,
     list_focus: gpui::FocusHandle,
     bounds_subscription: Option<Subscription>,
     tick: Option<gpui::Task<()>>,
@@ -79,7 +87,13 @@ impl LiveAgents {
             expanded: false,
             compact: false,
             visible: false,
-            scroll: UniformListScrollHandle::new(),
+            scroll: ListState::new(0, ListAlignment::Top, px(0.)),
+            window_visible: false,
+            visibility_subscription: None,
+            animation: None,
+            animation_started: Instant::now(),
+            #[cfg(test)]
+            frames: 0,
             list_focus: cx.focus_handle(),
             bounds_subscription: None,
             tick: None,
@@ -120,6 +134,7 @@ impl LiveAgents {
     pub(super) fn hide(&mut self) {
         self.visible = false;
         self.tick = None;
+        self.animation = None;
     }
 
     fn shown_count(&self) -> usize {
@@ -131,73 +146,132 @@ impl LiveAgents {
     }
 
     pub(super) fn set_activity(&mut self, id: i64, label: Option<String>, cx: &mut Context<Self>) {
-        if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == id)
-            && agent.activity != label
+        if let Some(ix) = self.agents.iter().position(|agent| agent.id == id)
+            && self.agents[ix].activity != label
         {
-            agent.activity = label;
+            self.agents[ix].activity = label;
+            if ix < self.shown_count() {
+                self.scroll.remeasure_items(ix..ix + 1);
+            }
             cx.notify();
         }
     }
 
-    fn activity_label<'a>(&self, agent: &'a Agent) -> &'a str {
-        if agent.status == Status::Working {
-            agent.activity.as_deref().unwrap_or("Working")
-        } else {
-            agent.status.label()
+    // Status is always spoken by the row, even when no label is painted.
+    fn activity_label<'a>(&self, agent: &'a Agent) -> Option<&'a str> {
+        match agent.status {
+            Status::Approval => Some(Status::Approval.label()),
+            Status::Working => agent.activity.as_deref().filter(|label| {
+                !label.trim().is_empty() && !matches!(label.trim(), "Working" | "Done")
+            }),
+            Status::Done => None,
         }
     }
 
-    fn row_height(&self) -> f32 {
+    fn row_height(&self, agent: &Agent) -> f32 {
         if self.compact {
             COMPACT_ROW_HEIGHT
+        } else if self.activity_label(agent).is_some() {
+            ACTIVITY_ROW_HEIGHT
         } else {
             ROW_HEIGHT
         }
     }
 
     fn scroll_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
-        let handle = self.scroll.0.borrow();
-        let base = &handle.base_handle;
-        let offset = base.offset();
-        let step = self.row_height();
-        let y = match event.keystroke.key.as_str() {
-            "up" => offset.y + px(step),
-            "down" => offset.y - px(step),
-            "pageup" => offset.y + px(step * DEFAULT_ROWS as f32),
-            "pagedown" => offset.y - px(step * DEFAULT_ROWS as f32),
-            "home" => px(0.),
-            "end" => -base.max_offset().y,
+        let page = self.scroll.viewport_bounds().size.height;
+        let step = px(if self.compact {
+            COMPACT_ROW_HEIGHT
+        } else {
+            ROW_HEIGHT
+        });
+        match event.keystroke.key.as_str() {
+            "up" => self.scroll.scroll_by(-step),
+            "down" => self.scroll.scroll_by(step),
+            "pageup" => self.scroll.scroll_by(-page),
+            "pagedown" => self.scroll.scroll_by(page),
+            "home" => self.scroll.scroll_to(ListOffset::default()),
+            "end" => self.scroll.scroll_to_end(),
             _ => return,
-        };
-        base.set_offset(gpui::point(
-            offset.x,
-            y.min(px(0.)).max(-base.max_offset().y),
-        ));
+        }
         cx.stop_propagation();
         cx.notify();
     }
 
-    fn toggle_expanded(&mut self, cx: &mut Context<Self>) {
-        self.expanded = !self.expanded;
-        // Disclosure is deliberate navigation. Ordinary semantic updates retain
-        // the scroll anchor; collapsing returns to the original four sessions.
-        if !self.expanded {
-            self.scroll
-                .0
-                .borrow()
-                .base_handle
-                .set_offset(Point::default());
+    /// Only inspect the viewport-sized presentation slice, never the registry or
+    /// transcript. ListState owns the actual laid-out scroll anchor and clip.
+    fn visible_has(&self, accepts: impl Fn(&Agent) -> bool) -> bool {
+        if !self.visible || !self.window_visible || self.compact {
+            return false;
         }
+        let top = self.scroll.logical_scroll_top();
+        let height = f32::from(self.scroll.viewport_bounds().size.height);
+        let mut y = -f32::from(top.offset_in_item);
+        for agent in self.agents[..self.shown_count()].iter().skip(top.item_ix) {
+            if y >= height {
+                break;
+            }
+            y += self.row_height(agent);
+            if y > 0. && accepts(agent) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn sync_animation(&mut self, cx: &mut Context<Self>) {
+        if !self.visible_has(|agent| agent.status == Status::Working) {
+            self.animation = None;
+        } else if self.animation.is_none() {
+            self.animation = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(FRAME_TICK).await;
+                    let keep = this.update(cx, |this, cx| {
+                        // Revalidate admission after every await. Hiding,
+                        // scrolling, completion and disposal revoke the clock.
+                        if !this.visible_has(|agent| agent.status == Status::Working) {
+                            this.animation = None;
+                            return false;
+                        }
+                        #[cfg(test)]
+                        {
+                            this.frames += 1;
+                        }
+                        cx.notify();
+                        true
+                    });
+                    if !matches!(keep, Ok(true)) {
+                        break;
+                    }
+                }
+            }));
+        }
+    }
+
+    fn frame_ms(&self) -> u64 {
+        self.animation_started.elapsed().as_millis() as u64
+    }
+
+    fn toggle_expanded(&mut self, cx: &mut Context<Self>) {
+        let top = self.scroll.logical_scroll_top();
+        self.expanded = !self.expanded;
+        // Expansion retains the reader's session and fractional offset, even
+        // when a short collapsed viewport was deliberately scrolled. Collapsing
+        // returns to the original four sessions.
+        self.scroll.reset(self.shown_count());
+        self.scroll.scroll_to(if self.expanded {
+            top
+        } else {
+            ListOffset::default()
+        });
         self.sync_timer(cx);
         cx.notify();
     }
 
     fn sync_timer(&mut self, cx: &mut Context<Self>) {
-        let ticking = self.visible
-            && !self.compact
-            && self.agents[..self.shown_count()]
-                .iter()
-                .any(|agent| agent.status != Status::Done && self.runs.contains_key(&agent.id));
+        self.sync_animation(cx);
+        let ticking = self
+            .visible_has(|agent| agent.status != Status::Done && self.runs.contains_key(&agent.id));
         if !ticking {
             self.tick = None;
         } else if self.tick.is_none() {
@@ -250,29 +324,18 @@ impl LiveAgents {
         if self.agents != agents {
             // Preserve the top session and fractional offset when approvals or
             // completions reorder rows above a deliberately scrolled position.
-            let handle = self.scroll.0.borrow();
-            let offset = handle.base_handle.offset();
-            let top = ((-f32::from(offset.y)).max(0.) / self.row_height()).floor() as usize;
-            if let Some(id) = self.agents.get(top).map(|agent| agent.id)
-                && let Some(next) = agents.iter().position(|agent| agent.id == id)
-                && next != top
-                && offset.y < px(0.)
-            {
-                handle.base_handle.set_offset(gpui::point(
-                    offset.x,
-                    offset.y + px((top as f32 - next as f32) * self.row_height()),
-                ));
-            }
-            drop(handle);
+            let top = self.scroll.logical_scroll_top();
+            let anchor = self.agents.get(top.item_ix).map(|agent| agent.id);
             if agents.is_empty() {
                 self.expanded = false;
-                self.scroll
-                    .0
-                    .borrow()
-                    .base_handle
-                    .set_offset(Point::default());
             }
+            let next = anchor.and_then(|id| agents.iter().position(|agent| agent.id == id));
             self.agents = agents;
+            self.scroll.reset(self.shown_count());
+            if let Some(item_ix) = next.filter(|_| top.item_ix != 0 || top.offset_in_item != px(0.))
+            {
+                self.scroll.scroll_to(ListOffset { item_ix, ..top });
+            }
             cx.notify();
         }
         self.sync_timer(cx);
@@ -284,15 +347,8 @@ impl LiveAgents {
             return false;
         }
         if self.compact != compact || !self.visible {
-            let old_height = self.row_height();
             self.compact = compact;
-            let handle = self.scroll.0.borrow();
-            let offset = handle.base_handle.offset();
-            handle.base_handle.set_offset(gpui::point(
-                offset.x,
-                offset.y * (self.row_height() / old_height),
-            ));
-            drop(handle);
+            self.scroll.remeasure();
             self.visible = true;
             cx.notify();
         }
@@ -310,7 +366,7 @@ impl LiveAgents {
         })
     }
 
-    fn row(&self, agent: &Agent) -> AnyElement {
+    fn row(&self, agent: &Agent) -> gpui::Stateful<gpui::Div> {
         let id = agent.id;
         let owner = self.owner.clone();
         let elapsed = self.elapsed(agent);
@@ -318,7 +374,10 @@ impl LiveAgents {
         let label = [
             Some(agent.title.clone()),
             Some(agent.project.clone()),
-            Some(activity.to_owned()),
+            Some(agent.status.label().to_owned()),
+            activity
+                .filter(|label| *label != agent.status.label())
+                .map(str::to_owned),
             elapsed.clone(),
         ]
         .into_iter()
@@ -357,9 +416,8 @@ impl LiveAgents {
             .items_center()
             .justify_center()
             .child(if agent.status == Status::Working {
-                // Keep the historical grid, without restoring per-row 30fps
-                // timers. The one card clock owns elapsed presentation only.
-                crate::session_mark::spinner_dots(400).into_any_element()
+                crate::session_mark::spinner_dots(if self.compact { 400 } else { self.frame_ms() })
+                    .into_any_element()
             } else {
                 icon(agent.status.glyph(), 12.)
                     .text_color(ink)
@@ -371,11 +429,10 @@ impl LiveAgents {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(status)
-                .into_any_element();
+                .child(status);
         }
         row.w_full()
-            .h(px(ROW_HEIGHT - 1.))
+            .h(px(self.row_height(agent) - 1.))
             .px_2()
             .py_1p5()
             .flex()
@@ -404,7 +461,7 @@ impl LiveAgents {
                             .child(agent.title.clone()),
                     ),
             )
-            .child(
+            .children(activity.map(|activity| {
                 div()
                     .mt_1()
                     .pl_4()
@@ -415,15 +472,14 @@ impl LiveAgents {
                     .text_size(px(11.))
                     .line_height(px(14.))
                     .text_color(ink)
-                    .child(status)
                     .child(
                         div()
                             .debug_selector(move || format!("live-agent-{id}-activity"))
                             .min_w_0()
                             .truncate()
                             .child(activity.to_owned()),
-                    ),
-            )
+                    )
+            }))
             .child(
                 div()
                     .mt_1()
@@ -435,7 +491,14 @@ impl LiveAgents {
                     .text_size(px(11.))
                     .line_height(px(14.))
                     .text_color(content(0.45))
-                    .child(provider_icon(&agent.provider, 12.))
+                    .child(status)
+                    .child(
+                        div()
+                            .debug_selector(move || format!("live-agent-{id}-provider"))
+                            .size(px(12.))
+                            .flex_shrink_0()
+                            .child(provider_icon(&agent.provider, 12.)),
+                    )
                     .child(
                         div()
                             .debug_selector(move || format!("live-agent-{id}-project"))
@@ -451,7 +514,6 @@ impl LiveAgents {
                             .child(time)
                     })),
             )
-            .into_any_element()
     }
 }
 
@@ -483,15 +545,34 @@ impl Render for LiveAgents {
             self.bounds_subscription =
                 Some(cx.observe_window_bounds(window, |_, _, cx| cx.notify()));
         }
+        if self.visibility_subscription.is_none() {
+            self.window_visible = window.is_visible();
+            self.visibility_subscription = Some(cx.observe_window_visibility(
+                window,
+                |this, visibility, _, cx| {
+                    this.window_visible = visibility.is_visible();
+                    this.sync_timer(cx);
+                },
+            ));
+        }
         let count = self.agents.len();
         let extra = count.saturating_sub(DEFAULT_ROWS);
         let compact = self.compact;
         let expanded = self.expanded;
         let entity = cx.entity();
         let shown = self.shown_count();
-        let height = px(shown as f32 * self.row_height())
-            .min(px(360.))
-            .min((window.viewport_size().height * 0.36).max(px(48.)));
+        let height = px(self.agents[..shown]
+            .iter()
+            .scan(0., |height, agent| {
+                if *height >= 360. {
+                    return None;
+                }
+                *height += self.row_height(agent);
+                Some(self.row_height(agent))
+            })
+            .sum::<f32>())
+        .min(px(360.))
+        .min((window.viewport_size().height * 0.36).max(px(48.)));
         let header = div()
             .debug_selector(|| "live-agents-working-header".into())
             .flex_shrink_0()
@@ -550,21 +631,29 @@ impl Render for LiveAgents {
             .min_h_0()
             .flex_shrink_1()
             .child(
-                uniform_list("live-agents-list", shown, move |range, _, cx| {
+                list(self.scroll.clone(), move |ix, _, cx| {
                     entity.update(cx, |this, _| {
-                        range
-                            .map(|ix| {
-                                div()
-                                    .h(px(this.row_height()))
-                                    .w_full()
-                                    .child(this.row(&this.agents[ix]))
-                            })
-                            .collect::<Vec<_>>()
+                        div()
+                            .h(px(this.row_height(&this.agents[ix])))
+                            .w_full()
+                            .child(this.row(&this.agents[ix]))
+                            .into_any_element()
                     })
                 })
-                .track_scroll(&self.scroll)
                 .h_full()
                 .w_full(),
+            )
+            // Runs after list prepaint: admission sees the real viewport and
+            // clamped scroll anchor, including wheel, resize and keyboard moves.
+            .child(
+                gpui::canvas(
+                    {
+                        let entity = cx.entity();
+                        move |_, _, cx| entity.update(cx, |this, cx| this.sync_timer(cx))
+                    },
+                    |_, _, _, _| {},
+                )
+                .size_0(),
             );
         let more = (extra > 0).then(|| {
             crate::controls::button(
