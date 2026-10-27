@@ -105,8 +105,11 @@ fn sidebar_pointer_events_notify_the_painted_owner(cx: &mut TestAppContext) {
     let notices = Rc::new(Cell::new(0));
     let observed = notices.clone();
     let _observer = cx.update(|cx| cx.observe(&view, move |_, _| observed.set(observed.get() + 1)));
-    let bounds = SIDEBAR_CURSOR.lock().unwrap().rail_bounds.unwrap();
-    SIDEBAR_CURSOR.lock().unwrap().mouse_pos = None;
+    let cursor = window
+        .update(cx, |_, window, _| sidebar_cursor(window).unwrap())
+        .unwrap();
+    let bounds = cursor.borrow().rail_bounds.unwrap();
+    cursor.borrow_mut().mouse_pos = None;
     let inside = bounds.center();
     let outside = gpui::point(bounds.right() + px(100.), bounds.center().y);
     for (position, notify) in [
@@ -121,9 +124,58 @@ fn sidebar_pointer_events_notify_the_painted_owner(cx: &mut TestAppContext) {
             .unwrap();
         cx.run_until_parked();
         assert_eq!(notices.get(), before + usize::from(notify));
-        assert_eq!(SIDEBAR_CURSOR.lock().unwrap().mouse_pos, Some(position));
+        assert_eq!(cursor.borrow().mouse_pos, Some(position));
         PENDING_FRAMES.with(|pending| assert!(pending.borrow().is_empty()));
     }
+}
+
+#[gpui::test]
+fn sidebar_gaze_is_isolated_and_cleaned_up_per_window(cx: &mut TestAppContext) {
+    crate::clock::use_test_clock(cx);
+    let (first, first_view, _) = open(cx);
+    let (second, second_view, _) = open(cx);
+    for view in [&first_view, &second_view] {
+        view.update(cx, |view, cx| {
+            view.preview = false;
+            cx.notify();
+        });
+    }
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    let first_cursor = first
+        .update(cx, |_, window, _| sidebar_cursor(window).unwrap())
+        .unwrap();
+    let second_cursor = second
+        .update(cx, |_, window, _| sidebar_cursor(window).unwrap())
+        .unwrap();
+    assert!(!Rc::ptr_eq(&first_cursor, &second_cursor));
+    let first_bounds = first_cursor.borrow().rail_bounds.unwrap();
+    let second_bounds = second_cursor.borrow().rail_bounds.unwrap();
+    let first_point = first_bounds.center();
+    let second_point = gpui::point(second_bounds.right() + px(100.), second_bounds.center().y);
+    first
+        .update(cx, |_, window, cx| {
+            window.simulate_mouse_move(first_point, cx)
+        })
+        .unwrap();
+    second
+        .update(cx, |_, window, cx| {
+            window.simulate_mouse_move(second_point, cx)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(first_cursor.borrow().mouse_pos, Some(first_point));
+    assert_eq!(second_cursor.borrow().mouse_pos, Some(second_point));
+    let first_handle: gpui::AnyWindowHandle = first.into();
+    cx.update_window(first_handle, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    SIDEBAR_CURSORS.with(|cursors| assert!(!cursors.borrow().contains_key(&first_handle)));
+    assert!(
+        second
+            .update(cx, |_, window, _| sidebar_cursor(window).is_some())
+            .unwrap()
+    );
 }
 
 #[gpui::test]

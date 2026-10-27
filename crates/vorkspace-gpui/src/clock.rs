@@ -57,7 +57,21 @@ impl TestClockContext for gpui::VisualTestContext {
 }
 #[cfg(test)]
 pub(crate) fn use_test_clock(cx: &impl TestClockContext) {
-    fake::EXECUTOR.with(|executor| *executor.borrow_mut() = Some(cx.animation_executor()));
+    let next = cx.animation_executor();
+    let changed = fake::EXECUTOR.with(|executor| {
+        let mut executor = executor.borrow_mut();
+        let changed = executor.as_ref().is_none_or(|previous| {
+            !std::sync::Arc::ptr_eq(
+                previous.scheduler_executor().scheduler(),
+                next.scheduler_executor().scheduler(),
+            )
+        });
+        *executor = Some(next);
+        changed
+    });
+    if changed {
+        crate::bots::avatar::reset_test_clock();
+    }
     fake::ENDLESS_FRAMES.set(false);
 }
 

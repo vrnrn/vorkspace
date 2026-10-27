@@ -23,7 +23,36 @@ use vorkspace_core::{
 /// Origin of every avatar clock. Idle beats and status ticks are absolute
 /// offsets from it, so avatars in different views wake at the same instants and
 /// GPUI coalesces their notifications into one window frame.
+#[cfg(not(test))]
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+#[cfg(test)]
+thread_local! {
+    static TEST_START: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+fn avatar_start() -> Instant {
+    #[cfg(not(test))]
+    {
+        *START
+    }
+    #[cfg(test)]
+    {
+        TEST_START.with(|start| match start.get() {
+            Some(start) => start,
+            None => {
+                let now = Instant::now();
+                start.set(Some(now));
+                now
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_test_clock() {
+    TEST_START.set(None);
+}
 
 /// Bound avatar motion to about 30 fps. Chat headers have their own rendering
 /// owner, so decorative ticks never notify the conversation.
@@ -77,7 +106,11 @@ impl PendingAvatarFrame {
         });
         // Cancelling drops the superseded future, whose guard re-enters the
         // map; it must run after the borrow above is released.
-        drop(superseded.ok()?);
+        let superseded = match superseded {
+            Ok(wake) => wake,
+            Err(()) => return None,
+        };
+        drop(superseded);
         Some(Self { key, generation })
     }
     fn is_current(&self) -> bool {
@@ -125,7 +158,7 @@ impl Drop for PendingAvatarFrame {
 /// Window context validation prevents publication into a closed window.
 fn request_avatar_frame(window: &Window, cx: &gpui::App, at: Duration) {
     let view = window.current_view();
-    let deadline = *START + at;
+    let deadline = avatar_start() + at;
     let Some(pending) = PendingAvatarFrame::acquire((window.window_handle(), view), deadline)
     else {
         return;
@@ -250,25 +283,49 @@ impl SidebarCursorState {
             })
     }
 }
-static SIDEBAR_CURSOR: LazyLock<Mutex<SidebarCursorState>> =
-    LazyLock::new(|| Mutex::new(SidebarCursorState::default()));
+type SharedSidebarCursor = std::rc::Rc<std::cell::RefCell<SidebarCursorState>>;
+thread_local! {
+    static SIDEBAR_CURSORS: std::cell::RefCell<HashMap<gpui::AnyWindowHandle, SharedSidebarCursor>> = Default::default();
+}
+
+fn sidebar_cursor(window: &Window) -> Option<SharedSidebarCursor> {
+    SIDEBAR_CURSORS.with(|cursors| cursors.borrow().get(&window.window_handle()).cloned())
+}
 
 /// Record the sidebar rail bounds and track global mouse movement so Bot avatars
 /// smoothly look toward the cursor whenever it enters the sidebar.
 pub(crate) fn sidebar_cursor_tracker() -> AnyElement {
     canvas(
         |_, _, _| {},
-        move |bounds, _, window, _| {
-            if let Ok(mut state) = SIDEBAR_CURSOR.lock() {
-                state.rail_bounds = Some(bounds);
-            }
+        move |bounds, _, window, cx| {
+            let handle = window.window_handle();
+            let cursor = window
+                .use_keyed_state("sidebar-cursor-tracker", cx, |_, cx| {
+                    let cursor =
+                        std::rc::Rc::new(std::cell::RefCell::new(SidebarCursorState::default()));
+                    SIDEBAR_CURSORS.with(|cursors| {
+                        cursors.borrow_mut().insert(handle, cursor.clone());
+                    });
+                    cx.on_release(move |cursor: &mut SharedSidebarCursor, _| {
+                        let _ = SIDEBAR_CURSORS.try_with(|cursors| {
+                            let mut cursors = cursors.borrow_mut();
+                            if cursors
+                                .get(&handle)
+                                .is_some_and(|current| std::rc::Rc::ptr_eq(current, cursor))
+                            {
+                                cursors.remove(&handle);
+                            }
+                        });
+                    })
+                    .detach();
+                    cursor
+                })
+                .read(cx)
+                .clone();
+            cursor.borrow_mut().rail_bounds = Some(bounds);
             let view = window.current_view();
             window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, cx| {
-                if phase == DispatchPhase::Capture
-                    && SIDEBAR_CURSOR
-                        .lock()
-                        .is_ok_and(|mut state| state.track(event.position))
-                {
+                if phase == DispatchPhase::Capture && cursor.borrow_mut().track(event.position) {
                     cx.notify(view);
                 }
             });
@@ -649,9 +706,11 @@ fn compute_bot_anim(
     status: &str,
     bounds: Bounds<Pixels>,
     animate: bool,
+    window: &Window,
 ) -> (BotAnimState, Option<Duration>) {
     let gaze = if animate {
-        SIDEBAR_CURSOR.lock().ok().and_then(|cursor| {
+        sidebar_cursor(window).and_then(|cursor| {
+            let cursor = cursor.borrow();
             let (rail, mouse) = cursor.rail_bounds.zip(cursor.mouse_pos)?;
             (rail.contains(&mouse) && rail.contains(&bounds.center())).then(|| {
                 (
@@ -663,7 +722,7 @@ fn compute_bot_anim(
     } else {
         None
     };
-    bot_anim_at(seed, status, animate, START.elapsed(), gaze)
+    bot_anim_at(seed, status, animate, avatar_start().elapsed(), gaze)
 }
 
 // Pointer input belongs to the sidebar only. The header shares idle life and
@@ -780,7 +839,8 @@ pub(super) fn header_avatar(
             let animate = visible
                 && window.is_window_active()
                 && bounds.intersects(&window.content_mask().bounds);
-            let (anim, next) = header_anim_at(look.seed, &status, animate, START.elapsed());
+            let (anim, next) =
+                header_anim_at(look.seed, &status, animate, avatar_start().elapsed());
             schedule(window, cx, next);
             let pixel_side = (bounds.size.width.as_f32() * window.scale_factor())
                 .ceil()
@@ -872,8 +932,13 @@ pub(super) fn settings_preview(
             let mouse = window.mouse_position();
             let crossed_eyes = delete_anchor.get().is_some_and(|b| b.contains(&mouse));
             let animate = window.is_window_active();
-            let (anim, next) =
-                preview_anim(look.seed, bounds, mouse, crossed_eyes, START.elapsed());
+            let (anim, next) = preview_anim(
+                look.seed,
+                bounds,
+                mouse,
+                crossed_eyes,
+                avatar_start().elapsed(),
+            );
             if animate {
                 schedule(window, cx, next);
             }
@@ -922,7 +987,8 @@ pub(crate) fn avatar_with_look(
     canvas(
         |_, _, _| {},
         move |bounds, _, window: &mut Window, cx| {
-            let sidebar_hovered = SIDEBAR_CURSOR.lock().ok().is_some_and(|c| {
+            let sidebar_hovered = sidebar_cursor(window).is_some_and(|c| {
+                let c = c.borrow();
                 c.rail_bounds.zip(c.mouse_pos).is_some_and(|(rail, pos)| {
                     rail.contains(&pos) && rail.contains(&bounds.center())
                 })
@@ -930,7 +996,7 @@ pub(crate) fn avatar_with_look(
             let animate = window.is_window_active()
                 && bounds.intersects(&window.content_mask().bounds)
                 && (!still || status == "working" || sidebar_hovered);
-            let (anim, next) = compute_bot_anim(look.seed, &status, bounds, animate);
+            let (anim, next) = compute_bot_anim(look.seed, &status, bounds, animate, window);
             schedule(window, cx, next);
             let image = cached_badge_or_bot_image(
                 true,
@@ -1029,6 +1095,29 @@ mod header_tests {
     use super::*;
 
     #[gpui::test]
+    fn avatar_clock_origin_follows_the_bound_executor(cx: &mut gpui::TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let first_origin = avatar_start();
+        cx.background_executor
+            .advance_clock(Duration::from_secs(100));
+        crate::clock::use_test_clock(cx);
+        assert_eq!(
+            avatar_start(),
+            first_origin,
+            "rebinding the same executor must preserve its origin"
+        );
+        assert_eq!(avatar_start().elapsed(), Duration::from_secs(100));
+        let other = gpui::TestAppContext::build(gpui::TestDispatcher::new(42), None);
+        crate::clock::use_test_clock(&other);
+        assert_eq!(
+            avatar_start(),
+            Instant::now(),
+            "a new executor must get a fresh origin"
+        );
+        assert_eq!(avatar_start().elapsed(), Duration::ZERO);
+    }
+
+    #[gpui::test]
     fn pending_avatar_frame_keeps_the_earliest_wake_and_releases_on_cancellation(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -1044,7 +1133,7 @@ mod header_tests {
         let window: gpui::AnyWindowHandle = cx.update(open);
         let other_window: gpui::AnyWindowHandle = cx.update(open);
         let id = (window, first.entity_id());
-        let at = |ms| *START + Duration::from_millis(ms);
+        let at = |ms| avatar_start() + Duration::from_millis(ms);
         let pending = PendingAvatarFrame::acquire(id, at(100)).unwrap();
         // An equal or later wake is already covered.
         assert!(PendingAvatarFrame::acquire(id, at(100)).is_none());
@@ -1081,6 +1170,7 @@ mod header_tests {
 
     #[gpui::test]
     fn avatar_frame_coalesces_supersedes_and_releases_after_timer(cx: &mut gpui::TestAppContext) {
+        crate::clock::use_test_clock(cx);
         let renders = std::rc::Rc::new(std::cell::Cell::new(0));
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
@@ -1121,6 +1211,41 @@ mod header_tests {
         PENDING_FRAMES.with(|pending| assert!(pending.borrow().is_empty()));
     }
 
+    #[gpui::test]
+    fn due_avatar_wake_is_not_replaced_by_a_later_deadline(cx: &mut gpui::TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|_| AvatarFrameTestView(None))
+            })
+            .unwrap()
+        });
+        let view = window.root(cx).unwrap();
+        let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = notifications.clone();
+        let _observer =
+            cx.update(|cx| cx.observe(&view, move |_, _| counter.set(counter.get() + 1)));
+        let key = (window.into(), view.entity_id());
+        cx.update(|cx| {
+            let pending = PendingAvatarFrame::acquire(key, Instant::now() - AVATAR_FRAME).unwrap();
+            let generation = pending.generation;
+            let view_id = view.entity_id();
+            // Model a due timer queued but not yet polled by the executor.
+            let task = cx.spawn(async move |cx| {
+                let current = pending.is_current();
+                drop(pending);
+                if current {
+                    cx.update(|cx| cx.notify(view_id));
+                }
+            });
+            PendingAvatarFrame::attach_to(key, generation, task);
+            assert!(PendingAvatarFrame::acquire(key, Instant::now() + AVATAR_FRAME * 5).is_none());
+        });
+        cx.run_until_parked();
+        assert_eq!(notifications.get(), 1);
+        PENDING_FRAMES.with(|pending| assert!(pending.borrow().is_empty()));
+    }
+
     /// Requests each listed delay (relative to now) on its next paint.
     struct AvatarFrameTestView(Option<Vec<Duration>>);
     impl gpui::Render for AvatarFrameTestView {
@@ -1134,7 +1259,7 @@ mod header_tests {
                 |_, _, _| {},
                 move |_, _, window, cx| {
                     for delay in &delays {
-                        request_avatar_frame(window, cx, START.elapsed() + *delay);
+                        request_avatar_frame(window, cx, avatar_start().elapsed() + *delay);
                     }
                 },
             )
