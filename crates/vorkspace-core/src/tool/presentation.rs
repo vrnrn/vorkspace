@@ -438,6 +438,44 @@ pub(super) fn shell_command(command: &str) -> String {
     }
     current
 }
+/// The directory a preceding `cd` moved later steps into. Relative file
+/// targets belong to that directory, not to the tool's starting directory.
+fn cd_target(part: &str) -> Option<String> {
+    let args = shlex::split(part)?;
+    match args.as_slice() {
+        [cd, dir] if cd == "cd" && dir != "-" && !dir.starts_with('-') => Some(dir.clone()),
+        _ => None,
+    }
+}
+fn anchored(dir: Option<&str>, path: &str) -> String {
+    match dir {
+        Some(dir)
+            if !path.starts_with(['/', '~', '\\'])
+                && !path.contains("://")
+                && !(dir.is_empty() || dir == ".") =>
+        {
+            format!(
+                "{}/{}",
+                dir.trim_end_matches('/'),
+                path.trim_start_matches("./")
+            )
+        }
+        _ => path.into(),
+    }
+}
+fn enter(dir: &mut Option<String>, requested: String) {
+    *dir = Some(if requested.starts_with(['/', '~']) {
+        requested
+    } else {
+        anchored(dir.as_deref(), &requested)
+    });
+}
+fn reanchor(intent: &mut Intent, dir: Option<&str>) {
+    if intent.action != "Find" {
+        intent.target = anchored(dir, &intent.target);
+        intent.path = intent.path.take().map(|path| anchored(dir, &path));
+    }
+}
 struct Intent {
     action: &'static str,
     target: String,
@@ -514,11 +552,17 @@ fn command_steps(command: &str, cwd: Option<&str>) -> Vec<CommandStep> {
     if parts.len() < 2 {
         return Vec::new();
     }
+    let mut dir: Option<String> = None;
     parts
         .into_iter()
         .enumerate()
         .map(|(index, (op, part))| {
-            let intent = shell_intent(part);
+            let mut intent = shell_intent(part);
+            if let Some(requested) = cd_target(part) {
+                enter(&mut dir, requested);
+            } else if let Some(intent) = intent.as_mut() {
+                reanchor(intent, dir.as_deref());
+            }
             CommandStep {
                 op: (index > 0).then_some(op.unwrap_or(";")),
                 command: part.into(),
@@ -589,7 +633,11 @@ fn shell_intent(command: &str) -> Option<Intent> {
         stages.push(command[start..].trim());
     }
     let mut last = None;
+    let mut dir: Option<String> = None;
     for stage in stages {
+        if let Some(requested) = cd_target(stage) {
+            enter(&mut dir, requested);
+        }
         let args = shlex::split(stage)?;
         let bin = args.first()?.rsplit('/').next()?;
         let value_flags: &[&str] = match bin {
@@ -680,6 +728,14 @@ fn shell_intent(command: &str) -> Option<Intent> {
             }
             _ => return None,
         };
+        if let Some(intent) = last.as_mut() {
+            // Stages before a `cd` were already anchored to their own directory.
+            if cd_target(stage).is_none()
+                && !matches!(bin, "pwd" | "echo" | "printf" | "true" | "wc")
+            {
+                reanchor(intent, dir.as_deref());
+            }
+        }
     }
     last
 }
@@ -745,6 +801,40 @@ mod tests {
         }
         let shown = call("WebSearch", json!({"query":"foo|bar"})).presentation();
         assert_eq!(shown.search_patterns(), ["foo|bar"]);
+    }
+    #[test]
+    fn relative_file_targets_follow_a_preceding_cd() {
+        let single = call(
+            "Bash",
+            json!({"command":"cd crates && sed -n '1,20p' vorkspace-core/src/lib.rs", "cwd":"/repo"}),
+        )
+        .presentation_in(Some("/repo"));
+        assert_eq!(
+            single.file_path.as_deref(),
+            Some("crates/vorkspace-core/src/lib.rs")
+        );
+        let chain = call(
+            "Bash",
+            json!({"command":"cd crates && sed -n '1,20p' a/b.rs && cd /abs && cat c.rs && cat ./d.rs && npm test", "cwd":"/repo"}),
+        )
+        .presentation_in(Some("/repo"));
+        let paths: Vec<_> = chain
+            .steps
+            .iter()
+            .filter_map(|s| s.file_path.as_deref())
+            .collect();
+        assert_eq!(paths, ["crates/a/b.rs", "/abs/c.rs", "/abs/d.rs"]);
+        let plain = call(
+            "Bash",
+            json!({"command":"cat src/a.rs && cat src/b.rs && npm test", "cwd":"/repo"}),
+        )
+        .presentation_in(Some("/repo"));
+        let paths: Vec<_> = plain
+            .steps
+            .iter()
+            .filter_map(|s| s.file_path.as_deref())
+            .collect();
+        assert_eq!(paths, ["src/a.rs", "src/b.rs"]);
     }
     #[test]
     fn live_codex_uses_last_meaningful_stage_and_cwd_boundary() {
