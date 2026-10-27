@@ -673,7 +673,6 @@ impl Inbox {
                 div()
                     .w_full()
                     .max_w(px(1024.))
-                    .mx_auto()
                     .px(px(32.))
                     .pt(px(20.))
                     .pb(px(if is_pr { 0. } else { 20. }))
