@@ -86,10 +86,12 @@ impl Notes {
             cx.new(|cx| Input::field("Find project", "Find project…", content(0.4), cx));
         let subscriptions = vec![
             cx.subscribe(&query, |_, _, _: &input::Changed, cx| cx.notify()),
-            cx.subscribe(&title, |this, _, _: &input::Changed, cx| this.edited(cx)),
+            cx.subscribe(&title, |this, _, _: &input::Changed, cx| {
+                this.input_changed(cx)
+            }),
             cx.subscribe(&body, |this, _, _: &input::Changed, cx| {
                 this.highlight_source(cx);
-                this.edited(cx);
+                this.input_changed(cx);
             }),
             cx.subscribe(&body, |this, _, event: &input::Rejected, cx| {
                 this.error = Some(event.0.into());
@@ -243,6 +245,25 @@ impl Notes {
         note.title = self.title.read(cx).content.to_string();
         note.body = self.body.read(cx).content.to_string();
         Some(note)
+    }
+
+    /// `Input::set_text` emits `Changed` for programmatic loads too, and those
+    /// arrive after `load_selection` has cleared `dirty`. Only content that
+    /// differs from the saved note is a user edit; otherwise an empty or
+    /// freshly loaded view would stay dirty with nothing to save, and
+    /// create/select/refresh would all refuse to proceed.
+    fn input_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(draft) = self.draft(cx) else {
+            return;
+        };
+        let unchanged = self
+            .notes
+            .iter()
+            .find(|note| note.id == draft.id)
+            .is_some_and(|saved| saved.title == draft.title && saved.body == draft.body);
+        if !unchanged {
+            self.edited(cx);
+        }
     }
 
     fn edited(&mut self, cx: &mut Context<Self>) {
@@ -1168,5 +1189,107 @@ fn relative_time(at: i64) -> String {
         _ => chrono::DateTime::from_timestamp_millis(at)
             .map(|date| date.format("%b %-d").to_string())
             .unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{TestAppContext, VisualTestContext};
+
+    fn store() -> Database {
+        std::sync::Arc::new(std::sync::Mutex::new(
+            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ))
+    }
+
+    fn view(
+        cx: &mut TestAppContext,
+        store: &Database,
+    ) -> (gpui::WindowHandle<Notes>, VisualTestContext) {
+        cx.update(|cx| {
+            crate::input::bind(cx);
+            crate::clock::use_test_clock(cx);
+        });
+        let store = store.clone();
+        let window = cx.add_window(move |_, cx| Notes::new(store, cx));
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        (window, visual)
+    }
+
+    #[gpui::test]
+    fn loading_an_empty_list_is_not_an_edit_and_new_note_works(cx: &mut TestAppContext) {
+        let store = store();
+        let (window, mut visual) = view(cx, &store);
+        window
+            .update(&mut visual, |notes, window, cx| {
+                assert!(!notes.dirty);
+                notes.create(window, cx);
+                assert_eq!(notes.notes.len(), 1);
+                assert_eq!(notes.selected.as_ref(), Some(&notes.notes[0].id));
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |notes, window, cx| {
+                assert!(!notes.dirty, "loading the new note must not look edited");
+                notes.create(window, cx);
+                assert_eq!(notes.notes.len(), 2);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn refresh_shows_notes_saved_elsewhere_after_an_empty_first_load(cx: &mut TestAppContext) {
+        let store = store();
+        let (window, mut visual) = view(cx, &store);
+        locked(&store)
+            .unwrap()
+            .save_note(&vorkspace_core::response::Note {
+                id: 7,
+                title: "From chat".into(),
+                body: "Saved from a response".into(),
+                tags: Vec::new(),
+                source_session: 0,
+                source_cwd: String::new(),
+            })
+            .unwrap();
+        window
+            .update(&mut visual, |notes, _, cx| notes.refresh(cx))
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |notes, _, _| {
+                assert_eq!(notes.notes.len(), 1);
+                assert_eq!(notes.notes[0].title, "From chat");
+                assert!(!notes.dirty);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn typing_still_marks_the_note_edited_and_saves(cx: &mut TestAppContext) {
+        let store = store();
+        let (window, mut visual) = view(cx, &store);
+        window
+            .update(&mut visual, |notes, window, cx| notes.create(window, cx))
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |notes, _, cx| {
+                notes
+                    .body
+                    .update(cx, |input, cx| input.set_text("Hello".into(), cx));
+            })
+            .unwrap();
+        window
+            .update(&mut visual, |notes, _, _| assert!(notes.dirty))
+            .unwrap();
+        window
+            .update(&mut visual, |notes, _, cx| notes.flush(cx))
+            .unwrap();
+        let saved = locked(&store).unwrap().list_notes().unwrap();
+        assert_eq!(saved[0].body, "Hello");
     }
 }
