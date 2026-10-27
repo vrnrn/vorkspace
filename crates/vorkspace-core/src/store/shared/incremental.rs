@@ -100,7 +100,7 @@ impl Store {
         blocks: &[Value],
     ) -> Result<bool, String> {
         match expected {
-            HistoryRevision::Digest(_) => Ok(self
+            HistoryRevision::Digest { .. } => Ok(self
                 .shared_card_history_matches(id, expected, blocks)
                 .unwrap_or_else(|| expected.matches(blocks))),
             HistoryRevision::Invalidated => Ok(false),

@@ -47,7 +47,7 @@ pub(super) struct Shared {
 /// must still refuse a source edit made by another window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HistoryRevision {
-    Digest([u8; 32]),
+    Digest { hash: [u8; 32], len: usize },
     Stored(i64),
     Invalidated,
 }
@@ -57,7 +57,13 @@ impl HistoryRevision {
         for block in blocks {
             Self::push(&mut hash, block);
         }
-        Self::Digest(hash.finalize().into())
+        Self::finish(hash, blocks.len())
+    }
+    fn finish(hash: Sha256, len: usize) -> Self {
+        Self::Digest {
+            hash: hash.finalize().into(),
+            len,
+        }
     }
     fn start(len: usize) -> Sha256 {
         let mut hash = Sha256::new();
@@ -65,6 +71,8 @@ impl HistoryRevision {
         hash
     }
     fn push(hash: &mut Sha256, block: &Value) {
+        #[cfg(test)]
+        HISTORY_REVISION_HASH_BLOCKS.with(|count| count.set(count.get() + 1));
         fn size(hash: &mut Sha256, len: usize) {
             hash.update((len as u64).to_le_bytes());
         }
@@ -116,34 +124,29 @@ impl HistoryRevision {
         *self == Self::of(blocks)
     }
     fn fast_forwards(&self, blocks: &[Value]) -> bool {
-        match self {
-            Self::Digest(_) => {
-                if blocks.is_empty() {
-                    return false;
-                }
-                for prefix_len in (1..blocks.len()).rev() {
-                    if *self == Self::of(&blocks[..prefix_len]) {
-                        return true;
-                    }
-                }
-                let non_draft: Vec<Value> = blocks
-                    .iter()
-                    .filter(|b| b["draft"] != true)
-                    .cloned()
-                    .collect();
-                if non_draft.is_empty() {
-                    return false;
-                }
-                for prefix_len in (1..=non_draft.len()).rev() {
-                    if *self == Self::of(&non_draft[..prefix_len]) {
-                        return true;
-                    }
-                }
-                false
-            }
-            Self::Stored(_) => false,
-            Self::Invalidated => false,
+        let Self::Digest { len, .. } = *self else {
+            return false;
+        };
+        if len == 0 || len > blocks.len() {
+            return false;
         }
+        // The guard already knows its source length. Only that prefix can
+        // match; hashing every possible prefix made a stale settings/draft
+        // save quadratic while the shared store mutex was held.
+        if len < blocks.len() && self.matches(&blocks[..len]) {
+            return true;
+        }
+        // Drafts can be interspersed with externally appended source blocks.
+        // Hash borrowed blocks so this fallback never clones rich histories.
+        let mut non_draft = blocks.iter().filter(|b| b["draft"] != true);
+        let mut hash = Self::start(len);
+        for _ in 0..len {
+            let Some(block) = non_draft.next() else {
+                return false;
+            };
+            Self::push(&mut hash, block);
+        }
+        *self == Self::finish(hash, len)
     }
 }
 
@@ -154,6 +157,7 @@ fn sql<T>(result: rusqlite::Result<T>) -> Result<T, String> {
 thread_local! {
     static HISTORY_READ_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static HISTORY_ENCODE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static HISTORY_REVISION_HASH_BLOCKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 fn parse<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, String> {
     #[cfg(test)]
@@ -1082,10 +1086,12 @@ impl Store {
             let mut records = sql(query.query([&original]))?;
             let mut rows = Vec::new();
             let mut digest = HistoryRevision::start(0);
+            let mut len = 0;
             let mut first = true;
             while let Some(record) = sql(records.next())? {
                 if first {
-                    digest = HistoryRevision::start(sql(record.get::<_, i64>(1))? as usize);
+                    len = sql(record.get::<_, i64>(1))? as usize;
+                    digest = HistoryRevision::start(len);
                     first = false;
                 }
                 let raw: String = sql(record.get(0))?;
@@ -1098,7 +1104,7 @@ impl Store {
                 .unwrap()
                 .snapshots
                 .borrow_mut()
-                .insert(id, HistoryRevision::Digest(digest.finalize().into()));
+                .insert(id, HistoryRevision::finish(digest, len));
             return Ok(Transcript { rows });
         }
         let blocks = self.shared_blocks(id)?;

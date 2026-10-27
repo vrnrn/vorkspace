@@ -105,7 +105,7 @@ impl Store {
                 }
                 local.remove(&session);
             }
-            Some(base @ HistoryRevision::Digest(_)) => {
+            Some(base @ HistoryRevision::Digest { .. }) => {
                 indices.remove(&session);
                 let ledger = local.entry(session).or_insert_with(|| CardRevision {
                     base,
@@ -201,7 +201,7 @@ impl Store {
         }
         Some(
             found.len() == ledger.changes.len()
-                && *expected == HistoryRevision::Digest(hash.finalize().into()),
+                && *expected == HistoryRevision::finish(hash, blocks.len()),
         )
     }
 }

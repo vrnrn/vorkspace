@@ -583,6 +583,67 @@ fn fast_forward_append_in_another_window_allows_saving_drafts_and_settings() {
     assert_eq!(blocks[1]["text"], "New reply from another window");
     assert_eq!(blocks[2]["draft"], true);
     assert_eq!(blocks[2]["text"], "My new draft prompt");
+    let mut settings = store.agent_settings(id).unwrap().unwrap();
+    settings.effort = Some("low".into());
+    store.save_agent_settings(id, &settings).unwrap();
+    drop(store);
+    let store = Store::open_vorkspace(&path).unwrap();
+    assert_eq!(store.shared_blocks(id).unwrap(), blocks);
+    assert_eq!(
+        store.agent_settings(id).unwrap().unwrap().effort.as_deref(),
+        Some("low")
+    );
+}
+
+#[test]
+fn stale_rich_history_rejects_draft_save_with_bounded_hashing_and_recovers_on_reload() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vorkspace.db");
+    let store = Store::open_vorkspace(&path).unwrap();
+    let mut source: Vec<Value> = (0..128)
+        .map(|i| {
+            json!({"id":format!("u-{i}"),"role":"user","text":"Saved",
+            "future":{"attachment":"x".repeat(1_024)}})
+        })
+        .collect();
+    let (id, original) = saved(&store, json!(source));
+    store.load(id).unwrap();
+    let mut pending = store.follow_ups(id).unwrap();
+    pending.draft = Some(crate::follow_up::Message {
+        id: "unsent".into(),
+        text: "Preserve this input".into(),
+        at: source.len(),
+        ..Default::default()
+    });
+    source[127]["future"]["attachment"] = json!("Edited in another window");
+    let other = Connection::open(&path).unwrap();
+    other
+        .execute(
+            "UPDATE sessions SET blocks_json=?2 WHERE id=?1",
+            params![original, encode(&source).unwrap()],
+        )
+        .unwrap();
+    HISTORY_REVISION_HASH_BLOCKS.with(|count| count.set(0));
+    assert!(store
+        .save_follow_ups(id, &pending)
+        .unwrap_err()
+        .contains("changed in another window"));
+    let hashed = HISTORY_REVISION_HASH_BLOCKS.with(|count| count.get());
+    assert!(hashed <= 3 * source.len(), "Hashed {hashed} source blocks");
+    assert_eq!(store.shared_blocks(id).unwrap(), source);
+    drop(store);
+    let store = Store::open_vorkspace(&path).unwrap();
+    store.load(id).unwrap();
+    let mut fresh = store.follow_ups(id).unwrap();
+    fresh.draft = pending.draft;
+    store.save_follow_ups(id, &fresh).unwrap();
+    drop(store);
+    let store = Store::open_vorkspace(&path).unwrap();
+    assert_eq!(&store.shared_blocks(id).unwrap()[..source.len()], source);
+    assert_eq!(
+        store.follow_ups(id).unwrap().draft.unwrap().text,
+        "Preserve this input"
+    );
 }
 
 #[test]
@@ -765,8 +826,8 @@ fn notes_reminders_search_and_read_only_connections_use_the_same_data() {
 
 #[test]
 fn history_revision_is_fixed_size_and_covers_original_rich_metadata() {
-    // The scalar-revision variant adds one discriminant to the 32-byte digest.
-    assert_eq!(std::mem::size_of::<HistoryRevision>(), 40);
+    // One bounded guard, including its source length, never owns rich history.
+    assert_eq!(std::mem::size_of::<HistoryRevision>(), 48);
     let blocks = vec![
         json!({"id":"u","role":"user","text":"same", "future":{"attachment":"x".repeat(1_000_000)}}),
     ];
@@ -776,6 +837,73 @@ fn history_revision_is_fixed_size_and_covers_original_rich_metadata() {
     changed[0]["future"]["attachment"] = json!("another source attachment");
     assert!(!revision.matches(&changed));
     assert!(!revision.matches(&[]));
+}
+
+#[test]
+fn history_fast_forward_matches_the_reference_across_drafts_and_source_edits() {
+    fn reference(expected: HistoryRevision, blocks: &[Value]) -> bool {
+        let non_draft: Vec<Value> = blocks
+            .iter()
+            .filter(|block| block["draft"] != true)
+            .cloned()
+            .collect();
+        (1..blocks.len()).any(|len| expected == HistoryRevision::of(&blocks[..len]))
+            || (1..=non_draft.len()).any(|len| expected == HistoryRevision::of(&non_draft[..len]))
+    }
+    let source: Vec<Value> = (0..5)
+        .map(|i| json!({"id":i,"text":format!("Saved {i}"),"future":{"keep":i}}))
+        .collect();
+    for mask in 0..32 {
+        let mut candidate = source.clone();
+        for (i, block) in candidate.iter_mut().enumerate() {
+            block["draft"] = json!(mask & (1 << i) != 0);
+        }
+        let filtered: Vec<Value> = candidate
+            .iter()
+            .filter(|block| block["draft"] != true)
+            .cloned()
+            .collect();
+        for base in [&candidate, &filtered] {
+            for len in 0..=base.len() {
+                let expected = HistoryRevision::of(&base[..len]);
+                for changed_at in 0..=candidate.len() {
+                    let mut changed = candidate.clone();
+                    if let Some(block) = changed.get_mut(changed_at) {
+                        block["future"]["keep"] = json!("External edit");
+                    }
+                    for current_len in 0..=changed.len() {
+                        let current = &changed[..current_len];
+                        assert_eq!(
+                            expected.fast_forwards(current),
+                            reference(expected, current)
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(!HistoryRevision::Stored(1).fast_forwards(&source));
+    assert!(!HistoryRevision::Invalidated.fast_forwards(&source));
+}
+
+#[test]
+fn history_fast_forward_hashes_at_most_two_known_prefixes() {
+    let source: Vec<Value> = (0..3_000)
+        .map(|i| json!({"id":i,"text":"Saved","future":{"rich":"x".repeat(1_024)}}))
+        .collect();
+    let guard = HistoryRevision::of(&source);
+    let mut edited = source.clone();
+    edited[2_999]["future"]["rich"] = json!("External edit");
+    let mut appended = source.clone();
+    appended.push(json!({"id":"next","text":"New reply"}));
+    let mut with_drafts = appended.clone();
+    with_drafts.insert(1, json!({"id":"draft","text":"Unsent input","draft":true}));
+    for (blocks, accepted) in [(&edited, false), (&appended, true), (&with_drafts, true)] {
+        HISTORY_REVISION_HASH_BLOCKS.with(|count| count.set(0));
+        assert_eq!(guard.fast_forwards(blocks), accepted);
+        let hashed = HISTORY_REVISION_HASH_BLOCKS.with(|count| count.get());
+        assert!(hashed <= 2 * source.len(), "Hashed {hashed} source blocks");
+    }
 }
 
 #[test]
