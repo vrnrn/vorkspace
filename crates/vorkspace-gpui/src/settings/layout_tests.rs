@@ -271,3 +271,31 @@ fn providers_without_an_open_conversation_list_their_loaded_models(cx: &mut Test
             .is_none()
     );
 }
+
+#[gpui::test]
+fn cost_monitoring_link_setting_appears_only_for_aws_bedrock(cx: &mut TestAppContext) {
+    use crate::accounts::Key;
+    use vorkspace_core::{provider::Kind, usage::Snapshot};
+    let directory = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(std::sync::Mutex::new(
+        vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
+    ));
+    cx.update(|cx| crate::accounts::install(store, cx));
+    let window = window(Section::Providers, cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bedrock-cost-link").is_none());
+    visual.update(|_, cx| {
+        crate::accounts::get(cx).unwrap().update(cx, |center, cx| {
+            let key = Key::new(Kind::Claude, center.profile("default"), None);
+            center.usage.entry(key).or_default().complete(Ok(Snapshot {
+                external_billing: Some("AWS Bedrock".into()),
+                updated_at: vorkspace_core::usage::now_ms(),
+                ..Default::default()
+            }));
+            cx.notify();
+        });
+    });
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bedrock-cost-link").is_some());
+}

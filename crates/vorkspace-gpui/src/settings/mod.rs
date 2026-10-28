@@ -274,6 +274,7 @@ pub(crate) struct SettingsView {
     skill_filter: Entity<Input>,
     skill_query: String,
     accent_custom: Entity<Input>,
+    bedrock_url: Entity<Input>,
     accent_custom_open: bool,
     accent_anchor: AnchorSlot,
     chat_background_preview: Entity<ProjectBackground>,
@@ -311,6 +312,17 @@ impl SettingsView {
             input.set_font_size(12.);
             input
         });
+        let bedrock_url = cx.new(|cx| {
+            let mut input = Input::field(
+                "Cost monitoring link",
+                "https://console.aws.amazon.com/costmanagement/",
+                content(0.35),
+                cx,
+            );
+            input.set_font_size(12.);
+            input.set_text(prefs.bedrock_cost_url.clone(), cx);
+            input
+        });
         let chat_background_preview = cx.new(|_| ProjectBackground::preview());
         let model_filter = cx.new(|cx| {
             let mut input = Input::field("Search models", "Search models", content(0.35), cx);
@@ -342,6 +354,12 @@ impl SettingsView {
             cx.subscribe(&keybinding_filter, |this, input, _: &input::Changed, cx| {
                 this.keybinding_query = input.read(cx).content.to_string();
                 cx.notify();
+            }),
+            cx.subscribe(&bedrock_url, |this, input, _: &input::Changed, cx| {
+                let text = input.read(cx).content.trim().to_owned();
+                if this.prefs.bedrock_cost_url != text {
+                    this.update(cx, |p| p.bedrock_cost_url = text);
+                }
             }),
             cx.subscribe(&accent_custom, |this, input, _: &input::Changed, cx| {
                 let text = input.read(cx).content.trim().to_owned();
@@ -421,6 +439,7 @@ impl SettingsView {
             skill_filter,
             skill_query: String::new(),
             accent_custom,
+            bedrock_url,
             accent_custom_open: false,
             accent_anchor: AnchorSlot::default(),
             chat_background_preview,

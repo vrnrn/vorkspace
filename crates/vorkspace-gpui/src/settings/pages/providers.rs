@@ -52,6 +52,44 @@ impl SettingsView {
                 )],
             ),
         ];
+        let mut usage = usage;
+        let bedrock = crate::accounts::get(cx).is_some_and(|center| {
+            center.read(cx).usage.values().any(|cached| {
+                cached
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.external_billing.as_deref() == Some("AWS Bedrock"))
+            })
+        });
+        if bedrock {
+            let invalid = !p.bedrock_cost_url.trim().is_empty() && p.cost_link().is_none();
+            usage.push(self.row(
+                None,
+                false,
+                "Cost monitoring link",
+                Some(
+                    if invalid {
+                        "Enter a full link starting with https://."
+                    } else {
+                        "Opens when you click AWS Bedrock in Subscriptions, such as your AWS Cost Explorer or Budgets page."
+                    }
+                    .into(),
+                ),
+                vec![
+                    div()
+                        .debug_selector(|| "bedrock-cost-link".into())
+                        .w(px(320.))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(content(0.1))
+                        .bg(content(0.05))
+                        .child(self.bedrock_url.clone())
+                        .into_any_element(),
+                ],
+            ));
+        }
         let binaries = self.discovery.binaries.clone();
         let mut clis = Vec::new();
         for (index, kind) in Kind::ALL.into_iter().enumerate() {
