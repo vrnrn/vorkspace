@@ -92,8 +92,8 @@ impl Store {
     }
     /// Read a snapshot-bound page of indexed Bot history. Blob, ordinary and
     /// remote histories return None and retain their existing loading path.
-    /// Pages are read-only and must not be passed to `write_rows` as a full
-    /// transcript; its row indices and revision guard have a different owner.
+    /// Use `write_indexed_history_page` for page-relative writes; `write_rows`
+    /// requires a complete transcript and a separate revision guard.
     pub fn indexed_history_page(
         &self,
         session: i64,
@@ -104,6 +104,20 @@ impl Store {
             return Ok(None);
         }
         self.shared_indexed_history_page(session, before, page_turns)
+    }
+    /// Merge a page-relative edit or tail append against the exact snapshot
+    /// that produced the page. Older pages cannot append into newer history.
+    pub fn write_indexed_history_page(
+        &mut self,
+        session: i64,
+        page: &IndexedHistoryPage,
+        start: usize,
+        rows: &[Row],
+    ) -> Result<(), String> {
+        if self.shared.is_none() || self.remote_session(session)?.is_some() {
+            return Err("Indexed Bot history is not available for this session".into());
+        }
+        self.shared_write_indexed_history_page(session, page, start, rows)
     }
     pub fn reset_provider_id_if(&self, id: i64, expected: Option<&str>) -> Result<(), String> {
         if self.shared.is_some() {
