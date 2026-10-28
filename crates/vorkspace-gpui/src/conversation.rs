@@ -447,7 +447,7 @@ impl Conversation {
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
         #[cfg(test)]
         crate::clock::use_test_clock(cx);
-        let input = cx.new(input::Input::new);
+        let input = cx.new(input::Input::composer);
         // A new tab shows its folder's checkout from the first frame; the
         // load below confirms it rather than popping it in.
         let git = (!summary.has_messages)
@@ -2859,9 +2859,6 @@ impl Conversation {
     // Composer.tsx in the inset layout: a frosted, rounded box holding the
     // field and its toolbar, with the workspace bar sitting under it.
     fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let radius = 8.;
-        let blur = composer_blur();
-        let fill = composer_fill();
         let command = if self.follow_ups.draft_selected {
             Some(input::Command::Draft)
         } else if self.settings.orchestrator {
@@ -2875,17 +2872,6 @@ impl Conversation {
         };
         self.input
             .update(cx, |input, cx| input.selected_command(command, cx));
-        let beside = cx
-            .try_global::<crate::settings::Preferences>()
-            .is_some_and(|p| p.model_controls == "beside");
-        let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
-        let controls = if beside {
-            self.model_controls(cx)
-        } else {
-            Vec::new()
-        };
-        let input = self.input.read(cx);
-        let has_value = input.has_message_text() || !self.attachments.is_empty();
         self.completion.update(cx, |completion, cx| {
             completion.set_cwd(
                 self.settings
@@ -2895,7 +2881,6 @@ impl Conversation {
                 cx,
             )
         });
-        let kind = Kind::from_id(&self.summary.provider);
         let menu: Vec<_> = self
             .menu
             .as_ref()
@@ -2975,80 +2960,96 @@ impl Conversation {
                 )
             })
             .child(self.approval_shelf(window, cx))
-            .child(
-                div()
-                    .id("composer-box")
-                    .debug_selector(|| "composer-box".into())
-                    .capture_action(cx.listener(|this, _: &input::Paste, _, cx| {
-                        if this.paste_attachments(cx) {
-                            cx.stop_propagation();
-                        }
-                    }))
-                    .relative()
-                    .rounded(px(radius))
-                    .border_1()
-                    .border_color(composer_border(self.input.focus_handle(cx).is_focused(window)))
-                    .when(self.file_drag, |d| d.border_color(accent_color().opacity(0.6)))
-                    .flex()
-                    .flex_col()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            window.focus(&this.input.focus_handle(cx), cx)
-                        }),
-                    )
-                    .child(self.completion.read(cx).composer_probe())
-                    .child(
-                        canvas(
-                            |_, _, _| {},
-                            move |bounds, _, window, _| {
-                                let surface = gpui::fill(bounds, fill).corner_radii(px(radius - 1.));
-                                let surface = if blur > 0. {
-                                    surface.border_color(
-                                        gpui_apple::metal_renderer::backdrop_blur_marker(
-                                            blur * window.scale_factor(),
-                                        ),
-                                    )
-                                } else {
-                                    surface
-                                };
-                                window.paint_quad(surface);
-                            },
-                        )
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full(),
-                    )
-                    .children(self.composer_recovery_banner(cx))
-                    .children(self.local_submission_banner(cx))
-                    .children(self.attachment_chips(cx))
-                    .child(
-                        // BotComposer's box: the field, with send beside it.
-                        // Even padding centres send beside one line and keeps
-                        // it at the bottom as the text grows.
-                        div()
-                            .flex()
-                            .items_end()
-                            .gap_1p5()
-                            .p(px(5.))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .self_center()
-                                    .px_1p5()
-                                    .py_1()
-                                    .child(self.completion.clone()),
-                            )
-                            .child(self.action(has_value, cx)),
-                    )
-                    .children(self.attachment_drop_overlay(12.)),
-            )
+            .child(self.composer_box(window, cx))
             .children(self.remote_notice(cx))
-            .child(self.workspace_bar(kind, trigger_effort, controls, cx))
+            .child(self.composer_tools(cx))
             .into_any_element()
     }
+    /// The composer box shared by sessions and Bots: its field, with send
+    /// beside it, on the frosted composer surface.
+    pub(super) fn composer_box(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        const RADIUS: f32 = 8.;
+        let blur = composer_blur();
+        let fill = composer_fill();
+        let bot = self.settings.bot.is_some();
+        let input = self.input.read(cx);
+        let has_value = input.has_message_text() || !self.attachments.is_empty();
+        // Sessions complete files, commands and skills; a Bot's field is plain.
+        let field = if bot {
+            self.input.clone().into_any_element()
+        } else {
+            self.completion.clone().into_any_element()
+        };
+        div()
+            .id("composer-box")
+            .debug_selector(|| "composer-box".into())
+            .capture_action(cx.listener(|this, _: &input::Paste, _, cx| {
+                if this.paste_attachments(cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .relative()
+            .rounded(px(RADIUS))
+            .border_1()
+            .border_color(composer_border(
+                self.input.focus_handle(cx).contains_focused(window, cx),
+            ))
+            .when(self.file_drag, |d| {
+                d.border_color(accent_color().opacity(0.6))
+            })
+            .flex()
+            .flex_col()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| window.focus(&this.input.focus_handle(cx), cx)),
+            )
+            .when(!bot, |d| d.child(self.completion.read(cx).composer_probe()))
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        let surface = gpui::fill(bounds, fill).corner_radii(px(RADIUS - 1.));
+                        let surface = if blur > 0. {
+                            surface.border_color(gpui_apple::metal_renderer::backdrop_blur_marker(
+                                blur * window.scale_factor(),
+                            ))
+                        } else {
+                            surface
+                        };
+                        window.paint_quad(surface);
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
+            .children(self.composer_recovery_banner(cx))
+            .children(self.local_submission_banner(cx))
+            .children(self.attachment_chips(cx))
+            .child(
+                // Even padding centres send beside one line and keeps it at
+                // the bottom as the text grows.
+                div()
+                    .flex()
+                    .items_end()
+                    .gap_1p5()
+                    .p(px(5.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .self_center()
+                            .px_1p5()
+                            .py_1()
+                            .child(field),
+                    )
+                    .child(self.action(has_value, cx)),
+            )
+            .children(self.attachment_drop_overlay(RADIUS))
+            .into_any_element()
+    }
+
     /// The shared `+`: files and modes for a session, files and queueing for
     /// a Bot.
     pub(super) fn add_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3075,15 +3076,21 @@ impl Conversation {
                 cx.listener(|this, _, window, cx| this.toggle_menu(ComposerMenu::Add, window, cx)),
             )
     }
-    /// Under the box, as in BotComposer: `+`, the working copy and branch on
-    /// the left; the model, its settings, access and context on the right.
-    fn workspace_bar(
-        &self,
-        kind: Kind,
-        trigger_effort: Option<SharedString>,
-        controls: Vec<AnyElement>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    /// The row under the box, shared by sessions and Bots: `+` (and for a
+    /// session its working copy and branch) on the left; the model, its
+    /// settings, access and context on the right.
+    pub(super) fn composer_tools(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let bot = self.settings.bot.is_some();
+        let kind = Kind::from_id(&self.summary.provider);
+        let beside = cx
+            .try_global::<crate::settings::Preferences>()
+            .is_some_and(|p| p.model_controls == "beside");
+        let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
+        let controls = if beside {
+            self.model_controls(cx)
+        } else {
+            Vec::new()
+        };
         let draft = !self.summary.has_messages;
         let linked =
             self.git.as_ref().is_some_and(|s| s.linked) || self.settings.worktree_cwd.is_some();
@@ -3146,7 +3153,7 @@ impl Conversation {
             self.branch.clone()
         };
         let ratio = self.context.and_then(|usage| usage.ratio());
-        let show_context = ratio.is_some() || draft;
+        let show_context = bot || ratio.is_some() || draft;
         let headline = ratio
             .map(|r| format!("{:.0}% context used", r * 100.))
             .unwrap_or_else(|| "No context used yet".into());
@@ -3162,6 +3169,7 @@ impl Conversation {
             || self.bot_ui.models.is_some();
         let model =
             quiet_control("composer-model", model_open)
+                .debug_selector(|| "composer-model".into())
                 .min_w_0()
                 .max_w(px(220.))
                 .flex_shrink(1.)
@@ -3235,8 +3243,22 @@ impl Conversation {
             .pl_1()
             .pr_1p5()
             .child(self.add_button(cx))
-            .child(workspace)
-            .when_some(branch, |d, branch| {
+            .when(bot && self.bot_ui.queue, |d| {
+                d.child(
+                    quiet_control("composer-queue-mode", true)
+                        .debug_selector(|| "composer-queue-mode".into())
+                        .aria_label("Queue is on; click to send normally")
+                        .child(icon("queue-list", 14.))
+                        .child("Queue")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.bot_ui.queue = false;
+                            cx.notify();
+                        })),
+                )
+            })
+            // A Bot works across its projects; a session owns one checkout.
+            .when(!bot, |d| d.child(workspace))
+            .when_some(branch.filter(|_| !bot), |d, branch| {
                 let detached = !new && self.git.as_ref().is_some_and(|s| s.detached);
                 let label = if detached {
                     format!("detached {branch}")
@@ -3274,7 +3296,7 @@ impl Conversation {
                     .gap_1()
                     .child(model)
                     .children(controls)
-                    .child(access)
+                    .when(!bot, |d| d.child(access))
                     .when(self.editing_last_turn.pending(), |d| {
                         d.child(
                             div()
@@ -3290,7 +3312,7 @@ impl Conversation {
                         )
                     })
                     .when(
-                        self.status != "Ready"
+                        !bot && self.status != "Ready"
                             && !self.busy
                             && !self.loading
                             && self.settings.usage_limit.is_none(),
@@ -3359,12 +3381,14 @@ impl Conversation {
                         )
                     }),
             )
+            .into_any_element()
     }
 
     // ComposerAction: a solid submit, dimmed while empty; Stop while busy.
     fn action(&self, has_value: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let ticket_pending = self.ticket_context.pending();
-        let busy = ticket_pending || (self.responding() && !has_value);
+        let bot = self.settings.bot.is_some();
+        let busy = !bot && (ticket_pending || (self.responding() && !has_value));
         let draft = self.draft_active(cx);
         let enabled = ticket_pending
             || (!self.attaching
@@ -3374,6 +3398,7 @@ impl Conversation {
         let accent = primary_action(enabled);
         div()
             .id("send-or-stop")
+            .debug_selector(|| "send-or-stop".into())
             .role(Role::Button)
             .aria_label(if busy {
                 "Stop"
@@ -3643,7 +3668,7 @@ mod composer_motion_tests {
                     assert_eq!(field.top() - top, px(9.));
                     assert_eq!(composer.bottom() - field.bottom(), px(10.));
                     assert_eq!(toolbar.top(), composer.bottom());
-                    assert_eq!(field.size.height, px(66.));
+                    assert_eq!(field.size.height, px(54.));
                     window
                         .update(visual, |_, window, _| {
                             let scale = window.scale_factor();
@@ -3901,22 +3926,9 @@ fn bar_trigger(
     path: &'static str,
     label: SharedString,
 ) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
+    quiet_control(id, false)
         .group(id)
-        .cursor(CursorStyle::Arrow)
-        .min_w_0()
-        .h(px(26.))
-        .px(px(6.))
-        .rounded_md()
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .text_size(px(12.))
-        .text_color(content(0.55))
-        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .flex_shrink(1.)
         .child(
             icon(path, 14.)
                 .text_color(content(0.55))

@@ -2268,10 +2268,10 @@ fn chat_composer_keeps_add_under_the_box_and_opens_the_model_list(cx: &mut TestA
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
-    let field = visual.debug_bounds("bot-composer").unwrap();
-    let send = visual.debug_bounds("bot-send").unwrap();
+    let field = visual.debug_bounds("composer-box").unwrap();
+    let send = visual.debug_bounds("send-or-stop").unwrap();
     let attach = visual.debug_bounds("composer-add").unwrap();
-    let model = visual.debug_bounds("bot-model").unwrap();
+    let model = visual.debug_bounds("composer-model").unwrap();
     // BotComposer with controls: send inside the box, `+` and the model
     // on the row beneath it, the model at its right end.
     assert!(field.contains(&send.center()));

@@ -352,17 +352,19 @@ impl Input {
         input.height = 25.;
         input
     }
+    /// The session and Bot composer field: one 13px line growing to eight.
+    pub(crate) fn composer(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.font_size = 13.;
+        input.line_height = 18.;
+        input.min_height = 18.;
+        input.max_height = 144.;
+        input.height = 18.;
+        input
+    }
     pub(crate) fn bot_composer(&mut self, name: &str, cx: &mut Context<Self>) {
-        if self.min_height != 18. {
-            self.height = 18.;
-        }
         self.label = format!("Message {name}").into();
         self.placeholder = self.label.clone();
-        self.font_size = 13.;
-        self.line_height = 18.;
-        self.min_height = 18.;
-        self.max_height = 144.;
-        self.height = self.height.clamp(self.min_height, self.max_height);
         cx.notify();
     }
     /// NewHabitPage's three-row AutoTextarea, capped like React's AutoTextarea.

@@ -174,7 +174,7 @@ fn automatic_updates_stay_quiet_and_peer_delivery_keeps_one_transcript_message(
             })
             .unwrap();
         visual.run_until_parked();
-        let composer = visual.debug_bounds("bot-composer").unwrap();
+        let composer = visual.debug_bounds("composer-box").unwrap();
         window
             .update(visual, |view, _, cx| {
                 view.busy = true;
@@ -191,7 +191,7 @@ fn automatic_updates_stay_quiet_and_peer_delivery_keeps_one_transcript_message(
         assert!(visual.debug_bounds("bot-background-update-error").is_none());
         assert!(visual.debug_bounds("bot-pending-peer").is_some());
         assert!(visual.debug_bounds("bot-pending-human").is_some());
-        assert_eq!(visual.debug_bounds("bot-composer").unwrap(), composer);
+        assert_eq!(visual.debug_bounds("composer-box").unwrap(), composer);
 
         window
             .update(visual, |view, _, cx| {
@@ -208,7 +208,7 @@ fn automatic_updates_stay_quiet_and_peer_delivery_keeps_one_transcript_message(
         assert!(visual.debug_bounds("bot-pending-peer").is_none());
         assert!(visual.debug_bounds("bot-peer-message-label").is_some());
         assert!(visual.debug_bounds("bot-background-update-error").is_none());
-        assert_eq!(visual.debug_bounds("bot-composer").unwrap(), composer);
+        assert_eq!(visual.debug_bounds("composer-box").unwrap(), composer);
         window
             .update(visual, |view, _, cx| {
                 assert_eq!(
@@ -718,7 +718,7 @@ fn bot_plus_offers_upload_and_queue_and_queue_applies_to_one_message(cx: &mut Te
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.run_until_parked();
     assert!(visual.debug_bounds("composer-add").is_some());
-    assert!(visual.debug_bounds("bot-queue-mode").is_none());
+    assert!(visual.debug_bounds("composer-queue-mode").is_none());
     window
         .update(visual, |view, window, cx| {
             let mut events = Vec::new();
@@ -736,7 +736,7 @@ fn bot_plus_offers_upload_and_queue_and_queue_applies_to_one_message(cx: &mut Te
         })
         .unwrap();
     visual.run_until_parked();
-    assert!(visual.debug_bounds("bot-queue-mode").is_some());
+    assert!(visual.debug_bounds("composer-queue-mode").is_some());
     window
         .update(visual, |view, _, cx| {
             view.send(cx);

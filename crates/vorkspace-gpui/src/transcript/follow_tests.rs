@@ -333,7 +333,7 @@ fn input_chat(cx: &mut TestAppContext, text: &str) -> gpui::WindowHandle<SubmitC
             },
             |_, cx| {
                 cx.new(|cx| {
-                    let input = cx.new(crate::input::Input::new);
+                    let input = cx.new(crate::input::Input::composer);
                     input.update(cx, |input, cx| {
                         input.bot_composer("BotCat", cx);
                         input.set_text(text.to_owned(), cx);

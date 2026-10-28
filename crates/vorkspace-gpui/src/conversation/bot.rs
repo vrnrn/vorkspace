@@ -705,8 +705,8 @@ impl Conversation {
                     .children(self.usage_notice(true, cx))
                     .children(self.auth_notice(cx))
                     .child(self.approval_shelf(window, cx))
-                    .child(self.bot_composer_box(window, cx))
-                    .child(self.bot_composer_tools(cx)),
+                    .child(self.composer_box(window, cx))
+                    .child(self.composer_tools(cx)),
             )
             .into_any_element()
     }
@@ -844,99 +844,7 @@ impl Conversation {
         }
         ("Model setting", items, 210., MenuStyle::Explorer)
     }
-    /// The form's box: the field and send, as `BotComposer` lays them out
-    /// when it has controls.
-    fn bot_composer_box(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let focused = self.input.focus_handle(cx).contains_focused(window, cx);
-        let ready = self.loaded
-            && !self.attaching
-            && (!self.input.read(cx).content.trim().is_empty() || !self.attachments.is_empty());
-        div()
-            .id("bot-composer")
-            .debug_selector(|| "bot-composer".into())
-            .relative()
-            .rounded_lg()
-            .border_1()
-            .border_color(content(if focused { 0.2 } else { 0.1 }))
-            .when(self.file_drag, |d| {
-                d.border_color(accent_color().opacity(0.6))
-            })
-            .bg(content(0.03))
-            .flex()
-            .flex_col()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| window.focus(&this.input.focus_handle(cx), cx)),
-            )
-            .child(self.composer_anchor.probe())
-            .children(self.composer_recovery_banner(cx))
-            .children(self.attachment_chips(cx))
-            .child(
-                // Even padding centres send beside one line, and keeps it at
-                // the bottom as the text grows.
-                div()
-                    .flex()
-                    .items_end()
-                    .gap_1p5()
-                    .p(px(5.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .self_center()
-                            .px_1p5()
-                            .py_1()
-                            .child(self.input.clone()),
-                    )
-                    .child(
-                        div()
-                            .id("bot-send")
-                            .debug_selector(|| "bot-send".into())
-                            .role(Role::Button)
-                            .aria_label("Send")
-                            .flex_shrink_0()
-                            .size(px(26.))
-                            .rounded_md()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(white(if ready { 1. } else { 0.3 }))
-                            .when(ready, |d| d.hover(|s| s.bg(white(0.9))))
-                            .child(icon("bot-arrow-up", 14.).text_color(black(if ready {
-                                1.
-                            } else {
-                                0.4
-                            })))
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if ready {
-                                    this.send(cx)
-                                }
-                            })),
-                    ),
-            )
-            .children(self.attachment_drop_overlay(8.))
-            .into_any_element()
-    }
     pub(super) fn model_controls(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let text_control = |id: SharedString, open: bool| {
-            div()
-                .id(id)
-                .role(Role::Button)
-                .flex_shrink_0()
-                .h(px(26.))
-                .min_w_0()
-                .px_1p5()
-                .gap_1p5()
-                .rounded_md()
-                .flex()
-                .items_center()
-                .text_size(px(12.))
-                .text_color(content(if open { 1. } else { 0.55 }))
-                .when(open, |d| d.bg(content(0.08)))
-                .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        };
         let model = self.model_info().cloned();
         let mut pills: Vec<AnyElement> = Vec::new();
         if let Some(model) = &model {
@@ -965,7 +873,7 @@ impl Conversation {
                     )
                 };
                 pills.push(
-                    text_control("bot-effort".into(), open)
+                    quiet_control("model-effort", open)
                         .max_w(px(112.))
                         .aria_label(format!("{label}: {value}"))
                         .aria_expanded(open)
@@ -981,7 +889,7 @@ impl Conversation {
             if model.fast && !grouped {
                 let on = self.settings.fast;
                 pills.push(
-                    text_control("bot-fast".into(), false)
+                    quiet_control("model-fast", false)
                         .aria_label(format!("Fast mode: {}", if on { "On" } else { "Off" }))
                         .child(div().when(!on, |d| d.opacity(0.5)).child("Fast"))
                         .on_click(cx.listener(|this, _, _, cx| this.menu_choice("fast", cx)))
@@ -991,7 +899,7 @@ impl Conversation {
             if model.thinking {
                 let on = self.settings.thinking.unwrap_or(false);
                 pills.push(
-                    text_control("bot-thinking".into(), false)
+                    quiet_control("model-thinking", false)
                         .aria_label(format!("Thinking: {}", if on { "On" } else { "Off" }))
                         .child(div().when(!on, |d| d.opacity(0.5)).child("Thinking"))
                         .on_click(cx.listener(|this, _, _, cx| this.menu_choice("thinking", cx)))
@@ -1020,7 +928,7 @@ impl Conversation {
                     format!("{}: {value}", control.name)
                 };
                 pills.push(
-                    text_control(format!("bot-control-{ix}").into(), open)
+                    quiet_control(SharedString::from(format!("model-control-{ix}")), open)
                         .max_w(px(112.))
                         .aria_label(title)
                         .when(!toggle, |d| {
@@ -1046,147 +954,5 @@ impl Conversation {
             }
         }
         pills
-    }
-    /// Under the box: `+` (files and queueing) on the left, the model, its settings
-    /// and the context meter on the right, the last lined up under send.
-    fn bot_composer_tools(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let text_control = |id: SharedString, open: bool| {
-            div()
-                .id(id)
-                .role(Role::Button)
-                .flex_shrink_0()
-                .h(px(26.))
-                .min_w_0()
-                .px_1p5()
-                .gap_1p5()
-                .rounded_md()
-                .flex()
-                .items_center()
-                .text_size(px(12.))
-                .text_color(content(if open { 1. } else { 0.55 }))
-                .when(open, |d| d.bg(content(0.08)))
-                .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        };
-        let pills = self.model_controls(cx);
-        let models_open = self.bot_ui.models.is_some();
-        let ratio = self.context.and_then(|usage| usage.ratio());
-        let headline = ratio
-            .map(|r| format!("{:.0}% context used", r * 100.))
-            .unwrap_or_else(|| "No context used yet".into());
-        let detail = self.context.map(|usage| {
-            format!(
-                "{} / {} tokens",
-                vorkspace_core::context::format_tokens(usage.used),
-                vorkspace_core::context::format_tokens(usage.window.unwrap_or(0))
-            )
-        });
-        div()
-            .min_w_0()
-            .flex()
-            .items_center()
-            .gap(px(2.))
-            .pt_1()
-            .pl_1()
-            .pr_1p5()
-            .child(self.add_button(cx))
-            .when(self.bot_ui.queue, |d| {
-                d.child(
-                    text_control("bot-queue-mode".into(), true)
-                        .debug_selector(|| "bot-queue-mode".into())
-                        .aria_label("Queue is on; click to send normally")
-                        .child(icon("queue-list", 14.))
-                        .child("Queue")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.bot_ui.queue = false;
-                            cx.notify();
-                        })),
-                )
-            })
-            .child(
-                div()
-                    .ml_auto()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        text_control("bot-model".into(), models_open)
-                            .min_w_0()
-                            .max_w(px(220.))
-                            .flex_shrink(1.)
-                            .debug_selector(|| "bot-model".into())
-                            .aria_label(format!(
-                                "{}, {}",
-                                Kind::display_label(&self.summary.provider),
-                                self.model_label()
-                            ))
-                            .aria_expanded(models_open)
-                            .child(self.model_anchor.probe())
-                            .child(provider_icon(&self.summary.provider, 14.))
-                            .child(div().min_w_0().truncate().child(self.model_label()))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_bot_models(window, cx)
-                            })),
-                    )
-                    .children(pills)
-                    .child(
-                        // A Bot is one long conversation; this is how full its
-                        // current thread is. It rotates threads itself.
-                        div()
-                            .id("bot-context-meter")
-                            .role(Role::Image)
-                            .aria_label(format!(
-                                "{headline}{}",
-                                detail
-                                    .as_ref()
-                                    .map(|s| format!(", {s}"))
-                                    .unwrap_or_default()
-                            ))
-                            .flex_shrink_0()
-                            .size(px(26.))
-                            .rounded_md()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .hover(|s| s.bg(content(0.08)))
-                            .child(self.context_anchor.probe())
-                            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                this.context_hovered = *hovered;
-                                cx.notify();
-                            }))
-                            .child(crate::context_meter::ring(ratio.unwrap_or(0.)))
-                            .when(self.context_hovered, |d| {
-                                d.child(
-                                    popover(
-                                        "bot-context-tooltip",
-                                        Anchor::Slot(self.context_anchor.clone()),
-                                    )
-                                    .side(Side::Top)
-                                    .align(Align::End)
-                                    .max_width(240.)
-                                    .padding(10.)
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .text_size(px(12.))
-                                            .line_height(px(16.))
-                                            .text_color(content(1.))
-                                            .child(headline)
-                                            .when_some(detail, |d, detail| {
-                                                d.child(
-                                                    div()
-                                                        .text_size(px(11.))
-                                                        .text_color(content(0.5))
-                                                        .child(detail),
-                                                )
-                                            }),
-                                    ),
-                                )
-                            }),
-                    ),
-            )
-            .into_any_element()
     }
 }

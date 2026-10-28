@@ -19,7 +19,7 @@ impl AssetSource for Assets {
    "pipette"=>include_bytes!("../assets/hugeicons/pipette.svg"),
    "square"=>include_bytes!("../assets/hugeicons/square.svg"),
    "file"=>include_bytes!("../assets/hugeicons/file.svg"),
-   "bot-send"=>include_bytes!("../assets/hugeicons/bot-send.svg"),
+   "send-or-stop"=>include_bytes!("../assets/hugeicons/bot-send.svg"),
    "bot-arrow-up"=>include_bytes!("../assets/hugeicons/bot-arrow-up.svg"),
    "bot-attach"=>include_bytes!("../assets/hugeicons/bot-attach.svg"),
    "gauge"=>include_bytes!("../assets/hugeicons/gauge.svg"),
