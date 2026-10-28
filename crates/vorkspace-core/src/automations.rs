@@ -204,7 +204,7 @@ fn default_actor() -> String {
     "anyone".into()
 }
 
-pub(crate) fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
+pub(crate) fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS automations (
            id TEXT PRIMARY KEY,
@@ -229,8 +229,11 @@ pub(crate) fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
            created_at INTEGER NOT NULL,
            PRIMARY KEY (automation_id, event_key)
          );",
-    )?;
+    )
+}
 
+pub(crate) fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
+    ensure_schema(conn)?;
     // Backfill claims from pre-ledger run history. Invalid legacy rows should not
     // prevent the session store from opening.
     let mut statement =

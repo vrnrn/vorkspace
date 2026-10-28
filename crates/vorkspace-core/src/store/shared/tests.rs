@@ -38,7 +38,7 @@ fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
     for edit in [true, false] {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("shared.db");
-        let mut writer = Store::open_vorkspace(&path).unwrap();
+        let writer = Store::open_vorkspace(&path).unwrap();
         let id = writer
             .create("codex", "/project-worktrees/feature")
             .unwrap()
@@ -120,7 +120,8 @@ fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
             .write(true)
             .open(lock_path)
             .unwrap();
-        let available = probe.try_lock().is_ok();
+        let probe_result = probe.try_lock();
+        let available = probe_result.is_ok();
         drop(probe);
         // On a regression, release the busy handler first so neither worker is
         // stranded while the assertion reports the inverted lock order.
@@ -138,11 +139,11 @@ fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
         let claim_result = claim_thread.join().unwrap();
         assert!(
             available,
-            "claim held sidecar while waiting for the {} transaction",
+            "sidecar lock probe failed while the claim waited for the {} transaction: {probe_result:?}",
             if edit { "edit" } else { "detach" }
         );
         writer_result.unwrap();
-        assert_eq!(claim_result.unwrap(), true);
+        assert!(claim_result.unwrap());
 
         let reopened = Store::open_vorkspace(&path).unwrap();
         let session = reopened

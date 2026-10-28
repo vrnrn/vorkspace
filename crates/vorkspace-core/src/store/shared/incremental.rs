@@ -260,6 +260,12 @@ impl Store {
         super::super::composer_draft::ensure_draft_schema(&tx)?;
         super::super::composer_draft::ensure_recovery_schema(&tx)?;
         ensure_bookkeeping_schema(&tx)?;
+        // All normal writers of this database must finish their lazy schema
+        // work before a whole-database schema version guards active history.
+        sql(super::super::local_submissions::ensure_table(&tx))?;
+        sql(super::super::notes::ensure_notes_table(&tx))?;
+        // Prepare automation DDL only; its service still owns run/claim backfill.
+        sql(crate::automations::ensure_schema(&tx))?;
         sql(tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS session_history_revisions(
                 session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
@@ -662,6 +668,11 @@ mod tests {
     fn first_bookkeeping_writes_preserve_other_active_histories_and_reopen() {
         for bot in [false, true] {
             for (operation, separate_writer) in [
+                ("note", false),
+                ("note", true),
+                ("submission", false),
+                ("submission", true),
+                ("automation", true),
                 ("queue", false),
                 ("origin", false),
                 ("claim", false),
@@ -702,7 +713,39 @@ mod tests {
                     error: None,
                     attachments: vec![],
                 };
+                let submission = || crate::store::SubmissionInput {
+                    attempt_id: "reserved-once".into(),
+                    user_turn_id: "unsent-once".into(),
+                    session_id: String::new(),
+                    payload_json: r#"{"text":"Keep this send"}"#.into(),
+                    user_turn: Some(
+                        json!({"id":"unsent-once","role":"user","text":"Keep this send"}),
+                    ),
+                };
                 match operation {
+                    "note" => {
+                        actor
+                            .upsert_note(&crate::notes::NoteUpsert {
+                                id: "saved-note".into(),
+                                title: "Saved while a chat streams".into(),
+                                body: "Keep the note too".into(),
+                                ..Default::default()
+                            })
+                            .unwrap();
+                    }
+                    "submission" => assert!(
+                        actor
+                            .reserve_local_submission(target, submission())
+                            .unwrap()
+                            .created
+                    ),
+                    "automation" => {
+                        assert!(crate::automations::Service::open(&path)
+                            .unwrap()
+                            .list()
+                            .unwrap()
+                            .is_empty());
+                    }
                     "queue" => actor.accept_follow_ups(target, &queued).unwrap(),
                     "origin" => actor
                         .save_setting(
@@ -739,6 +782,25 @@ mod tests {
                 assert_eq!(reopened.load(id).unwrap().rows, history.rows);
                 assert_eq!(reopened.shared_blocks(id).unwrap()[1], before[1]);
                 match operation {
+                    "note" => assert_eq!(
+                        reopened.get_note("saved-note").unwrap().unwrap().body,
+                        "Keep the note too"
+                    ),
+                    "submission" => {
+                        let receipt = reopened
+                            .reserve_local_submission(other, submission())
+                            .unwrap();
+                        assert!(
+                            !receipt.created,
+                            "reopening must not reserve a duplicate send"
+                        );
+                        assert_eq!(receipt.receipt.user_turn.unwrap()["text"], "Keep this send");
+                    }
+                    "automation" => assert!(crate::automations::Service::open(&path)
+                        .unwrap()
+                        .list()
+                        .unwrap()
+                        .is_empty()),
                     "queue" => assert_eq!(
                         reopened.follow_ups(other).unwrap().messages,
                         queued.messages

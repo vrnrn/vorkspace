@@ -184,6 +184,7 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
     visual.run_until_parked();
     let edit = visual.debug_bounds("edit-message-draft").unwrap().center();
     visual.simulate_click(edit, Default::default());
+    visual.run_until_parked();
     visual.simulate_keystrokes("cmd-a");
     visual.simulate_input("Intermediate");
     visual.run_until_parked();
