@@ -3640,7 +3640,6 @@ impl Conversation {
                         .min_w_0()
                         .flex_shrink(1.)
                         .truncate()
-                        .text_size(px(11.))
                         .text_color(content(0.5))
                         .child(effort),
                 )
