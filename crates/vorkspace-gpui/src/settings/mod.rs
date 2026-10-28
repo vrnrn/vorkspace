@@ -70,6 +70,7 @@ pub(crate) struct SettingsContext {
     pub cwd: String,
     pub project_label: String,
     pub archived: Vec<ArchivedSession>,
+    pub archived_projects: Vec<String>,
     /// Projects the Worktrees, Providers and Inbox pages offer.
     pub projects: Vec<(String, String)>,
     pub sessions: Vec<(i64, String, bool)>,
@@ -96,6 +97,7 @@ impl PartialEq for SettingsContext {
             && self.cwd == other.cwd
             && self.project_label == other.project_label
             && self.archived == other.archived
+            && self.archived_projects == other.archived_projects
             && self.projects == other.projects
             && self.sessions == other.sessions
             && self.quick_error == other.quick_error
@@ -136,6 +138,7 @@ pub(crate) enum SettingsEvent {
     Section(Section),
     OpenSession(i64),
     Archive(i64, bool),
+    RestoreProject(String),
     Delete(i64),
     ChooseBackground,
     RemoveWorktree {

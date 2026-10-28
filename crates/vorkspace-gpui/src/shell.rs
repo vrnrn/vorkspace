@@ -675,7 +675,7 @@ impl Shell {
             .collect::<Vec<_>>();
         let workspace = Workspace::restore(saved.as_deref(), &paths, &cwd);
         let mut projects = workspace.projects;
-        if !projects.contains(&workspace.project) {
+        if !workspace.project.is_empty() && !projects.contains(&workspace.project) {
             projects.push(workspace.project);
         }
         let metadata = locked(&store)
@@ -5107,10 +5107,7 @@ impl Shell {
                     MenuItem::Separator,
                     self.project_notification_menu(path).into(),
                     MenuItem::Separator,
-                    MenuAction::new("archive", "Archive")
-                        .icon("archive")
-                        .disabled(true)
-                        .into(),
+                    MenuAction::new("archive", "Archive").icon("archive").into(),
                     MenuAction::new("delete", "Delete")
                         .icon("trash")
                         .danger()
@@ -5189,7 +5186,9 @@ impl Shell {
                 }
             }
             MenuTarget::Project { path, .. } => {
-                if action == "reveal" {
+                if action == "archive" {
+                    self.archive_project(&path, cx);
+                } else if action == "reveal" {
                     if path.starts_with("remote://") {
                         self.error = Some("Remote folders stay on their host machine.".into());
                         cx.notify();
@@ -5203,6 +5202,71 @@ impl Shell {
                 }
             }
         }
+    }
+    // Archive only after the workspace has been durably saved. Existing tabs and
+    // processes remain owned by their current lifecycle and are never closed here.
+    fn commit_project_archive(&mut self, next: Workspace, cx: &mut Context<Self>) {
+        let state = serde_json::to_string(&next).expect("serialize workspace");
+        // Cancel queued older snapshots before acquiring the store lock.
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        let result = locked(&self.store).and_then(|store| store.save_ui_state(&state));
+        if let Err(error) = result {
+            self.error = Some(format!("Could not save project archive: {error}"));
+        } else {
+            *self.latest_state.lock().unwrap_or_else(|e| e.into_inner()) = state;
+            self.workspace = next;
+            self.invalidate_chrome(cx);
+        }
+        cx.notify();
+    }
+    fn archive_project(&mut self, path: &str, cx: &mut Context<Self>) {
+        let key = vorkspace_core::files::path_key(path);
+        let same = |p: &str| vorkspace_core::files::path_key(p) == key;
+        let current = vorkspace_core::files::path_key(&self.workspace.project);
+        let open = self.workspace.open_sessions().iter().any(|id| {
+            let id = self.workspace.session_for_pane(*id);
+            // Tabs without a verified current-project owner may belong to a
+            // worktree or an unsaved pane in the project being archived.
+            let owner = self
+                .workspace
+                .tab_workspaces
+                .get(&id)
+                .map(String::as_str)
+                .or_else(|| self.session_summaries.get(&id).map(|s| s.cwd.as_str()));
+            owner.is_none_or(|p| vorkspace_core::files::path_key(p) != current)
+        });
+        let busy = self
+            .order
+            .iter()
+            .any(|id| self.session_metadata(*id, cx).busy);
+        // Terminal title tabs and Bots can have independent worktree scopes.
+        // Refuse conservatively until those owners have released their work.
+        let terminals = !self.terminal_tabs.is_empty()
+            || self.terminals.values().any(|v| !v.is_empty())
+            || self
+                .workspace
+                .docks
+                .values()
+                .any(|dock| !dock.terminals.is_empty())
+            || self
+                .workspace
+                .title_order
+                .iter()
+                .any(|tab| matches!(tab, TitleTab::Terminal { .. }));
+        let bots = self
+            .workspace
+            .title_order
+            .iter()
+            .any(|t| matches!(t, TitleTab::Bot { .. }));
+        if same(&self.workspace.project) || open || busy || terminals || bots {
+            self.error = Some("To archive this project, switch to another project and close other projects’ open panes and finish running conversations. Close terminal and Bot tabs first.".into());
+            cx.notify();
+            return;
+        }
+        let mut next = self.workspace.clone();
+        next.projects.retain(|p| !same(p));
+        next.project_archive.insert(key, true);
+        self.commit_project_archive(next, cx);
     }
     fn close_preview(&mut self, cx: &mut Context<Self>) {
         self.preview_open = None;

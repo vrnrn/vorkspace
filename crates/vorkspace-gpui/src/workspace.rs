@@ -217,6 +217,8 @@ pub(crate) struct Workspace {
     pub tab_workspaces: HashMap<i64, String>,
     pub active: Option<i64>,
     pub projects: Vec<String>,
+    /// Explicit decisions keyed by normalized path; false prevents stale legacy re-import.
+    pub project_archive: HashMap<String, bool>,
     pub project: String,
     /// Last focused open session in each project, independent of tab order.
     pub project_focus: HashMap<String, i64>,
@@ -406,6 +408,7 @@ impl Default for Workspace {
             tab_workspaces: HashMap::new(),
             active: None,
             projects: Vec::new(),
+            project_archive: HashMap::new(),
             project: String::new(),
             project_focus: HashMap::new(),
             recent_files: HashMap::new(),
@@ -460,8 +463,48 @@ impl Workspace {
                 serde_json::from_value::<Self>(value).ok()
             })
             .unwrap_or_default();
+        // Recover markers retained by an earlier bridge even when the desktop
+        // source is unavailable. Native decisions, including restore, win.
+        if let Some(raw) = state
+            .desktop_preferences_metadata
+            .as_ref()
+            .and_then(|m| m.get("vorkspace.archivedProjects"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.as_array().cloned())
+        {
+            for path in raw
+                .iter()
+                .filter_map(|v| v.get("path").and_then(|v| v.as_str()))
+                .filter(|p| !p.is_empty())
+            {
+                state
+                    .project_archive
+                    .entry(vorkspace_core::files::path_key(path))
+                    .or_insert(true);
+            }
+        }
         state.classic_layout = true;
-        if state.project.is_empty() {
+        state.projects.retain(|p| {
+            state
+                .project_archive
+                .get(&vorkspace_core::files::path_key(p))
+                != Some(&true)
+        });
+        if state
+            .project_archive
+            .get(&vorkspace_core::files::path_key(&state.project))
+            == Some(&true)
+        {
+            state.project = state.projects.first().cloned().unwrap_or_default();
+            state.active = None;
+        }
+        if state.project.is_empty()
+            && state
+                .project_archive
+                .get(&vorkspace_core::files::path_key(cwd))
+                != Some(&true)
+        {
             state.project = cwd.into();
         }
         for appearance in state.project_appearance.values_mut() {
@@ -576,7 +619,13 @@ impl Workspace {
             dock.active = dock.active.min(dock.terminals.len() - 1);
             dock.size = dock.side.clamp(dock.size, (4000., 4000.));
         }
-        state.add_project(cwd);
+        if state
+            .project_archive
+            .get(&vorkspace_core::files::path_key(cwd))
+            != Some(&true)
+        {
+            state.add_project(cwd);
+        }
         let open: HashSet<_> = state.open_sessions().into_iter().collect();
         let review_owners = &state.review_owners;
         state.project_focus.retain(|project, id| {
@@ -585,17 +634,23 @@ impl Workspace {
                     *known == review_owners.get(id).copied().unwrap_or(*id) && path == project
                 })
         });
-        if let Some((_, project)) = sessions.iter().find(|(id, _)| {
+        if let Some((_, project)) = sessions.iter().find(|(id, path)| {
             state
-                .active
-                .is_some_and(|pane| state.session_for_pane(pane) == *id)
+                .project_archive
+                .get(&vorkspace_core::files::path_key(path))
+                != Some(&true)
+                && state
+                    .active
+                    .is_some_and(|pane| state.session_for_pane(pane) == *id)
         }) {
             state.project = project.clone();
             state
                 .project_focus
                 .insert(project.clone(), state.active.unwrap());
         }
-        state.add_project(&state.project.clone());
+        if !state.project.is_empty() {
+            state.add_project(&state.project.clone());
+        }
         state
     }
     /// Reorder the available projection, merging it into the complete order so
@@ -686,7 +741,18 @@ impl Workspace {
             })
     }
     pub fn add_project(&mut self, path: &str) {
-        if !self.projects.iter().any(|p| p == path) {
+        if path.is_empty() {
+            return;
+        }
+        let key = vorkspace_core::files::path_key(path);
+        if self.project_archive.contains_key(&key) {
+            self.project_archive.insert(key.clone(), false);
+        }
+        if !self
+            .projects
+            .iter()
+            .any(|p| vorkspace_core::files::path_key(p) == key)
+        {
             self.projects.push(path.into());
         }
     }
@@ -1110,6 +1176,29 @@ pub(crate) fn project_name(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archived_project_is_not_reopened_by_active_session_or_stale_metadata() {
+        let saved = serde_json::json!({
+            "projects": ["/work/old", "/work/other"], "project": "/work/old", "active": 42,
+            "tabs": [42], "project_archive": {"/work/old": true},
+            "desktop_preferences_metadata": {"vorkspace.archivedProjects": "[{\"path\":\"/work/old/\"}]"}
+        }).to_string();
+        let mut state = Workspace::restore(Some(&saved), &[(42, "/work/old".into())], "/work/old");
+        assert_eq!(state.project, "/work/other");
+        assert!(!state.projects.contains(&"/work/old".into()));
+        assert!(state.tabs.contains(&42));
+        state.add_project("/work/old/");
+        let saved = serde_json::to_string(&state).unwrap();
+        let state = Workspace::restore(Some(&saved), &[(42, "/work/old".into())], "/work/other");
+        assert_eq!(state.project_archive.get("/work/old"), Some(&false));
+        assert!(
+            state
+                .projects
+                .iter()
+                .any(|p| vorkspace_core::files::path_key(p) == "/work/old")
+        );
+    }
 
     #[test]
     fn terminal_legacy_restore_preserves_other_tabs_and_upgrades_scope_identity() {

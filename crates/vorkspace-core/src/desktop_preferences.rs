@@ -155,10 +155,48 @@ impl DesktopPreferences {
             .cloned()
             .unwrap_or(Value::Null);
         let mut next = Map::new();
+        // Explicit native decisions survive stale or temporarily unavailable desktop data.
+        let mut archive = object
+            .get("project_archive")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(items) = self
+            .json("vorkspace.archivedProjects")
+            .and_then(|v| v.as_array().cloned())
+        {
+            for path in items
+                .iter()
+                .filter_map(|v| v["path"].as_str())
+                .filter(|p| project_path(p))
+            {
+                archive
+                    .entry(crate::files::path_key(path))
+                    .or_insert(json!(true));
+            }
+        }
+        object.insert("project_archive".into(), Value::Object(archive.clone()));
         if let Some(projects) = self.projects() {
             let source = json!(projects);
             let current = object.get("projects").cloned().unwrap_or(json!([]));
-            let merged = merge_projects(baseline.get("projects"), &current, &source);
+            let mut merged = merge_projects(baseline.get("projects"), &current, &source);
+            if let Some(paths) = merged.as_array_mut() {
+                paths.retain(|p| {
+                    p.as_str().is_none_or(|p| {
+                        archive.get(&crate::files::path_key(p)) != Some(&json!(true))
+                    })
+                });
+                for (path, decision) in &archive {
+                    if decision == &json!(false)
+                        && !paths.iter().any(|p| {
+                            p.as_str()
+                                .is_some_and(|p| crate::files::path_key(p) == *path)
+                        })
+                    {
+                        paths.push(json!(path));
+                    }
+                }
+            }
             object.insert("projects".into(), merged.clone());
             next.insert("projects".into(), source);
             // A stale sidecar selection may point at an internal Bot chat.
@@ -841,6 +879,37 @@ mod tests {
             workspace["project_appearance"]["/code/agent-terminal"]["background"]["path"],
             "/background.png"
         );
+    }
+
+    #[test]
+    fn archived_project_restore_survives_stale_and_missing_source() {
+        let source = prefs(&[
+            (
+                "vorkspace.recentProjects",
+                json!([{"path":"C:/Work/Repo/"}]),
+            ),
+            (
+                "vorkspace.archivedProjects",
+                json!([{"path":"c:\\work\\repo"}]),
+            ),
+        ]);
+        let mut workspace = json!({});
+        source.apply_workspace(&mut workspace);
+        assert_eq!(workspace["project_archive"]["c:/work/repo"], true);
+        assert_eq!(workspace["projects"], json!([]));
+        workspace["project_archive"]["c:/work/repo"] = json!(false);
+        source.apply_workspace(&mut workspace);
+        assert_eq!(workspace["projects"], json!(["c:/work/repo"]));
+        let saved = serde_json::to_string(&workspace).unwrap();
+        let mut reopened: Value = serde_json::from_str(&saved).unwrap();
+        DesktopPreferences {
+            values: Default::default(),
+            available: false,
+        }
+        .apply_workspace(&mut reopened);
+        source.apply_workspace(&mut reopened);
+        assert_eq!(reopened["project_archive"]["c:/work/repo"], false);
+        assert_eq!(reopened["projects"], json!(["c:/work/repo"]));
     }
 
     #[test]
