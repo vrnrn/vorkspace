@@ -144,6 +144,13 @@ mod model_label_tests {
                     // Another provider's model with the same id is unaffected.
                     crate::settings::model_key("claude", "c"),
                 ],
+                favorite_models: ["a", "b", "c"]
+                    .into_iter()
+                    .map(|model| crate::settings::ModelChoice {
+                        provider: "codex".into(),
+                        model: Some(model.into()),
+                    })
+                    .collect(),
                 ..Default::default()
             });
             let list = cx.new(|cx| {
@@ -184,6 +191,13 @@ mod model_label_tests {
                 );
                 assert!(!ids.contains(&"b".to_string()), "{ids:?}");
                 assert!(ids.contains(&"c".to_string()), "{ids:?}");
+                list.tab = ModelTab::Favorites;
+                let favorites: Vec<_> = list
+                    .entries(cx)
+                    .into_iter()
+                    .filter_map(|entry| entry.id)
+                    .collect();
+                assert_eq!(favorites, ["a", "c"]);
             });
         });
     }
@@ -568,6 +582,15 @@ impl ModelList {
                 .filter_map(|choice| {
                     let kind = Kind::parse(&choice.provider)?;
                     if kind != self.provider && self.hidden.iter().any(|id| id == kind.id()) {
+                        return None;
+                    }
+                    let current = kind == self.provider && choice.model == self.current;
+                    if !current
+                        && choice.model.as_deref().is_some_and(|id| {
+                            cx.global::<crate::settings::Preferences>()
+                                .model_hidden(kind.id(), id)
+                        })
+                    {
                         return None;
                     }
                     let name = self.saved_model_name(kind, choice.model.as_deref());

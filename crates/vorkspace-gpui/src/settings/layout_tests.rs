@@ -208,6 +208,47 @@ fn models_menu_hides_and_restores_individual_models(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn models_menu_scrolls_to_lower_rows(cx: &mut TestAppContext) {
+    use vorkspace_core::provider::Kind;
+    let window = window(Section::Providers, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.discovery.binaries = vec![(Kind::Claude, Some("/bin/claude".into()))];
+            view.ctx.catalogs.insert(
+                "claude".into(),
+                (0..30)
+                    .map(|n| (format!("model-{n}"), format!("Model {n}")))
+                    .collect(),
+            );
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let at = visual.debug_bounds("models-claude").unwrap().center();
+    visual.simulate_click(at, Default::default());
+    visual.run_until_parked();
+    let scroll = visual.debug_bounds("models-scroll-claude").unwrap();
+    assert!(scroll.size.height <= px(320.));
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: scroll.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-1200.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    visual.run_until_parked();
+    let last = visual.debug_bounds("model-visible-claude-29").unwrap();
+    assert!(last.center().y >= scroll.top() && last.center().y < scroll.bottom());
+    visual.simulate_click(last.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            assert!(view.prefs.model_hidden("claude", "model-29"))
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn providers_without_an_open_conversation_list_their_loaded_models(cx: &mut TestAppContext) {
     use vorkspace_core::provider::Kind;
     let window = window(Section::Providers, cx);

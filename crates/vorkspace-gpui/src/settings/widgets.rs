@@ -909,7 +909,17 @@ impl SettingsView {
                                         )
                                     }),
                             )
-                            .children(rows),
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("models-scroll-{provider}")))
+                                    .debug_selector(move || format!("models-scroll-{provider}"))
+                                    .max_h(px(320.))
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .flex()
+                                    .flex_col()
+                                    .children(rows),
+                            ),
                     ),
                 )
             })

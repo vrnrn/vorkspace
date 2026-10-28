@@ -21,7 +21,7 @@ When Vorkspace starts up, it looks to see which of these tools are installed on 
 
 ## 2. Choosing Which Models You See
 
-Some AI tools list dozens of different models. In **Settings → Providers**, you can click **Models** next to any agent and uncheck the models you never use so your model picker stays clean and uncluttered.
+Some AI tools list dozens of different models. In **Settings → Providers**, you can click **Models** next to any agent and uncheck the models you never use so your model picker stays clean and uncluttered. This choice applies across Vorkspace, including favorites and recent models, and is saved for next time. Hidden models stay in that list so you can check them again, or choose **Show all**. A conversation keeps its current model and still shows it in its own picker even if you hide it.
 
 ---
 

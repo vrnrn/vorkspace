@@ -2757,12 +2757,18 @@ impl Conversation {
             .filter_map(|choice| {
                 let kind = Kind::parse(&choice.provider)?;
                 choice.model.as_ref()?;
-                (kind == provider || !hidden.iter().any(|id| id == kind.id()))
+                let selected = (kind, choice.model.clone()) == current;
+                let model_hidden = cx
+                    .try_global::<crate::settings::Preferences>()
+                    .is_some_and(|p| p.model_hidden(kind.id(), choice.model.as_deref().unwrap()));
+                ((kind == provider || !hidden.iter().any(|id| id == kind.id()))
+                    && (selected || !model_hidden))
                     .then(|| (kind, choice.model.clone()))
             })
             .collect();
         choices.dedup();
-        if !choices.contains(&current) {
+        if !choices.iter().take(6).any(|choice| choice == &current) {
+            choices.truncate(5);
             choices.push(current.clone());
         }
         choices.truncate(6);
@@ -4583,6 +4589,10 @@ mod menu_tests {
                         model: model.map(Into::into),
                     })
                     .collect(),
+                    hidden_models: vec![
+                        crate::settings::model_key("codex", "gpt-6.1-sol"),
+                        crate::settings::model_key("claude", "opus"),
+                    ],
                     ..Default::default()
                 };
                 cx.set_global(prefs);
@@ -4618,7 +4628,6 @@ mod menu_tests {
                 assert_eq!(
                     labels,
                     [
-                        ("GPT-6.1-Sol".to_string(), false),
                         ("Opus".to_string(), true),
                         ("GPT-6-luna".to_string(), false),
                     ]
