@@ -231,6 +231,63 @@ fn indexed_bot_stale_older_edit_rejects_append_then_reload_allows_retry() {
 }
 
 #[test]
+fn indexed_bot_saved_and_unsaved_search_results_share_global_row_indices() {
+    use crate::search::{self, Scope, Target};
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    store
+        .conn
+        .execute_batch(include_str!("../../../tests/fixtures/bot-schema.sql"))
+        .unwrap();
+    let id = store.create("codex", "/project").unwrap().id;
+    let original = store.persisted_session_id(id).unwrap();
+    store
+        .conn
+        .execute("INSERT INTO bot_transcripts VALUES(?1)", [&original])
+        .unwrap();
+    let blocks: Vec<_> = (0..40).map(|i| json!({
+        "id": format!("block-{i}"), "role": if i % 2 == 0 { "user" } else { "assistant" },
+        "text": if i == 0 { "needle in old history".to_owned() } else { format!("Message {i}") }
+    })).collect();
+    store.shared_store_blocks(id, &blocks).unwrap();
+    let summary = store
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.id == id)
+        .unwrap();
+    let mut live = store.load(id).unwrap();
+    live.begin("user");
+    live.append("needle in unsaved message");
+    let flag = Arc::new(AtomicBool::new(false));
+    let (saved, truncated) = store.search_sessions("needle", flag.clone()).unwrap();
+    assert!(!truncated);
+    let local = search::messages(&summary, &live.rows, "needle", &flag);
+    assert!(saved.iter().any(|hit| hit.target
+        == Target::Message {
+            session: id,
+            row: 0
+        }));
+    assert!(!saved.iter().any(|hit| hit.target
+        == Target::Message {
+            session: id,
+            row: 40
+        }));
+    let grouped = search::grouped(local.into_iter().chain(saved), Scope::Conversations);
+    let targets: Vec<_> = grouped.into_iter().map(|hit| hit.target).collect();
+    assert_eq!(targets.len(), 2);
+    assert!(targets.contains(&Target::Message {
+        session: id,
+        row: 0
+    }));
+    assert!(targets.contains(&Target::Message {
+        session: id,
+        row: 40
+    }));
+}
+
+#[test]
 fn desktop_sidebar_recovers_only_hidden_launches_of_listed_callers_without_history_reads() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("vorkspace.db");
