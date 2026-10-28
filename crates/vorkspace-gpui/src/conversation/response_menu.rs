@@ -289,6 +289,12 @@ impl Conversation {
         let source = transcript.turns.get(&turn);
         let mut options = Vec::new();
         for model in models {
+            if cx
+                .try_global::<crate::settings::Preferences>()
+                .is_some_and(|prefs| prefs.model_hidden(provider.id(), &model.id))
+            {
+                continue;
+            }
             if kind == TransferKind::SecondOpinion
                 && provider.id() == from
                 && source.is_some_and(|source| {
@@ -553,6 +559,50 @@ mod tests {
         assert_eq!(surface.right() - row.right(), px(5.));
         assert_eq!(row.top() - surface.top(), px(5.));
         assert_eq!(surface.bottom() - row.bottom(), px(5.));
+    }
+
+    #[gpui::test]
+    fn response_transfer_menus_hide_models_for_their_provider(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, cx| {
+                cx.set_global(crate::settings::Preferences {
+                    hidden_models: vec![crate::settings::model_key("claude", "hidden")],
+                    ..Default::default()
+                });
+                for kind in [TransferKind::Handoff, TransferKind::SecondOpinion] {
+                    for provider in [Kind::Claude, Kind::Codex] {
+                        let options = view.response_model_items(
+                            1,
+                            kind,
+                            provider,
+                            Ok(vec![model("hidden", "Hidden"), model("visible", "Visible")]),
+                            cx,
+                        );
+                        let ids: Vec<_> = options
+                            .iter()
+                            .filter_map(|option| match option {
+                                MenuItem::Action(action) => Some(
+                                    serde_json::from_str::<Target>(&action.id)
+                                        .unwrap()
+                                        .model
+                                        .unwrap(),
+                                ),
+                                _ => None,
+                            })
+                            .collect();
+                        assert_eq!(
+                            ids,
+                            if provider == Kind::Claude {
+                                vec!["visible"]
+                            } else {
+                                vec!["hidden", "visible"]
+                            }
+                        );
+                    }
+                }
+            })
+            .unwrap();
     }
 
     #[gpui::test]

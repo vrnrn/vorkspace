@@ -234,8 +234,17 @@ pub(crate) struct SettingsView {
     select_anchors: RefCell<HashMap<&'static str, AnchorSlot>>,
     /// Provider catalogs loaded for this page, so a provider without an open
     /// conversation still lists its models.
-    discovered_catalogs: HashMap<String, Vec<(String, String)>>,
-    catalogs_loading: Vec<vorkspace_core::provider::Kind>,
+    discovered_catalogs: HashMap<
+        (
+            vorkspace_core::provider::Kind,
+            vorkspace_core::accounts::Profile,
+        ),
+        Vec<(String, String)>,
+    >,
+    catalogs_loading: Vec<(
+        vorkspace_core::provider::Kind,
+        vorkspace_core::accounts::Profile,
+    )>,
     models_open: Option<vorkspace_core::provider::Kind>,
     model_menu_anchors: RefCell<HashMap<vorkspace_core::provider::Kind, AnchorSlot>>,
     model_filter: Entity<Input>,
@@ -369,7 +378,12 @@ impl SettingsView {
             }),
         ];
         if let Some(center) = crate::accounts::get(cx) {
-            subscriptions.push(cx.observe(&center, |_, _, cx| cx.notify()));
+            subscriptions.push(cx.observe(&center, |this, _, cx| {
+                if this.section == Section::Providers {
+                    this.load_catalogs(false, cx);
+                }
+                cx.notify();
+            }));
         }
         let recorder = cx.weak_entity();
         subscriptions.push(cx.intercept_keystrokes(move |event, window, cx| {
@@ -475,7 +489,7 @@ impl SettingsView {
                 this.discovery = data;
                 this.discovery_loading = false;
                 if this.section == Section::Providers {
-                    this.load_catalogs(cx);
+                    this.load_catalogs(true, cx);
                 }
                 if this.section == Section::Mcp {
                     this.refresh_mcp_health(cx);
@@ -485,23 +499,45 @@ impl SettingsView {
         }));
         cx.notify();
     }
+    fn catalog_profile(
+        &self,
+        kind: vorkspace_core::provider::Kind,
+        cx: &App,
+    ) -> vorkspace_core::accounts::Profile {
+        crate::accounts::get(cx)
+            .map(|center| center.read(cx).selected(kind, &self.selected_project))
+            .unwrap_or_default()
+    }
+    fn discovered_models(
+        &self,
+        kind: vorkspace_core::provider::Kind,
+        cx: &App,
+    ) -> Option<&Vec<(String, String)>> {
+        self.discovered_catalogs
+            .get(&(kind, self.catalog_profile(kind, cx)))
+    }
     /// Load every installed provider's model list off the render path.
-    fn load_catalogs(&mut self, cx: &mut Context<Self>) {
+    fn load_catalogs(&mut self, force: bool, cx: &mut Context<Self>) {
         for (kind, path) in self.discovery.binaries.clone() {
-            if path.is_none() || self.catalogs_loading.contains(&kind) {
+            let profile = self.catalog_profile(kind, cx);
+            let key = (kind, profile.clone());
+            if path.is_none()
+                || self.catalogs_loading.contains(&key)
+                || (!force && self.discovered_catalogs.contains_key(&key))
+            {
                 continue;
             }
-            self.catalogs_loading.push(kind);
+            self.catalogs_loading.push(key.clone());
             let work = cx
                 .background_executor()
-                .spawn(async move { vorkspace_core::catalog::models(kind) });
+                .spawn(async move { vorkspace_core::catalog::models_for(kind, &profile) });
             cx.spawn(async move |this, cx| {
                 let result = work.await;
                 let _ = this.update(cx, |this, cx| {
-                    this.catalogs_loading.retain(|loading| *loading != kind);
+                    this.catalogs_loading.retain(|loading| *loading != key);
                     if let Ok(models) = result {
                         this.discovered_catalogs.insert(
-                            kind.id().into(),
+                            key,
                             models
                                 .into_iter()
                                 .map(|model| {
@@ -559,7 +595,7 @@ impl SettingsView {
             self.section = section;
             self.watch_connections(cx);
             if section == Section::Providers {
-                self.load_catalogs(cx);
+                self.load_catalogs(false, cx);
             }
             if section == Section::Mcp {
                 self.refresh_mcp_health(cx);

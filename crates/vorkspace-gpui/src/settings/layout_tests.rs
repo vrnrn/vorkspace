@@ -255,8 +255,10 @@ fn providers_without_an_open_conversation_list_their_loaded_models(cx: &mut Test
     window
         .update(cx, |view, _, cx| {
             view.discovery.binaries = vec![(Kind::Codex, Some("/bin/codex".into()))];
-            view.discovered_catalogs
-                .insert("codex".into(), vec![("a".into(), "Alpha".into())]);
+            view.discovered_catalogs.insert(
+                (Kind::Codex, Default::default()),
+                vec![("a".into(), "Alpha".into())],
+            );
             cx.notify();
         })
         .unwrap();
@@ -270,6 +272,69 @@ fn providers_without_an_open_conversation_list_their_loaded_models(cx: &mut Test
             .debug_bounds("settings-select-provider-scope")
             .is_none()
     );
+}
+
+#[gpui::test]
+fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
+    cx: &mut TestAppContext,
+) {
+    use vorkspace_core::provider::Kind;
+    let directory = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(std::sync::Mutex::new(
+        vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
+    ));
+    cx.update(|cx| crate::accounts::install(store, cx));
+    let window = window(Section::Providers, cx);
+    let account = cx.update(|cx| {
+        crate::accounts::get(cx).unwrap().update(cx, |center, _| {
+            center.book.add(Kind::Codex, "Work").unwrap()
+        })
+    });
+    window
+        .update(cx, |view, _, cx| {
+            // Keep the test independent of external provider binaries.
+            view.discovery.binaries.clear();
+            let center = crate::accounts::get(cx).unwrap();
+            let default = center
+                .read(cx)
+                .selected(Kind::Codex, &view.selected_project);
+            let work = center.read(cx).profile(&account.id);
+            view.discovered_catalogs.insert(
+                (Kind::Codex, default),
+                vec![("default-model".into(), "Default model".into())],
+            );
+            view.discovered_catalogs.insert(
+                (Kind::Codex, work),
+                vec![("work-model".into(), "Work model".into())],
+            );
+            assert_eq!(
+                view.discovered_models(Kind::Codex, cx).unwrap()[0].0,
+                "default-model"
+            );
+            center.update(cx, |center, cx| {
+                center
+                    .book
+                    .select(Kind::Codex, &view.selected_project, &account.id)
+                    .unwrap();
+                cx.notify();
+            });
+            assert_eq!(
+                view.discovered_models(Kind::Codex, cx).unwrap()[0].0,
+                "work-model"
+            );
+            center.update(cx, |center, cx| {
+                center
+                    .book
+                    .select(Kind::Codex, &view.selected_project, "default")
+                    .unwrap();
+                cx.notify();
+            });
+            assert_eq!(
+                view.discovered_models(Kind::Codex, cx).unwrap()[0].0,
+                "default-model"
+            );
+        })
+        .unwrap();
 }
 
 #[gpui::test]
