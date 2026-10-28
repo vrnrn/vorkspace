@@ -994,6 +994,125 @@ impl UsageFooter {
         )
     }
 }
+// The rail shows remaining capacity consistently, independent of the expanded
+// used/remaining preference. Unknown usage has no ring, rather than a false zero.
+fn rail_window(snapshot: Option<&usage::Snapshot>) -> Option<&usage::Window> {
+    let windows = &snapshot?.windows;
+    windows
+        .iter()
+        .find(|w| w.minutes == 10_080 && w.used_percent.is_finite())
+        .or_else(|| {
+            windows
+                .iter()
+                .find(|w| w.minutes == 300 && w.used_percent.is_finite())
+        })
+        .or_else(|| windows.iter().find(|w| w.used_percent.is_finite()))
+}
+
+fn summary_lines(snapshot: Option<&usage::Snapshot>, remaining: bool, now: i64) -> Vec<String> {
+    let Some(snapshot) = snapshot else {
+        return Vec::new();
+    };
+    let five = snapshot
+        .windows
+        .iter()
+        .find(|w| w.minutes == 300 && w.used_percent.is_finite());
+    let weekly = snapshot
+        .windows
+        .iter()
+        .find(|w| w.minutes == 10_080 && w.used_percent.is_finite());
+    let format_window = |w: &usage::Window, prefix: Option<&str>, remaining: bool| {
+        let percent = if remaining {
+            100. - w.used_percent
+        } else {
+            w.used_percent
+        }
+        .clamp(0., 100.);
+        let mut text = format!(
+            "{}{percent:.0}% {}",
+            prefix.map(|p| format!("{p}: ")).unwrap_or_default(),
+            if remaining { "left" } else { "used" }
+        );
+        if w.resets_at.is_some() {
+            text.push_str(&format!(" · {}", w.countdown(now)));
+        }
+        text
+    };
+    if let (Some(five), Some(weekly)) = (five, weekly) {
+        vec![
+            format_window(five, Some("5h"), true),
+            format_window(weekly, Some("W"), true),
+        ]
+    } else {
+        snapshot
+            .windows
+            .iter()
+            .filter(|w| w.used_percent.is_finite())
+            .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
+            .map(|w| vec![format_window(w, None, remaining)])
+            .unwrap_or_default()
+    }
+}
+
+fn usage_ring(kind: Kind, window: &usage::Window) -> impl IntoElement {
+    let ratio = ((100. - window.used_percent).clamp(0., 100.) / 100.) as f32;
+    let color: gpui::Hsla = match kind {
+        Kind::Codex => rgb(0x7a9dff).into(),
+        Kind::Claude => rgb(0xd97757).into(),
+        _ => content(0.7),
+    };
+    gpui::canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let center = bounds.center();
+            for (amount, alpha) in [(1., 0.22), (ratio, 1.)] {
+                if amount <= 0. {
+                    continue;
+                }
+                let mut path = gpui::PathBuilder::stroke(px(2.));
+                let steps = (amount * 100.).ceil() as usize;
+                for step in 0..=steps {
+                    let angle = step as f32 / steps as f32 * amount * std::f32::consts::TAU
+                        - std::f32::consts::FRAC_PI_2;
+                    let point = center + gpui::point(px(12. * angle.cos()), px(12. * angle.sin()));
+                    if step == 0 {
+                        path.move_to(point);
+                    } else {
+                        path.line_to(point);
+                    }
+                }
+                if amount == 1. {
+                    path.close();
+                }
+                let mut stroke = color;
+                stroke.a *= alpha;
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, stroke);
+                }
+                if alpha == 1. && amount < 1. {
+                    for angle in [
+                        -std::f32::consts::FRAC_PI_2,
+                        amount * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2,
+                    ] {
+                        let origin = center
+                            + gpui::point(px(12. * angle.cos() - 1.), px(12. * angle.sin() - 1.));
+                        window.paint_quad(
+                            gpui::fill(
+                                gpui::Bounds::new(origin, gpui::size(px(2.), px(2.))),
+                                stroke,
+                            )
+                            .corner_radii(px(1.)),
+                        );
+                    }
+                }
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+    .size_full()
+}
+
 use crate::accounts::ui::bar_color as usage_color;
 impl Render for UsageFooter {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1015,13 +1134,19 @@ impl Render for UsageFooter {
                     let windows = snapshot
                         .windows
                         .iter()
+                        .filter(|window| window.used_percent.is_finite())
                         .map(|window| {
-                            format!(
-                                "{} {}% · {}",
+                            let mut text = format!(
+                                "{} {}",
                                 window.label(),
-                                self.display_percent(window.used_percent).round(),
-                                window.countdown(now)
-                            )
+                                self.percent_label(window.used_percent)
+                            );
+                            if window.resets_at.is_some() {
+                                text.push_str(&format!(" · {}", window.reset_label(now)));
+                            } else {
+                                text.push_str(" · reset time unavailable");
+                            }
+                            text
                         })
                         .collect::<Vec<_>>();
                     if windows.is_empty() {
@@ -1041,23 +1166,11 @@ impl Render for UsageFooter {
                         "Usage unavailable".into()
                     }
                 });
-            let summary = state
-                .snapshot
-                .as_ref()
-                .and_then(|snapshot| {
-                    snapshot
-                        .windows
-                        .iter()
-                        .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
-                })
-                .map(|window| {
-                    format!(
-                        "{} · {}",
-                        self.percent_label(window.used_percent),
-                        window.countdown(now)
-                    )
-                })
-                .unwrap_or_else(|| detail.clone());
+            let mut summary = summary_lines(state.snapshot.as_ref(), self.show_remaining, now);
+            if summary.is_empty() {
+                summary.push(detail.clone());
+            }
+            let ring = rail_window(state.snapshot.as_ref());
             let picked = key.clone();
             let refresh = key.clone();
             let row_id = format!(
@@ -1087,7 +1200,18 @@ impl Render for UsageFooter {
                             )))
                             .role(Role::Button)
                             .aria_label(format!("{name} usage details"))
-                            .aria_description(detail.clone())
+                            .aria_description(if self.compact {
+                                match ring {
+                                    Some(w) => {
+                                        format!("{} remaining shown in ring. {detail}", w.label())
+                                    }
+                                    None => detail.clone(),
+                                }
+                            } else if summary.len() == 2 {
+                                format!("{}. {detail}", summary.join(". "))
+                            } else {
+                                detail.clone()
+                            })
                             .track_focus(&trigger)
                             .tab_index(0)
                             .key_context("UsageChip")
@@ -1106,6 +1230,9 @@ impl Render for UsageFooter {
                             .gap_2()
                             .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
                             .child(anchor.probe())
+                            .when(self.compact, |d| {
+                                d.children(ring.map(|w| usage_ring(key.kind, w)))
+                            })
                             .child(provider_icon(key.kind.id(), 14.))
                             .when(!self.compact, |d| {
                                 d.child(
@@ -1120,14 +1247,14 @@ impl Render for UsageFooter {
                                                 .truncate()
                                                 .child(name),
                                         )
-                                        .child(
+                                        .children(summary.into_iter().map(|line| {
                                             div()
                                                 .text_size(px(10.))
                                                 .line_height(px(15.))
                                                 .text_color(content(0.5))
                                                 .truncate()
-                                                .child(summary),
-                                        ),
+                                                .child(line)
+                                        })),
                                 )
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -1239,6 +1366,48 @@ fn external_billing(snapshot: Option<&usage::Snapshot>) -> Option<&'static str> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sidebar_usage_windows_resets_and_rail_priority() {
+        use super::*;
+        let window = |minutes, used_percent, resets_at| usage::Window {
+            minutes,
+            used_percent,
+            resets_at,
+        };
+        let mut snapshot = usage::Snapshot {
+            windows: vec![
+                window(10_080, 31., Some(172_800_000)),
+                window(300, 0., None),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            summary_lines(Some(&snapshot), false, 0),
+            ["5h: 100% left", "W: 69% left · 2d"]
+        );
+        assert_eq!(rail_window(Some(&snapshot)).unwrap().minutes, 10_080);
+        snapshot.windows[1].resets_at = Some(3_600_000);
+        assert_eq!(
+            summary_lines(Some(&snapshot), true, 0),
+            ["5h: 100% left · 1h", "W: 69% left · 2d"]
+        );
+        snapshot.windows.remove(1);
+        assert_eq!(summary_lines(Some(&snapshot), true, 0), ["69% left · 2d"]);
+        assert_eq!(rail_window(Some(&snapshot)).unwrap().minutes, 10_080);
+        snapshot.windows = vec![window(300, 0., Some(3_600_000))];
+        assert_eq!(summary_lines(Some(&snapshot), false, 0), ["0% used · 1h"]);
+        assert_eq!(rail_window(Some(&snapshot)).unwrap().minutes, 300);
+        snapshot.windows = vec![window(1_440, 75., None)];
+        assert_eq!(summary_lines(Some(&snapshot), true, 0), ["25% left"]);
+        assert_eq!(rail_window(Some(&snapshot)).unwrap().minutes, 1_440);
+        snapshot.windows[0].used_percent = f64::NAN;
+        assert!(summary_lines(Some(&snapshot), true, 0).is_empty());
+        assert!(rail_window(Some(&snapshot)).is_none());
+        assert!(rail_window(None).is_none());
+        snapshot.windows.clear();
+        assert!(rail_window(Some(&snapshot)).is_none());
+    }
+
     use super::*;
     #[gpui::test]
     fn subscriptions_keep_account_usage_separate_from_the_active_conversation(

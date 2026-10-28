@@ -408,3 +408,102 @@ fn native_compact_footer_capture() {
         }
     }
 }
+
+#[test]
+#[ignore = "Requires Metal and VOKKY_SIDEBAR_USAGE_CAPTURE_DIR"]
+fn native_sidebar_usage_capture() {
+    struct Surface {
+        usage: Entity<UsageFooter>,
+        compact: bool,
+    }
+    impl Render for Surface {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .bg(rgb(CHAT))
+                .font_family(crate::fonts::UI)
+                .child(
+                    div()
+                        .w(px(if self.compact { COMPACT_WIDTH } else { 240. }))
+                        .h_full()
+                        .bg(shell_fill())
+                        .flex()
+                        .flex_col()
+                        .justify_end()
+                        .when(!self.compact, |d| d.px_2())
+                        .child(self.usage.clone()),
+                )
+        }
+    }
+    let output =
+        std::path::PathBuf::from(std::env::var_os("VOKKY_SIDEBAR_USAGE_CAPTURE_DIR").unwrap());
+    assert!(output.is_absolute() && output.is_dir());
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(Mutex::new(
+        Store::open(&directory.path().join("native.sqlite")).unwrap(),
+    ));
+    let mut cx = gpui::HeadlessAppContext::with_platform(
+        Arc::new(gpui_apple::AppleTextSystem::new()),
+        Arc::new(crate::assets::Assets),
+        || {
+            Ok(Some(Box::new(
+                gpui_apple::metal_renderer::MetalHeadlessRenderer::new(),
+            )))
+        },
+    );
+    cx.update(|cx| {
+        crate::clock::use_test_clock(cx);
+        crate::accounts::install(store, cx);
+        let center = crate::accounts::get(cx).unwrap();
+        center.update(cx, |center, cx| {
+            center.usage.clear();
+            let now = vorkspace_core::usage::now_ms();
+            for (kind, weekly) in [(Kind::Codex, 88.), (Kind::Claude, 31.)] {
+                center
+                    .usage
+                    .entry(default_key(kind))
+                    .or_default()
+                    .complete(Ok(Snapshot {
+                        updated_at: now,
+                        windows: vec![
+                            vorkspace_core::usage::Window {
+                                minutes: 300,
+                                used_percent: 0.,
+                                resets_at: None,
+                            },
+                            vorkspace_core::usage::Window {
+                                minutes: 10_080,
+                                used_percent: weekly,
+                                resets_at: Some(now + 172_800_000),
+                            },
+                        ],
+                        ..Default::default()
+                    }));
+            }
+            cx.notify();
+        });
+    });
+    for compact in [false, true] {
+        let window = cx
+            .open_window(size(px(280.), px(300.)), |_, cx| {
+                let usage = cx.new(|cx| {
+                    let mut usage = UsageFooter::new(Kind::Codex, cx);
+                    usage.set_compact(compact, cx);
+                    usage
+                });
+                cx.new(|_| Surface { usage, compact })
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.capture_screenshot(window.into())
+            .unwrap()
+            .save(output.join(if compact {
+                "usage-compact.png"
+            } else {
+                "usage-expanded.png"
+            }))
+            .unwrap();
+        cx.update_window(window.into(), |_, window, _| window.remove_window())
+            .unwrap();
+    }
+}
