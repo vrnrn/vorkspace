@@ -5206,9 +5206,7 @@ impl Shell {
         if action == "delete"
             && let MenuTarget::Tab(id) = target
         {
-            // Temporary adapter: integration should route this to the shared
-            // request_delete_sessions confirmation instead.
-            self.delete_from_settings(id, window, cx);
+            self.request_delete_sessions(vec![id], window, cx);
             return;
         }
         match target {

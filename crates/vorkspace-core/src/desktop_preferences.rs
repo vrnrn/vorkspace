@@ -180,11 +180,19 @@ impl DesktopPreferences {
             let source = json!(projects);
             let current = object.get("projects").cloned().unwrap_or(json!([]));
             let mut merged = merge_projects(baseline.get("projects"), &current, &source);
-            let deleted: HashSet<_> = object.get("deleted_projects").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(crate::files::path_key).collect();
+            let deleted: HashSet<_> = object
+                .get("deleted_projects")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(crate::files::path_key)
+                .collect();
             if let Some(paths) = merged.as_array_mut() {
                 paths.retain(|p| {
                     p.as_str().is_none_or(|p| {
-                        archive.get(&crate::files::path_key(p)) != Some(&json!(true)) && !deleted.contains(&crate::files::path_key(p))
+                        archive.get(&crate::files::path_key(p)) != Some(&json!(true))
+                            && !deleted.contains(&crate::files::path_key(p))
                     })
                 });
                 for (path, decision) in &archive {
@@ -929,6 +937,17 @@ mod tests {
         state["projects"] = json!(["/code/gone", "/code/keep"]);
         source.apply_workspace(&mut state);
         assert_eq!(state["projects"], json!(["/code/gone", "/code/keep"]));
+    }
+
+    #[test]
+    fn deleted_project_is_not_resurrected_by_an_older_archive_restore() {
+        let source = prefs(&[("vorkspace.recentProjects", json!([{"path":"/code/gone"}]))]);
+        let mut state = json!({"projects":[], "project_archive":{"/code/gone":false}, "deleted_projects":["/code/gone"]});
+        source.apply_workspace(&mut state);
+        assert_eq!(state["projects"], json!([]));
+        state["deleted_projects"] = json!([]);
+        source.apply_workspace(&mut state);
+        assert_eq!(state["projects"], json!(["/code/gone"]));
     }
 
     #[test]

@@ -706,14 +706,24 @@ impl Workspace {
             dock.size = dock.side.clamp(dock.size, (4000., 4000.));
         }
         state.projects.retain(|p| {
-            !state.deleted_projects.contains(&vorkspace_core::files::path_key(p))
+            !state
+                .deleted_projects
+                .contains(&vorkspace_core::files::path_key(p))
         });
-        if state.deleted_projects.contains(&vorkspace_core::files::path_key(&state.project)) {
+        if state
+            .deleted_projects
+            .contains(&vorkspace_core::files::path_key(&state.project))
+        {
             state.project = state.projects.first().cloned().unwrap_or_default();
             state.active = None;
         }
-        if state.project_archive.get(&vorkspace_core::files::path_key(cwd)) != Some(&true)
-            && !state.deleted_projects.contains(&vorkspace_core::files::path_key(cwd))
+        if state
+            .project_archive
+            .get(&vorkspace_core::files::path_key(cwd))
+            != Some(&true)
+            && !state
+                .deleted_projects
+                .contains(&vorkspace_core::files::path_key(cwd))
         {
             state.add_project(cwd);
         }
@@ -730,7 +740,9 @@ impl Workspace {
                 .project_archive
                 .get(&vorkspace_core::files::path_key(path))
                 != Some(&true)
-                && !state.deleted_projects.contains(&vorkspace_core::files::path_key(path))
+                && !state
+                    .deleted_projects
+                    .contains(&vorkspace_core::files::path_key(path))
                 && state
                     .active
                     .is_some_and(|pane| state.session_for_pane(pane) == *id)
@@ -931,7 +943,11 @@ impl Workspace {
         if self.project_archive.contains_key(&key) {
             self.project_archive.insert(key.clone(), false);
         }
-        if !self.projects.iter().any(|p| vorkspace_core::files::path_key(p) == key) {
+        if !self
+            .projects
+            .iter()
+            .any(|p| vorkspace_core::files::path_key(p) == key)
+        {
             self.projects.push(path.into());
         }
     }

@@ -339,11 +339,11 @@ impl Shell {
                 }
                 SettingsEvent::RestoreProject(path) => {
                     let mut next = this.workspace.clone();
-                    next.add_project(path);
+                    next.restore_project(path);
                     this.commit_project_archive(next, cx);
                     this.sync_settings(cx);
                 }
-                SettingsEvent::Delete(id) => this.delete_from_settings(*id, window, cx),
+                SettingsEvent::Delete(id) => this.request_delete_sessions(vec![*id], window, cx),
                 SettingsEvent::RemoveWorktree {
                     cwd,
                     path,
@@ -587,29 +587,6 @@ impl Shell {
             let _=this.update(cx,|this,cx|{let result=result.map(|detached|{for(summary,settings)in detached{this.session_summaries.insert(summary.id, summary.clone());this.session_worktrees.insert(summary.id,settings.worktree_cwd.clone());if let Some(view)=this.sessions.get(&summary.id){view.update(cx,|v,cx|v.worktree_deleted(summary,settings,cx));}}this.worktree_focus.retain(|_,focus|!is_equal_or_inside(&focus.path,&path));});this.finish_worktree_action(result,cx);});
         }).detach();
         let _ = window;
-    }
-    pub(super) fn delete_from_settings(
-        &mut self,
-        id: i64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let prompt = window.prompt(
-            gpui::PromptLevel::Warning,
-            "Delete this conversation permanently?",
-            Some("Its messages and saved settings will be removed."),
-            &["Delete", "Cancel"],
-            cx,
-        );
-        cx.spawn(async move |this, cx| {
-            if prompt.await != Ok(0) {
-                return;
-            }
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.delete_session(id, window, cx);
-            });
-        })
-        .detach();
     }
 }
 fn this_update(this: &mut Shell, cx: &mut Context<Shell>) {
