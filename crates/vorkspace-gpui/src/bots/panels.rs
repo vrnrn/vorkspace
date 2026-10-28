@@ -1130,37 +1130,6 @@ impl Bots {
             .map(|f| f.read(cx).content.to_string())
             .unwrap_or_default()
     }
-    pub(super) fn topbar(&self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
-        let id = bot.id.clone();
-        div()
-            .child(
-                button("open-channels", "Channels").on_click(cx.listener(|this, _, _, cx| {
-                    this.channels.open = true;
-                    cx.notify();
-                })),
-            )
-            .absolute()
-            .top_0()
-            .right(px(10.))
-            .h(px(40.))
-            .flex()
-            .items_center()
-            .child(
-                icon_button("bot-settings", "Bot settings", "settings")
-                    .debug_selector(|| "bot-settings".into())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if this.creating() {
-                            this.create(Vec::new(), window, cx);
-                            return;
-                        }
-                        this.settings = Some(SettingsSection::General);
-                        window.focus(&this.settings_focus, cx);
-                        this.reload_files(&id, cx);
-                        cx.notify();
-                    })),
-            )
-            .into_any_element()
-    }
     pub(super) fn select_overview(&mut self, tab: OverviewTab, cx: &mut Context<Self>) {
         if tab != OverviewTab::Changes {
             self.pause_changes(cx);
@@ -2628,7 +2597,12 @@ impl Bots {
         })
         .detach();
     }
-    fn open_bot_settings(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_bot_settings(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.roster.get(id).is_none() {
             return;
         }

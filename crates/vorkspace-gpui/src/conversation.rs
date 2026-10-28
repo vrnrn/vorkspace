@@ -447,7 +447,7 @@ impl Conversation {
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
         #[cfg(test)]
         crate::clock::use_test_clock(cx);
-        let input = cx.new(input::Input::new);
+        let input = cx.new(input::Input::composer);
         // A new tab shows its folder's checkout from the first frame; the
         // load below confirms it rather than popping it in.
         let git = (!summary.has_messages)
@@ -956,7 +956,13 @@ impl Conversation {
                 .unwrap_or_default();
             let attachments = std::mem::take(&mut self.attachments);
             if !text.trim().is_empty() || !attachments.is_empty() {
-                cx.emit(bot::Submitted { text, attachments });
+                // Queue applies to this message only, like a session mode.
+                let queue = std::mem::take(&mut self.bot_ui.queue);
+                cx.emit(bot::Submitted {
+                    text,
+                    attachments,
+                    queue,
+                });
                 cx.notify();
             }
             return;
@@ -2183,6 +2189,11 @@ impl Conversation {
                     self.toggle_mode(id, cx);
                     return;
                 }
+                "queue" => {
+                    self.bot_ui.queue = !self.bot_ui.queue;
+                    cx.notify();
+                    return;
+                }
                 _ => return,
             }
         }
@@ -2611,6 +2622,21 @@ impl Conversation {
                 )
             }
             // Composer.tsx's plus menu with native mode and attachment actions.
+            ComposerMenu::Add if self.settings.bot.is_some() => {
+                let items = vec![
+                    MenuItem::Header("Add to message".into()),
+                    MenuAction::new("upload", "Upload file")
+                        .icon("file-add")
+                        .description("Attach files or images")
+                        .into(),
+                    MenuAction::new("queue", "Queue")
+                        .icon("queue-list")
+                        .description("Send after the current reply instead of steering it")
+                        .checked(self.bot_ui.queue)
+                        .into(),
+                ];
+                ("Add to message", items, 250., MenuStyle::Composer)
+            }
             ComposerMenu::Add => {
                 let mut items = vec![MenuItem::Header("Add to message".into())];
                 items.extend(
@@ -2839,9 +2865,6 @@ impl Conversation {
     // Composer.tsx in the inset layout: a frosted, rounded box holding the
     // field and its toolbar, with the workspace bar sitting under it.
     fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let radius = 12.;
-        let blur = composer_blur();
-        let fill = composer_fill();
         let command = if self.follow_ups.draft_selected {
             Some(input::Command::Draft)
         } else if self.settings.orchestrator {
@@ -2855,17 +2878,6 @@ impl Conversation {
         };
         self.input
             .update(cx, |input, cx| input.selected_command(command, cx));
-        let beside = cx
-            .try_global::<crate::settings::Preferences>()
-            .is_some_and(|p| p.model_controls == "beside");
-        let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
-        let controls = if beside {
-            self.model_controls(cx)
-        } else {
-            Vec::new()
-        };
-        let input = self.input.read(cx);
-        let has_value = input.has_message_text() || !self.attachments.is_empty();
         self.completion.update(cx, |completion, cx| {
             completion.set_cwd(
                 self.settings
@@ -2875,7 +2887,6 @@ impl Conversation {
                 cx,
             )
         });
-        let kind = Kind::from_id(&self.summary.provider);
         let menu: Vec<_> = self
             .menu
             .as_ref()
@@ -2955,183 +2966,137 @@ impl Conversation {
                 )
             })
             .child(self.approval_shelf(window, cx))
-            .child(
-                div()
-                    .id("composer-box")
-                    .debug_selector(|| "composer-box".into())
-                    .capture_action(cx.listener(|this, _: &input::Paste, _, cx| {
-                        if this.paste_attachments(cx) {
-                            cx.stop_propagation();
-                        }
-                    }))
-                    .relative()
-                    .rounded(px(radius))
-                    .border_1()
-                    .border_color(composer_border(self.input.focus_handle(cx).is_focused(window)))
-                    .when(self.file_drag, |d| d.border_color(accent_color().opacity(0.6)))
-                    .flex()
-                    .flex_col()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            window.focus(&this.input.focus_handle(cx), cx)
-                        }),
-                    )
-                    .child(self.completion.read(cx).composer_probe())
-                    .child(
-                        canvas(
-                            |_, _, _| {},
-                            move |bounds, _, window, _| {
-                                let surface = gpui::fill(bounds, fill).corner_radii(px(radius - 1.));
-                                let surface = if blur > 0. {
-                                    surface.border_color(
-                                        gpui_apple::metal_renderer::backdrop_blur_marker(
-                                            blur * window.scale_factor(),
-                                        ),
-                                    )
-                                } else {
-                                    surface
-                                };
-                                window.paint_quad(surface);
-                            },
-                        )
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full(),
-                    )
-                    .children(self.composer_recovery_banner(cx))
-                    .children(self.local_submission_banner(cx))
-                    .children(self.attachment_chips(cx))
-                    .child(
-                        div()
-                            .px_3()
-                            .pt(px(14.))
-                            .pb(px(14.))
-                            .child(self.completion.clone()),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| "composer-toolbar".into())
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .px_2()
-                            .pb(px(10.))
-                            .child(
-                                tool_pill("composer-add", "Add files or choose a mode")
-                                    .aria_expanded(self.menu_is(ComposerMenu::Add))
-                                    .when(self.menu_is(ComposerMenu::Add), |d| d.bg(content(0.2)))
-                                    .child(self.add_anchor.probe())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.toggle_menu(ComposerMenu::Add, window, cx)
-                                    }))
-                                    .w(px(26.))
-                                    .justify_center()
-                                    .text_color(content(0.5))
-                                    .child(
-                                        icon("plus", 14.)
-                                            .text_color(content(0.5))
-                                            .group_hover("composer-add", |s| {
-                                                s.text_color(content(1.))
-                                            }),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(
-                                        tool_pill("composer-model", "Model")
-                                            .min_w_0()
-                                            .max_w(px(220.))
-                                            .flex_shrink(1.)
-                                            .aria_label(format!(
-                                                "{}, {}{}",
-                                                kind.label(),
-                                                self.model_label(),
-                                                trigger_effort
-                                                    .as_ref()
-                                                    .map(|effort| format!(", effort {effort}"))
-                                                    .unwrap_or_default()
-                                            ))
-                                            .child(self.model_anchor.probe())
-                                            .aria_expanded(self.menu_is(ComposerMenu::Model) || self.menu_is(ComposerMenu::Recent) || self.bot_ui.models.is_some())
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.toggle_menu(ComposerMenu::Model, window, cx)
-                                            }))
-                                            .on_mouse_down(
-                                                MouseButton::Right,
-                                                cx.listener(|this, _, window, cx| {
-                                                    cx.stop_propagation();
-                                                    this.open_recent_models(window, cx)
-                                                }),
-                                            )
-                                            .child(provider_icon(&self.summary.provider, 16.))
-                                            .child(pill_label(self.model_label()))
-                                            .when_some(trigger_effort, |d, effort| {
-                                                d.child(
-                                                    div()
-                                                        .debug_selector(|| "composer-model-effort".into())
-                                                        .flex_shrink_0()
-                                                        .text_size(px(11.))
-                                                        .text_color(content(0.5))
-                                                        .child(effort),
-                                                )
-                                            })
-                                            .child(icon("chevron-down", 12.)),
-                                    )
-                                    .children(controls)
-                                    .child(
-                                        tool_pill("composer-access", "Access")
-                                            .aria_label(format!(
-                                                "Access, {}",
-                                                self.settings.access.label()
-                                            ))
-                                            .aria_expanded(self.menu_is(ComposerMenu::Access))
-                                            .child(self.access_anchor.probe())
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.toggle_menu(ComposerMenu::Access, window, cx)
-                                            }))
-                                            .child(
-                                                icon(
-                                                    match self.settings.access {
-                                                        AccessMode::FullAccess => "shield-alert",
-                                                        AccessMode::AutoAcceptEdits => {
-                                                            "pencil-edit"
-                                                        }
-                                                        AccessMode::Auto => "sparkles",
-                                                        _ => "square-lock",
-                                                    },
-                                                    14.,
-                                                )
-                                                .text_color(
-                                                    if self.settings.access
-                                                        == AccessMode::FullAccess
-                                                    {
-                                                        status(StatusColor::Warning, 1.)
-                                                    } else {
-                                                        content(1.)
-                                                    },
-                                                ),
-                                            )
-                                            .child(pill_label(self.settings.access.label()))
-                                            .child(icon("chevron-down", 12.)),
-                                    ),
-                            )
-                            .child(self.action(has_value, cx)),
-                    )
-                    .children(self.attachment_drop_overlay(12.)),
-            )
+            .child(self.composer_box(window, cx))
             .children(self.remote_notice(cx))
-            .child(self.workspace_bar(cx))
+            .child(self.composer_tools(cx))
             .into_any_element()
     }
-    fn workspace_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The composer box shared by sessions and Bots: its field, with send
+    /// beside it, on the frosted composer surface.
+    pub(super) fn composer_box(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        const RADIUS: f32 = 8.;
+        let blur = composer_blur();
+        let fill = composer_fill();
+        let bot = self.settings.bot.is_some();
+        let input = self.input.read(cx);
+        let has_value = input.has_message_text() || !self.attachments.is_empty();
+        // Sessions complete files, commands and skills; a Bot's field is plain.
+        let field = if bot {
+            self.input.clone().into_any_element()
+        } else {
+            self.completion.clone().into_any_element()
+        };
+        div()
+            .id("composer-box")
+            .debug_selector(|| "composer-box".into())
+            .capture_action(cx.listener(|this, _: &input::Paste, _, cx| {
+                if this.paste_attachments(cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .relative()
+            .rounded(px(RADIUS))
+            .border_1()
+            .border_color(composer_border(
+                self.input.focus_handle(cx).contains_focused(window, cx),
+            ))
+            .when(self.file_drag, |d| {
+                d.border_color(accent_color().opacity(0.6))
+            })
+            .flex()
+            .flex_col()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| window.focus(&this.input.focus_handle(cx), cx)),
+            )
+            .when(!bot, |d| d.child(self.completion.read(cx).composer_probe()))
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        let surface = gpui::fill(bounds, fill).corner_radii(px(RADIUS - 1.));
+                        let surface = if blur > 0. {
+                            surface.border_color(gpui_apple::metal_renderer::backdrop_blur_marker(
+                                blur * window.scale_factor(),
+                            ))
+                        } else {
+                            surface
+                        };
+                        window.paint_quad(surface);
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
+            .children(self.composer_recovery_banner(cx))
+            .children(self.local_submission_banner(cx))
+            .children(self.attachment_chips(cx))
+            .child(
+                // Even padding centres send beside one line and keeps it at
+                // the bottom as the text grows.
+                div()
+                    .flex()
+                    .items_end()
+                    .gap_1p5()
+                    .p(px(5.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .self_center()
+                            .px_1p5()
+                            .py_1()
+                            .child(field),
+                    )
+                    .child(self.action(has_value, cx)),
+            )
+            .children(self.attachment_drop_overlay(RADIUS))
+            .into_any_element()
+    }
+
+    /// The shared `+`: files and modes for a session, files and queueing for
+    /// a Bot.
+    pub(super) fn add_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let open = self.menu_is(ComposerMenu::Add);
+        quiet_control("composer-add", open)
+            .debug_selector(|| "composer-add".into())
+            .group("composer-add")
+            .w(px(26.))
+            .px_0()
+            .justify_center()
+            .aria_label(if self.settings.bot.is_some() {
+                "Upload a file or queue this message"
+            } else {
+                "Add files or choose a mode"
+            })
+            .aria_expanded(open)
+            .child(self.add_anchor.probe())
+            .child(
+                icon("plus", 14.)
+                    .text_color(content(if open { 1. } else { 0.55 }))
+                    .group_hover("composer-add", |s| s.text_color(content(1.))),
+            )
+            .on_click(
+                cx.listener(|this, _, window, cx| this.toggle_menu(ComposerMenu::Add, window, cx)),
+            )
+    }
+    /// The row under the box, shared by sessions and Bots: `+` (and for a
+    /// session its working copy and branch) on the left; the model, its
+    /// settings, access and context on the right.
+    pub(super) fn composer_tools(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let bot = self.settings.bot.is_some();
+        let kind = Kind::from_id(&self.summary.provider);
+        let beside = cx
+            .try_global::<crate::settings::Preferences>()
+            .is_some_and(|p| p.model_controls == "beside");
+        let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
+        let controls = if beside {
+            self.model_controls(cx)
+        } else {
+            Vec::new()
+        };
         let draft = !self.summary.has_messages;
         let linked =
             self.git.as_ref().is_some_and(|s| s.linked) || self.settings.worktree_cwd.is_some();
@@ -3156,6 +3121,7 @@ impl Conversation {
                 },
                 label.into(),
             )
+            .debug_selector(|| "composer-workspace".into())
             .aria_label(format!("Workspace {label}"))
             .aria_expanded(self.menu_is(ComposerMenu::Workspace))
             .child(self.workspace_anchor.probe())
@@ -3171,11 +3137,11 @@ impl Conversation {
             // WorkspaceIdentity: a started conversation owns this working copy.
             div()
                 .id("composer-workspace")
+                .debug_selector(|| "composer-workspace".into())
                 .role(Role::Group)
                 .aria_label(format!("Workspace {label}"))
                 .flex_shrink_0()
-                .h(px(24.))
-                .ml(px(-6.))
+                .h(px(26.))
                 .px(px(6.))
                 .flex()
                 .items_center()
@@ -3195,7 +3161,7 @@ impl Conversation {
             self.branch.clone()
         };
         let ratio = self.context.and_then(|usage| usage.ratio());
-        let show_context = ratio.is_some() || draft;
+        let show_context = bot || ratio.is_some() || draft;
         let headline = ratio
             .map(|r| format!("{:.0}% context used", r * 100.))
             .unwrap_or_else(|| "No context used yet".into());
@@ -3206,15 +3172,111 @@ impl Conversation {
                 vorkspace_core::context::format_tokens(usage.window.unwrap_or(0))
             )
         });
+        let model_open = self.menu_is(ComposerMenu::Model)
+            || self.menu_is(ComposerMenu::Recent)
+            || self.bot_ui.models.is_some();
+        let model =
+            quiet_control("composer-model", model_open)
+                .debug_selector(|| "composer-model".into())
+                .min_w_0()
+                .max_w(px(220.))
+                .flex_shrink(1.)
+                .aria_label(format!(
+                    "{}, {}{}",
+                    kind.label(),
+                    self.model_label(),
+                    trigger_effort
+                        .as_ref()
+                        .map(|effort| format!(", effort {effort}"))
+                        .unwrap_or_default()
+                ))
+                .child(self.model_anchor.probe())
+                .aria_expanded(model_open)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_menu(ComposerMenu::Model, window, cx)
+                }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.open_recent_models(window, cx)
+                    }),
+                )
+                .child(provider_icon(&self.summary.provider, 14.))
+                .child(
+                    div()
+                        .debug_selector(|| "composer-model-label".into())
+                        .min_w_0()
+                        .truncate()
+                        .child(self.model_label()),
+                )
+                .when_some(trigger_effort, |d, effort| {
+                    d.child(
+                        div()
+                            .debug_selector(|| "composer-model-effort".into())
+                            .min_w_0()
+                            .flex_shrink(1.)
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(content(0.5))
+                            .child(effort),
+                    )
+                });
+        let access_open = self.menu_is(ComposerMenu::Access);
+        let access = quiet_control("composer-access", access_open)
+            .debug_selector(|| "composer-access".into())
+            .aria_label(format!("Access, {}", self.settings.access.label()))
+            .aria_expanded(access_open)
+            .child(self.access_anchor.probe())
+            .on_click(
+                cx.listener(|this, _, window, cx| {
+                    this.toggle_menu(ComposerMenu::Access, window, cx)
+                }),
+            )
+            .child(
+                icon(
+                    match self.settings.access {
+                        AccessMode::FullAccess => "shield-alert",
+                        AccessMode::AutoAcceptEdits => "pencil-edit",
+                        AccessMode::Auto => "sparkles",
+                        _ => "square-lock",
+                    },
+                    14.,
+                )
+                .text_color(if self.settings.access == AccessMode::FullAccess {
+                    status(StatusColor::Warning, 1.)
+                } else {
+                    content(if access_open { 1. } else { 0.55 })
+                }),
+            )
+            .child(div().truncate().child(self.settings.access.label()));
         div()
+            .debug_selector(|| "composer-toolbar".into())
             .min_w_0()
             .flex()
+            .flex_wrap()
             .items_center()
-            .gap(px(10.))
-            .pt(px(6.))
-            .px(px(15.))
-            .child(workspace)
-            .when_some(branch, |d, branch| {
+            .gap(px(2.))
+            .pt_1()
+            .pl_1()
+            .pr_1p5()
+            .child(self.add_button(cx))
+            .when(bot && self.bot_ui.queue, |d| {
+                d.child(
+                    quiet_control("composer-queue-mode", true)
+                        .debug_selector(|| "composer-queue-mode".into())
+                        .aria_label("Queue is on; click to send normally")
+                        .child(icon("queue-list", 14.))
+                        .child("Queue")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.bot_ui.queue = false;
+                            cx.notify();
+                        })),
+                )
+            })
+            // A Bot works across its projects; a session owns one checkout.
+            .when(!bot, |d| d.child(workspace))
+            .when_some(branch.filter(|_| !bot), |d, branch| {
                 let detached = !new && self.git.as_ref().is_some_and(|s| s.detached);
                 let label = if detached {
                     format!("detached {branch}")
@@ -3223,6 +3285,7 @@ impl Conversation {
                 };
                 d.child(
                     bar_trigger("composer-branch", "git-branch", label.clone().into())
+                        .debug_selector(|| "composer-branch".into())
                         .aria_label(format!(
                             "{} {label}",
                             if new { "Worktree base" } else { "Branch" }
@@ -3245,10 +3308,17 @@ impl Conversation {
             .child(
                 div()
                     .ml_auto()
+                    .pl_2()
+                    .min_w_0()
+                    .max_w_full()
                     .flex_shrink_0()
                     .flex()
+                    .flex_wrap()
                     .items_center()
-                    .gap(px(8.))
+                    .gap_1()
+                    .child(model)
+                    .children(controls)
+                    .when(!bot, |d| d.child(access))
                     .when(self.editing_last_turn.pending(), |d| {
                         d.child(
                             div()
@@ -3264,7 +3334,7 @@ impl Conversation {
                         )
                     })
                     .when(
-                        self.status != "Ready"
+                        !bot && self.status != "Ready"
                             && !self.busy
                             && !self.loading
                             && self.settings.usage_limit.is_none(),
@@ -3287,6 +3357,7 @@ impl Conversation {
                         d.child(
                             div()
                                 .id("context-meter")
+                                .debug_selector(|| "context-meter".into())
                                 .role(Role::Image)
                                 .aria_label(format!(
                                     "{headline}{}",
@@ -3333,12 +3404,14 @@ impl Conversation {
                         )
                     }),
             )
+            .into_any_element()
     }
 
     // ComposerAction: a solid submit, dimmed while empty; Stop while busy.
     fn action(&self, has_value: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let ticket_pending = self.ticket_context.pending();
-        let busy = ticket_pending || (self.responding() && !has_value);
+        let bot = self.settings.bot.is_some();
+        let busy = !bot && (ticket_pending || (self.responding() && !has_value));
         let draft = self.draft_active(cx);
         let enabled = ticket_pending
             || (!self.attaching
@@ -3348,6 +3421,7 @@ impl Conversation {
         let accent = primary_action(enabled);
         div()
             .id("send-or-stop")
+            .debug_selector(|| "send-or-stop".into())
             .role(Role::Button)
             .aria_label(if busy {
                 "Stop"
@@ -3568,6 +3642,202 @@ mod composer_motion_tests {
         from
     }
     #[gpui::test]
+    fn composer_toolbar_wraps_without_overlapping_and_keeps_menus_clickable(
+        cx: &mut TestAppContext,
+    ) {
+        crate::theme::configure(&Default::default(), false, true);
+        cx.update(|cx| {
+            cx.set_global(crate::settings::Preferences::default());
+            crate::clock::use_test_clock(cx);
+        });
+        let window = window(cx, 760.);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        for width in [760., 480., 360., 260., 760.] {
+            visual.simulate_resize(size(px(width), px(700.)));
+            for started in [false, true] {
+                for beside in [false, true] {
+                    window
+                        .update(visual, |view, _, cx| {
+                            cx.global_mut::<crate::settings::Preferences>()
+                                .model_controls = if beside { "beside" } else { "combined" }.into();
+                            view.summary.has_messages = started;
+                            view.branch = Some("feature/a-very-long-branch-name".into());
+                            view.model = Some("gpt-6.1-sol".into());
+                            view.settings.effort = Some("xhigh".into());
+                            view.settings.access = AccessMode::FullAccess;
+                            view.catalog = vec![Model {
+                                alias_target: None,
+                                id: "gpt-6.1-sol".into(),
+                                name: "GPT-6.1 Sol".into(),
+                                efforts: vec!["high".into(), "xhigh".into()],
+                                default_effort: Some("high".into()),
+                                fast: false,
+                                thinking: false,
+                                default: true,
+                                tiers: Vec::new(),
+                                controls: Vec::new(),
+                            }];
+                            cx.notify();
+                        })
+                        .unwrap();
+                    visual.run_until_parked();
+                    visual.refresh().unwrap();
+                    let toolbar = visual.debug_bounds("composer-toolbar").unwrap();
+                    let mut names = vec![
+                        "composer-add",
+                        "composer-workspace",
+                        "composer-branch",
+                        "composer-model",
+                        "composer-access",
+                    ];
+                    if !started {
+                        names.push("context-meter");
+                    }
+                    let mut bounds: Vec<_> = names
+                        .iter()
+                        .map(|name| visual.debug_bounds(name).unwrap())
+                        .collect();
+                    if beside {
+                        names.push("model-effort");
+                        bounds.push(visual.debug_bounds("model-effort").unwrap());
+                    }
+                    for (i, a) in bounds.iter().enumerate() {
+                        assert!(
+                            a.left() >= toolbar.left()
+                                && a.right() <= toolbar.right()
+                                && a.top() >= toolbar.top()
+                                && a.bottom() <= toolbar.bottom(),
+                            "{} outside toolbar at {width}, started={started}, beside={beside}: {a:?}, {toolbar:?}",
+                            names[i]
+                        );
+                        for (j, b) in bounds.iter().enumerate().skip(i + 1) {
+                            assert!(
+                                a.right() <= b.left()
+                                    || b.right() <= a.left()
+                                    || a.bottom() <= b.top()
+                                    || b.bottom() <= a.top(),
+                                "{} overlaps {} at {width}, started={started}, beside={beside}: {a:?}, {b:?}",
+                                names[i],
+                                names[j]
+                            );
+                        }
+                    }
+                    if !beside {
+                        let effort = visual.debug_bounds("composer-model-effort").unwrap();
+                        let label = visual.debug_bounds("composer-model-label").unwrap();
+                        let model = bounds[3];
+                        assert!(effort.left() >= model.left() && effort.right() <= model.right());
+                        assert!(label.right() <= effort.left());
+                    }
+                    visual.simulate_click(bounds[3].center(), Default::default());
+                    assert!(
+                        window
+                            .update(visual, |view, _, _| view.menu_is(ComposerMenu::Model)
+                                || view.bot_ui.models.is_some())
+                            .unwrap()
+                    );
+                    window
+                        .update(visual, |view, _, cx| {
+                            view.menu = None;
+                            view.bot_ui.models = None;
+                            cx.notify();
+                        })
+                        .unwrap();
+                    visual.refresh().unwrap();
+                    let access = visual.debug_bounds("composer-access").unwrap();
+                    visual.simulate_click(access.center(), Default::default());
+                    assert!(
+                        window
+                            .update(visual, |view, _, _| view.menu_is(ComposerMenu::Access))
+                            .unwrap()
+                    );
+                    window
+                        .update(visual, |view, _, cx| {
+                            view.menu = None;
+                            cx.notify();
+                        })
+                        .unwrap();
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "Requires Metal and VORKSPACE_COMPOSER_CAPTURE_DIR"]
+    fn native_narrow_composer_capture() {
+        struct Capture(Entity<Conversation>);
+        impl gpui::Render for Capture {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().bg(pane_fill()).child(self.0.clone())
+            }
+        }
+        let output =
+            std::path::PathBuf::from(std::env::var_os("VORKSPACE_COMPOSER_CAPTURE_DIR").unwrap());
+        assert!(output.is_absolute() && output.is_dir());
+        let mut cx = gpui::HeadlessAppContext::with_platform(
+            Arc::new(gpui_apple::AppleTextSystem::new()),
+            Arc::new(crate::assets::Assets),
+            || {
+                Ok(Some(Box::new(
+                    gpui_apple::metal_renderer::MetalHeadlessRenderer::new(),
+                )))
+            },
+        );
+        crate::clock::use_test_clock(&cx);
+        for light in [false, true] {
+            let prefs = crate::settings::Preferences {
+                theme: if light { "light" } else { "dark" }.into(),
+                ..Default::default()
+            };
+            crate::theme::configure(&prefs, false, true);
+            cx.update(|cx| cx.set_global(prefs));
+            for width in [260., 360., 480., 760.] {
+                let store = Store::open(Path::new(":memory:")).unwrap();
+                let summary = store.create("codex", "/work/vorkspace").unwrap();
+                let store = Arc::new(Mutex::new(store));
+                let window = cx
+                    .open_window(size(px(width), px(700.)), |_, cx| {
+                        let conversation = cx.new(|cx| {
+                            let mut view = Conversation::new(summary, store, cx);
+                            view.loaded = true;
+                            view.status = "Ready".into();
+                            view.branch = Some("feature/a-very-long-branch-name".into());
+                            view.settings.access = AccessMode::FullAccess;
+                            view.model = Some("gpt-6.1-sol".into());
+                            view.settings.effort = Some("xhigh".into());
+                            view.catalog = vec![Model {
+                                alias_target: None,
+                                id: "gpt-6.1-sol".into(),
+                                name: "GPT-6.1 Sol".into(),
+                                efforts: vec!["high".into(), "xhigh".into()],
+                                default_effort: Some("high".into()),
+                                fast: false,
+                                thinking: false,
+                                default: true,
+                                tiers: Vec::new(),
+                                controls: Vec::new(),
+                            }];
+                            view
+                        });
+                        cx.new(|_| Capture(conversation))
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                crate::clock::settle_headless_animations(window, &mut cx);
+                cx.capture_screenshot(window.into())
+                    .unwrap()
+                    .save(output.join(format!(
+                        "composer-{}-{width}.png",
+                        if light { "light" } else { "dark" }
+                    )))
+                    .unwrap();
+                cx.update_window(window.into(), |_, window, _| window.remove_window())
+                    .unwrap();
+            }
+        }
+        crate::theme::configure(&Default::default(), false, true);
+    }
+    #[gpui::test]
     fn composer_uses_react_surface_and_equal_text_padding_with_attachments(
         cx: &mut TestAppContext,
     ) {
@@ -3604,6 +3874,13 @@ mod composer_motion_tests {
                     let composer = visual.debug_bounds("composer-box").unwrap();
                     let field = visual.debug_bounds("composer-text-field").unwrap();
                     let toolbar = visual.debug_bounds("composer-toolbar").unwrap();
+                    // The column is centred in the pane, not pushed to an edge.
+                    let left = composer.left();
+                    let right = px(width) - composer.right();
+                    assert!(
+                        (left - right).abs() <= px(1.),
+                        "composer is centred: {left:?} vs {right:?} at {width}px"
+                    );
                     let top = if attached {
                         visual
                             .debug_bounds("composer-attachments")
@@ -3612,9 +3889,12 @@ mod composer_motion_tests {
                     } else {
                         composer.top() + px(1.)
                     };
-                    assert_eq!(field.top() - top, px(14.));
-                    assert_eq!(toolbar.top() - field.bottom(), px(14.));
-                    assert_eq!(field.size.height, px(66.));
+                    // BotComposer's box: 5px around the row plus the field's
+                    // 4px, and the tools sit under the box, not inside it.
+                    assert_eq!(field.top() - top, px(9.));
+                    assert_eq!(composer.bottom() - field.bottom(), px(10.));
+                    assert_eq!(toolbar.top(), composer.bottom());
+                    assert_eq!(field.size.height, px(54.));
                     window
                         .update(visual, |_, window, _| {
                             let scale = window.scale_factor();
@@ -3622,7 +3902,7 @@ mod composer_motion_tests {
                                 .painted_quads()
                                 .into_iter()
                                 .find(|quad| {
-                                    (quad.corner_radii.top_left.0 / scale - 11.).abs() < 0.1
+                                    (quad.corner_radii.top_left.0 / scale - 7.).abs() < 0.1
                                         && quad.background.as_solid() == Some(content(0.03))
                                         && (quad.bounds.size.width.0 / scale
                                             - f32::from(composer.size.width))
@@ -3679,7 +3959,7 @@ mod composer_motion_tests {
                     .painted_quads()
                     .into_iter()
                     .find(|q| {
-                        (q.corner_radii.top_left.0 / w.scale_factor() - 12.).abs() < 0.1
+                        (q.corner_radii.top_left.0 / w.scale_factor() - 8.).abs() < 0.1
                             && q.bounds.size.width.0 / w.scale_factor() > 500.
                     })
                     .expect("the composer box must be painted at its animated position");
@@ -3799,22 +4079,13 @@ impl Render for Conversation {
                 ),
             )
             .child(
-                div()
-                    .flex_shrink_0()
-                    .w_full()
-                    .flex()
-                    .justify_center()
-                    .child(
-                        div()
-                            .w_full()
-                            .max_w(px(COMPOSER_COLUMN))
-                            .flex()
-                            .flex_col()
-                            .px(px(10.))
-                            .pb(px(6.))
-                            .when_some(self.questions.front(), |d, (card, _)| d.child(card.clone()))
-                            .child(self.composer_motion.clone().wrap(self.composer(window, cx))),
-                    ),
+                // A column, as in a Bot chat, so the shared column's auto
+                // margins centre it.
+                div().flex_shrink_0().w_full().flex().flex_col().child(
+                    composer_column()
+                        .when_some(self.questions.front(), |d, (card, _)| d.child(card.clone()))
+                        .child(self.composer_motion.clone().wrap(self.composer(window, cx))),
+                ),
             )
             .when_some(self.btw.as_ref(), |d, sheet| d.child(sheet.clone()))
             .children(self.remote_plan_reader(cx))
@@ -3843,29 +4114,49 @@ fn tool_pill(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div>
         .hover(|s| s.bg(content(0.15)))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
-// GitPickerTrigger: the quiet `h-6` controls in the bar under the box.
+/// The column a composer sits in, shared by sessions and Bots.
+pub(super) fn composer_column() -> gpui::Div {
+    div()
+        .w_full()
+        .max_w(px(COMPOSER_COLUMN))
+        .mx_auto()
+        .px(px(10.))
+        .pb(px(6.))
+        .flex()
+        .flex_col()
+}
+/// BotComposer's quiet control under the box: plain until hovered or open.
+pub(super) fn quiet_control(
+    id: impl Into<gpui::ElementId>,
+    open: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .cursor(CursorStyle::Arrow)
+        .flex_shrink_0()
+        .h(px(26.))
+        .min_w_0()
+        .px_1p5()
+        .gap_1p5()
+        .rounded_md()
+        .flex()
+        .items_center()
+        .text_size(px(12.))
+        .text_color(content(if open { 1. } else { 0.55 }))
+        .when(open, |d| d.bg(content(0.08)))
+        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+}
+// GitPickerTrigger: the quiet controls in the bar under the box.
 fn bar_trigger(
     id: &'static str,
     path: &'static str,
     label: SharedString,
 ) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
+    quiet_control(id, false)
         .group(id)
-        .cursor(CursorStyle::Arrow)
-        .min_w_0()
-        .h(px(24.))
-        .ml(px(-6.))
-        .px(px(6.))
-        .rounded_md()
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .text_size(px(12.))
-        .text_color(content(0.55))
-        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .flex_shrink(1.)
         .child(
             icon(path, 14.)
                 .text_color(content(0.55))
@@ -3873,14 +4164,6 @@ fn bar_trigger(
         )
         .child(div().min_w_0().truncate().child(label))
 }
-fn pill_label(label: impl Into<SharedString>) -> impl IntoElement {
-    div()
-        .min_w_0()
-        .truncate()
-        .text_size(px(11.))
-        .child(label.into())
-}
-
 /// The checked-out branch (or short detached commit) for `cwd`, read from the
 /// repository's HEAD, including linked worktrees whose `.git` is a file.
 pub(crate) fn git_branch(cwd: &Path) -> Option<String> {

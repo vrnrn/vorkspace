@@ -9442,7 +9442,7 @@ mod tests {
                         .painted_quads()
                         .iter()
                         .any(|quad| quad.border_color == marker
-                            && quad.corner_radii.top_left.0 == 11. * window.scale_factor()),
+                            && quad.corner_radii.top_left.0 == 7. * window.scale_factor()),
                     "composer frosting keeps its blur and corner radius"
                 );
             })

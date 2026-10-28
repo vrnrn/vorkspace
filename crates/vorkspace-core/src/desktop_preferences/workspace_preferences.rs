@@ -76,7 +76,7 @@ impl DesktopPreferences {
             ("sounds", "sounds", true),
             ("notifications", "notifications", false),
             ("tab_animations", "tabAnimationsEnabled", false),
-            ("quick_composer", "quickComposerEnabled", true),
+            ("quick_composer", "quickComposerEnabled", false),
             ("working_agents", "liveAgentsEnabled", true),
             ("close_to_tray", "closeToTray", true),
             ("inset_glass", "insetGlass", true),

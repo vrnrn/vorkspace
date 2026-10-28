@@ -134,7 +134,7 @@ From back to front:
 | Window / sidebar | `shell_fill()` | none | none | none |
 | Main pane | `pane_fill()` | none | 1px divider | none |
 | Card / settings group | `content(0.03)` | `rounded_xl` | `content(0.1)` | none |
-| Composer | `composer_fill()`, `composer_blur()` | 12 | `composer_border(focused)` | none |
+| Composer | `composer_fill()`, `composer_blur()` | 8 | `composer_border(focused)` | none |
 | Popover / menu | `popover()` glass, or `floating_fill()` | 12 | `content(0.1)` | popover pair |
 | Toast | `notifications/surface.rs` glass frame | 12 | `content(0.1)` | `shadow_lg` |
 | Modal | `popover().modal_surface()` | 16 | `content(0.07)` | popover pair |
@@ -145,8 +145,8 @@ From back to front:
 - **Dividers** are 1px: `content(0.1)` for chrome rules, `content(0.04)–0.05`
   for faint panel edges and row separators.
 - **Radii:** 4 for small chips and 20px icon actions; 6 (`rounded_md`) for
-  buttons, icon buttons, inputs and tab plates; 8 for menu rows; 12 for
-  floating surfaces and the composer; 16 for modals; `rounded_full` for pills,
+  buttons, icon buttons, inputs and tab plates; 8 for menu rows and the
+  composer box; 12 for floating surfaces; 16 for modals; `rounded_full` for pills,
   avatars, switches and dots.
 - **Shadows** belong to floating layers only; flat panes and cards have none.
   Popovers and their modal variant share the layered pair in `popover.rs`.

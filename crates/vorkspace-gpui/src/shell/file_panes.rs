@@ -149,7 +149,7 @@ mod tests {
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
         assert!(
-            visual.debug_bounds("bot-composer").is_some(),
+            visual.debug_bounds("composer-box").is_some(),
             "the action starts in the visible Bot"
         );
         window
@@ -165,7 +165,7 @@ mod tests {
             visual.debug_bounds("review-tab-strip").is_some(),
             "the file pane is rendered"
         );
-        assert!(visual.debug_bounds("bot-composer").is_none());
+        assert!(visual.debug_bounds("composer-box").is_none());
         let (pane, editor) = window
             .update(visual, |shell, w, cx| {
                 assert!(!shell.bot_active(cx));
@@ -198,7 +198,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        assert!(visual.debug_bounds("bot-composer").is_some());
+        assert!(visual.debug_bounds("composer-box").is_some());
         window
             .update(visual, |shell, w, cx| {
                 assert_eq!(shell.active_title_tab(cx), Some(bot.clone()));

@@ -127,7 +127,7 @@ impl Default for Preferences {
             file_view_mode: "preview".into(),
             tab_animations: false,
             notes: true,
-            quick_composer: true,
+            quick_composer: false,
             clipboard_history: true,
             working_agents: true,
             close_to_tray: true,

@@ -145,6 +145,9 @@ pub(crate) struct Bots {
     persisted_messages: HashSet<String>,
     failed_reports: HashSet<String>,
     inflight: HashMap<String, Message>,
+    /// Outbox messages the user queued: they wait for the running reply
+    /// instead of being steered into it.
+    held: HashSet<String>,
     card_refresh: HashMap<String, u64>,
     session_filters: filters::Filters,
     session_filter_anchor: AnchorSlot,
@@ -388,6 +391,7 @@ impl Bots {
             persisted_messages,
             failed_reports: HashSet::new(),
             inflight: HashMap::new(),
+            held: HashSet::new(),
             card_refresh: HashMap::new(),
             session_filters,
             session_filter_anchor: AnchorSlot::default(),
@@ -722,7 +726,7 @@ impl Bots {
                 this.observations.push(cx.subscribe(
                     &view,
                     move |this, _, event: &BotSubmitted, cx| {
-                        this.enqueue(
+                        this.enqueue_held(
                             &source,
                             event.text.clone(),
                             event
@@ -731,6 +735,7 @@ impl Bots {
                                 .map(|p| p.to_string_lossy().to_string())
                                 .collect(),
                             false,
+                            event.queue,
                             cx,
                         )
                     },
@@ -889,10 +894,26 @@ impl Bots {
         internal: bool,
         cx: &mut Context<Self>,
     ) {
+        self.enqueue_held(id, text, attachments, internal, false, cx);
+    }
+    fn enqueue_held(
+        &mut self,
+        id: &str,
+        text: String,
+        attachments: Vec<String>,
+        internal: bool,
+        hold: bool,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(bot) = self.roster.get_mut(id) {
+            let message = bot::new_id();
+            // Marked before dispatch, which may steer at once.
+            if hold {
+                self.held.insert(message.clone());
+            }
             bot.outbox.push(Message {
                 peer: None,
-                id: bot::new_id(),
+                id: message,
                 text,
                 sent_at: Some(vorkspace_core::time::now_ms()),
                 internal,
@@ -911,13 +932,14 @@ impl Bots {
             .and_then(|v| v.read(cx).bot_delivered())
             .map(str::to_owned);
         if let Some(message) = delivered
-            && let Some(m) = self.roster.get_mut(id).filter(|m| {
-                m.outbox
-                    .first()
-                    .is_some_and(|q| q.id == message && q.peer.is_none())
-            })
+            && let Some(m) = self.roster.get_mut(id)
+            && let Some(index) = m
+                .outbox
+                .iter()
+                .position(|q| q.id == message && q.peer.is_none())
         {
-            m.outbox.remove(0);
+            let sent = m.outbox.remove(index);
+            self.held.remove(&sent.id);
             self.save(cx);
             self.configure_chat(id, cx);
         }
@@ -991,7 +1013,7 @@ impl Bots {
         let Some(message) = self
             .roster
             .get(id)
-            .and_then(|m| m.outbox.first())
+            .and_then(|m| m.outbox.iter().find(|m| !self.held.contains(&m.id)))
             .filter(|m| self.persisted_messages.contains(&m.id))
             .cloned()
         else {
@@ -1555,8 +1577,7 @@ impl gpui::Render for Bots {
                     .when_some(self.chat(), |d, chat| {
                         chat.update(cx, |chat, cx| chat.show_bot_header(header_visible, cx));
                         d.child(div().flex_1().min_h_0().child(chat))
-                    })
-                    .child(self.topbar(&bot, cx)),
+                    }),
             )
             .children(self.settings_modal(&bot, window, cx))
             .when(!self.creating(), |d| d.children(self.picker_surface(cx)))

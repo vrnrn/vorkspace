@@ -65,7 +65,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
         let name = visual.debug_bounds("bot-chat-header-name").unwrap();
         let scrim = visual.debug_bounds("bot-chat-mask-end").unwrap();
         let transcript = visual.debug_bounds("bot-chat-transcript").unwrap();
-        let composer = visual.debug_bounds("bot-composer").unwrap();
+        let composer = visual.debug_bounds("composer-box").unwrap();
         assert_eq!(header.size.height, px(header::HEIGHT));
         assert_eq!(face.center().x, header.center().x);
         assert_eq!(name.center().x, header.center().x);
@@ -86,7 +86,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
         visual.run_until_parked();
         // Typing can legitimately wrap the retained draft at narrow widths.
         // Compare status transitions against the resulting composer geometry.
-        let composer = visual.debug_bounds("bot-composer").unwrap();
+        let composer = visual.debug_bounds("composer-box").unwrap();
         let draft = chat.read_with(visual, |chat, cx| chat.input.read(cx).content.clone());
         let rows = chat.read_with(visual, |chat, cx| chat.bot_rows(cx).to_vec());
         let signature = visual.debug_bounds("bot-signature-pill");
@@ -114,7 +114,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
             visual.run_until_parked();
             assert!(visual.debug_bounds(selector).is_some());
             assert_eq!(visual.debug_bounds("bot-chat-header").unwrap(), header);
-            assert_eq!(visual.debug_bounds("bot-composer").unwrap(), composer);
+            assert_eq!(visual.debug_bounds("composer-box").unwrap(), composer);
             window
                 .update(visual, |_, window, cx| {
                     let chat = chat.read(cx);
@@ -125,8 +125,8 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
                 .unwrap();
         }
         assert!(signature.is_some(), "message signatures remain present");
-        let settings = visual.debug_bounds("bot-settings").unwrap();
-        assert!(settings.left() >= face.right() || settings.bottom() <= face.top());
+        // The Channels and settings buttons no longer sit over the chat.
+        assert!(visual.debug_bounds("bot-settings").is_none());
     }
 
     // In short panes existing attention notices may reflow/shrink the composer.
@@ -142,7 +142,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
         visual.run_until_parked();
         visual.refresh().unwrap();
         let transcript = visual.debug_bounds("bot-chat-transcript").unwrap();
-        let composer = visual.debug_bounds("bot-composer").unwrap();
+        let composer = visual.debug_bounds("composer-box").unwrap();
         let header = visual.debug_bounds("bot-chat-header").unwrap();
         assert_eq!(header.top(), transcript.top());
         assert!(transcript.bottom() <= composer.top());
