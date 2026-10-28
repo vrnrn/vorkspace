@@ -364,6 +364,7 @@ impl Store {
         let store = Self {
             conn,
             path: path.into(),
+            project_deletions: Default::default(),
             shared: Some(Shared {
                 earlier_bot_tables,
                 columns,

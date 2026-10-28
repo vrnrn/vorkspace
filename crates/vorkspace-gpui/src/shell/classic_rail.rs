@@ -1,6 +1,5 @@
 //! The original project rail is independent of the project's session/file pane.
 use super::*;
-use serde_json::Value;
 
 const COMPACT_WIDTH: f32 = 48.;
 
@@ -29,16 +28,6 @@ fn compact_settings_button() -> gpui::Stateful<gpui::Div> {
         .focusable()
         .tab_stop(true)
         .size(px(32.))
-}
-
-fn metadata(workspace: &Workspace, key: &str) -> Value {
-    workspace
-        .desktop_preferences_metadata
-        .as_ref()
-        .and_then(|values| values.get(key))
-        .and_then(Value::as_str)
-        .and_then(|value| serde_json::from_str(value).ok())
-        .unwrap_or(Value::Null)
 }
 
 impl Shell {
@@ -162,16 +151,15 @@ impl Shell {
                 session.responding().then(|| session.summary.cwd.clone())
             })
             .collect();
-        let groups = metadata(&self.workspace, "vorkspace.projectGroups");
-        let assignments = metadata(&self.workspace, "vorkspace.projectGroupAssignments");
-        let pinned = metadata(&self.workspace, "vorkspace.projectRailPinned");
-        let pinned: HashSet<_> = pinned
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(vorkspace_core::files::path_key)
-            .collect();
+        let _ = self.workspace.migrate_project_rail();
+        let rail_state = self
+            .workspace
+            .project_rail_state
+            .clone()
+            .unwrap_or_default();
+        let groups = &rail_state.groups;
+        let assignments = &rail_state.assignments;
+        let pinned = &rail_state.pinned;
         let pinned_projects: Vec<_> = projects
             .iter()
             .enumerate()
@@ -180,23 +168,23 @@ impl Shell {
             .collect();
         let mut group_rows = Vec::new();
         let mut grouped_paths = HashSet::new();
-        if let Some(groups) = groups.as_array() {
+        {
             for group in groups {
-                let (Some(id), Some(name)) = (group["id"].as_str(), group["name"].as_str()) else {
-                    continue;
-                };
+                let id = group.id.as_str();
+                let name = group.name.as_str();
                 let collapsed = self
                     .workspace
                     .project_group_collapsed
                     .get(id)
                     .copied()
-                    .unwrap_or(group["collapsed"] == true);
+                    .unwrap_or(group.collapsed);
                 let members: Vec<_> = projects
                     .iter()
                     .enumerate()
                     .filter(|(_, path)| {
                         let key = vorkspace_core::files::path_key(path);
-                        !pinned.contains(&key) && assignments[key] == id
+                        !pinned.contains(&key)
+                            && assignments.get(&key).is_some_and(|assigned| assigned == id)
                     })
                     .map(|(ix, path)| {
                         grouped_paths.insert(path.clone());
@@ -205,6 +193,8 @@ impl Shell {
                     .collect();
                 let id = id.to_owned();
                 let toggle = id.clone();
+                let rename =
+                    self.rename_row(&session_groups::RenameTarget::ProjectGroup(id.clone()), cx);
                 let row = div()
                     .id(SharedString::from(format!("classic-project-group-{id}")))
                     .debug_selector(move || format!("classic-project-group-{id}"))
@@ -241,7 +231,7 @@ impl Shell {
                     .mb_1p5()
                     .rounded_md()
                     .when(!collapsed, |d| d.bg(content(0.05)))
-                    .child(row);
+                    .child(rename.unwrap_or_else(|| row.into_any_element()));
                 if !collapsed {
                     section = section.child(div().p_1().flex().flex_col().gap_px().children(
                         members.into_iter().map(|(ix, path)| {
@@ -359,10 +349,12 @@ impl Shell {
     }
 
     fn toggle_classic_project_group(&mut self, id: &str, cx: &mut Context<Self>) {
-        let groups = metadata(&self.workspace, "vorkspace.projectGroups");
-        let Some(group) = groups
-            .as_array()
-            .and_then(|groups| groups.iter().find(|group| group["id"] == id))
+        let _ = self.workspace.migrate_project_rail();
+        let Some(group) = self
+            .workspace
+            .project_rail_state
+            .as_ref()
+            .and_then(|rail| rail.groups.iter().find(|g| g.id == id))
         else {
             return;
         };
@@ -371,7 +363,7 @@ impl Shell {
             .project_group_collapsed
             .get(id)
             .copied()
-            .unwrap_or(group["collapsed"] == true);
+            .unwrap_or(group.collapsed);
         self.workspace
             .project_group_collapsed
             .insert(id.to_owned(), !collapsed);
@@ -829,6 +821,143 @@ mod tests {
     use vorkspace_core::store::Store;
 
     #[gpui::test]
+    fn native_group_creation_rename_assignment_and_pin_render_and_persist(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            super::super::bind_keys(cx);
+            crate::input::bind(cx);
+        });
+        let (window, _, _) = crate::shell::tests::window(cx);
+        let path = "/work/another-project".to_string();
+        window
+            .update(cx, |shell, w, cx| {
+                shell.run_menu(
+                    MenuTarget::Project {
+                        path: path.clone(),
+                        rail: true,
+                    },
+                    "project-group:new",
+                    None,
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        let group_id = window
+            .update(cx, |shell, _, _| {
+                shell.workspace.project_rail_state.as_ref().unwrap().groups[0]
+                    .id
+                    .clone()
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1400.), px(1000.)));
+        visual.run_until_parked();
+        visual.simulate_input("Work");
+        visual.simulate_keystrokes("enter");
+        visual.run_until_parked();
+        let selector: &'static str =
+            Box::leak(format!("classic-project-group-{group_id}").into_boxed_str());
+        assert!(visual.debug_bounds(selector).is_some());
+        window
+            .update(visual, |shell, w, cx| {
+                assert_eq!(
+                    shell.workspace.project_rail_state.as_ref().unwrap().groups[0].name,
+                    "Work"
+                );
+                shell.run_menu(
+                    MenuTarget::Project {
+                        path: path.clone(),
+                        rail: true,
+                    },
+                    "pin",
+                    None,
+                    w,
+                    cx,
+                );
+                assert!(
+                    shell
+                        .workspace
+                        .project_rail_state
+                        .as_ref()
+                        .unwrap()
+                        .pinned
+                        .contains(&vorkspace_core::files::path_key(&path))
+                );
+                shell.run_menu(
+                    MenuTarget::Project {
+                        path: path.clone(),
+                        rail: true,
+                    },
+                    "pin",
+                    None,
+                    w,
+                    cx,
+                );
+                shell.run_menu(
+                    MenuTarget::Project {
+                        path: path.clone(),
+                        rail: true,
+                    },
+                    "project-group:set:",
+                    None,
+                    w,
+                    cx,
+                );
+                shell.run_menu(
+                    MenuTarget::Project {
+                        path: path.clone(),
+                        rail: true,
+                    },
+                    &format!("project-group:set:{group_id}"),
+                    None,
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                let state = locked(&shell.store).unwrap().ui_state().unwrap().unwrap();
+                let reopened = Workspace::restore(Some(&state), &[], &path);
+                let rail = reopened.project_rail_state.unwrap();
+                assert!(!rail.pinned.contains(&path));
+                assert_eq!(
+                    rail.assignments.get(&path).map(String::as_str),
+                    Some(group_id.as_str())
+                );
+                assert_eq!(rail.groups[0].name, "Work");
+            })
+            .unwrap();
+        window
+            .update(visual, |shell, w, cx| {
+                shell.run_menu(
+                    MenuTarget::Project {
+                        path: path.clone(),
+                        rail: true,
+                    },
+                    &format!("group-remove:{group_id}"),
+                    None,
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                let saved = locked(&shell.store).unwrap().ui_state().unwrap().unwrap();
+                let restored = Workspace::restore(Some(&saved), &[], &path);
+                let rail = restored.project_rail_state.unwrap();
+                assert!(rail.groups.is_empty());
+                assert!(rail.assignments.is_empty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn original_rail_keeps_pins_groups_and_all_projects_through_a_saved_group_toggle(
         cx: &mut TestAppContext,
     ) {
@@ -864,6 +993,7 @@ mod tests {
             .update(cx, |shell, _, cx| {
                 shell.workspace.projects = projects.clone();
                 shell.workspace.desktop_preferences_metadata = Some(source.clone());
+                shell.workspace.project_rail_state = None;
                 shell.workspace.project_group_collapsed.clear();
                 shell.invalidate_chrome(cx);
                 cx.notify();

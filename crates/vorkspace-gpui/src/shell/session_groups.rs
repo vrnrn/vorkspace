@@ -96,6 +96,7 @@ pub(super) struct FolderDrag {
 pub(super) enum RenameTarget {
     Session(i64),
     Folder(String),
+    ProjectGroup(String),
 }
 pub(super) struct Renaming {
     pub(super) target: RenameTarget,
@@ -905,10 +906,22 @@ impl Shell {
         self.persist(cx);
     }
 
-    fn start_rename(&mut self, target: RenameTarget, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn start_rename(
+        &mut self,
+        target: RenameTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.close_preview(cx);
         let text = match &target {
             RenameTarget::Session(id) => self.session_metadata(*id, cx).display_title(),
+            RenameTarget::ProjectGroup(id) => self
+                .workspace
+                .project_rail_state
+                .as_ref()
+                .and_then(|r| r.groups.iter().find(|g| &g.id == id))
+                .map(|g| g.name.clone())
+                .unwrap_or_default(),
             RenameTarget::Folder(folder) => self
                 .project_groups()
                 .folder(folder)
@@ -970,6 +983,18 @@ impl Shell {
                             });
                         }
                         self.store_write("rename the session", cx, move |s| s.title(id, &name));
+                    }
+                }
+                RenameTarget::ProjectGroup(id) => {
+                    if let Some(group) = self
+                        .workspace
+                        .project_rail_mut()
+                        .groups
+                        .iter_mut()
+                        .find(|g| g.id == id)
+                    {
+                        group.name = name;
+                        self.persist(cx);
                     }
                 }
                 RenameTarget::Folder(folder) => {

@@ -142,7 +142,7 @@ impl Shell {
             self.observations.truncate(observations_before);
             return Err(self.rollback_app_start(id, cleanup, error, cx));
         }
-        self.workspace.add_project(&summary.cwd);
+        self.workspace.restore_project(&summary.cwd);
         self.started_by.insert(id, caller);
         if let Some((target, edge)) = placement {
             let before = self.active_leaves();

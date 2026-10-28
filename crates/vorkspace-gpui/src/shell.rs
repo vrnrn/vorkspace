@@ -16,6 +16,7 @@ mod live_agents;
 mod notifications;
 mod orchestration;
 mod picker_preferences;
+mod project_delete;
 mod project_settings;
 mod quick_composer;
 mod quick_open;
@@ -565,6 +566,7 @@ pub(crate) struct Shell {
     pub(crate) workspace: Workspace,
     external_editors: Option<Vec<vorkspace_core::external_editor::ExternalEditor>>,
     external_editor_scan: u64,
+    deleting_projects: HashSet<String>,
     focus: FocusHandle,
     project_rail_toggle_focus: FocusHandle,
     sidebar_focus: FocusHandle,
@@ -598,6 +600,7 @@ pub(crate) struct Shell {
     /// focus a new session in a tab or project the user has already left.
     navigation_revision: u64,
     pending_project_blanks: HashSet<String>,
+    pending_project_creations: HashMap<String, usize>,
     new_tab_task: Option<gpui::Task<()>>,
     worktree_focus: HashMap<String, crate::worktree_switcher::WorktreeFocus>,
     session_worktrees: HashMap<i64, Option<String>>,
@@ -896,6 +899,7 @@ impl Shell {
             workspace,
             external_editors: None,
             external_editor_scan: 0,
+            deleting_projects: HashSet::new(),
             focus: cx.focus_handle(),
             project_rail_toggle_focus: cx.focus_handle().tab_stop(true),
             sidebar_focus: cx.focus_handle(),
@@ -924,6 +928,7 @@ impl Shell {
             history: VisitHistory::default(),
             navigation_revision: 0,
             pending_project_blanks: HashSet::new(),
+            pending_project_creations: HashMap::new(),
             new_tab_task: None,
             worktree_focus,
             session_worktrees,
@@ -1151,7 +1156,7 @@ impl Shell {
         self.trim_session_histories(&shown, cx);
     }
     fn add(&mut self, summary: Session, cx: &mut Context<Self>) {
-        self.workspace.add_project(&summary.cwd);
+        self.workspace.restore_project(&summary.cwd);
         self.add_loaded(summary, cx);
     }
     /// Loading history must not turn every session directory into a rail project.
@@ -3953,6 +3958,14 @@ impl Shell {
     }
 
     fn select_project(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .deleting_projects
+            .contains(&vorkspace_core::files::path_key(&path))
+        {
+            self.error = Some("This project is being deleted.".into());
+            cx.notify();
+            return;
+        }
         self.selected_sessions.clear();
         self.selection_anchor = None;
         self.sidebar_target = None;
@@ -4071,7 +4084,7 @@ impl Shell {
                 if let Some(path) = paths.first() {
                     let path = path.to_string_lossy().into_owned();
                     let _ = this.update_in(cx, |this, window, cx| {
-                        this.workspace.add_project(&path);
+                        this.workspace.restore_project(&path);
                         this.select_project(path, window, cx);
                     });
                 }
@@ -4097,6 +4110,11 @@ impl Shell {
         if only_if_empty && !self.pending_project_blanks.insert(blank_key.clone()) {
             return;
         }
+        let creation_key = vorkspace_core::files::path_key(&cwd);
+        *self
+            .pending_project_creations
+            .entry(creation_key.clone())
+            .or_default() += 1;
         let model = self
             .workspace
             .preferences
@@ -4152,6 +4170,7 @@ impl Shell {
                 previous.await;
             }
             let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_project_creation(&creation_key);
                 if only_if_empty {
                     this.pending_project_blanks.remove(&blank_key);
                 }
@@ -5089,17 +5108,63 @@ impl Shell {
                         .into(),
                 ];
                 if *rail {
-                    items.extend([
+                    let rail = self
+                        .workspace
+                        .project_rail_state
+                        .clone()
+                        .unwrap_or_default();
+                    let key = vorkspace_core::files::path_key(path);
+                    let mut groups = vec![
+                        MenuAction::new("project-group:new", "New group…"),
+                        MenuAction::new("project-group:set:", "No group")
+                            .checked(!rail.assignments.contains_key(&key)),
+                    ];
+                    groups.extend(rail.groups.iter().map(|g| {
+                        MenuAction::new(format!("project-group:set:{}", g.id), g.name.clone())
+                            .checked(rail.assignments.get(&key) == Some(&g.id))
+                    }));
+                    let manage = rail
+                        .groups
+                        .iter()
+                        .flat_map(|g| {
+                            [
+                                MenuAction::new(
+                                    format!("group-rename:{}", g.id),
+                                    format!("Rename {}…", g.name),
+                                ),
+                                MenuAction::new(
+                                    format!("group-remove:{}", g.id),
+                                    format!("Remove {}", g.name),
+                                ),
+                            ]
+                        })
+                        .collect::<Vec<_>>();
+                    items.push(
                         MenuAction::new("project-group", "Move to group")
                             .icon("folder-tree")
-                            .disabled(true)
-                            .submenu(vec![MenuAction::new("project-group:new", "New group…")])
+                            .submenu(groups)
                             .into(),
-                        MenuAction::new("pin", "Pin project")
-                            .icon("pin")
-                            .disabled(true)
-                            .into(),
-                    ]);
+                    );
+                    if !manage.is_empty() {
+                        items.push(
+                            MenuAction::new("manage-groups", "Manage groups")
+                                .icon("folder-tree")
+                                .submenu(manage)
+                                .into(),
+                        );
+                    }
+                    items.push(
+                        MenuAction::new(
+                            "pin",
+                            if rail.pinned.contains(&key) {
+                                "Unpin project"
+                            } else {
+                                "Pin project"
+                            },
+                        )
+                        .icon("pin")
+                        .into(),
+                    );
                 }
                 items.extend([
                     MenuAction::new("reveal", REVEAL_LABEL)
@@ -5113,7 +5178,6 @@ impl Shell {
                     MenuAction::new("delete", "Delete")
                         .icon("trash")
                         .danger()
-                        .disabled(true)
                         .into(),
                 ]);
                 (
@@ -5188,8 +5252,99 @@ impl Shell {
                 }
             }
             MenuTarget::Project { path, .. } => {
-                if action == "archive" {
+                if (action == "pin"
+                    || action.starts_with("project-group:")
+                    || action.starts_with("group-rename:")
+                    || action.starts_with("group-remove:"))
+                    && let Err(error) = self.workspace.migrate_project_rail()
+                {
+                    self.error = Some(format!(
+                        "Cannot change project groups: {error}. Existing preferences were kept."
+                    ));
+                    cx.notify();
+                    return;
+                }
+                if action == "pin" {
+                    let key = vorkspace_core::files::path_key(&path);
+                    let rail = self.workspace.project_rail_mut();
+                    let value = if rail.pinned.remove(&key) {
+                        false
+                    } else {
+                        rail.pinned.insert(key.clone());
+                        true
+                    };
+                    if rail.awaiting_legacy_pins {
+                        rail.pin_overrides.insert(key, value);
+                    }
+                    self.persist(cx);
+                    self.invalidate_chrome(cx);
+                    cx.notify();
+                } else if action == "project-group:new" {
+                    let rail = self.workspace.project_rail_mut();
+                    let id = format!("native-group-{}", vorkspace_core::bot::new_id());
+                    rail.groups.push(crate::workspace::ProjectRailGroup {
+                        id: id.clone(),
+                        name: "New group".into(),
+                        collapsed: false,
+                    });
+                    let key = vorkspace_core::files::path_key(&path);
+                    rail.assignments.insert(key.clone(), id.clone());
+                    if rail.awaiting_legacy_assignments {
+                        rail.assignment_overrides
+                            .insert(key.clone(), Some(id.clone()));
+                    }
+                    rail.pinned.remove(&key);
+                    if rail.awaiting_legacy_pins {
+                        rail.pin_overrides.insert(key, false);
+                    }
+                    self.persist(cx);
+                    self.start_rename(session_groups::RenameTarget::ProjectGroup(id), window, cx);
+                } else if let Some(id) = action.strip_prefix("group-rename:") {
+                    self.start_rename(
+                        session_groups::RenameTarget::ProjectGroup(id.into()),
+                        window,
+                        cx,
+                    );
+                } else if let Some(id) = action.strip_prefix("group-remove:") {
+                    let rail = self.workspace.project_rail_mut();
+                    rail.groups.retain(|g| g.id != id);
+                    if rail.awaiting_legacy_assignments {
+                        let removed: Vec<_> = rail
+                            .assignments
+                            .iter()
+                            .filter(|(_, g)| g.as_str() == id)
+                            .map(|(p, _)| p.clone())
+                            .collect();
+                        for path in removed {
+                            rail.assignment_overrides.insert(path, None);
+                        }
+                    }
+                    rail.assignments.retain(|_, g| g != id);
+                    self.workspace.project_group_collapsed.remove(id);
+                    self.persist(cx);
+                    self.invalidate_chrome(cx);
+                    cx.notify();
+                } else if let Some(id) = action.strip_prefix("project-group:set:") {
+                    let rail = self.workspace.project_rail_mut();
+                    let key = vorkspace_core::files::path_key(&path);
+                    if id.is_empty() {
+                        rail.assignments.remove(&key);
+                        if rail.awaiting_legacy_assignments {
+                            rail.assignment_overrides.insert(key, None);
+                        }
+                    } else if rail.groups.iter().any(|g| g.id == id) {
+                        rail.assignments.insert(key.clone(), id.into());
+                        if rail.awaiting_legacy_assignments {
+                            rail.assignment_overrides.insert(key, Some(id.into()));
+                        }
+                    }
+                    self.persist(cx);
+                    self.invalidate_chrome(cx);
+                    cx.notify();
+                } else if action == "archive" {
                     self.archive_project(&path, cx);
+                } else if action == "delete" {
+                    self.confirm_delete_project(path, window, cx);
                 } else if action == "reveal" {
                     if path.starts_with("remote://") {
                         self.error = Some("Remote folders stay on their host machine.".into());

@@ -180,14 +180,16 @@ impl DesktopPreferences {
             let source = json!(projects);
             let current = object.get("projects").cloned().unwrap_or(json!([]));
             let mut merged = merge_projects(baseline.get("projects"), &current, &source);
+            let deleted: HashSet<_> = object.get("deleted_projects").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(crate::files::path_key).collect();
             if let Some(paths) = merged.as_array_mut() {
                 paths.retain(|p| {
                     p.as_str().is_none_or(|p| {
-                        archive.get(&crate::files::path_key(p)) != Some(&json!(true))
+                        archive.get(&crate::files::path_key(p)) != Some(&json!(true)) && !deleted.contains(&crate::files::path_key(p))
                     })
                 });
                 for (path, decision) in &archive {
                     if decision == &json!(false)
+                        && !deleted.contains(path)
                         && !paths.iter().any(|p| {
                             p.as_str()
                                 .is_some_and(|p| crate::files::path_key(p) == *path)
@@ -910,6 +912,23 @@ mod tests {
         source.apply_workspace(&mut reopened);
         assert_eq!(reopened["project_archive"]["c:/work/repo"], false);
         assert_eq!(reopened["projects"], json!(["c:/work/repo"]));
+    }
+
+    #[test]
+    fn native_deleted_project_survives_first_and_later_desktop_snapshots() {
+        let source = prefs(&[(
+            "vorkspace.recentProjects",
+            json!([{"path":"/code/gone"}, {"path":"/code/keep"}]),
+        )]);
+        let mut state = json!({"projects":["/code/keep"], "project":"/code/keep", "deleted_projects":["/code/gone"]});
+        source.apply_workspace(&mut state);
+        assert_eq!(state["projects"], json!(["/code/keep"]));
+        source.apply_workspace(&mut state);
+        assert_eq!(state["projects"], json!(["/code/keep"]));
+        state["deleted_projects"] = json!([]);
+        state["projects"] = json!(["/code/gone", "/code/keep"]);
+        source.apply_workspace(&mut state);
+        assert_eq!(state["projects"], json!(["/code/gone", "/code/keep"]));
     }
 
     #[test]
