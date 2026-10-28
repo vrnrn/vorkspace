@@ -829,15 +829,31 @@ fn edited_draft_identity_preserves_unknown_block_and_attachment_fields_on_reopen
     draft.attachments = vec!["/retained.png".into()];
     state.revision += 1;
     store.accept_follow_ups(id, &state).unwrap();
+    let other = Store::open_vorkspace(&path).unwrap();
+    let intermediate = other.follow_ups(id).unwrap().draft.unwrap();
+    let draft = state.draft.as_mut().unwrap();
+    draft.replaces_draft_id = Some(draft.id.clone());
+    draft.id = "edited-again".into();
+    draft.text = "Final".into();
+    state.revision += 1;
+    store.accept_follow_ups(id, &state).unwrap();
+    other
+        .save_setting(&format!("bot-delivered:{id}:{}", intermediate.id), "1")
+        .unwrap();
     drop(store);
+    drop(other);
     let reopened = Store::open_vorkspace(&path).unwrap();
     let block = reopened.shared_blocks(id).unwrap().pop().unwrap();
-    assert_eq!(block["id"], "edited");
-    assert_eq!(block["text"], "After");
+    assert_eq!(block["id"], "edited-again");
+    assert_eq!(block["text"], "Final");
     assert_eq!(block["futureDraft"]["keep"], true);
     assert_eq!(block["attachments"][0]["path"], "/retained.png");
     assert_eq!(block["attachments"][0]["mimeType"], "image/png");
     assert_eq!(block["attachments"][0]["futureFile"], "keep");
+    let draft = reopened.follow_ups(id).unwrap().draft.unwrap();
+    assert_eq!(draft.id, "edited-again");
+    assert_eq!(draft.text, "Final");
+    assert_eq!(draft.attachments, vec![PathBuf::from("/retained.png")]);
 }
 
 #[test]

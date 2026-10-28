@@ -101,6 +101,13 @@ fn canceling_draft_edit_restores_saved_mcp_context(cx: &mut TestAppContext) {
             let edited = view.follow_ups.state.draft.as_ref().unwrap();
             assert_eq!(edited.text, "No token");
             assert!(edited.prepared_prompt.is_none());
+            locked(&view.store)
+                .unwrap()
+                .save_setting(
+                    &format!("bot-delivered:{}:{}", view.summary.id, edited.id),
+                    "1",
+                )
+                .unwrap();
         })
         .unwrap();
     let cancel = visual.debug_bounds("cancel-draft-edit").unwrap().center();
@@ -116,8 +123,159 @@ fn canceling_draft_edit_restores_saved_mcp_context(cx: &mut TestAppContext) {
                 .unwrap();
             assert_eq!(saved.text, original);
             assert_eq!(saved.prepared_prompt.as_deref(), Some(prepared));
+            assert_ne!(saved.id, "saved-context", "cancel publishes a new version");
         })
         .unwrap();
+}
+
+#[gpui::test]
+fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("draft-versions.sqlite");
+    let attachment = dir.path().join("attachment.txt");
+    std::fs::write(&attachment, "saved attachment").unwrap();
+    let store = Store::open(&path).unwrap();
+    let summary = store.create("codex", "/tmp").unwrap();
+    let session = summary.id;
+    let mut roster = vorkspace_core::bot::Roster::default();
+    roster.bots.push(Bot {
+        id: "bot".into(),
+        session_id: Some(session),
+        ..Default::default()
+    });
+    roster.save(&store).unwrap();
+    let mut state = store.follow_ups(session).unwrap();
+    state.revision += 1;
+    state.draft = Some(vorkspace_core::follow_up::Message {
+        id: "original".into(),
+        text: "Original".into(),
+        attachments: vec![attachment],
+        ..Default::default()
+    });
+    state.retain_attachments(session, store.data_dir()).unwrap();
+    store.accept_follow_ups(session, &state).unwrap();
+    store
+        .save_setting(
+            &format!("bot-draft-origin:{session}"),
+            &serde_json::json!({"id":"original", "revision":1}).to_string(),
+        )
+        .unwrap();
+    let window = cx.update(|cx| {
+        input::bind(cx);
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| {
+                let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
+                view.loaded = true;
+                view.configure_bot(Bot::default(), dir.path().into(), Default::default(), cx);
+                view.follow_ups.persisted = state.revision;
+                view.follow_ups.state = state.clone();
+                view.transcript.update(cx, |transcript, cx| {
+                    transcript.set_saved_draft(state.draft.clone(), cx)
+                });
+                view
+            })
+        })
+        .unwrap()
+    });
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(size(px(900.), px(680.)));
+    visual.run_until_parked();
+    let edit = visual.debug_bounds("edit-message-draft").unwrap().center();
+    visual.simulate_click(edit, Default::default());
+    visual.simulate_keystrokes("cmd-a");
+    visual.simulate_input("Intermediate");
+    visual.run_until_parked();
+
+    // The second connection queues exactly the intermediate snapshot while
+    // the first window keeps the same editor open.
+    let mut other = Store::open(&path).unwrap();
+    let stale_state = other.follow_ups(session).unwrap();
+    let intermediate = stale_state.draft.as_ref().unwrap().clone();
+    assert_eq!(intermediate.text, "Intermediate");
+    assert_ne!(intermediate.id, "original");
+    let queued = Message {
+        id: intermediate.id.clone(),
+        text: intermediate.text.clone(),
+        prepared_prompt: intermediate.prepared_prompt.clone(),
+        attachments: intermediate
+            .attachments
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect(),
+        ..message(&intermediate.id, &intermediate.text, false)
+    };
+    let mut roster = vorkspace_core::bot::Roster::load(&other).unwrap();
+    roster.get_mut("bot").unwrap().outbox.push(queued.clone());
+    roster.save(&other).unwrap();
+
+    visual.simulate_keystrokes("cmd-a");
+    visual.simulate_input("Final version");
+    visual.run_until_parked();
+    let final_draft = other.follow_ups(session).unwrap().draft.unwrap();
+    assert_eq!(final_draft.text, "Final version");
+    assert_ne!(final_draft.id, intermediate.id);
+    let marker: serde_json::Value = serde_json::from_str(
+        &other
+            .setting(&format!("bot-draft-origin:{session}"))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(marker["id"], intermediate.id);
+    assert_eq!(marker["nextId"], final_draft.id);
+    assert_eq!(final_draft.attachments.len(), 1);
+    assert_eq!(
+        std::fs::read(&final_draft.attachments[0]).unwrap(),
+        b"saved attachment"
+    );
+    let mut conflicting = stale_state;
+    conflicting.revision += 1;
+    conflicting.draft.as_mut().unwrap().text = "Concurrent edit".into();
+    assert!(other.accept_follow_ups(session, &conflicting).is_err());
+    assert_eq!(
+        other.follow_ups(session).unwrap().draft.unwrap(),
+        final_draft
+    );
+
+    assert!(
+        other
+            .claim_bot_message("bot", &queued, "owner-one")
+            .unwrap()
+    );
+    assert!(
+        !other
+            .claim_bot_message("bot", &queued, "owner-two")
+            .unwrap()
+    );
+    let mut transcript = vorkspace_core::transcript::Transcript::default();
+    transcript.begin("user");
+    transcript.append(&queued.text);
+    other
+        .write_rows_with_message(session, 0, &transcript.rows, Some(&queued.id))
+        .unwrap();
+    window
+        .update(visual, |view, _, cx| {
+            view.bot_draft_outbox_saved(&queued, cx);
+            assert_eq!(view.follow_ups.state.draft.as_ref(), Some(&final_draft));
+        })
+        .unwrap();
+    drop(other);
+    let reopened = Store::open(&path).unwrap();
+    assert!(
+        reopened
+            .setting(&format!("bot-delivered:{session}:{}", intermediate.id))
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        reopened.follow_ups(session).unwrap().draft.unwrap(),
+        final_draft
+    );
+    assert!(
+        !reopened
+            .claim_bot_message("bot", &queued, "owner-three")
+            .unwrap()
+    );
 }
 
 #[gpui::test]
@@ -1353,17 +1511,7 @@ fn bot_plus_offers_upload_and_queue_and_queue_applies_to_one_message(cx: &mut Te
                     _ => None,
                 })
                 .collect();
-            assert_eq!(
-                ids,
-                [
-                    "upload",
-                    "plan",
-                    "operator",
-                    "orchestrator",
-                    "draft",
-                    "queue"
-                ]
-            );
+            assert_eq!(ids, ["upload", "draft", "queue"]);
             view.menu_choice("queue", cx);
             assert!(view.bot_ui.queue);
         })

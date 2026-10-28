@@ -490,16 +490,16 @@ impl Conversation {
             let prepared = self.completion.read(cx).prepare_prompt(text);
             draft.replace_text(text.to_owned(), prepared);
         }
-        // An edited version must never share a delivery receipt with a
-        // previous version that another window has already queued.
-        if draft.id != edit_id {
-            draft.replaces_draft_id = Some(draft.id.clone());
-            draft.id = edit_id.to_owned();
-        }
+        // Every published mutation, including a cancellation, needs its own
+        // delivery identity. The editor can publish several versions before
+        // it closes, and another window may queue any one of them.
+        draft.replaces_draft_id = Some(draft.id.clone());
+        draft.id = vorkspace_core::bot::new_id();
+        let new_id = draft.id.clone();
         next.revision += 1;
         let result = (|| {
-            if self.settings.bot.is_some() && id != edit_id {
-                self.mark_bot_draft_edit_origin(id, edit_id)?;
+            if self.settings.bot.is_some() {
+                self.mark_bot_draft_edit_origin(id, &new_id)?;
             }
             let store = locked(&self.store)?;
             next.retain_attachments(self.summary.id, store.data_dir())?;
