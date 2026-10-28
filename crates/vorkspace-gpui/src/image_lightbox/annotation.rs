@@ -133,58 +133,11 @@ pub(super) fn png(
         }
     }
     if !texts.is_empty() {
-        use cosmic_text::{Attrs, Buffer, Color, FontSystem, Metrics, Shaping, SwashCache, Wrap};
-        let mut fonts = FontSystem::new();
-        let mut cache = SwashCache::new();
+        // GPUI's macOS editor uses this same CoreText shaper and glyph rasterizer.
+        // Keep each instance's font IDs local: fallback runs may introduce new IDs.
+        let fonts = gpui_apple::AppleTextSystem::new();
         for text in texts.iter().filter(|text| !text.text.is_empty()) {
-            let font_size = (text.size * w as f32).max(1.);
-            let mut buffer = Buffer::new(&mut fonts, Metrics::new(font_size, font_size * 1.25));
-            buffer.set_wrap(Wrap::None);
-            buffer.set_size(None, None);
-            buffer.set_text(&text.text, &Attrs::new(), Shaping::Advanced, None);
-            buffer.shape_until_scroll(&mut fonts, false);
-            let available_width = (1. - text.position.0) * w as f32;
-            let available_height = (1. - text.position.1) * h as f32;
-            if buffer.layout_runs().any(|run| run.line_w > available_width)
-                || font_size * 1.25 > available_height
-            {
-                return Err(
-                    "Text extends beyond the image; shorten it or place it farther from the edge"
-                        .into(),
-                );
-            }
-            let color = Color::rgb(
-                (text.color >> 16) as u8,
-                (text.color >> 8) as u8,
-                text.color as u8,
-            );
-            let origin_x = (text.position.0 * w as f32).round() as i32;
-            let origin_y = (text.position.1 * h as f32).round() as i32;
-            buffer.draw(&mut fonts, &mut cache, color, |x, y, width, height, ink| {
-                for dy in 0..height {
-                    for dx in 0..width {
-                        let x = origin_x + x + dx as i32;
-                        let y = origin_y + y + dy as i32;
-                        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
-                            continue;
-                        }
-                        let dest = image.get_pixel_mut(x as u32, y as u32);
-                        let a = ink.a() as f32 / 255.;
-                        let old_a = dest[3] as f32 / 255.;
-                        let out_a = a + old_a * (1. - a);
-                        if out_a == 0. {
-                            continue;
-                        }
-                        for (channel, source) in [ink.r(), ink.g(), ink.b()].iter().enumerate() {
-                            dest[channel] = ((*source as f32 * a
-                                + dest[channel] as f32 * old_a * (1. - a))
-                                / out_a)
-                                .round() as u8;
-                        }
-                        dest[3] = (out_a * 255.).round() as u8;
-                    }
-                }
-            });
+            draw_text(&mut image, text, &fonts)?;
         }
     }
     let mut output = Cursor::new(Vec::new());
@@ -192,6 +145,148 @@ pub(super) fn png(
         .write_to(&mut output, image::ImageFormat::Png)
         .map_err(|e| e.to_string())?;
     Ok(output.into_inner())
+}
+
+// The editor and export deliberately use a single unwrapped system-font line.
+// Its origin is the top-left of the line box, in image-relative coordinates.
+pub(super) const FONT_FAMILY: &str = crate::fonts::UI;
+const CLIPPED: &str = "Text extends beyond the image; shorten it or place it farther from the edge";
+
+fn draw_text(
+    image: &mut RgbaImage,
+    text: &TextBox,
+    fonts: &impl gpui::PlatformTextSystem,
+) -> Result<(), String> {
+    use gpui::{FontRun, RenderGlyphParams, point, px};
+
+    if text.text.contains(['\r', '\n']) {
+        return Err("Annotation text must be a single line".into());
+    }
+    let (width, height) = image.dimensions();
+    let font_size = px((text.size * width as f32).max(1.));
+    let line_height = font_size * crate::input::ANNOTATION_LINE_HEIGHT;
+    let font_id = fonts
+        .font_id(&gpui::font(FONT_FAMILY))
+        .map_err(|e| e.to_string())?;
+    let layout = fonts.layout_line(
+        &text.text,
+        font_size,
+        &[FontRun {
+            len: text.text.len(),
+            font_id,
+        }],
+    );
+    let origin_x = text.position.0 * width as f32;
+    let origin_y = text.position.1 * height as f32;
+    if !origin_x.is_finite()
+        || !origin_y.is_finite()
+        || origin_x < 0.
+        || origin_y < 0.
+        || origin_x + layout.width.as_f32() > width as f32
+        || origin_y + line_height.as_f32() > height as f32
+    {
+        return Err(CLIPPED.into());
+    }
+    let baseline =
+        origin_y + ((line_height - layout.ascent - layout.descent) / 2. + layout.ascent).as_f32();
+    let color = gpui::rgb(text.color);
+    let dilation = fonts.glyph_dilation_for_color(color.into());
+    for run in &layout.runs {
+        for glyph in &run.glyphs {
+            let x = origin_x + glyph.position.x.as_f32();
+            let y = baseline + glyph.position.y.as_f32();
+            // Match Window::paint_glyph's device-pixel quantization at scale 1;
+            // PNG pixels are the target device pixels. Emoji use integer origins.
+            let quantize = |value: f32, variants: u8| {
+                let scaled = value * variants as f32;
+                (scaled.abs() - 0.5).ceil().copysign(scaled) / variants as f32
+            };
+            let (x, y) = if glyph.is_emoji {
+                (quantize(x, 1), quantize(y, 1))
+            } else {
+                (
+                    quantize(x, gpui::SUBPIXEL_VARIANTS_X),
+                    quantize(y, gpui::SUBPIXEL_VARIANTS_Y),
+                )
+            };
+            let params = RenderGlyphParams {
+                font_id: run.font_id,
+                glyph_id: glyph.id,
+                font_size,
+                subpixel_variant: if glyph.is_emoji {
+                    point(0, 0)
+                } else {
+                    point(
+                        (x.fract() * gpui::SUBPIXEL_VARIANTS_X as f32) as u8,
+                        (y.fract() * gpui::SUBPIXEL_VARIANTS_Y as f32) as u8,
+                    )
+                },
+                scale_factor: 1.,
+                is_emoji: glyph.is_emoji,
+                subpixel_rendering: false,
+                dilation: if glyph.is_emoji { 0 } else { dilation },
+            };
+            let bounds = fonts
+                .glyph_raster_bounds(&params)
+                .map_err(|e| e.to_string())?;
+            if bounds.size.width.0 == 0 || bounds.size.height.0 == 0 {
+                continue;
+            }
+            let (size, pixels) = fonts
+                .rasterize_glyph(&params, bounds)
+                .map_err(|e| e.to_string())?;
+            let left = x.trunc() as i32 + bounds.origin.x.0;
+            let top = y.trunc() as i32 + bounds.origin.y.0;
+            let channels = if glyph.is_emoji { 4 } else { 1 };
+            for row in 0..size.height.0 as usize {
+                for column in 0..size.width.0 as usize {
+                    let offset = (row * size.width.0 as usize + column) * channels;
+                    // AppleTextSystem returns straight-alpha BGRA for emoji and
+                    // alpha coverage for ordinary glyphs, just like GPUI's atlas.
+                    let (source, alpha) = if glyph.is_emoji {
+                        (
+                            [pixels[offset + 2], pixels[offset + 1], pixels[offset]],
+                            pixels[offset + 3],
+                        )
+                    } else {
+                        (
+                            [
+                                (text.color >> 16) as u8,
+                                (text.color >> 8) as u8,
+                                text.color as u8,
+                            ],
+                            pixels[offset],
+                        )
+                    };
+                    if alpha == 0 {
+                        continue;
+                    }
+                    let x = left + column as i32;
+                    let y = top + row as i32;
+                    if (x as f32) < origin_x.floor()
+                        || (y as f32) < origin_y.floor()
+                        || x >= width as i32
+                        || y >= height as i32
+                        || (y as f32) >= (origin_y + line_height.as_f32()).ceil()
+                    {
+                        return Err(CLIPPED.into());
+                    }
+                    let dest = image.get_pixel_mut(x as u32, y as u32);
+                    let a = alpha as f32 / 255.;
+                    let old_a = dest[3] as f32 / 255.;
+                    let out_a = a + old_a * (1. - a);
+                    for channel in 0..3 {
+                        dest[channel] = ((source[channel] as f32 * a
+                            + dest[channel] as f32 * old_a * (1. - a))
+                            / out_a)
+                            .round() as u8;
+                    }
+                    dest[3] = (out_a * 255.).round() as u8;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -258,6 +353,85 @@ mod tests {
             original
         );
     }
+    #[test]
+    fn system_layout_uses_proportional_and_fallback_runs_and_checks_edges() {
+        use gpui::{FontRun, PlatformTextSystem, px};
+        let fonts = gpui_apple::AppleTextSystem::new();
+        let id = fonts.font_id(&gpui::font(FONT_FAMILY)).unwrap();
+        let layout = |text: &str| {
+            fonts.layout_line(
+                text,
+                px(24.),
+                &[FontRun {
+                    len: text.len(),
+                    font_id: id,
+                }],
+            )
+        };
+        assert!(layout("WWWW").width > layout("iiii").width);
+        let fallback = layout("Wi 漢 🐙");
+        assert!(fallback.runs.iter().any(|run| run.font_id != id));
+        assert!(
+            fallback
+                .runs
+                .iter()
+                .flat_map(|run| &run.glyphs)
+                .any(|glyph| glyph.is_emoji)
+        );
+        let original = RgbaImage::from_pixel(320, 120, image::Rgba([255, 255, 255, 255]));
+        let text = TextBox {
+            position: (0.8, 0.7),
+            size: 0.06,
+            color: 0x000000,
+            text: "Wi".into(),
+        };
+        let saved = image::load_from_memory(&png(&original, &[], &[text.clone()]).unwrap())
+            .unwrap()
+            .into_rgba8();
+        assert!(saved.pixels().any(|pixel| pixel[0] < 200));
+        let colored = TextBox {
+            position: (0.1, 0.2),
+            size: 0.08,
+            color: 0x000000,
+            text: "漢 🐙".into(),
+        };
+        let saved = image::load_from_memory(&png(&original, &[], &[colored]).unwrap())
+            .unwrap()
+            .into_rgba8();
+        assert!(
+            saved
+                .pixels()
+                .any(|pixel| pixel[0] != pixel[1] || pixel[1] != pixel[2])
+        );
+        assert!(
+            png(
+                &original,
+                &[],
+                &[TextBox {
+                    position: (0.99, 0.7),
+                    ..text.clone()
+                }]
+            )
+            .is_err()
+        );
+        assert!(
+            png(
+                &original,
+                &[],
+                &[TextBox {
+                    position: (0.8, 0.99),
+                    ..text
+                }]
+            )
+            .is_err()
+        );
+        assert!(
+            original
+                .pixels()
+                .all(|pixel| pixel.0 == [255, 255, 255, 255])
+        );
+    }
+
     #[test]
     fn text_flattens_with_brush_and_rejects_clipped_content() {
         let original = RgbaImage::from_pixel(400, 160, image::Rgba([255, 255, 255, 255]));

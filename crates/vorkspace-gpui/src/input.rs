@@ -175,6 +175,8 @@ pub fn bind(cx: &mut App) {
     ]);
 }
 
+pub(crate) const ANNOTATION_LINE_HEIGHT: f32 = 1.25;
+
 pub struct Input {
     code: Option<code::Code>,
     focus: FocusHandle,
@@ -189,6 +191,7 @@ pub struct Input {
     label: SharedString,
     font_size: f32,
     line_height: f32,
+    annotation: bool,
     min_height: f32,
     max_height: f32,
     /// A textarea that takes Enter as a newline and submits on Cmd/Ctrl+Enter.
@@ -246,6 +249,7 @@ impl Input {
             label: "Message composer".into(),
             font_size: FONT_SIZE,
             line_height: LINE_HEIGHT,
+            annotation: false,
             min_height: MIN_HEIGHT,
             max_height: MAX_HEIGHT,
             secondary_submit: false,
@@ -407,8 +411,9 @@ impl Input {
         self.max_chars = Some(value);
     }
     pub(crate) fn set_annotation_metrics(&mut self, font_size: f32) {
+        self.annotation = true;
         self.font_size = font_size;
-        self.line_height = font_size * 1.25;
+        self.line_height = font_size * ANNOTATION_LINE_HEIGHT;
         self.height = self.line_height;
     }
     pub(crate) fn set_font_size(&mut self, size: f32) {
@@ -1498,7 +1503,11 @@ impl Element for InputElement {
         } else {
             i.scroll_y
         };
-        let scroll_x = if !i.single_line || placeholder {
+        let annotation_fits = i.annotation
+            && lines
+                .first()
+                .is_none_or(|line| line.size(line_height).width <= bounds.size.width);
+        let scroll_x = if !i.single_line || placeholder || annotation_fits {
             px(0.)
         } else if caret.x < i.scroll_x {
             caret.x
