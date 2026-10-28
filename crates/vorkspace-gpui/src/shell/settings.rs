@@ -571,7 +571,12 @@ impl Shell {
         }).detach();
         let _ = window;
     }
-    fn delete_from_settings(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn delete_from_settings(
+        &mut self,
+        id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let prompt = window.prompt(
             gpui::PromptLevel::Warning,
             "Delete this conversation permanently?",

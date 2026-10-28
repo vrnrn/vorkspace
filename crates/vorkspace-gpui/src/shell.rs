@@ -4921,10 +4921,7 @@ impl Shell {
                             },
                         )
                         .into(),
-                        MenuAction::new("delete", "Delete")
-                            .danger()
-                            .disabled(true)
-                            .into(),
+                        MenuAction::new("delete", "Delete").danger().into(),
                     ]);
                 }
                 (
@@ -5141,6 +5138,14 @@ impl Shell {
             && let MenuTarget::Tab(id) = target
         {
             self.toggle_archive(id, cx);
+            return;
+        }
+        if action == "delete"
+            && let MenuTarget::Tab(id) = target
+        {
+            // Temporary adapter: integration should route this to the shared
+            // request_delete_sessions confirmation instead.
+            self.delete_from_settings(id, window, cx);
             return;
         }
         match target {
@@ -10339,6 +10344,47 @@ mod tests {
         cx.refresh().unwrap();
         cx.run_until_parked();
         (window, ids.0, ids.1)
+    }
+    #[gpui::test]
+    fn tab_delete_confirms_and_targets_the_original_session(cx: &mut TestAppContext) {
+        let (window, a, b) = window(cx);
+        window.update(cx, |shell, w, cx| {
+            shell.open(a, w, cx);
+            let (_, items, _, _) = shell.menu_items(&MenuTarget::Tab(a), &mut Vec::new(), w, cx);
+            assert!(items.iter().any(|item| matches!(item, MenuItem::Action(action) if action.id == "delete" && !action.disabled && action.danger)));
+            shell.run_menu(MenuTarget::Tab(a), "delete", None, w, cx);
+            shell.open(b, w, cx);
+        }).unwrap();
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, w, cx| {
+                assert!(shell.session_summaries.contains_key(&a));
+                shell.open(a, w, cx);
+                shell.run_menu(MenuTarget::Tab(a), "delete", None, w, cx);
+                shell.open(b, w, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Delete");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(!shell.session_summaries.contains_key(&a));
+                assert!(shell.session_summaries.contains_key(&b));
+                assert!(
+                    !locked(&shell.store)
+                        .unwrap()
+                        .sessions()
+                        .unwrap()
+                        .iter()
+                        .any(|s| s.id == a)
+                );
+            })
+            .unwrap();
     }
     #[gpui::test]
     fn pane_surfaces_follow_the_edge_at_a_constant_width(cx: &mut TestAppContext) {
