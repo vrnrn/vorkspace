@@ -46,7 +46,7 @@ use crate::{
     conversation::{Conversation, SessionChanged},
     input,
     notes::Notes,
-    pane_layout::{Edge, LayoutLeaf, Rect, SplitDir},
+    pane_layout::{Edge, LayoutLeaf, PaneNode, Rect, SplitDir},
     pane_motion::{PaneSlide, ResizeSettle},
     pickers::{ProjectPicked, ProjectPicker},
     popover::{
@@ -463,6 +463,8 @@ impl TabShift {
 }
 /// Below this a chat column stops being comfortable to read.
 const MIN_CHAT_WIDTH: f32 = 420.;
+const MAX_SESSION_STACK: usize = 3;
+const PANE_LIMIT_MESSAGE: &str = "Not enough room to tile here. Widen the window or use another tab; columns can contain up to three sessions.";
 /// A sideways tab drag sags; only a deliberate pull below the strip
 /// targets a pane (TitleBar's PANE_DROP_PULL).
 const PANE_DROP_PULL: f32 = 32.;
@@ -631,6 +633,9 @@ pub(crate) struct Shell {
     review_drag: bool,
     split_bounds: HashMap<i64, AnchorSlot>,
     pane_bounds: AnchorSlot,
+    pane_viewport: AnchorSlot,
+    pane_scroll: ScrollHandle,
+    pane_scroll_focus: Option<(i64, i64, u32, u32)>,
     pane_drag: Option<PaneDrag>,
     pane_sash: Option<SashDrag>,
     pane_motion: Option<PaneMotion>,
@@ -955,6 +960,9 @@ impl Shell {
             review_drag: false,
             split_bounds: HashMap::new(),
             pane_bounds: AnchorSlot::default(),
+            pane_viewport: AnchorSlot::default(),
+            pane_scroll: ScrollHandle::new(),
+            pane_scroll_focus: None,
             pane_drag: None,
             pane_sash: None,
             pane_motion: None,
@@ -2175,15 +2183,184 @@ impl Shell {
         let tab = self.workspace.tab_of(id).unwrap_or(id);
         let layout = self.workspace.layout(tab);
         if layout.is_split() || self.pane_motion.as_ref().is_some_and(|m| m.tab == tab) {
-            return self.pane_tree(tab, layout.leaves(), window, cx);
+            return self.scrollable_pane_tree(tab, layout, window, cx);
         }
+        self.pane_scroll_focus = None;
         let hint = self.drop_hint(id);
         div()
             .size_full()
             .relative()
+            .child(self.pane_viewport.layout_probe())
             .child(self.pane_bounds.layout_probe())
             .child(self.session_surface(id, None, window, cx))
             .children(hint)
+            .into_any_element()
+    }
+    /// Keep old or resized layouts intact on a scrollable canvas when they
+    /// cannot fit. The controls make both axes discoverable without a trackpad.
+    fn scrollable_pane_tree(
+        &mut self,
+        tab: i64,
+        layout: PaneNode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (view_width, view_height) = self.pane_viewport.get().map_or((800., 600.), |b| {
+            (b.size.width.as_f32(), b.size.height.as_f32())
+        });
+        let view_width = view_width.max(1.);
+        let view_height = view_height.max(1.);
+        let width = view_width.max(layout.width_for_minimum(MIN_CHAT_WIDTH));
+        let stack = layout
+            .max_session_stack(|id| id >= 0 && !self.workspace.review_owners.contains_key(&id));
+        let height = if stack > MAX_SESSION_STACK {
+            view_height.max(
+                layout.height_for_minimum(view_height / MAX_SESSION_STACK as f32, |id| {
+                    id >= 0 && !self.workspace.review_owners.contains_key(&id)
+                }),
+            )
+        } else {
+            view_height
+        };
+        let overflow_x = width > view_width + 0.5;
+        let overflow_y = height > view_height + 0.5;
+        let active = self.workspace.active.unwrap_or(tab);
+        let signature = (tab, active, view_width.to_bits(), view_height.to_bits());
+        if self.pane_scroll_focus != Some(signature) {
+            if let Some(pane) = layout.leaves().iter().find(|p| p.id == active) {
+                let mut x = self.pane_scroll.offset().x.as_f32();
+                let mut y = self.pane_scroll.offset().y.as_f32();
+                let left = pane.rect.x * width;
+                let right = left + pane.rect.w * width;
+                let top = pane.rect.y * height;
+                let bottom = top + pane.rect.h * height;
+                if left + x < 0. {
+                    x = -left;
+                }
+                if right + x > view_width {
+                    x = view_width - right;
+                }
+                if top + y < 0. {
+                    y = -top;
+                }
+                if bottom + y > view_height {
+                    y = view_height - bottom;
+                }
+                self.pane_scroll.set_offset(gpui::point(
+                    px(x.clamp((view_width - width).min(0.), 0.)),
+                    px(y.clamp((view_height - height).min(0.), 0.)),
+                ));
+            }
+            self.pane_scroll_focus = Some(signature);
+        }
+        let tree = self.pane_tree(tab, layout.leaves(), window, cx);
+        let mut buttons = Vec::new();
+        if overflow_x {
+            buttons.push(self.pane_scroll_button(
+                "pane-scroll-left",
+                "Show panes to the left",
+                "chevron-left",
+                (view_width * 0.7, 0.),
+                (view_width - width, view_height - height),
+                cx,
+            ));
+            buttons.push(self.pane_scroll_button(
+                "pane-scroll-right",
+                "Show panes to the right",
+                "chevron-right",
+                (-view_width * 0.7, 0.),
+                (view_width - width, view_height - height),
+                cx,
+            ));
+        }
+        if overflow_y {
+            buttons.push(self.pane_scroll_button(
+                "pane-scroll-up",
+                "Show panes above",
+                "chevron-up",
+                (0., view_height * 0.7),
+                (view_width - width, view_height - height),
+                cx,
+            ));
+            buttons.push(self.pane_scroll_button(
+                "pane-scroll-down",
+                "Show panes below",
+                "chevron-down",
+                (0., -view_height * 0.7),
+                (view_width - width, view_height - height),
+                cx,
+            ));
+        }
+        let controls = div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .h(px(30.))
+            .border_t_1()
+            .border_color(crate::right_panel::stroke())
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(content(0.65))
+                    .child("More panes"),
+            )
+            .children(buttons);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .id("pane-viewport")
+                    .debug_selector(|| "pane-viewport".into())
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(self.pane_viewport.layout_probe())
+                    .child(
+                        div()
+                            .id("pane-scroll-area")
+                            .size_full()
+                            .overflow_scroll()
+                            .track_scroll(&self.pane_scroll)
+                            .child(div().w(px(width)).h(px(height)).flex_shrink_0().child(tree)),
+                    ),
+            )
+            .when(overflow_x || overflow_y, |d| d.child(controls))
+            .into_any_element()
+    }
+    fn scroll_panes(&mut self, delta: (f32, f32), limit: (f32, f32), cx: &mut Context<Self>) {
+        let offset = self.pane_scroll.offset();
+        self.pane_scroll.set_offset(gpui::point(
+            px((offset.x.as_f32() + delta.0).clamp(limit.0.min(0.), 0.)),
+            px((offset.y.as_f32() + delta.1).clamp(limit.1.min(0.), 0.)),
+        ));
+        cx.notify();
+    }
+
+    fn pane_scroll_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        icon: &'static str,
+        delta: (f32, f32),
+        limit: (f32, f32),
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        icon_button(id, label, icon)
+            .debug_selector(move || id.into())
+            .focusable()
+            .tab_stop(true)
+            .focus_visible(|s| s.bg(content(0.15)))
+            .on_click(cx.listener(move |this, _, _, cx| this.scroll_panes(delta, limit, cx)))
+            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space" | " ") {
+                    this.scroll_panes(delta, limit, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .into_any_element()
     }
     /// PaneTree.tsx: absolutely placed panes, sashes on shared edges and a
@@ -2384,6 +2561,31 @@ impl Shell {
         let (target, edge) = drag.over?;
         if target != id {
             return None;
+        }
+        if !self.placement_allowed(drag.source, target, edge) {
+            return Some(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(pane_fill())
+                            .border_1()
+                            .border_color(crate::right_panel::stroke())
+                            .text_size(px(12.))
+                            .text_color(content(0.8))
+                            .child("Not enough room to tile here"),
+                    )
+                    .into_any_element(),
+            );
         }
         let wash = div().absolute().bg(accent_color()).opacity(0.15);
         let line = div().absolute().bg(accent_color());
@@ -2682,7 +2884,7 @@ impl Shell {
                     .or_else(|| self.workspace.reviews.get(&leaf.id).cloned())
                     .filter(|r| !r.tabs.is_empty());
                 match review {
-                    Some(r) if r.chat_hidden => f32::INFINITY,
+                    Some(r) if r.chat_hidden => width,
                     Some(r) => width * (1. - r.ratio),
                     None => width,
                 }
@@ -3169,10 +3371,130 @@ impl Shell {
             cx.notify();
         }
     }
+    fn pane_available_width(&self) -> f32 {
+        let sidebar = if self.workspace.sidebar_visible {
+            self.workspace.right_panel_width
+        } else {
+            0.
+        };
+        let dock = self
+            .workspace
+            .docks
+            .get(&self.workspace.project)
+            .filter(|dock| dock.open && !dock.side.vertical())
+            .map_or(0., |dock| dock.size);
+        let expected =
+            (self.viewport_width - self.classic_rail_width() - self.right_drawn - sidebar - dock)
+                .max(0.);
+        self.pane_viewport
+            .get()
+            .map_or(expected, |bounds| bounds.size.width.as_f32().min(expected))
+    }
+
+    /// `fit_sidebar` automatically hides the session sidebar when a split
+    /// needs its room and restores it when it fits again.
+    fn pane_admission_width(&self) -> f32 {
+        self.pane_available_width()
+            + if self.workspace.sidebar_visible {
+                self.workspace.right_panel_width
+            } else {
+                0.
+            }
+    }
+
+    fn pane_layout_allowed(&self, before: &PaneNode, after: &PaneNode) -> bool {
+        let session = |id: i64| id >= 0 && !self.workspace.review_owners.contains_key(&id);
+        let old_stack = before.max_session_stack(session);
+        let new_stack = after.max_session_stack(session);
+        let stack_ok = new_stack <= MAX_SESSION_STACK
+            || (old_stack > MAX_SESSION_STACK && new_stack < old_stack);
+        let available = self.pane_admission_width();
+        let old_width = before.minimum_width(MIN_CHAT_WIDTH);
+        let new_width = after.minimum_width(MIN_CHAT_WIDTH);
+        stack_ok && new_width <= available.max(old_width) + 0.5
+    }
+
+    fn fit_active_pane_width(&mut self) {
+        let width = self.pane_available_width();
+        if let Some(tab) = self.workspace.active_tab()
+            && let Some(layout) = self.workspace.layouts.get_mut(&tab)
+        {
+            let width = width.max(layout.minimum_width(MIN_CHAT_WIDTH));
+            layout.fit_width(width, MIN_CHAT_WIDTH);
+        }
+    }
+
+    fn placement_allowed(&self, source: DragSource, target: i64, edge: Edge) -> bool {
+        let Some(tab) = self.workspace.tab_of(target) else {
+            return false;
+        };
+        let before = self.workspace.layout(tab);
+        let id = source.session();
+        let after = match source {
+            DragSource::Tab(source_tab) => {
+                if source_tab == tab {
+                    return false;
+                }
+                before.place_layout(self.workspace.layout(source_tab), target, edge)
+            }
+            DragSource::Review(owner)
+                if self.workspace.review_owners.contains_key(&owner)
+                    || self
+                        .workspace
+                        .reviews
+                        .get(&owner)
+                        .is_some_and(|r| r.chat_hidden) =>
+            {
+                before.place_pane(owner, target, edge)
+            }
+            DragSource::Review(_) => before.place_pane(i64::MIN, target, edge),
+            DragSource::Pane(owner)
+                if self
+                    .workspace
+                    .reviews
+                    .get(&owner)
+                    .is_some_and(|r| !r.chat_hidden) =>
+            {
+                let base = before.replace_leaf(owner, i64::MIN);
+                let target = if target == owner { i64::MIN } else { target };
+                base.place_pane(owner, target, edge)
+            }
+            _ => before.place_pane(id, target, edge),
+        };
+        let adds_pane = after.leaf_ids().len() > before.leaf_ids().len();
+        if matches!(edge, Edge::Left | Edge::Right)
+            && adds_pane
+            && after.minimum_width(MIN_CHAT_WIDTH) > self.pane_admission_width() + 0.5
+        {
+            return false;
+        }
+        self.pane_layout_allowed(&before, &after)
+    }
+
+    fn split_allowed(&self, before: &PaneNode, target: i64, dir: SplitDir, id: i64) -> bool {
+        let after = before.split_pane(target, dir, id);
+        (dir != SplitDir::Right
+            || after.minimum_width(MIN_CHAT_WIDTH) <= self.pane_admission_width() + 0.5)
+            && self.pane_layout_allowed(before, &after)
+    }
+
+    fn reject_pane_placement(&mut self, cx: &mut Context<Self>) {
+        self.error = Some(PANE_LIMIT_MESSAGE.into());
+        cx.notify();
+    }
     /// cmd-d / shift-cmd-d: a new session beside the focused pane, with the
     /// focused session's provider.
     fn split_session(&mut self, dir: SplitDir, cx: &mut Context<Self>) {
         if self.app_view_open() || self.workspace.active.is_none() {
+            return;
+        }
+        let focused = self.workspace.active.unwrap();
+        let Some(tab) = self.workspace.tab_of(focused) else {
+            return;
+        };
+        let before = self.workspace.layout(tab);
+        if !self.split_allowed(&before, focused, dir, i64::MAX) {
+            self.reject_pane_placement(cx);
             return;
         }
         let kind = self
@@ -3209,25 +3531,13 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok(summary) => {
-                    let id = summary.id;
-                    this.add(summary, cx);
-                    this.seed_worktree(id, worktree.as_ref(), cx);
-                    this.order.retain(|s| *s != id);
-                    this.order.insert(0, id);
-                    if this.navigation_revision != navigation_revision
-                        || this.workspace.active != target
-                    {
-                        this.invalidate_chrome(cx);
-                        cx.notify();
-                        return;
-                    }
-                    let before = this.active_leaves();
-                    this.workspace.split(id, dir);
-                    this.begin_pane_motion(before);
-                    this.fit_sidebar(cx);
-                    this.activate_session(id, window, cx);
-                }
+                Ok(summary) => this.finish_split_creation(
+                    summary,
+                    worktree.as_ref(),
+                    (target, navigation_revision, dir),
+                    window,
+                    cx,
+                ),
                 Err(error) => {
                     this.error = Some(error);
                     cx.notify();
@@ -3235,6 +3545,51 @@ impl Shell {
             });
         })
         .detach();
+    }
+    fn finish_split_creation(
+        &mut self,
+        summary: Session,
+        worktree: Option<&crate::worktree_switcher::WorktreeFocus>,
+        request: (Option<i64>, u64, SplitDir),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (target, navigation_revision, dir) = request;
+        let id = summary.id;
+        self.add(summary, cx);
+        self.seed_worktree(id, worktree, cx);
+        self.order.retain(|s| *s != id);
+        self.order.insert(0, id);
+        if self.navigation_revision != navigation_revision || self.workspace.active != target {
+            // The user navigated while creation was in flight. Keep the new
+            // blank session reachable without stealing the newer focus.
+            let active = self.workspace.active;
+            self.workspace.open(id);
+            self.workspace.active = active;
+            self.persist(cx);
+            self.invalidate_chrome(cx);
+            cx.notify();
+            return;
+        }
+        let Some(target) = target else {
+            return;
+        };
+        let Some(tab) = self.workspace.tab_of(target) else {
+            return;
+        };
+        let layout = self.workspace.layout(tab);
+        if !self.split_allowed(&layout, target, dir, id) {
+            self.workspace.open(id);
+            self.activate_session(id, window, cx);
+            self.reject_pane_placement(cx);
+            return;
+        }
+        let before = self.active_leaves();
+        self.workspace.split(id, dir);
+        self.fit_active_pane_width();
+        self.begin_pane_motion(before);
+        self.fit_sidebar(cx);
+        self.activate_session(id, window, cx);
     }
     fn focus_neighbor(&mut self, dir: Edge, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.workspace.neighbor(dir) {
@@ -3319,6 +3674,13 @@ impl Shell {
     /// The pane under a point and the edge it would take, in the active tab.
     fn pane_hit(&self, position: Point<Pixels>) -> Option<(i64, Edge)> {
         if self.app_view_open() {
+            return None;
+        }
+        if self
+            .pane_viewport
+            .get()
+            .is_none_or(|bounds| !bounds.contains(&position))
+        {
             return None;
         }
         let bounds = self.pane_bounds.get()?;
@@ -3447,6 +3809,13 @@ impl Shell {
             self.apply_sidebar_drop(drag.source.session(), target, window, cx);
             return;
         }
+        if let Some((target, edge)) = drag.over
+            && drag.insert.is_none()
+            && !self.placement_allowed(drag.source, target, edge)
+        {
+            self.reject_pane_placement(cx);
+            return;
+        }
         let mut before = self.active_leaves();
         let id = drag.source.session();
         let mut over = drag.over;
@@ -3501,6 +3870,7 @@ impl Shell {
             }
             _ => return,
         }
+        self.fit_active_pane_width();
         self.history
             .prune(&self.workspace.open_sessions(), self.workspace.active);
         self.fit_sidebar(cx);
@@ -3570,7 +3940,11 @@ impl Shell {
                 index,
                 span,
             } => {
-                let (at, min, max) = self.workspace.sash_range(*tab, path, *index)?;
+                let (at, min, max) = self
+                    .workspace
+                    .layout(*tab)
+                    .horizontal_sash_range(path, *index, *span, MIN_CHAT_WIDTH)
+                    .or_else(|| self.workspace.sash_range(*tab, path, *index))?;
                 (at, min, max, span.max(1.))
             }
         })
@@ -3587,8 +3961,18 @@ impl Shell {
                 }
             }
             ResizeTarget::Sash {
-                tab, path, index, ..
-            } => self.workspace.place_sash(*tab, path, *index, value),
+                tab,
+                path,
+                index,
+                span,
+            } => {
+                let value = self
+                    .workspace
+                    .layout(*tab)
+                    .horizontal_sash_range(path, *index, *span, MIN_CHAT_WIDTH)
+                    .map_or(value, |(_, min, max)| value.clamp(min, max));
+                self.workspace.place_sash(*tab, path, *index, value)
+            }
         }
     }
     /// Follows the pointer to `value`, stopping at the target's limits. The
@@ -7475,7 +7859,23 @@ impl Render for Shell {
                     }
                 }));
             self.observations
-                .push(cx.observe_window_bounds(window, |this, _, cx| this.close_preview(cx)));
+                .push(cx.observe_window_bounds(window, |this, window, cx| {
+                    this.close_preview(cx);
+                    let size = window.viewport_size();
+                    if let Some(mut bounds) = this.pane_viewport.get() {
+                        bounds.size.width = px((bounds.size.width.as_f32() + size.width.as_f32()
+                            - this.viewport_width)
+                            .max(0.));
+                        bounds.size.height = px((bounds.size.height.as_f32()
+                            + size.height.as_f32()
+                            - this.viewport_height)
+                            .max(0.));
+                        this.pane_viewport.set(Some(bounds));
+                    }
+                    this.viewport_width = size.width.as_f32();
+                    this.viewport_height = size.height.as_f32();
+                    cx.notify();
+                }));
         }
         self.viewport_width = window.viewport_size().width.as_f32();
         self.viewport_height = window.viewport_size().height.as_f32();
@@ -8396,10 +8796,22 @@ mod tests {
                 .unwrap();
             cx.run_until_parked();
             window
-                .update(cx, |shell, _, _| {
+                .update(cx, |shell, w, cx| {
                     assert_eq!(shell.workspace.project, "/work/another-project");
                     assert_eq!(shell.workspace.active, Some(a));
-                    assert_eq!(shell.workspace.tabs, [a, b]);
+                    assert_eq!(&shell.workspace.tabs[..2], &[a, b]);
+                    if split {
+                        assert_eq!(shell.workspace.tabs.len(), 3);
+                        let created = shell.workspace.tabs[2];
+                        assert_eq!(shell.session_summaries[&created].cwd, "/work/vorkspace");
+                        let saved = locked(&shell.store).unwrap().ui_state().unwrap().unwrap();
+                        let restored: Workspace = serde_json::from_str(&saved).unwrap();
+                        assert!(restored.tabs.contains(&created));
+                        shell.select_project("/work/vorkspace".into(), w, cx);
+                        assert!(shell.visible_tabs(cx).contains(&TitleTab::Session(created)));
+                    } else {
+                        assert_eq!(shell.workspace.tabs.len(), 2);
+                    }
                     assert!(shell.workspace.layouts.is_empty());
                 })
                 .unwrap();
@@ -10501,6 +10913,400 @@ mod tests {
         (window, a, b)
     }
     #[gpui::test]
+    fn pane_limit_rejects_a_fourth_session_and_preserves_the_source(cx: &mut TestAppContext) {
+        let (window, a, b) = same_project_window(cx);
+        cx.update(bind_keys);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1500.), px(900.)));
+        window
+            .update(visual, |shell, w, cx| {
+                shell.open(b, w, cx);
+                let c = locked(&shell.store)
+                    .unwrap()
+                    .create("codex", "/work/vorkspace")
+                    .unwrap();
+                let c_id = c.id;
+                shell.add(c, cx);
+                shell.workspace.split(c_id, SplitDir::Down);
+                let d = locked(&shell.store)
+                    .unwrap()
+                    .create("codex", "/work/vorkspace")
+                    .unwrap();
+                let d_id = d.id;
+                shell.add(d, cx);
+                shell.workspace.split(d_id, SplitDir::Down);
+                shell.workspace.open(a);
+                shell.workspace.open(d_id);
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, w, cx| {
+                let before = shell.workspace.clone();
+                let target = shell.workspace.active.unwrap();
+                assert!(!shell.placement_allowed(DragSource::Session(a), target, Edge::Bottom));
+                shell.pane_drag = Some(PaneDrag {
+                    source: DragSource::Session(a),
+                    start: gpui::point(px(0.), px(0.)),
+                    position: gpui::point(px(0.), px(0.)),
+                    active: true,
+                    over: Some((target, Edge::Bottom)),
+                    insert: None,
+                });
+                shell.finish_pane_drag(w, cx);
+                assert_eq!(shell.workspace.tabs, before.tabs);
+                assert_eq!(shell.workspace.layout(b), before.layout(b));
+                assert_eq!(shell.workspace.active, before.active);
+                assert_eq!(shell.error.as_deref(), Some(PANE_LIMIT_MESSAGE));
+                assert!(
+                    shell
+                        .app_placement(
+                            target,
+                            "/work/vorkspace",
+                            &serde_json::json!({"placement":"down"}),
+                            cx
+                        )
+                        .is_err()
+                );
+                shell.split_session(SplitDir::Down, cx);
+                assert_eq!(shell.workspace.open_sessions(), before.open_sessions());
+                shell.error = None;
+                shell.focus_active(w, cx);
+            })
+            .unwrap();
+        visual.simulate_keystrokes("cmd-shift-d");
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                assert_eq!(shell.workspace.layout(b).max_session_stack(|id| id >= 0), 3);
+                assert_eq!(shell.error.as_deref(), Some(PANE_LIMIT_MESSAGE));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn pane_limit_async_creation_rechecks_space_before_publication(cx: &mut TestAppContext) {
+        let (window, _, session) = window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open(session, w, cx);
+                shell.viewport_width = 1800.;
+                shell.pane_viewport.set(Some(Bounds::new(
+                    gpui::point(px(0.), px(0.)),
+                    gpui::size(px(1200.), px(800.)),
+                )));
+                let layout = shell.workspace.layout(session);
+                assert!(shell.pane_layout_allowed(
+                    &layout,
+                    &layout.split_pane(session, SplitDir::Right, i64::MAX)
+                ));
+                let summary = locked(&shell.store)
+                    .unwrap()
+                    .create("codex", "/work/vorkspace")
+                    .unwrap();
+                let revision = shell.navigation_revision;
+                // Exercise the actual foreground continuation with a new size.
+                shell.pane_viewport.set(Some(Bounds::new(
+                    gpui::point(px(0.), px(0.)),
+                    gpui::size(px(500.), px(800.)),
+                )));
+                shell.finish_split_creation(
+                    summary,
+                    None,
+                    (Some(session), revision, SplitDir::Right),
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                let new = shell.workspace.active.unwrap();
+                assert_ne!(new, session);
+                assert_eq!(shell.workspace.tab_of(new), Some(new));
+                assert_eq!(shell.workspace.layout(session).leaf_ids(), [session]);
+                assert_eq!(shell.error.as_deref(), Some(PANE_LIMIT_MESSAGE));
+                assert!(shell.session_summaries.contains_key(&new));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn pane_limit_rejected_chat_drop_keeps_attached_dirty_file(cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler;
+        crate::clock::use_test_clock(cx);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("draft.txt");
+        std::fs::write(&path, "original").unwrap();
+        let (window, _, target) = window(cx);
+        let source = window
+            .update(cx, |shell, w, cx| {
+                shell.open(target, w, cx);
+                for _ in 0..2 {
+                    let summary = locked(&shell.store)
+                        .unwrap()
+                        .create("codex", "/work/vorkspace")
+                        .unwrap();
+                    let id = summary.id;
+                    shell.add(summary, cx);
+                    shell.workspace.split(id, SplitDir::Down);
+                }
+                let summary = locked(&shell.store)
+                    .unwrap()
+                    .create("codex", "/work/vorkspace")
+                    .unwrap();
+                let source = summary.id;
+                shell.add(summary, cx);
+                shell.workspace.split(source, SplitDir::Right);
+                shell.open_review(
+                    crate::review::ReviewTab::File {
+                        cwd: directory.path().to_string_lossy().into_owned(),
+                        path: path.to_string_lossy().into_owned(),
+                    },
+                    w,
+                    cx,
+                );
+                source
+            })
+            .unwrap();
+        cx.run_until_parked();
+        crate::clock::settle_animations(window, cx);
+        window
+            .update(cx, |shell, w, cx| {
+                let review = shell.reviews[&source].clone();
+                let editor = review.read(cx).active_editor().unwrap();
+                let input = editor.read(cx).input.clone();
+                input.update(cx, |input, cx| {
+                    input.replace_text_in_range(None, "changed", w, cx)
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        crate::clock::settle_animations(window, cx);
+        window
+            .update(cx, |shell, w, cx| {
+                let review = shell.reviews[&source].clone();
+                let editor = review.read(cx).active_editor().unwrap();
+                assert!(editor.read(cx).dirty);
+                let before = shell.workspace.layout(target);
+                assert!(!shell.placement_allowed(DragSource::Pane(source), target, Edge::Bottom));
+                shell.pane_drag = Some(PaneDrag {
+                    source: DragSource::Pane(source),
+                    start: gpui::point(px(0.), px(0.)),
+                    position: gpui::point(px(0.), px(0.)),
+                    active: true,
+                    over: Some((target, Edge::Bottom)),
+                    insert: None,
+                });
+                shell.finish_pane_drag(w, cx);
+                assert_eq!(shell.workspace.layout(target), before);
+                assert!(shell.workspace.review_owners.is_empty());
+                assert_eq!(shell.reviews[&source], review);
+                assert_eq!(review.read(cx).active_editor().unwrap(), editor);
+                assert!(editor.read(cx).dirty);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn pane_limit_overfull_layout_retains_and_reveals_all_panes(cx: &mut TestAppContext) {
+        let (window, _, b) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1200.), px(800.)));
+        let ids = window
+            .update(visual, |shell, w, cx| {
+                shell.open(b, w, cx);
+                let mut ids = vec![b];
+                for _ in 0..4 {
+                    let summary = locked(&shell.store)
+                        .unwrap()
+                        .create("codex", "/work/vorkspace")
+                        .unwrap();
+                    let id = summary.id;
+                    shell.add(summary, cx);
+                    shell.workspace.split(id, SplitDir::Down);
+                    ids.push(id);
+                }
+                let saved = serde_json::to_string(&shell.workspace).unwrap();
+                let sessions = shell
+                    .session_summaries
+                    .values()
+                    .map(|s| (s.id, s.cwd.clone()))
+                    .collect::<Vec<_>>();
+                shell.workspace = Workspace::restore(Some(&saved), &sessions, "/work/vorkspace");
+                cx.notify();
+                ids
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("pane-scroll-down").is_some());
+        assert!(visual.debug_bounds("pane-scroll-up").is_some());
+        window
+            .update(visual, |shell, w, cx| shell.open(ids[0], w, cx))
+            .unwrap();
+        visual.run_until_parked();
+        let top_offset = window
+            .update(visual, |shell, _, _| shell.pane_scroll.offset().y)
+            .unwrap();
+        let down = visual.debug_bounds("pane-scroll-down").unwrap().center();
+        visual.simulate_click(down, Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                assert!(shell.pane_scroll.offset().y < top_offset)
+            })
+            .unwrap();
+        window
+            .update(visual, |shell, w, cx| {
+                shell.open(*ids.last().unwrap(), w, cx)
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                assert!(shell.pane_scroll.offset().y < top_offset);
+                assert_eq!(shell.workspace.layout(b).leaf_ids(), ids);
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn pane_limit_width_changes_with_window_and_preserves_horizontal_overflow(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, a, b) = same_project_window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1800.), px(800.)));
+        window
+            .update(visual, |shell, w, cx| shell.open(b, w, cx))
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                assert!(shell.pane_available_width() >= 840.);
+                assert!(shell.placement_allowed(DragSource::Session(a), b, Edge::Right));
+            })
+            .unwrap();
+        window
+            .update(visual, |shell, _, cx| {
+                shell.workspace.place(a, b, Edge::Right);
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let before = window
+            .update(visual, |shell, _, _| shell.workspace.layout(b))
+            .unwrap();
+        visual.simulate_resize(gpui::size(px(700.), px(800.)));
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.run_until_parked();
+        let geometry = window
+            .update(visual, |shell, _, _| {
+                (
+                    shell.pane_viewport.get(),
+                    shell.pane_bounds.get(),
+                    shell.workspace.layout(b),
+                    shell.workspace.active,
+                )
+            })
+            .unwrap();
+        assert!(
+            visual.debug_bounds("pane-scroll-left").is_some(),
+            "{geometry:?}"
+        );
+        assert!(visual.debug_bounds("pane-scroll-right").is_some());
+        window
+            .update(visual, |shell, _, _| {
+                assert_eq!(shell.workspace.layout(b), before);
+                assert_eq!(shell.workspace.layout(b).leaf_ids(), [b, a]);
+                assert!(shell.pane_bounds.get().unwrap().size.width.as_f32() >= 840.);
+                assert!(!shell.placement_allowed(DragSource::Session(i64::MAX), a, Edge::Right));
+                assert!(shell.placement_allowed(DragSource::Session(i64::MAX), a, Edge::Bottom));
+            })
+            .unwrap();
+    }
+    #[test]
+    #[ignore = "Requires Metal and VORKSPACE_PANE_CAPTURE_DIR"]
+    fn pane_limit_native_capture() {
+        let output =
+            std::path::PathBuf::from(std::env::var_os("VORKSPACE_PANE_CAPTURE_DIR").unwrap());
+        assert!(output.is_absolute() && output.is_dir());
+        let store = Arc::new(Mutex::new(
+            Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let sessions: Vec<_> = (0..5)
+            .map(|_| {
+                let mut store = locked(&store).unwrap();
+                let mut session = store.create("codex", "/work/pane-fixture").unwrap();
+                store.write_rows(session.id, 0, &[
+                    vorkspace_core::transcript::Row { role: "user".into(), text: "Please review this change and explain what happens when the window gets smaller.".into(), first: true, sent_at: None },
+                    vorkspace_core::transcript::Row { role: "assistant".into(), text: "The panes retain their sessions. You can use the arrows below to reach any pane outside the visible area.".into(), first: true, sent_at: None },
+                ]).unwrap();
+                session.has_messages = true;
+                session
+            })
+            .collect();
+        let mut cx = gpui::HeadlessAppContext::with_platform(
+            Arc::new(gpui_apple::AppleTextSystem::new()),
+            Arc::new(crate::assets::Assets),
+            || {
+                Ok(Some(Box::new(
+                    gpui_apple::metal_renderer::MetalHeadlessRenderer::new(),
+                )))
+            },
+        );
+        crate::clock::use_test_clock(&cx);
+        for (name, dir, count, viewport) in [
+            ("two-wide", SplitDir::Right, 2, (1500., 900.)),
+            (
+                "restored-horizontal-overflow",
+                SplitDir::Right,
+                5,
+                (1200., 800.),
+            ),
+            (
+                "restored-vertical-overflow",
+                SplitDir::Down,
+                5,
+                (1200., 800.),
+            ),
+        ] {
+            let mut state = Workspace::default();
+            state.add_project("/work/pane-fixture");
+            state.project = "/work/pane-fixture".into();
+            state.open(sessions[0].id);
+            for session in sessions.iter().take(count).skip(1) {
+                state.split(session.id, dir);
+            }
+            let saved = serde_json::to_string(&state).unwrap();
+            let store = store.clone();
+            let summaries = sessions.clone();
+            let window = cx
+                .open_window(gpui::size(px(viewport.0), px(viewport.1)), |_, cx| {
+                    cx.new(|cx| {
+                        Shell::new(
+                            store,
+                            summaries,
+                            "/work/pane-fixture".into(),
+                            Some(saved),
+                            cx,
+                        )
+                    })
+                })
+                .unwrap();
+            cx.run_until_parked();
+            crate::clock::settle_headless_animations(window, &mut cx);
+            cx.capture_screenshot(window.into())
+                .unwrap()
+                .save(output.join(format!("{name}.png")))
+                .unwrap();
+            cx.update_window(window.into(), |_, window, _| window.remove_window())
+                .unwrap();
+        }
+    }
+    #[gpui::test]
     fn selected_file_reference_preserves_the_live_draft_and_requests_focus(
         cx: &mut TestAppContext,
     ) {
@@ -11104,6 +11910,8 @@ mod tests {
             .update(cx, |shell, _, _| assert!(shell.tab_drag.is_none()))
             .unwrap();
         // A title tab pulled down onto a pane's left half moves in beside it.
+        // This successful drop needs enough room for all three panes.
+        cx.simulate_resize(gpui::size(px(2800.), px(900.)));
         window
             .update(cx, |shell, w, cx| shell.open(b, w, cx))
             .unwrap();
