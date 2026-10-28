@@ -18,6 +18,8 @@ The [repository map](repository.md) shows where each part lives. Embedded helper
 
 Long saved chats are read a piece at a time. Hidden views keep their work without repeatedly asking to redraw, and repeated terminal redraw requests are combined. Cleaning up one idle agent does not hold the shared lock that other agents need.
 
+The storage layer can also read part of an indexed Bot chat for other code to inspect. It checks the entire saved chat for changes before returning an older piece and asks the caller to start again if the chat changed. This does not yet change how the chat window loads or saves messages; other kinds of history keep their existing loading behavior.
+
 Every click of Terminal in the sidebar opens and focuses a new terminal across the main workspace, starting in your selected project or worktree folder. You can keep several independent shells in the same folder. Click a terminal tab at the top to return to that exact shell. Switching tabs keeps its output and commands running; selecting a different folder never moves an existing shell. Closing its tab ends only that shell, with a warning if a command is running. After quitting and reopening the app, saved terminal tabs start new shells in their saved starting folders when selected. Running programs and old terminal output do not survive quitting. The smaller terminal dock and its shortcuts still work separately.
 
 As a reply arrives, only changed chat blocks are saved. The screen can show a small preview while the full tool result stays safely in the database. A stale window cannot overwrite newer saved history.

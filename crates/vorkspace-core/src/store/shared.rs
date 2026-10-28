@@ -6,6 +6,8 @@ mod bot_tables;
 mod card;
 mod edit;
 mod incremental;
+mod history_window;
+pub use history_window::{IndexedHistoryCursor, IndexedHistoryPage};
 mod ordinary;
 #[cfg(test)]
 mod tests;

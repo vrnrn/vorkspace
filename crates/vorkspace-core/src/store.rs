@@ -25,6 +25,7 @@ mod session_preview;
 pub use session_preview::SessionPreviewData;
 mod edit;
 mod shared;
+pub use shared::{IndexedHistoryCursor, IndexedHistoryPage};
 mod side_threads;
 use crate::transcript::{Row, Transcript};
 pub use edit::EditSnapshot;
@@ -88,6 +89,21 @@ impl Store {
             return Err("This project is being deleted; try again afterward.".into());
         }
         Ok(())
+    }
+    /// Read a snapshot-bound page of indexed Bot history. Blob, ordinary and
+    /// remote histories return None and retain their existing loading path.
+    /// Pages are read-only and must not be passed to `write_rows` as a full
+    /// transcript; its row indices and revision guard have a different owner.
+    pub fn indexed_history_page(
+        &self,
+        session: i64,
+        before: Option<&IndexedHistoryCursor>,
+        page_turns: usize,
+    ) -> Result<Option<IndexedHistoryPage>, String> {
+        if self.shared.is_none() || self.remote_session(session)?.is_some() {
+            return Ok(None);
+        }
+        self.shared_indexed_history_page(session, before, page_turns)
     }
     pub fn reset_provider_id_if(&self, id: i64, expected: Option<&str>) -> Result<(), String> {
         if self.shared.is_some() {
