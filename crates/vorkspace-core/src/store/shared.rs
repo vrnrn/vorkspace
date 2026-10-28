@@ -613,8 +613,13 @@ impl Store {
     ) -> Result<bool, String> {
         self.shared_writable()?;
         let shared = self.shared.as_ref().unwrap();
-        // Lock ordering is sidecar then SQL; roster publication uses the same
-        // sidecar lock, so validation and claim cannot race a roster update.
+        // Transactions precede the sidecar lock everywhere both are needed.
+        // Keep both through validation and commit so roster publication cannot
+        // race the claim, including across independent processes.
+        let tx = sql(rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
         let _lock = shared.extras_path.as_deref().map(lock_extras).transpose()?;
         let extras = match &shared.extras_path {
             Some(path) => read_extras(path)?,
@@ -627,10 +632,6 @@ impl Store {
             bot,
             message,
         )?;
-        let tx = sql(rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        ))?;
         sql(tx.execute_batch("CREATE TABLE IF NOT EXISTS native_bot_dispatch_claims(bot_id TEXT NOT NULL,message_id TEXT NOT NULL,token TEXT NOT NULL,PRIMARY KEY(bot_id,message_id))"))?;
         let inserted = sql(tx.execute(
             "INSERT OR IGNORE INTO native_bot_dispatch_claims VALUES(?1,?2,?3)",
@@ -1001,6 +1002,8 @@ impl Store {
             fields.push(("model", json!(format!("{provider}:{model}"))));
         }
         self.shared_patch(id, &fields)?;
+        #[cfg(test)]
+        tests::pause_preference_save();
         self.shared_save_setting(&format!("agent:{id}"), &encode(settings)?)
     }
     /// Add native turn receipts to their original desktop prompt objects.

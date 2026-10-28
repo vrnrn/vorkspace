@@ -1,5 +1,245 @@
 use super::*;
 
+// Test-only gates stop a real preference write after its SQL update and stop a
+// competing claim in SQLite's busy handler, without depending on scheduling.
+thread_local! {
+    static PREFERENCE_GATE: RefCell<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>> = const { RefCell::new(None) };
+    static CLAIM_GATE: RefCell<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<bool>)>> = const { RefCell::new(None) };
+}
+
+pub(super) fn pause_preference_save() {
+    PREFERENCE_GATE.with(|gate| {
+        if let Some((ready, resume)) = gate.borrow_mut().take() {
+            ready.send(()).unwrap();
+            resume
+                .recv_timeout(std::time::Duration::from_secs(15))
+                .unwrap();
+        }
+    });
+}
+
+fn pause_busy_claim(_: i32) -> bool {
+    CLAIM_GATE.with(|gate| {
+        if let Some((ready, resume)) = gate.borrow_mut().take() {
+            let _ = ready.send(());
+            return resume
+                .recv_timeout(std::time::Duration::from_secs(15))
+                .unwrap_or(false);
+        }
+        false
+    })
+}
+
+#[test]
+fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    for edit in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("shared.db");
+        let mut writer = Store::open_vorkspace(&path).unwrap();
+        let id = writer
+            .create("codex", "/project-worktrees/feature")
+            .unwrap()
+            .id;
+        writer.provider_id(id, "thread").unwrap();
+        let history = vec![
+            json!({"id":"earlier","role":"user","text":"Keep","providerTurnId":"old","future":{"keep":true}}),
+            json!({"id":"answer","role":"assistant","text":"Kept answer"}),
+            json!({"id":"latest","role":"user","text":"Replace","providerTurnId":"turn"}),
+            json!({"id":"reply","role":"assistant","text":"Old reply","future":7}),
+        ];
+        writer.shared_store_blocks(id, &history).unwrap();
+        let settings = Settings {
+            worktree_cwd: Some("/project-worktrees/feature".into()),
+            worktree_base: Some("preserve-base".into()),
+            ..Default::default()
+        };
+        writer.save_agent_settings(id, &settings).unwrap();
+        let rows = writer.load(id).unwrap().rows;
+        let snapshot = writer.prepare_edit_last_turn(id, &rows, None).unwrap();
+        let message = crate::bot::Message {
+            prepared_prompt: None,
+            id: "message".into(),
+            text: "hello".into(),
+            peer: None,
+            sent_at: None,
+            internal: false,
+            error: None,
+            attachments: vec![],
+        };
+        let mut roster = crate::bot::Roster::default();
+        roster.bots.push(crate::bot::Bot {
+            id: "bot".into(),
+            name: "Bot".into(),
+            outbox: vec![message.clone()],
+            ..Default::default()
+        });
+        roster.save(&writer).unwrap();
+        writer.save_setting("unrelated", "preserve").unwrap();
+        let claimant = Store::open_vorkspace(&path).unwrap();
+        let sidecar = writer.shared.as_ref().unwrap().extras_path.clone().unwrap();
+
+        let (writer_ready_tx, writer_ready_rx) = mpsc::channel();
+        let (writer_resume_tx, writer_resume_rx) = mpsc::channel();
+        let (writer_done_tx, writer_done_rx) = mpsc::channel();
+        let writer_thread = std::thread::spawn(move || {
+            PREFERENCE_GATE
+                .with(|gate| *gate.borrow_mut() = Some((writer_ready_tx, writer_resume_rx)));
+            let result = if edit {
+                writer.shared_finish_edit(id, &snapshot, "fork")
+            } else {
+                writer
+                    .shared_detach_worktree("/project-worktrees/feature", "/project")
+                    .map(|_| ())
+            };
+            writer_done_tx.send(result).unwrap();
+        });
+        writer_ready_rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+
+        let (claim_ready_tx, claim_ready_rx) = mpsc::channel();
+        let (claim_resume_tx, claim_resume_rx) = mpsc::channel();
+        let claim_message = message.clone();
+        let claim_thread = std::thread::spawn(move || {
+            CLAIM_GATE.with(|gate| *gate.borrow_mut() = Some((claim_ready_tx, claim_resume_rx)));
+            claimant.conn.busy_handler(Some(pause_busy_claim)).unwrap();
+            claimant.shared_claim_bot_message("bot", &claim_message, "owner")
+        });
+        claim_ready_rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        let lock_path = sidecar.with_file_name(format!(
+            "{}.lock",
+            sidecar.file_name().unwrap().to_string_lossy()
+        ));
+        let probe = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        let available = probe.try_lock().is_ok();
+        drop(probe);
+        // On a regression, release the busy handler first so neither worker is
+        // stranded while the assertion reports the inverted lock order.
+        if !available {
+            claim_resume_tx.send(false).unwrap();
+        }
+        writer_resume_tx.send(()).unwrap();
+        let writer_result = writer_done_rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        if available {
+            claim_resume_tx.send(true).unwrap();
+        }
+        writer_thread.join().unwrap();
+        let claim_result = claim_thread.join().unwrap();
+        assert!(
+            available,
+            "claim held sidecar while waiting for the {} transaction",
+            if edit { "edit" } else { "detach" }
+        );
+        writer_result.unwrap();
+        assert_eq!(claim_result.unwrap(), true);
+
+        let reopened = Store::open_vorkspace(&path).unwrap();
+        let session = reopened
+            .sessions()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == id)
+            .unwrap();
+        assert_eq!(
+            reopened.shared_blocks(id).unwrap(),
+            if edit {
+                history[..2].to_vec()
+            } else {
+                history.clone()
+            }
+        );
+        assert_eq!(
+            session.provider_id.as_deref(),
+            if edit { Some("fork") } else { None }
+        );
+        let saved = reopened.agent_settings(id).unwrap().unwrap();
+        assert_eq!(saved.worktree_removed, !edit);
+        assert_eq!(
+            saved.worktree_base.as_deref(),
+            if edit { Some("preserve-base") } else { None }
+        );
+        assert_eq!(
+            session.cwd,
+            if edit {
+                "/project-worktrees/feature"
+            } else {
+                "/project"
+            }
+        );
+        assert_eq!(
+            reopened.setting("unrelated").unwrap().as_deref(),
+            Some("preserve")
+        );
+        let restored = crate::bot::Roster::load(&reopened).unwrap();
+        assert_eq!(
+            serde_json::to_value(&restored.get("bot").unwrap().outbox[0]).unwrap(),
+            serde_json::to_value(&message).unwrap()
+        );
+        assert!(!reopened
+            .claim_bot_message("bot", &message, "other")
+            .unwrap());
+    }
+}
+
+#[test]
+fn claim_sidecar_failure_releases_sqlite_and_preserves_the_outbox() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("shared.db");
+    let store = Store::open_vorkspace(&path).unwrap();
+    let message = crate::bot::Message {
+        prepared_prompt: None,
+        id: "message".into(),
+        text: "hello".into(),
+        peer: None,
+        sent_at: None,
+        internal: false,
+        error: None,
+        attachments: vec![],
+    };
+    let mut roster = crate::bot::Roster::default();
+    roster.bots.push(crate::bot::Bot {
+        id: "bot".into(),
+        name: "Bot".into(),
+        outbox: vec![message.clone()],
+        ..Default::default()
+    });
+    roster.save(&store).unwrap();
+    let sidecar = store.shared.as_ref().unwrap().extras_path.as_ref().unwrap();
+    let lock_path = sidecar.with_file_name(format!(
+        "{}.lock",
+        sidecar.file_name().unwrap().to_string_lossy()
+    ));
+    let backup = directory.path().join("lock-backup");
+    std::fs::rename(&lock_path, &backup).unwrap();
+    std::fs::create_dir(&lock_path).unwrap();
+    assert!(store.claim_bot_message("bot", &message, "owner").is_err());
+    assert!(!has_table(&store.conn, "native_bot_dispatch_claims").unwrap());
+    let other = Connection::open(&path).unwrap();
+    other.execute_batch("BEGIN IMMEDIATE; COMMIT;").unwrap();
+    std::fs::remove_dir(&lock_path).unwrap();
+    std::fs::rename(&backup, &lock_path).unwrap();
+    drop(other);
+    drop(store);
+    let reopened = Store::open_vorkspace(&path).unwrap();
+    assert!(reopened
+        .claim_bot_message("bot", &message, "owner")
+        .unwrap());
+    assert!(!reopened
+        .claim_bot_message("bot", &message, "other")
+        .unwrap());
+}
+
 #[test]
 fn streamed_ordinary_load_retains_rich_payloads_across_append_and_reopen() {
     let directory = tempfile::tempdir().unwrap();
