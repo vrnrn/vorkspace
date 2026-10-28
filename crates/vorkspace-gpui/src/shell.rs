@@ -6,6 +6,7 @@ mod automation_runs;
 pub(crate) mod bots;
 mod classic_rail;
 mod classic_sidebar;
+mod external_editor;
 mod file_panes;
 mod idle_agents;
 #[cfg(test)]
@@ -562,6 +563,8 @@ pub(crate) struct Shell {
     saved_search: Option<(String, vorkspace_core::search::Scope)>,
     order: Vec<i64>,
     pub(crate) workspace: Workspace,
+    external_editors: Option<Vec<vorkspace_core::external_editor::ExternalEditor>>,
+    external_editor_scan: u64,
     focus: FocusHandle,
     project_rail_toggle_focus: FocusHandle,
     sidebar_focus: FocusHandle,
@@ -891,6 +894,8 @@ impl Shell {
             saved_search: None,
             order: Vec::new(),
             workspace,
+            external_editors: None,
+            external_editor_scan: 0,
             focus: cx.focus_handle(),
             project_rail_toggle_focus: cx.focus_handle().tab_stop(true),
             sidebar_focus: cx.focus_handle(),
@@ -976,6 +981,7 @@ impl Shell {
             latest_state,
             render_passes: 0,
         };
+        this.scan_external_editors(cx);
         this.observe_accounts(cx);
         this.observe_picker_preferences(cx);
         let bot_owner = cx.weak_entity();
@@ -4773,6 +4779,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if matches!(&target, MenuTarget::Project { .. }) {
+            self.scan_external_editors(cx);
+        }
         self.close_preview(cx);
         // Close the previous menu first, so the new one remembers the focus
         // that was there before either opened.
@@ -5096,14 +5105,7 @@ impl Shell {
                     MenuAction::new("reveal", REVEAL_LABEL)
                         .icon("folder-open")
                         .into(),
-                    MenuAction::new("external-editor", "Open in editor")
-                        .icon("app-window")
-                        .disabled(true)
-                        .submenu(vec![MenuAction::new(
-                            "external-editor:none",
-                            "No supported editors found",
-                        )])
-                        .into(),
+                    self.external_editor_menu(path).into(),
                     MenuItem::Separator,
                     self.project_notification_menu(path).into(),
                     MenuItem::Separator,
@@ -5195,6 +5197,8 @@ impl Shell {
                     } else {
                         cx.reveal_path(std::path::Path::new(&path));
                     }
+                } else if let Some(editor) = action.strip_prefix("external-editor:") {
+                    self.open_in_external_editor(editor, &path, cx);
                 } else if action == "background" {
                     self.open_background_dialog(path, window, cx);
                 } else if action.starts_with("mute:") {
