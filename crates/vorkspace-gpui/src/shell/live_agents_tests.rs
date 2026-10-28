@@ -64,6 +64,63 @@ fn zero_one_and_multiple_sessions_are_discoverable_without_hydrating_history(
 }
 
 #[gpui::test]
+fn compact_activity_is_one_animated_control_for_working_sessions_and_expands(
+    cx: &mut TestAppContext,
+) {
+    let (window, a, b) = fixture(cx);
+    window
+        .update(cx, |shell, _, cx| {
+            shell.workspace.project_rail_open = false;
+            shell.workspace.preferences.collapsed_project_rail = "compact".into();
+            shell.invalidate_chrome(cx);
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(gpui::size(px(1300.), px(900.)));
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("compact-working").is_none());
+    busy(window, a, true, visual);
+    busy(window, b, true, visual);
+    assert!(visual.debug_bounds("compact-working").is_some());
+    assert!(bounds(visual, format!("live-agent-{a}")).is_none());
+    assert!(bounds(visual, format!("live-agent-{b}")).is_none());
+    let activity = window
+        .update(visual, |shell, _, _| shell.live_agents.clone())
+        .unwrap();
+    assert_eq!(
+        activity.read_with(visual, |card, _| card.working_count()),
+        2
+    );
+    let frames = activity.read_with(visual, |card, _| card.frames);
+    visual.executor().advance_clock(FRAME_TICK * 3);
+    visual.run_until_parked();
+    assert!(activity.read_with(visual, |card, _| card.frames) > frames);
+    busy(window, a, false, visual);
+    assert_eq!(
+        activity.read_with(visual, |card, _| card.working_count()),
+        1
+    );
+    let control = visual.debug_bounds("compact-working").unwrap();
+    visual.simulate_click(control.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, _| {
+            assert!(shell.workspace.project_rail_open)
+        })
+        .unwrap();
+    assert!(bounds(visual, format!("live-agent-{b}")).is_some());
+    window
+        .update(visual, |shell, _, cx| shell.toggle_project_rail(cx))
+        .unwrap();
+    visual.run_until_parked();
+    busy(window, b, false, visual);
+    assert!(visual.debug_bounds("compact-working").is_none());
+    assert!(visual.debug_bounds("sidebar-activity-card").is_none());
+    assert!(activity.read_with(visual, |card, _| card.animation.is_none()));
+}
+
+#[gpui::test]
 fn approvals_sort_first_and_unseen_completions_open_the_exact_cross_project_session(
     cx: &mut TestAppContext,
 ) {
@@ -403,7 +460,7 @@ fn elapsed_clock_is_local_bounded_and_stops_for_hidden_compact_and_finished_card
         visual.run_until_parked();
         assert!(
             activity.read_with(visual, |activity, _| activity.tick.is_none()
-                && activity.animation.is_none()),
+                && (mode == "compact" || activity.animation.is_none())),
             "{mode}"
         );
         let ticks = activity.read_with(visual, |activity, _| activity.ticks);
@@ -443,7 +500,8 @@ fn four_rows_expand_to_bounded_scrolling_and_preserve_footer_and_focus(cx: &mut 
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.simulate_resize(gpui::size(px(1300.), px(900.)));
     visual.run_until_parked();
-    for compact in [false, true] {
+    {
+        let compact = false;
         window
             .update(visual, |shell, w, cx| {
                 shell.workspace.project_rail_open = !compact;
@@ -1152,13 +1210,7 @@ fn shared_frames_are_bounded_and_visibility_completion_and_disposal_cancel_timer
         eprintln!(
             "working motion: rows={count}, frames=30, ancestor redraws={redraws}, discovery publications=0"
         );
-        for mode in [
-            "hidden-window",
-            "compact",
-            "approval",
-            "done",
-            "hidden-card",
-        ] {
+        for mode in ["hidden-window", "approval", "done", "hidden-card"] {
             visual.simulate_visibility_change(if mode == "hidden-window" {
                 gpui::WindowVisibility::Hidden
             } else {

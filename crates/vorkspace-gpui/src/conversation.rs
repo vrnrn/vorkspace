@@ -18,6 +18,7 @@ pub(crate) mod receive_tests;
 mod remote;
 pub(crate) mod remote_plans;
 mod response_menu;
+mod responsive_toolbar;
 #[cfg(test)]
 mod submission_tests;
 mod ticket_context;
@@ -111,6 +112,7 @@ enum ComposerMenu {
     Access,
     Account,
     Workspace,
+    CompactSettings,
     /// A Bot's model setting pill: 0 is effort, then each model control.
     Setting(usize),
 }
@@ -213,6 +215,8 @@ pub(crate) struct Conversation {
     workspace_anchor: AnchorSlot,
     branch_anchor: AnchorSlot,
     context_anchor: AnchorSlot,
+    compact_anchor: AnchorSlot,
+    compact_focus: gpui::FocusHandle,
     composer_anchor: AnchorSlot,
     composer_motion: ComposerMotion,
     narrow: bool,
@@ -664,6 +668,8 @@ impl Conversation {
             workspace_anchor: AnchorSlot::default(),
             branch_anchor: AnchorSlot::default(),
             context_anchor: AnchorSlot::default(),
+            compact_anchor: AnchorSlot::default(),
+            compact_focus: cx.focus_handle(),
             composer_anchor: AnchorSlot::default(),
             composer_motion: ComposerMotion::default(),
             narrow: false,
@@ -803,6 +809,9 @@ impl Conversation {
                         }
                         this.transcript
                             .update(cx, |view, cx| view.set_saved_draft(draft, cx));
+                        if this.settings.bot.is_some() {
+                            this.sync_bot_pending(cx);
+                        }
                     }
                     Err(error) => {
                         this.status = error;
@@ -861,6 +870,16 @@ impl Conversation {
                         }
                         this.status = "Ready".into();
                         this.loaded = true;
+                        if let Some(message) = this
+                            .follow_ups
+                            .state
+                            .draft
+                            .as_ref()
+                            .and_then(|draft| this.bot_ui.accepted_drafts.get(&draft.id))
+                            .cloned()
+                        {
+                            this.bot_draft_outbox_saved(&message, cx);
+                        }
                         if let Some((row, query)) = this.pending_search.take() {
                             this.reveal_search(row, query, cx);
                         }
@@ -1022,23 +1041,121 @@ impl Conversation {
         if self.handle_local_command(cx) {
             return;
         }
+        if self.settings.bot.is_some() && self.draft_active(cx) {
+            self.save_message_draft(cx);
+            return;
+        }
         if self.settings.bot.is_some() {
-            if self.attaching || self.input.read(cx).is_composing() {
+            if self.attaching
+                || self.input.read(cx).is_composing()
+                || self
+                    .bot_ui
+                    .direct_sending
+                    .as_ref()
+                    .is_some_and(|pending| !pending.4)
+            {
                 return;
             }
-            let text = self
-                .input
-                .update(cx, |input, cx| input.take(cx))
-                .unwrap_or_default();
-            let attachments = std::mem::take(&mut self.attachments);
-            if !text.trim().is_empty() || !attachments.is_empty() {
-                // Queue applies to this message only, like a session mode.
-                let queue = std::mem::take(&mut self.bot_ui.queue);
+            let raw = self.input.read(cx).content.to_string();
+            let attachments = self.attachments.clone();
+            if !raw.trim().is_empty() || !attachments.is_empty() {
+                // The outbox acknowledgement clears only this exact input. A
+                // failed write or process exit before admission leaves a saved
+                // composer instead of silently discarding the submission.
+                self.capture_composer(cx);
+                if let Err(error) = self.composer_draft.flush() {
+                    self.status =
+                        format!("Could not save composer: {error}. Your input was preserved.");
+                    cx.notify();
+                    return;
+                }
+                let selection = self.input.read(cx).selection_utf16();
+                if self
+                    .bot_ui
+                    .direct_sending
+                    .as_ref()
+                    .is_some_and(|(_, previous, files, _, _)| {
+                        previous != &raw || files != &attachments
+                    })
+                {
+                    self.status = "The previous message was not queued. Restore its original input and send it to retry; your current input is preserved.".into();
+                    cx.notify();
+                    return;
+                }
+                let recovery = match self.pending_bot_submission(&raw, &attachments) {
+                    Ok(recovery) => recovery,
+                    Err(error) => {
+                        self.status = format!(
+                            "Could not verify the previous submission: {error}. Your input was preserved."
+                        );
+                        cx.notify();
+                        return;
+                    }
+                };
+                let text = self.consume_mode_command(raw.clone(), cx);
+                let mode = if self.settings.orchestrator {
+                    Some("orchestrator")
+                } else if self.settings.plan {
+                    Some("plan")
+                } else if self.settings.operator {
+                    Some("operator")
+                } else {
+                    None
+                };
+                let mode = recovery.as_ref().map_or(mode.map(str::to_owned), |record| {
+                    record.payload["botSubmission"]["mode"]
+                        .as_str()
+                        .map(str::to_owned)
+                });
+                let queue = recovery.as_ref().map_or(self.bot_ui.queue, |record| {
+                    record.payload["botSubmission"]["queue"]
+                        .as_bool()
+                        .unwrap_or(false)
+                });
+                let id = if let Some((id, _, _, _, _)) = &self.bot_ui.direct_sending {
+                    id.clone()
+                } else if let Some(record) = &recovery {
+                    record.owner.clone()
+                } else {
+                    let id = vorkspace_core::bot::new_id();
+                    let result = locked(&self.store).and_then(|store| {
+                        let mut saved = store
+                            .composer_draft(self.summary.id)?
+                            .ok_or("Composer was not saved")?;
+                        saved.payload["botSubmission"] =
+                            serde_json::json!({"mode": mode, "queue": queue});
+                        store.save_composer_recovery(
+                            self.summary.id,
+                            vorkspace_core::store::ComposerRecovery {
+                                owner: id.clone(),
+                                revision: saved.revision,
+                                payload: saved.payload,
+                            },
+                        )
+                    });
+                    if let Err(error) = result {
+                        self.status = format!(
+                            "Could not preserve composer before sending: {error}. Your input was preserved."
+                        );
+                        cx.notify();
+                        return;
+                    }
+                    id
+                };
+                self.bot_ui.queue = false;
+                self.bot_ui.direct_sending =
+                    Some((id.clone(), raw, attachments.clone(), selection, false));
                 cx.emit(bot::Submitted {
+                    draft_id: Some(id),
                     text,
+                    prepared_prompt: None,
                     attachments,
                     queue,
+                    mode: mode.clone(),
                 });
+                if mode.is_some() {
+                    self.clear_submitted_mode(cx);
+                }
                 cx.notify();
             }
             return;
@@ -1241,12 +1358,14 @@ impl Conversation {
             .is_some_and(|p| !p.claude_hooks);
         settings.model = self.model.clone();
         settings.environment.extend(self.app_environment.clone());
-        if settings.remote_action.as_ref().is_none_or(|action| {
-            (action["type"] == "send"
-                && action["draftBlockId"].is_null()
-                && action["planBlockId"].is_null())
-                || action["type"] == "draft"
-        }) {
+        if settings.bot.is_none()
+            && settings.remote_action.as_ref().is_none_or(|action| {
+                (action["type"] == "send"
+                    && action["draftBlockId"].is_null()
+                    && action["planBlockId"].is_null())
+                    || action["type"] == "draft"
+            })
+        {
             settings
                 .attachments
                 .extend(std::mem::take(&mut self.attachments));
@@ -1816,6 +1935,13 @@ impl Conversation {
             ResponseRequest::QuoteSelection { text } => self.bot_quote(text, window, cx),
             ResponseRequest::EditLastTurn { turn } => self.begin_edit_last_turn(*turn, window, cx),
             ResponseRequest::Draft { send } => self.draft_action(*send, cx),
+            ResponseRequest::EditDraft {
+                id,
+                edit_id,
+                text,
+                finish,
+                cancel,
+            } => self.edit_saved_draft(id, edit_id, text, *finish, *cancel, cx),
             ResponseRequest::SaveNote {
                 turn,
                 text,
@@ -2542,6 +2668,7 @@ impl Conversation {
             ComposerMenu::Access => &self.access_anchor,
             ComposerMenu::Account => &self.account_anchor,
             ComposerMenu::Workspace => &self.workspace_anchor,
+            ComposerMenu::CompactSettings => &self.compact_anchor,
             ComposerMenu::Setting(ix) => self
                 .bot_ui
                 .setting_anchors
@@ -2594,9 +2721,27 @@ impl Conversation {
                 None => menu,
             }
         });
-        events.push(
-            cx.subscribe_in(&menu, window, |this, menu, event: &MenuEvent, _, cx| {
+        events.push(cx.subscribe_in(
+            &menu,
+            window,
+            move |this, menu, event: &MenuEvent, window, cx| {
                 if let MenuEvent::Picked(id, _) = event {
+                    if id.as_ref() == "compact:branch" {
+                        let new = !this.summary.has_messages && this.settings.new_worktree;
+                        this.open_git(
+                            if new { GitMode::Base } else { GitMode::Branch },
+                            window,
+                            cx,
+                        );
+                        return;
+                    }
+                    if id.as_ref() == "compact:cancel-edit" {
+                        this.menu = None;
+                        this.cancel_edit_last_turn(cx);
+                        window.focus(&this.input.focus_handle(cx), cx);
+                        cx.notify();
+                        return;
+                    }
                     let toggle = menu.read(cx).toggle_state(id);
                     if id.as_ref() == "upload" {
                         this.choose_attachments(cx);
@@ -2610,9 +2755,12 @@ impl Conversation {
                     }
                 }
                 this.menu = None;
+                if kind == ComposerMenu::CompactSettings {
+                    window.focus(&this.input.focus_handle(cx), cx);
+                }
                 cx.notify();
-            }),
-        );
+            },
+        ));
         self.menu = Some(OpenMenu {
             kind,
             menu,
@@ -2629,6 +2777,111 @@ impl Conversation {
     ) -> (&'static str, Vec<MenuItem>, f32, MenuStyle) {
         let provider = Kind::from_id(&self.summary.provider);
         match kind {
+            ComposerMenu::CompactSettings => {
+                let bot = self.settings.bot.is_some();
+                let draft = !self.summary.has_messages;
+                let enabled = !self.busy && !self.preparing_worktree && self.git.is_some();
+                let mut items = vec![MenuItem::Header(
+                    if bot {
+                        "Bot settings"
+                    } else {
+                        "Session settings"
+                    }
+                    .into(),
+                )];
+                if !bot {
+                    let linked = self.git.as_ref().is_some_and(|s| s.linked)
+                        || self.settings.worktree_cwd.is_some();
+                    let label = if draft && self.settings.new_worktree {
+                        "New worktree"
+                    } else if linked {
+                        "Worktree"
+                    } else {
+                        "Current checkout"
+                    };
+                    items.push(MenuItem::Header(format!("Workspace · {label}").into()));
+                    if draft {
+                        let (_, workspace, _, _) =
+                            self.menu_items(ComposerMenu::Workspace, events, window, cx);
+                        items.extend(workspace.into_iter().filter_map(|item| match item {
+                            MenuItem::Action(mut action) => {
+                                action.disabled |= !enabled;
+                                Some(MenuItem::Action(action))
+                            }
+                            _ => None,
+                        }));
+                    }
+                    if let Some(branch) = if draft && self.settings.new_worktree {
+                        self.settings
+                            .worktree_base
+                            .as_ref()
+                            .or(self.branch.as_ref())
+                    } else {
+                        self.branch.as_ref()
+                    } {
+                        items.push(
+                            MenuAction::new(
+                                "compact:branch",
+                                if draft && self.settings.new_worktree {
+                                    "Worktree base"
+                                } else {
+                                    "Branch"
+                                },
+                            )
+                            .value(
+                                if !(draft && self.settings.new_worktree)
+                                    && self.git.as_ref().is_some_and(|git| git.detached)
+                                {
+                                    format!("detached {branch}")
+                                } else if draft && self.settings.new_worktree {
+                                    crate::git_picker::base_label(branch).to_owned()
+                                } else {
+                                    branch.clone()
+                                },
+                            )
+                            .disabled(!enabled)
+                            .into(),
+                        );
+                    }
+                }
+                let (_, model, _, _) = self.menu_items(ComposerMenu::Model, events, window, cx);
+                // Combined mode already contains model options; beside mode must expose them here too.
+                if cx
+                    .try_global::<crate::settings::Preferences>()
+                    .is_some_and(|p| p.model_controls == "beside")
+                {
+                    items.extend(self.bot_model_options());
+                }
+                items.extend(model);
+                if !bot {
+                    let actions = self
+                        .bot_access_options()
+                        .into_iter()
+                        .filter_map(|item| match item {
+                            MenuItem::Action(action) => Some(*action),
+                            _ => None,
+                        })
+                        .collect();
+                    items.push(
+                        MenuAction::new("compact:access", "Access")
+                            .value(self.settings.access.label())
+                            .submenu(actions)
+                            .into(),
+                    );
+                }
+                if self.editing_last_turn.pending() {
+                    items.push(MenuAction::new("compact:cancel-edit", "Cancel edit").into());
+                }
+                if !bot
+                    && self.status != "Ready"
+                    && !self.busy
+                    && !self.loading
+                    && self.settings.usage_limit.is_none()
+                {
+                    items.push(MenuItem::Note(self.status.clone().into()));
+                }
+                ("Session settings", items, 280., MenuStyle::Settings)
+            }
             ComposerMenu::Account => {
                 let items = crate::accounts::get(cx)
                     .map(|center| {
@@ -2707,21 +2960,6 @@ impl Conversation {
                 )
             }
             // Composer.tsx's plus menu with native mode and attachment actions.
-            ComposerMenu::Add if self.settings.bot.is_some() => {
-                let items = vec![
-                    MenuItem::Header("Add to message".into()),
-                    MenuAction::new("upload", "Upload file")
-                        .icon("file-add")
-                        .description("Attach files or images")
-                        .into(),
-                    MenuAction::new("queue", "Queue")
-                        .icon("queue-list")
-                        .description("Send after the current reply instead of steering it")
-                        .checked(self.bot_ui.queue)
-                        .into(),
-                ];
-                ("Add to message", items, 250., MenuStyle::Composer)
-            }
             ComposerMenu::Add => {
                 let mut items = vec![MenuItem::Header("Add to message".into())];
                 items.extend(
@@ -2747,9 +2985,16 @@ impl Conversation {
                         MenuAction::new("draft", "Draft")
                             .icon("circle-dashed-hi")
                             .description("Save this message without starting the agent")
-                            .disabled(self.busy || self.follow_ups.state.draft.is_some()),
+                            .disabled(
+                                self.follow_ups.state.draft.is_some()
+                                    || (self.is_remote() && (self.busy || self.stopping)),
+                            ),
                     ]
                     .into_iter()
+                    .filter(|action| {
+                        self.settings.bot.is_none()
+                            || !matches!(action.id.as_ref(), "plan" | "operator" | "orchestrator")
+                    })
                     .map(|action| {
                         let checked = match action.id.as_ref() {
                             "plan" => self.settings.plan,
@@ -2761,6 +3006,15 @@ impl Conversation {
                         action.checked(checked).into()
                     }),
                 );
+                if self.settings.bot.is_some() {
+                    items.push(
+                        MenuAction::new("queue", "Queue")
+                            .icon("queue-list")
+                            .description("Send after the current reply instead of steering it")
+                            .checked(self.bot_ui.queue)
+                            .into(),
+                    );
+                }
                 ("Add to message", items, 250., MenuStyle::Composer)
             }
             // ModelPicker: a "Model" row whose flyout lists the models.
@@ -3143,15 +3397,18 @@ impl Conversation {
 
     /// The shared `+`: files and modes for a session, files and queueing for
     /// a Bot.
-    pub(super) fn add_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn add_button(&self, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let open = self.menu_is(ComposerMenu::Add);
-        quiet_control("composer-add", open)
+        let queue = compact && self.settings.bot.is_some() && self.bot_ui.queue;
+        quiet_control("composer-add", open || queue)
             .debug_selector(|| "composer-add".into())
             .group("composer-add")
             .w(px(26.))
             .px_0()
             .justify_center()
-            .aria_label(if self.settings.bot.is_some() {
+            .aria_label(if queue {
+                "Queue is on; upload a file or change queue mode"
+            } else if self.settings.bot.is_some() {
                 "Upload a file or queue this message"
             } else {
                 "Add files or choose a mode"
@@ -3160,7 +3417,7 @@ impl Conversation {
             .child(self.add_anchor.probe())
             .child(
                 icon("plus", 14.)
-                    .text_color(content(if open { 1. } else { 0.55 }))
+                    .text_color(content(if open || queue { 1. } else { 0.55 }))
                     .group_hover("composer-add", |s| s.text_color(content(1.))),
             )
             .on_click(
@@ -3171,6 +3428,11 @@ impl Conversation {
     /// session its working copy and branch) on the left; the model, its
     /// settings, access and context on the right.
     pub(super) fn composer_tools(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let wide = self.composer_tools_variant(cx, false);
+        let compact = self.composer_tools_variant(cx, true);
+        responsive_toolbar::ResponsiveToolbar::new(wide, compact).into_any_element()
+    }
+    fn composer_tools_variant(&mut self, cx: &mut Context<Self>, compact: bool) -> AnyElement {
         let bot = self.settings.bot.is_some();
         let kind = Kind::from_id(&self.summary.provider);
         let beside = cx
@@ -3241,72 +3503,155 @@ impl Conversation {
                 .into_any_element()
         };
         let branch = if new {
-            self.settings.worktree_base.clone().or(self.branch.clone())
+            self.settings
+                .worktree_base
+                .as_deref()
+                .map(crate::git_picker::base_label)
+                .map(str::to_owned)
+                .or(self.branch.clone())
         } else {
             self.branch.clone()
         };
-        let ratio = self.context.and_then(|usage| usage.ratio());
-        let show_context = bot || ratio.is_some() || draft;
-        let headline = ratio
-            .map(|r| format!("{:.0}% context used", r * 100.))
-            .unwrap_or_else(|| "No context used yet".into());
-        let detail = self.context.map(|usage| {
-            format!(
-                "{} / {} tokens",
-                vorkspace_core::context::format_tokens(usage.used),
-                vorkspace_core::context::format_tokens(usage.window.unwrap_or(0))
-            )
-        });
-        let model_open = self.menu_is(ComposerMenu::Model)
-            || self.menu_is(ComposerMenu::Recent)
-            || self.bot_ui.models.is_some();
-        let model =
-            quiet_control("composer-model", model_open)
-                .debug_selector(|| "composer-model".into())
+        if compact {
+            let open = self.menu.as_ref().is_some_and(|open| {
+                !matches!(open.kind, ComposerMenu::Add | ComposerMenu::Account)
+            }) || self.git_picker.is_some()
+                || self.bot_ui.models.is_some();
+            return div()
+                .debug_selector(|| "composer-toolbar".into())
+                .w_full()
                 .min_w_0()
-                .max_w(px(220.))
-                .flex_shrink(1.)
-                .aria_label(format!(
-                    "{}, {}{}",
-                    kind.label(),
-                    self.model_label(),
-                    trigger_effort
-                        .as_ref()
-                        .map(|effort| format!(", effort {effort}"))
-                        .unwrap_or_default()
-                ))
-                .child(self.model_anchor.probe())
-                .aria_expanded(model_open)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_menu(ComposerMenu::Model, window, cx)
-                }))
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(|this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.open_recent_models(window, cx)
-                    }),
-                )
-                .child(provider_icon(&self.summary.provider, 14.))
+                .flex()
+                .items_center()
+                .gap(px(2.))
+                .pt_1()
+                .pl_1()
+                .pr_1p5()
+                .child(self.add_button(true, cx))
                 .child(
                     div()
-                        .debug_selector(|| "composer-model-label".into())
+                        .ml_auto()
                         .min_w_0()
-                        .truncate()
-                        .child(self.model_label()),
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            quiet_control("composer-session-settings", open)
+                                .debug_selector(|| "composer-session-settings".into())
+                                .flex_shrink(1.)
+                                .aria_label(if bot {
+                                    "Bot settings"
+                                } else {
+                                    "Session settings"
+                                })
+                                .aria_expanded(open)
+                                .track_focus(&self.compact_focus)
+                                .tab_index(0)
+                                .child(self.compact_anchor.probe())
+                                // Existing open menus follow the same visible anchor through a resize.
+                                .child(self.model_anchor.probe())
+                                .child(self.access_anchor.probe())
+                                .child(self.workspace_anchor.probe())
+                                .child(self.branch_anchor.probe())
+                                .children(
+                                    self.bot_ui
+                                        .setting_anchors
+                                        .iter()
+                                        .map(|anchor| anchor.probe()),
+                                )
+                                .child(icon("settings", 14.))
+                                .child(div().min_w_0().truncate().child(if bot {
+                                    "Bot settings"
+                                } else {
+                                    "Session settings"
+                                }))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_menu(ComposerMenu::CompactSettings, window, cx)
+                                }))
+                                .on_key_down(cx.listener(
+                                    |this, event: &gpui::KeyDownEvent, window, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        {
+                                            this.toggle_menu(
+                                                ComposerMenu::CompactSettings,
+                                                window,
+                                                cx,
+                                            );
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                )),
+                        )
+                        .children(self.context_meter(true, cx)),
                 )
-                .when_some(trigger_effort, |d, effort| {
-                    d.child(
-                        div()
-                            .debug_selector(|| "composer-model-effort".into())
-                            .min_w_0()
-                            .flex_shrink(1.)
-                            .truncate()
-                            .text_size(px(11.))
-                            .text_color(content(0.5))
-                            .child(effort),
-                    )
-                });
+                .into_any_element();
+        }
+        let model_open = self.menu_is(ComposerMenu::Model)
+            || self.menu_is(ComposerMenu::CompactSettings)
+            || self.menu_is(ComposerMenu::Recent)
+            || self.bot_ui.models.is_some();
+        let model = quiet_control("composer-model", model_open)
+            .debug_selector(|| "composer-model".into())
+            .min_w_0()
+            .max_w(px(220.))
+            .flex_shrink(1.)
+            .aria_label(format!(
+                "{}, {}{}",
+                kind.label(),
+                self.model_label(),
+                trigger_effort
+                    .as_ref()
+                    .map(|effort| format!(", effort {effort}"))
+                    .unwrap_or_default()
+            ))
+            .child(self.model_anchor.probe())
+            .child(self.compact_anchor.probe())
+            .track_focus(&self.compact_focus)
+            .tab_index(0)
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    if this.menu_is(ComposerMenu::CompactSettings) {
+                        this.close_menu(window, cx);
+                    } else {
+                        this.toggle_menu(ComposerMenu::Model, window, cx);
+                    }
+                    cx.stop_propagation();
+                }
+            }))
+            .aria_expanded(model_open)
+            .on_click(cx.listener(|this, _, window, cx| {
+                if this.menu_is(ComposerMenu::CompactSettings) {
+                    this.close_menu(window, cx);
+                } else {
+                    this.toggle_menu(ComposerMenu::Model, window, cx);
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.open_recent_models(window, cx)
+                }),
+            )
+            .child(provider_icon(&self.summary.provider, 14.))
+            .child(
+                div()
+                    .debug_selector(|| "composer-model-label".into())
+                    .min_w_0()
+                    .truncate()
+                    .child(self.model_label()),
+            )
+            .when_some(trigger_effort, |d, effort| {
+                d.child(
+                    div()
+                        .debug_selector(|| "composer-model-effort".into())
+                        .min_w_0()
+                        .flex_shrink(1.)
+                        .truncate()
+                        .text_color(content(0.5))
+                        .child(effort),
+                )
+            });
         let access_open = self.menu_is(ComposerMenu::Access);
         let access = quiet_control("composer-access", access_open)
             .debug_selector(|| "composer-access".into())
@@ -3337,6 +3682,7 @@ impl Conversation {
             .child(div().truncate().child(self.settings.access.label()));
         div()
             .debug_selector(|| "composer-toolbar".into())
+            .w_full()
             .min_w_0()
             .flex()
             .flex_wrap()
@@ -3345,7 +3691,7 @@ impl Conversation {
             .pt_1()
             .pl_1()
             .pr_1p5()
-            .child(self.add_button(cx))
+            .child(self.add_button(false, cx))
             .when(bot && self.bot_ui.queue, |d| {
                 d.child(
                     quiet_control("composer-queue-mode", true)
@@ -3438,58 +3784,82 @@ impl Conversation {
                             )
                         },
                     )
-                    .when(show_context, |d| {
-                        d.child(
-                            div()
-                                .id("context-meter")
-                                .debug_selector(|| "context-meter".into())
-                                .role(Role::Image)
-                                .aria_label(format!(
-                                    "{headline}{}",
-                                    detail
-                                        .as_ref()
-                                        .map(|s| format!(", {s}"))
-                                        .unwrap_or_default()
-                                ))
-                                .child(self.context_anchor.probe())
-                                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                    this.context_hovered = *hovered;
-                                    cx.notify();
-                                }))
-                                .child(crate::context_meter::ring(ratio.unwrap_or(0.)))
-                                .when(self.context_hovered, |d| {
-                                    d.child(
-                                        popover(
-                                            "context-tooltip",
-                                            Anchor::Slot(self.context_anchor.clone()),
-                                        )
-                                        .side(Side::Top)
-                                        .align(Align::End)
-                                        .max_width(240.)
-                                        .padding(10.)
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .text_size(px(12.))
-                                                .line_height(px(16.))
-                                                .text_color(content(1.))
-                                                .child(headline)
-                                                .when_some(detail, |d, detail| {
-                                                    d.child(
-                                                        div()
-                                                            .text_size(px(11.))
-                                                            .text_color(content(0.5))
-                                                            .child(detail),
-                                                    )
-                                                }),
-                                        ),
-                                    )
-                                }),
-                        )
-                    }),
+                    .children(self.context_meter(false, cx)),
             )
             .into_any_element()
+    }
+
+    fn context_meter(&self, force: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let bot = self.settings.bot.is_some();
+        let draft = !self.summary.has_messages;
+        let ratio = self.context.and_then(|usage| usage.ratio());
+        let show_context = force || bot || ratio.is_some() || draft;
+        let headline = ratio
+            .map(|r| format!("{:.0}% context used", r * 100.))
+            .unwrap_or_else(|| {
+                if draft && self.context.is_none() {
+                    "No context used yet"
+                } else {
+                    "Context usage unavailable"
+                }
+                .into()
+            });
+        let detail = self.context.map(|usage| {
+            let used = vorkspace_core::context::format_tokens(usage.used);
+            match usage.window.filter(|window| *window > 0) {
+                Some(window) => format!(
+                    "{used} / {} tokens",
+                    vorkspace_core::context::format_tokens(window)
+                ),
+                None => format!("{used} tokens used; context window unknown"),
+            }
+        });
+        show_context.then(|| {
+            div()
+                .id("context-meter")
+                .debug_selector(|| "context-meter".into())
+                .role(Role::Image)
+                .aria_label(format!(
+                    "{headline}{}",
+                    detail
+                        .as_ref()
+                        .map(|s| format!(", {s}"))
+                        .unwrap_or_default()
+                ))
+                .child(self.context_anchor.probe())
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    this.context_hovered = *hovered;
+                    cx.notify();
+                }))
+                .child(crate::context_meter::ring(ratio.unwrap_or(0.)))
+                .when(self.context_hovered, |d| {
+                    d.child(
+                        popover("context-tooltip", Anchor::Slot(self.context_anchor.clone()))
+                            .side(Side::Top)
+                            .align(Align::End)
+                            .max_width(240.)
+                            .padding(10.)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(content(1.))
+                                    .child(headline)
+                                    .when_some(detail, |d, detail| {
+                                        d.child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(content(0.5))
+                                                .child(detail),
+                                        )
+                                    }),
+                            ),
+                    )
+                })
+                .into_any_element()
+        })
     }
 
     // ComposerAction: a solid submit, dimmed while empty; Stop while busy.
@@ -3502,7 +3872,10 @@ impl Conversation {
             || (!self.attaching
                 && (!self.preparing_worktree || self.busy || self.stopping)
                 && (busy || (has_value && self.loaded))
-                && (busy || !draft || (!self.busy && self.follow_ups.state.draft.is_none())));
+                && (busy
+                    || !draft
+                    || (self.follow_ups.state.draft.is_none()
+                        && (!self.is_remote() || (!self.busy && !self.stopping)))));
         let accent = primary_action(enabled);
         div()
             .id("send-or-stop")
@@ -3727,17 +4100,19 @@ mod composer_motion_tests {
         from
     }
     #[gpui::test]
-    fn composer_toolbar_wraps_without_overlapping_and_keeps_menus_clickable(
-        cx: &mut TestAppContext,
-    ) {
+    fn composer_toolbar_selects_one_row_during_resize_and_preserves_draft(cx: &mut TestAppContext) {
         crate::theme::configure(&Default::default(), false, true);
         cx.update(|cx| {
             cx.set_global(crate::settings::Preferences::default());
             crate::clock::use_test_clock(cx);
+            input::bind(cx);
+            crate::popover::bind(cx);
         });
-        let window = window(cx, 760.);
+        let window = window(cx, 1000.);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        for width in [760., 480., 360., 260., 760.] {
+        let mut saw_compact = false;
+        let mut saw_wide = false;
+        for width in [1000., 760., 480., 360., 260., 360., 480., 760., 1000.] {
             visual.simulate_resize(size(px(width), px(700.)));
             for started in [false, true] {
                 for beside in [false, true] {
@@ -3747,6 +4122,7 @@ mod composer_motion_tests {
                                 .model_controls = if beside { "beside" } else { "combined" }.into();
                             view.summary.has_messages = started;
                             view.branch = Some("feature/a-very-long-branch-name".into());
+                            view.git = Some(vorkspace_core::git::Snapshot::default());
                             view.model = Some("gpt-6.1-sol".into());
                             view.settings.effort = Some("xhigh".into());
                             view.settings.access = AccessMode::FullAccess;
@@ -3765,87 +4141,296 @@ mod composer_motion_tests {
                             cx.notify();
                         })
                         .unwrap();
-                    visual.run_until_parked();
                     visual.refresh().unwrap();
                     let toolbar = visual.debug_bounds("composer-toolbar").unwrap();
-                    let mut names = vec![
-                        "composer-add",
-                        "composer-workspace",
-                        "composer-branch",
-                        "composer-model",
-                        "composer-access",
-                    ];
-                    if !started {
-                        names.push("context-meter");
-                    }
-                    let mut bounds: Vec<_> = names
-                        .iter()
-                        .map(|name| visual.debug_bounds(name).unwrap())
-                        .collect();
-                    if beside {
-                        names.push("model-effort");
-                        bounds.push(visual.debug_bounds("model-effort").unwrap());
-                    }
-                    for (i, a) in bounds.iter().enumerate() {
-                        assert!(
-                            a.left() >= toolbar.left()
-                                && a.right() <= toolbar.right()
-                                && a.top() >= toolbar.top()
-                                && a.bottom() <= toolbar.bottom(),
-                            "{} outside toolbar at {width}, started={started}, beside={beside}: {a:?}, {toolbar:?}",
-                            names[i]
-                        );
-                        for (j, b) in bounds.iter().enumerate().skip(i + 1) {
+                    assert!(
+                        toolbar.size.height <= px(30.5),
+                        "toolbar wrapped at {width}: {toolbar:?}"
+                    );
+                    let add = visual.debug_bounds("composer-add").unwrap();
+                    let compact = visual.debug_bounds("composer-session-settings");
+                    if let Some(settings) = compact {
+                        saw_compact = true;
+                        assert!(visual.debug_bounds("composer-workspace").is_none());
+                        assert!(visual.debug_bounds("composer-model").is_none());
+                        assert!(visual.debug_bounds("composer-access").is_none());
+                        assert!(add.right() <= settings.left());
+                        assert!(settings.right() <= toolbar.right());
+                        if let Some(context) = visual.debug_bounds("context-meter") {
+                            assert!(settings.right() <= context.left());
+                            assert!(context.right() <= toolbar.right());
+                        }
+                    } else {
+                        saw_wide = true;
+                        for name in [
+                            "composer-workspace",
+                            "composer-branch",
+                            "composer-model",
+                            "composer-access",
+                        ] {
+                            let control = visual.debug_bounds(name).unwrap();
                             assert!(
-                                a.right() <= b.left()
-                                    || b.right() <= a.left()
-                                    || a.bottom() <= b.top()
-                                    || b.bottom() <= a.top(),
-                                "{} overlaps {} at {width}, started={started}, beside={beside}: {a:?}, {b:?}",
-                                names[i],
-                                names[j]
+                                control.top() >= toolbar.top()
+                                    && control.bottom() <= toolbar.bottom()
                             );
                         }
                     }
-                    if !beside {
-                        let effort = visual.debug_bounds("composer-model-effort").unwrap();
-                        let label = visual.debug_bounds("composer-model-label").unwrap();
-                        let model = bounds[3];
-                        assert!(effort.left() >= model.left() && effort.right() <= model.right());
-                        assert!(label.right() <= effort.left());
+                    for _ in 0..3 {
+                        visual.refresh().unwrap();
+                        assert_eq!(
+                            compact.is_some(),
+                            visual.debug_bounds("composer-session-settings").is_some()
+                        );
                     }
-                    visual.simulate_click(bounds[3].center(), Default::default());
-                    assert!(
-                        window
-                            .update(visual, |view, _, _| view.menu_is(ComposerMenu::Model)
-                                || view.bot_ui.models.is_some())
-                            .unwrap()
-                    );
                     window
                         .update(visual, |view, _, cx| {
-                            view.menu = None;
-                            view.bot_ui.models = None;
-                            cx.notify();
-                        })
-                        .unwrap();
-                    visual.refresh().unwrap();
-                    let access = visual.debug_bounds("composer-access").unwrap();
-                    visual.simulate_click(access.center(), Default::default());
-                    assert!(
-                        window
-                            .update(visual, |view, _, _| view.menu_is(ComposerMenu::Access))
-                            .unwrap()
-                    );
-                    window
-                        .update(visual, |view, _, cx| {
-                            view.menu = None;
-                            cx.notify();
+                            assert_eq!(view.input.read(cx).content.as_ref(), "First message")
                         })
                         .unwrap();
                 }
             }
         }
+        assert!(saw_compact && saw_wide);
     }
+    #[gpui::test]
+    fn compact_settings_keep_existing_actions_focus_and_anchor_on_resize(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::settings::Preferences::default());
+            crate::clock::use_test_clock(cx);
+            input::bind(cx);
+            crate::popover::bind(cx);
+        });
+        let window = window(cx, 360.);
+        window
+            .update(cx, |c, _, cx| {
+                c.git = Some(vorkspace_core::git::Snapshot::default());
+                c.branch = Some("main".into());
+                c.settings.access = AccessMode::FullAccess;
+                c.model = Some("test-model".into());
+                c.catalog = vec![Model {
+                    alias_target: None,
+                    id: "test-model".into(),
+                    name: "Test model".into(),
+                    efforts: vec!["high".into(), "xhigh".into()],
+                    default_effort: Some("high".into()),
+                    fast: false,
+                    thinking: false,
+                    default: true,
+                    tiers: Vec::new(),
+                    controls: Vec::new(),
+                }];
+                cx.notify();
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        window
+            .update(visual, |c, w, cx| w.focus(&c.compact_focus, cx))
+            .unwrap();
+        visual.simulate_keystrokes("enter");
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("menu-action-workspace:new").is_some());
+        assert!(
+            visual
+                .debug_bounds("menu-action-workspace:existing")
+                .is_some()
+        );
+        assert!(visual.debug_bounds("menu-action-compact:branch").is_some());
+        assert!(visual.debug_bounds("menu-action-model").is_some());
+        assert!(visual.debug_bounds("menu-action-reasoning").is_some());
+        assert!(visual.debug_bounds("menu-action-compact:access").is_some());
+        let effort = visual.debug_bounds("menu-action-reasoning").unwrap();
+        visual.simulate_mouse_move(effort.center(), None, Default::default());
+        visual.run_until_parked();
+        let high = visual.debug_bounds("menu-action-effort:xhigh").unwrap();
+        visual.simulate_click(high.center(), Default::default());
+        window
+            .update(visual, |c, _, cx| {
+                assert_eq!(c.settings.effort.as_deref(), Some("xhigh"));
+                assert_eq!(c.input.read(cx).content.as_ref(), "First message");
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        let settings = visual.debug_bounds("composer-session-settings").unwrap();
+        visual.simulate_click(settings.center(), Default::default());
+        visual.run_until_parked();
+        let new = visual.debug_bounds("menu-action-workspace:new").unwrap();
+        visual.simulate_click(new.center(), Default::default());
+        window
+            .update(visual, |c, w, cx| {
+                assert!(c.settings.new_worktree);
+                assert!(c.input.focus_handle(cx).is_focused(w));
+                assert_eq!(c.input.read(cx).content.as_ref(), "First message");
+            })
+            .unwrap();
+        window
+            .update(visual, |c, _, cx| {
+                c.git = Some(vorkspace_core::git::Snapshot::default());
+                c.branch = Some("main".into());
+                c.settings.worktree_base = Some("refs/remotes/origin/main".into());
+                cx.notify();
+            })
+            .unwrap();
+        window
+            .update(visual, |c, w, cx| {
+                let (_, items, _, _) =
+                    c.menu_items(ComposerMenu::CompactSettings, &mut Vec::new(), w, cx);
+                let branch = items.iter().find_map(|item| match item {
+                    MenuItem::Action(action) if action.id.as_ref() == "compact:branch" => {
+                        action.value.as_deref()
+                    }
+                    _ => None,
+                });
+                assert_eq!(branch, Some("origin/main"));
+                assert_eq!(
+                    c.settings.worktree_base.as_deref(),
+                    Some("refs/remotes/origin/main")
+                );
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        let settings = visual.debug_bounds("composer-session-settings").unwrap();
+        visual.simulate_click(settings.center(), Default::default());
+        visual.run_until_parked();
+        let branch = visual.debug_bounds("menu-action-compact:branch").unwrap();
+        visual.simulate_click(branch.center(), Default::default());
+        window
+            .update(visual, |c, _, cx| {
+                assert!(
+                    c.git_picker
+                        .as_ref()
+                        .is_some_and(|picker| picker.read(cx).mode() == GitMode::Base)
+                );
+                assert_eq!(c.input.read(cx).content.as_ref(), "First message");
+            })
+            .unwrap();
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let settings = visual.debug_bounds("composer-session-settings").unwrap();
+        visual.simulate_click(settings.center(), Default::default());
+        visual.run_until_parked();
+        let access = visual.debug_bounds("menu-action-compact:access").unwrap();
+        visual.simulate_mouse_move(access.center(), None, Default::default());
+        visual.run_until_parked();
+        let supervised = visual
+            .debug_bounds("menu-action-access:supervised")
+            .unwrap();
+        visual.simulate_click(supervised.center(), Default::default());
+        window
+            .update(visual, |c, _, cx| {
+                assert_eq!(c.settings.access, AccessMode::Supervised);
+                assert_eq!(c.input.read(cx).content.as_ref(), "First message");
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        let settings = visual.debug_bounds("composer-session-settings").unwrap();
+        visual.simulate_click(settings.center(), Default::default());
+        visual.run_until_parked();
+        visual.simulate_resize(size(px(1000.), px(700.)));
+        visual.refresh().unwrap();
+        window
+            .update(visual, |c, _, _| {
+                assert!(c.menu_is(ComposerMenu::CompactSettings));
+                assert_eq!(c.compact_anchor.get(), c.model_anchor.get());
+            })
+            .unwrap();
+        visual.simulate_keystrokes("escape");
+        window
+            .update(visual, |c, w, cx| {
+                assert!(c.menu.is_none());
+                assert!(c.input.focus_handle(cx).is_focused(w));
+                assert_eq!(c.input.read(cx).content.as_ref(), "First message");
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        let model = visual.debug_bounds("composer-model").unwrap();
+        visual.simulate_click(model.center(), Default::default());
+        visual.run_until_parked();
+        visual.simulate_resize(size(px(360.), px(700.)));
+        visual.refresh().unwrap();
+        window
+            .update(visual, |c, _, _| {
+                assert!(c.menu_is(ComposerMenu::Model));
+                assert_eq!(c.model_anchor.get(), c.compact_anchor.get());
+            })
+            .unwrap();
+        visual.simulate_keystrokes("escape");
+        window
+            .update(visual, |c, w, cx| {
+                assert!(c.menu.is_none());
+                assert!(c.input.focus_handle(cx).is_focused(w));
+                assert_eq!(c.input.read(cx).content.as_ref(), "First message");
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn compact_bot_composer_keeps_queue_and_bot_settings_separate(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::settings::Preferences::default());
+            crate::popover::bind(cx);
+        });
+        let window = window(cx, 220.);
+        window
+            .update(cx, |view, _, cx| {
+                view.configure_bot(
+                    vorkspace_core::bot::Bot {
+                        name: "Sam".into(),
+                        ..Default::default()
+                    },
+                    "/private/tmp".into(),
+                    Default::default(),
+                    cx,
+                );
+                view.input
+                    .update(cx, |input, cx| input.set_text("Unsent draft".into(), cx));
+            })
+            .unwrap();
+        window
+            .update(cx, |view, _, cx| {
+                view.bot_ui.queue = true;
+                view.model = Some("test-model".into());
+                view.catalog = vec![vorkspace_core::catalog::Model {
+                    alias_target: None,
+                    id: "test-model".into(),
+                    name: "A very long test model name".into(),
+                    efforts: vec!["high".into(), "xhigh".into()],
+                    default_effort: Some("high".into()),
+                    fast: false,
+                    thinking: false,
+                    default: true,
+                    tiers: Vec::new(),
+                    controls: Vec::new(),
+                }];
+                cx.notify();
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(size(px(220.), px(680.)));
+        visual.refresh().unwrap();
+        let settings = visual.debug_bounds("composer-session-settings").unwrap();
+        let add = visual.debug_bounds("composer-add").unwrap();
+        let context = visual.debug_bounds("context-meter").unwrap();
+        assert!(add.right() <= settings.left() && settings.right() <= context.left());
+        visual.simulate_click(settings.center(), Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("menu-action-model").is_some());
+        assert!(visual.debug_bounds("menu-action-reasoning").is_some());
+        assert!(visual.debug_bounds("menu-action-compact:access").is_none());
+        assert!(visual.debug_bounds("menu-action-workspace:new").is_none());
+        visual.simulate_keystrokes("escape");
+        visual.refresh().unwrap();
+        visual.simulate_click(add.center(), Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("menu-action-queue").is_some());
+        window
+            .update(visual, |view, _, cx| {
+                assert!(view.bot_ui.queue);
+                assert_eq!(view.input.read(cx).content.as_ref(), "Unsent draft");
+            })
+            .unwrap();
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "Requires Metal and VORKSPACE_COMPOSER_CAPTURE_DIR"]
@@ -3916,6 +4501,69 @@ mod composer_motion_tests {
                         if light { "light" } else { "dark" }
                     )))
                     .unwrap();
+                if width == 360. {
+                    cx.update_window(window.into(), |root, window, cx| {
+                        let conversation = root.downcast::<Capture>().unwrap().read(cx).0.clone();
+                        conversation.update(cx, |view, cx| {
+                            view.git = Some(vorkspace_core::git::Snapshot::default());
+                            view.toggle_menu(ComposerMenu::CompactSettings, window, cx);
+                        });
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                    crate::clock::settle_headless_animations(window, &mut cx);
+                    cx.capture_screenshot(window.into())
+                        .unwrap()
+                        .save(output.join(format!(
+                            "composer-menu-{}.png",
+                            if light { "light" } else { "dark" }
+                        )))
+                        .unwrap();
+                }
+                if width == 260. {
+                    cx.update_window(window.into(), |root, _, cx| {
+                        let conversation = root.downcast::<Capture>().unwrap().read(cx).0.clone();
+                        conversation.update(cx, |view, cx| {
+                            view.configure_bot(
+                                vorkspace_core::bot::Bot {
+                                    name: "Sam".into(),
+                                    ..Default::default()
+                                },
+                                "/private/tmp".into(),
+                                Default::default(),
+                                cx,
+                            );
+                            view.bot_ui.queue = true;
+                            cx.notify();
+                        });
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                    crate::clock::settle_headless_animations(window, &mut cx);
+                    cx.capture_screenshot(window.into())
+                        .unwrap()
+                        .save(output.join(format!(
+                            "bot-composer-{}.png",
+                            if light { "light" } else { "dark" }
+                        )))
+                        .unwrap();
+                    cx.update_window(window.into(), |root, window, cx| {
+                        let conversation = root.downcast::<Capture>().unwrap().read(cx).0.clone();
+                        conversation.update(cx, |view, cx| {
+                            view.toggle_menu(ComposerMenu::CompactSettings, window, cx)
+                        });
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                    crate::clock::settle_headless_animations(window, &mut cx);
+                    cx.capture_screenshot(window.into())
+                        .unwrap()
+                        .save(output.join(format!(
+                            "bot-menu-{}.png",
+                            if light { "light" } else { "dark" }
+                        )))
+                        .unwrap();
+                }
                 cx.update_window(window.into(), |_, window, _| window.remove_window())
                     .unwrap();
             }

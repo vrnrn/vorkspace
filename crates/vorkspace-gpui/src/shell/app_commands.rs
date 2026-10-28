@@ -40,7 +40,7 @@ impl Shell {
         project: &str,
         cx: &App,
     ) -> Result<(), String> {
-        if let Some((target, _)) = placement {
+        if let Some((target, edge)) = placement {
             if self.workspace.tab_of(target).is_none()
                 || !self.session_summaries.contains_key(&target)
             {
@@ -50,6 +50,9 @@ impl Shell {
                 != vorkspace_core::files::path_key(project)
             {
                 return Err("Split target is outside the selected project".into());
+            }
+            if !self.placement_allowed(DragSource::Session(i64::MAX), target, edge) {
+                return Err(PANE_LIMIT_MESSAGE.into());
             }
         }
         Ok(())
@@ -147,6 +150,7 @@ impl Shell {
         if let Some((target, edge)) = placement {
             let before = self.active_leaves();
             self.workspace.place(id, target, edge);
+            self.fit_active_pane_width();
             self.begin_pane_motion(before);
             self.fit_sidebar(cx);
             self.activate_session(id, window, cx);

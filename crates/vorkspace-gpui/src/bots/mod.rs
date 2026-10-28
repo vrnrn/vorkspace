@@ -145,6 +145,8 @@ pub(crate) struct Bots {
     persisted_messages: HashSet<String>,
     failed_reports: HashSet<String>,
     inflight: HashMap<String, Message>,
+    /// Claims submitted by this manager, retained until the message leaves its queue.
+    dispatch_claims: HashSet<String>,
     /// Outbox messages the user queued: they wait for the running reply
     /// instead of being steered into it.
     held: HashSet<String>,
@@ -156,6 +158,17 @@ impl EventEmitter<Changed> for Bots {}
 impl EventEmitter<TabOpened> for Bots {}
 impl EventEmitter<ShowDetails> for Bots {}
 impl Bots {
+    pub(crate) fn conversation_for_session(
+        &self,
+        id: i64,
+        cx: &App,
+    ) -> Option<Entity<Conversation>> {
+        self.chats
+            .values()
+            .chain(self.channels.views.values())
+            .find(|view| view.read(cx).summary.id == id)
+            .cloned()
+    }
     pub(crate) fn resource_sessions(
         &self,
         cx: &App,
@@ -304,6 +317,7 @@ impl Bots {
             .iter()
             .flat_map(|m| m.outbox.iter().map(|q| q.id.clone()))
             .collect();
+        let held = roster.held_messages.clone();
         let session_filters = locked(&store)
             .ok()
             .and_then(|s| s.setting("bot-session-filters").ok().flatten())
@@ -391,7 +405,8 @@ impl Bots {
             persisted_messages,
             failed_reports: HashSet::new(),
             inflight: HashMap::new(),
-            held: HashSet::new(),
+            dispatch_claims: HashSet::new(),
+            held,
             card_refresh: HashMap::new(),
             session_filters,
             session_filter_anchor: AnchorSlot::default(),
@@ -574,17 +589,22 @@ impl Bots {
         cx.notify();
     }
     fn save(&mut self, cx: &mut Context<Self>) {
+        let live: HashSet<_> = self
+            .roster
+            .bots
+            .iter()
+            .flat_map(|bot| bot.outbox.iter().map(|message| message.id.clone()))
+            .collect();
+        self.roster.held_messages.retain(|id| live.contains(id));
+        self.roster.message_modes.retain(|id, _| live.contains(id));
+        self.held.retain(|id| live.contains(id));
+        self.dispatch_claims.retain(|id| live.contains(id));
         let roster = self.roster.clone();
         let store = self.store.clone();
         let queued = roster
             .bots
             .iter()
-            .map(|m| {
-                (
-                    m.id.clone(),
-                    m.outbox.iter().map(|q| q.id.clone()).collect::<Vec<_>>(),
-                )
-            })
+            .map(|m| (m.id.clone(), m.outbox.clone()))
             .collect::<Vec<_>>();
         let previous = self.writes.take();
         self.writes = Some(cx.spawn(async move |this, cx| {
@@ -598,6 +618,15 @@ impl Bots {
             let result = work.await;
             let _ = this.update(cx, |this, cx| match result {
                 Err(error) => {
+                    for (id, messages) in &queued {
+                        if let Some(view) = this.chats.get(id) {
+                            for message in messages {
+                                view.update(cx, |view, cx| {
+                                    view.bot_draft_outbox_failed(&message.id, &error, cx)
+                                });
+                            }
+                        }
+                    }
                     this.error = Some(error);
                     cx.notify();
                 }
@@ -606,7 +635,24 @@ impl Bots {
                         if this.awaiting_creation.remove(&id) {
                             this.ensure_chat(&id, cx);
                         }
-                        this.persisted_messages.extend(messages);
+                        if let Some(view) = this.chats.get(&id) {
+                            for message in &messages {
+                                if !this.roster.get(&id).is_some_and(|bot| {
+                                    bot.outbox.iter().any(|current| {
+                                        current.id == message.id
+                                            && current.text == message.text
+                                            && current.attachments == message.attachments
+                                    })
+                                }) {
+                                    continue;
+                                }
+                                view.update(cx, |view, cx| {
+                                    view.bot_draft_outbox_saved(message, cx)
+                                });
+                            }
+                        }
+                        this.persisted_messages
+                            .extend(messages.into_iter().map(|message| message.id));
                         this.dispatch(&id, cx);
                     }
                     this.persisted_messages.retain(|id| {
@@ -715,6 +761,11 @@ impl Bots {
                 view.update(cx, |view, cx| {
                     view.allow_storage_paging = page_chat;
                     view.configure_bot(bot, root, env, cx);
+                    for message in this.roster.get(&id).into_iter().flat_map(|bot| &bot.outbox) {
+                        if this.persisted_messages.contains(&message.id) {
+                            view.bot_draft_outbox_saved(message, cx);
+                        }
+                    }
                     if let Some(settings) = settings {
                         let config = view.settings.bot.take();
                         let env = std::mem::take(&mut view.settings.environment);
@@ -738,6 +789,9 @@ impl Bots {
                                 .collect(),
                             false,
                             event.queue,
+                            event.draft_id.clone(),
+                            event.mode.clone(),
+                            event.prepared_prompt.clone(),
                             cx,
                         )
                     },
@@ -858,6 +912,10 @@ impl Bots {
     }
     /// Retry clears a queued message's error; discard drops it.
     fn queue_changed(&mut self, source: &str, id: &str, remove: bool, cx: &mut Context<Self>) {
+        let held = self.held.remove(id);
+        self.roster.held_messages.remove(id);
+        let mode = self.roster.message_modes.remove(id);
+        let mut replacement = None;
         if let Some(bot) = self.roster.get_mut(source) {
             if remove {
                 bot.outbox.retain(|m| m.id != id);
@@ -870,6 +928,16 @@ impl Bots {
                     bot::new_id()
                 };
                 message.error = None;
+                replacement = Some(message.id.clone());
+            }
+        }
+        if let Some(id) = replacement {
+            if held {
+                self.held.insert(id.clone());
+                self.roster.held_messages.insert(id.clone());
+            }
+            if let Some(mode) = mode {
+                self.roster.message_modes.insert(id, mode);
             }
         }
         self.save(cx);
@@ -896,8 +964,9 @@ impl Bots {
         internal: bool,
         cx: &mut Context<Self>,
     ) {
-        self.enqueue_held(id, text, attachments, internal, false, cx);
+        self.enqueue_held(id, text, attachments, internal, false, None, None, None, cx);
     }
+    #[allow(clippy::too_many_arguments)]
     fn enqueue_held(
         &mut self,
         id: &str,
@@ -905,23 +974,58 @@ impl Bots {
         attachments: Vec<String>,
         internal: bool,
         hold: bool,
+        draft_id: Option<String>,
+        mode: Option<String>,
+        prepared_prompt: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        if self.roster.get(id).is_none() {
+            if let (Some(draft_id), Some(view)) = (draft_id.as_deref(), self.chats.get(id)) {
+                view.update(cx, |view, cx| {
+                    view.bot_draft_outbox_failed(draft_id, "Bot is no longer available", cx)
+                });
+            }
+            return;
+        }
         if let Some(bot) = self.roster.get_mut(id) {
-            let message = bot::new_id();
-            // Marked before dispatch, which may steer at once.
-            if hold {
-                self.held.insert(message.clone());
+            let message = draft_id.unwrap_or_else(bot::new_id);
+            if let Some(queued) = bot.outbox.iter().find(|queued| queued.id == message) {
+                if queued.text != text
+                    || queued.attachments != attachments
+                    || queued.prepared_prompt != prepared_prompt
+                {
+                    if let Some(view) = self.chats.get(id) {
+                        view.update(cx, |view, cx| {
+                            view.bot_draft_outbox_failed(
+                                &message,
+                                "A different version is already queued; reopen the conversation",
+                                cx,
+                            )
+                        });
+                    }
+                    return;
+                }
+                self.save(cx);
+                return;
             }
             bot.outbox.push(Message {
                 peer: None,
-                id: message,
+                id: message.clone(),
                 text,
+                prepared_prompt,
                 sent_at: Some(vorkspace_core::time::now_ms()),
                 internal,
                 error: None,
                 attachments,
             });
+            // Marked before dispatch, which may steer at once.
+            if hold || mode.is_some() {
+                self.held.insert(message.clone());
+                self.roster.held_messages.insert(message.clone());
+            }
+            if let Some(mode) = mode {
+                self.roster.message_modes.insert(message, mode);
+            }
             self.save(cx);
             self.configure_chat(id, cx);
             self.dispatch(id, cx);
@@ -942,6 +1046,8 @@ impl Bots {
         {
             let sent = m.outbox.remove(index);
             self.held.remove(&sent.id);
+            self.roster.held_messages.remove(&sent.id);
+            self.roster.message_modes.remove(&sent.id);
             self.save(cx);
             self.configure_chat(id, cx);
         }
@@ -1013,8 +1119,65 @@ impl Bots {
             self.steer(id, cx);
             return;
         }
-        if view.update(cx, |v, cx| v.bot_dispatch(&message, cx)) {
+        let Some(token) = self.claim_dispatch(id, &message, cx) else {
+            return;
+        };
+        let mode = self.roster.message_modes.get(&message.id).cloned();
+        if view.update(cx, |v, cx| {
+            v.bot_dispatch_with_mode(&message, mode.as_deref(), cx)
+        }) {
+            self.dispatch_claims.insert(message.id.clone());
             self.inflight.insert(id.into(), message);
+        } else {
+            self.release_unsubmitted_claim(id, &message.id, &token, cx);
+        }
+    }
+    fn claim_dispatch(
+        &mut self,
+        bot: &str,
+        message: &Message,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        if self.dispatch_claims.contains(&message.id) {
+            return None;
+        }
+        let token = bot::new_id();
+        let result =
+            locked(&self.store).and_then(|store| store.claim_bot_message(bot, message, &token));
+        match result {
+            Ok(true) => Some(token),
+            Ok(false) => {
+                if let Some(queued) = self
+                    .roster
+                    .get_mut(bot)
+                    .and_then(|bot| bot.outbox.iter_mut().find(|item| item.id == message.id))
+                {
+                    queued.error = Some("Delivery is uncertain or another window is sending this message. Inspect the conversation before choosing Retry or Discard.".into());
+                }
+                self.configure_chat(bot, cx);
+                None
+            }
+            Err(error) => {
+                self.error = Some(format!("Could not claim Bot message: {error}"));
+                self.changed(cx);
+                None
+            }
+        }
+    }
+    fn release_unsubmitted_claim(
+        &mut self,
+        bot: &str,
+        message: &str,
+        token: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = locked(&self.store)
+            .and_then(|store| store.release_unsubmitted_bot_claim(bot, message, token))
+        {
+            self.error = Some(format!(
+                "Could not release Bot message claim: {error}. Inspect the conversation before retrying."
+            ));
+            self.changed(cx);
         }
     }
     /// A user message waiting behind a running turn steers that turn. A peer
@@ -1034,7 +1197,14 @@ impl Bots {
             return;
         };
         if let Some(view) = self.chats.get(id).cloned() {
-            view.update(cx, |v, cx| v.bot_steer(&message, cx));
+            let Some(token) = self.claim_dispatch(id, &message, cx) else {
+                return;
+            };
+            if view.update(cx, |v, cx| v.bot_steer(&message, cx)) {
+                self.dispatch_claims.insert(message.id.clone());
+            } else {
+                self.release_unsubmitted_claim(id, &message.id, &token, cx);
+            }
         }
     }
     fn steer_failed(&mut self, id: &str, message: &str, error: &str, cx: &mut Context<Self>) {

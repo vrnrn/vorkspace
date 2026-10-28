@@ -467,6 +467,7 @@ impl TranscriptView {
                                         Box::new(crate::image_lightbox::Open {
                                             source: source.clone(),
                                             alt: alt.clone(),
+                                            draft_session: None,
                                         }),
                                         cx,
                                     );

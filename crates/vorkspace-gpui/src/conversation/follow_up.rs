@@ -221,8 +221,7 @@ impl Conversation {
             self.defer_history_action(|this, cx| this.save_message_draft(cx), cx);
             return;
         }
-        if self.busy
-            || self.follow_ups.state.draft.is_some()
+        if self.follow_ups.state.draft.is_some()
             || !self.loaded
             || self.attaching
             || self.input.read(cx).is_composing()
@@ -236,11 +235,61 @@ impl Conversation {
         if text.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
-        self.input.update(cx, |i, cx| i.set_text(String::new(), cx));
-        let attachments = std::mem::take(&mut self.attachments);
-        let mut message = self.message(text, attachments, None, cx);
+        let mut message = self.message(text, self.attachments.clone(), None, cx);
         message.at = self.transcript.read(cx).source_rows().len();
-        if self.summary.title.starts_with("New ") {
+        // Bot drafts are accepted before clearing the composer. An attachment
+        // copy or storage failure must leave the user's input untouched.
+        if self.settings.bot.is_some() {
+            let origin_revision = match self.bot_draft_origin_revision(cx) {
+                Ok(revision) => revision,
+                Err(error) => {
+                    self.status =
+                        format!("Could not save draft: {error}. Your composer was preserved.");
+                    self.bot_ui.draft_error = Some(self.status.clone());
+                    cx.notify();
+                    return;
+                }
+            };
+            let mut next = self.follow_ups.state.clone();
+            next.revision += 1;
+            next.draft = Some(message.clone());
+            let result = (|| {
+                let store = locked(&self.store)?;
+                next.retain_attachments(self.summary.id, store.data_dir())?;
+                store.accept_bot_draft(self.summary.id, &next, origin_revision, &message.id)
+            })();
+            if let Err(error) = result {
+                // A shared-store root publication can fail after its database
+                // commit. Adopt any matching durable card before permitting a
+                // retry, while retaining the original composer as recovery.
+                if let Ok(saved) =
+                    locked(&self.store).and_then(|store| store.follow_ups(self.summary.id))
+                    && saved
+                        .draft
+                        .as_ref()
+                        .is_some_and(|draft| draft.id == message.id)
+                {
+                    self.follow_ups.persisted = saved.revision;
+                    self.follow_ups.state = saved;
+                    self.summary.has_messages = true;
+                    let draft = self.follow_ups.state.draft.clone();
+                    self.transcript
+                        .update(cx, |view, cx| view.set_saved_draft(draft, cx));
+                }
+                self.status =
+                    format!("Could not save draft: {error}. Your composer was preserved.");
+                self.bot_ui.draft_error = Some(self.status.clone());
+                cx.notify();
+                return;
+            }
+            self.bot_ui.draft_error = None;
+            message = next.draft.clone().unwrap();
+            self.follow_ups.persisted = next.revision;
+            self.follow_ups.state = next;
+        }
+        self.input.update(cx, |i, cx| i.set_text(String::new(), cx));
+        self.attachments.clear();
+        if self.settings.bot.is_none() && self.summary.title.starts_with("New ") {
             self.summary.title = message
                 .label()
                 .split_whitespace()
@@ -274,7 +323,9 @@ impl Conversation {
             .update(cx, |view, cx| view.introduce_saved_draft(message, cx));
         self.completion
             .update(cx, |completion, cx| completion.dismiss(cx));
-        self.save_follow_ups(cx);
+        if self.settings.bot.is_none() {
+            self.save_follow_ups(cx);
+        }
         cx.emit(SessionChanged);
     }
     pub(super) fn draft_action(&mut self, send: bool, cx: &mut Context<Self>) {
@@ -287,6 +338,69 @@ impl Conversation {
             return;
         }
         if send && (!self.loaded || self.preparing_worktree) {
+            return;
+        }
+        if self.settings.bot.is_some() {
+            if self.bot_ui.draft_sending.is_some() && (!send || !self.bot_ui.draft_retry) {
+                return;
+            }
+            if send {
+                let Some(message) = self.follow_ups.state.draft.as_ref().cloned() else {
+                    return;
+                };
+                if self.execution_provider().is_err()
+                    || self.follow_ups.persisted < self.follow_ups.state.revision
+                {
+                    self.status = "Draft is not ready to send; it was preserved.".into();
+                    cx.notify();
+                    return;
+                }
+                if self.bot_ui.draft_sending.is_none() {
+                    self.bot_ui.draft_queue = std::mem::take(&mut self.bot_ui.queue);
+                }
+                self.bot_ui.draft_sending = Some(message.id.clone());
+                self.bot_ui.draft_retry = false;
+                self.transcript
+                    .update(cx, |view, cx| view.set_draft_transfer(Some(false), cx));
+                cx.emit(bot::Submitted {
+                    draft_id: Some(message.id),
+                    prepared_prompt: Some(
+                        message
+                            .prepared_prompt
+                            .unwrap_or_else(|| message.text.clone()),
+                    ),
+                    text: message.text,
+                    attachments: message.attachments,
+                    queue: self.bot_ui.draft_queue,
+                    mode: message.mode,
+                });
+                cx.notify();
+                return;
+            }
+            let Some(draft) = self.follow_ups.state.draft.as_ref() else {
+                return;
+            };
+            let mut next = self.follow_ups.state.clone();
+            next.draft = None;
+            next.revision += 1;
+            let result = self
+                .mark_bot_draft_discarded(&draft.id)
+                .and_then(|()| locked(&self.store)?.accept_follow_ups(self.summary.id, &next));
+            if let Err(error) = result {
+                self.bot_ui.draft_error = Some(format!(
+                    "Could not remove draft: {error}. Your draft was preserved."
+                ));
+                cx.notify();
+                return;
+            }
+            self.follow_ups.persisted = next.revision;
+            self.follow_ups.state = next;
+            self.summary.has_messages = !self.transcript.read(cx).source_rows().is_empty();
+            self.transcript
+                .update(cx, |view, cx| view.set_saved_draft(None, cx));
+            self.bot_ui.draft_error = None;
+            cx.emit(SessionChanged);
+            cx.notify();
             return;
         }
         let Some(mut message) = self.follow_ups.state.draft.take() else {
@@ -312,6 +426,140 @@ impl Conversation {
             .update(cx, |view, cx| view.set_saved_draft(None, cx));
         self.save_follow_ups(cx);
         cx.emit(SessionChanged);
+    }
+    pub(super) fn edit_saved_draft(
+        &mut self,
+        id: &str,
+        edit_id: &str,
+        text: &str,
+        finish: bool,
+        cancel: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.transcript.read(cx).is_saved_draft_edit(id, edit_id) {
+            return;
+        }
+        if !cancel && !self.transcript.read(cx).saved_draft_edit_matches(text, cx) {
+            return;
+        }
+        let original = if cancel {
+            let Some((original, prepared)) = self
+                .transcript
+                .read(cx)
+                .saved_draft_edit_original(id, edit_id)
+            else {
+                return;
+            };
+            if original != text {
+                return;
+            }
+            Some(prepared)
+        } else {
+            None
+        };
+        if self.bot_ui.draft_sending.is_some()
+            || self.follow_ups.persisted < self.follow_ups.state.revision
+        {
+            self.status = "Wait for the draft to finish saving before editing.".into();
+            cx.notify();
+            return;
+        }
+        let mut next = self.follow_ups.state.clone();
+        let Some(draft) = next.draft.as_mut().filter(|draft| draft.id == id) else {
+            return;
+        };
+        if text.trim().is_empty() && draft.attachments.is_empty() {
+            return;
+        }
+        if draft.text == text
+            && original
+                .as_ref()
+                .is_none_or(|prepared| draft.prepared_prompt.as_ref() == prepared.as_ref())
+        {
+            if finish {
+                let draft = next.draft.clone();
+                self.transcript
+                    .update(cx, |view, cx| view.finish_saved_draft_edit(draft, cx));
+            }
+            return;
+        }
+        if let Some(prepared) = original {
+            draft.text = text.to_owned();
+            draft.prepared_prompt = prepared;
+        } else {
+            let prepared = self.completion.read(cx).prepare_prompt(text);
+            draft.replace_text(text.to_owned(), prepared);
+        }
+        // Every published mutation, including a cancellation, needs its own
+        // delivery identity. The editor can publish several versions before
+        // it closes, and another window may queue any one of them.
+        draft.replaces_draft_id = Some(draft.id.clone());
+        draft.id = vorkspace_core::bot::new_id();
+        let new_id = draft.id.clone();
+        next.revision += 1;
+        let result = (|| {
+            if self.settings.bot.is_some() {
+                self.mark_bot_draft_edit_origin(id, &new_id)?;
+            }
+            let store = locked(&self.store)?;
+            next.retain_attachments(self.summary.id, store.data_dir())?;
+            store.accept_follow_ups(self.summary.id, &next)
+        })();
+        match result {
+            Ok(()) => {
+                let _ = locked(&self.store).and_then(|store| {
+                    store.clear_composer_recovery(
+                        self.summary.id,
+                        &format!("saved-draft-edit:{edit_id}"),
+                    )
+                });
+                self.bot_ui.draft_error = None;
+                self.follow_ups.persisted = next.revision;
+                self.follow_ups.state = next;
+                let draft = self.follow_ups.state.draft.clone();
+                self.transcript.update(cx, |view, cx| {
+                    if finish {
+                        view.finish_saved_draft_edit(draft, cx);
+                    } else {
+                        view.update_saved_draft_edit(draft);
+                    }
+                });
+                cx.emit(SessionChanged);
+            }
+            Err(error) => {
+                let end = text.encode_utf16().count();
+                let files = next
+                    .draft
+                    .as_ref()
+                    .map(|draft| {
+                        draft
+                            .attachments
+                            .iter()
+                            .map(|path| serde_json::json!({"path":path}))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let recovery = vorkspace_core::store::ComposerRecovery {
+                    owner: format!("saved-draft-edit:{edit_id}"),
+                    revision: next.revision,
+                    payload: serde_json::json!({"cwd":self.summary.cwd, "text":text, "selectionStart":end, "selectionEnd":end, "attachments":files, "mcpTags":[]}),
+                };
+                let recovery_result = locked(&self.store)
+                    .and_then(|store| store.save_composer_recovery(self.summary.id, recovery));
+                self.status =
+                    format!("Could not save draft edit: {error}. Your edit is still open.");
+                if let Err(recovery_error) = recovery_result {
+                    self.status = format!(
+                        "{}. Could not save a recovery copy: {recovery_error}",
+                        self.status
+                    );
+                }
+                if self.settings.bot.is_some() {
+                    self.bot_ui.draft_error = Some(self.status.clone());
+                }
+            }
+        }
+        cx.notify();
     }
     pub(super) fn follow_up_delivered(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.follow_ups.sending.as_deref() == Some(id) {
@@ -661,7 +909,7 @@ fn queue_button(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{TestAppContext, WindowHandle};
+    use gpui::{TestAppContext, VisualTestContext, WindowHandle};
     use std::sync::Mutex;
     use vorkspace_core::store::Store;
 
@@ -988,6 +1236,84 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn working_sessions_and_bots_can_save_a_draft_without_sending_it(cx: &mut TestAppContext) {
+        for bot in [false, true] {
+            let window = conversation(cx);
+            let (controls, received) = std::sync::mpsc::channel();
+            window
+                .update(cx, |view, _, cx| {
+                    if bot {
+                        view.configure_bot(
+                            vorkspace_core::bot::Bot::default(),
+                            "/tmp".into(),
+                            Default::default(),
+                            cx,
+                        );
+                    }
+                    view.busy = true;
+                    view.summary.has_messages = true;
+                    view.follow_ups.ready = true;
+                    view.controls = Some(controls);
+                    cx.notify();
+                })
+                .unwrap();
+            let visual = &mut VisualTestContext::from_window(window.into(), cx);
+            visual.run_until_parked();
+            let add = visual.debug_bounds("composer-add").unwrap().center();
+            visual.simulate_click(add, Default::default());
+            visual.run_until_parked();
+            let draft = visual.debug_bounds("menu-action-draft").unwrap().center();
+            visual.simulate_click(draft, Default::default());
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, cx| {
+                    assert!(
+                        view.follow_ups.draft_selected,
+                        "Draft is selectable while working"
+                    );
+                    view.input.update(cx, |input, cx| {
+                        input.set_text("/draft Save this for later".into(), cx)
+                    });
+                    cx.notify();
+                })
+                .unwrap();
+            visual.run_until_parked();
+            let save = visual.debug_bounds("send-or-stop").unwrap().center();
+            visual.simulate_click(save, Default::default());
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, cx| {
+                    assert!(view.busy, "saving must not stop the running agent");
+                    assert_eq!(
+                        view.follow_ups.state.draft.as_ref().unwrap().text,
+                        "Save this for later"
+                    );
+                    assert!(view.follow_ups.state.messages.is_empty());
+                    assert!(view.input.read(cx).content.is_empty());
+                })
+                .unwrap();
+            assert!(
+                received.try_recv().is_err(),
+                "saving must not send or steer"
+            );
+            window
+                .update(visual, |view, _, _| {
+                    assert_eq!(
+                        locked(&view.store)
+                            .unwrap()
+                            .follow_ups(view.summary.id)
+                            .unwrap()
+                            .draft
+                            .unwrap()
+                            .text,
+                        "Save this for later"
+                    );
+                })
+                .unwrap();
+        }
     }
 
     #[gpui::test]

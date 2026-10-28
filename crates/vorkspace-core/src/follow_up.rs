@@ -13,6 +13,10 @@ pub struct Message {
     pub prepared_prompt: Option<String>,
     pub attachments: Vec<PathBuf>,
     pub mode: Option<String>,
+    /// Explicit identity replacement lets the shared store retain fields it
+    /// does not understand when an edited draft receives a new delivery ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaces_draft_id: Option<String>,
     /// Insertion point for a saved draft, independent of provider history.
     pub at: usize,
     pub error: Option<String>,

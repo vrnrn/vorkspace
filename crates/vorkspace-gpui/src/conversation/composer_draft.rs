@@ -62,8 +62,28 @@ impl State {
         writer.discarded = true;
         writer.pending = None;
     }
+    pub(super) fn generation(&self) -> u64 {
+        self.writer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .generation
+    }
+    pub(super) fn forget_recovery(&self, owner: &str) {
+        self.writer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .recoveries
+            .retain(|record| record.owner != owner);
+    }
     pub(super) fn ready_for_replacement(&self) -> bool {
-        !self.hydrating && self.error.is_none() && !self.resolving
+        !self.hydrating
+            && self.error.is_none()
+            && !self.resolving
+            && !self
+                .writer
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .discarded
     }
 }
 pub(super) fn flush(writer: &Arc<Mutex<Writer>>) -> Result<(), String> {
@@ -146,7 +166,173 @@ fn current_record(state: &Writer) -> Option<vorkspace_core::store::ComposerDraft
         deleted: state.deleted,
     })
 }
+fn same_submission_input(a: &Value, b: &Value) -> bool {
+    a["text"]
+        .as_str()
+        .is_some_and(|text| b["text"].as_str() == Some(text))
+        && a["cwd"] == b["cwd"]
+        && a["attachments"]
+            .as_array()
+            .zip(b["attachments"].as_array())
+            .is_some_and(|(a, b)| {
+                a.len() == b.len()
+                    && a.iter().zip(b).all(|(a, b)| {
+                        a["path"]
+                            .as_str()
+                            .is_some_and(|path| b["path"].as_str() == Some(path))
+                    })
+            })
+        && a["mcpTags"]
+            .as_array()
+            .zip(b["mcpTags"].as_array())
+            .is_some_and(|(a, b)| {
+                a.len() == b.len()
+                    && a.iter().zip(b).all(|(a, b)| {
+                        a["token"] == b["token"]
+                            && ["provider", "name", "scope", "configPath", "transport"]
+                                .into_iter()
+                                .all(|key| a["server"][key] == b["server"][key])
+                            && a["server"]["enabled"].as_bool().unwrap_or(true)
+                                == b["server"]["enabled"].as_bool().unwrap_or(true)
+                    })
+            })
+}
 impl Conversation {
+    /// A direct Bot send may have reached the outbox before its UI
+    /// acknowledgement. Reuse its durable identity after reopening, so that
+    /// neither a queued message nor a dispatch claim can be submitted twice.
+    pub(super) fn pending_bot_submission(
+        &self,
+        text: &str,
+        attachments: &[std::path::PathBuf],
+    ) -> Result<Option<vorkspace_core::store::ComposerRecovery>, String> {
+        let store = locked(&self.store)?;
+        let saved = store.composer_draft(self.summary.id)?;
+        let records = store.composer_recoveries(self.summary.id)?;
+        let mut matches = records.into_iter().filter(|record| {
+            record.payload["botSubmission"].is_object()
+                && saved
+                    .as_ref()
+                    .is_some_and(|draft| same_submission_input(&record.payload, &draft.payload))
+                && record.payload["text"].as_str() == Some(text)
+                && record.payload["attachments"]
+                    .as_array()
+                    .is_some_and(|files| {
+                        files.len() == attachments.len()
+                            && files.iter().zip(attachments).all(|(file, path)| {
+                                file["path"]
+                                    .as_str()
+                                    .is_some_and(|saved| Path::new(saved) == path)
+                            })
+                    })
+        });
+        let first = matches.next();
+        if matches.next().is_some() {
+            return Err(
+                "Multiple recovered submissions match this input; review them before sending"
+                    .into(),
+            );
+        }
+        Ok(first)
+    }
+    /// Flush the input so the database can compare its revision when publishing the draft.
+    pub(super) fn bot_draft_origin_revision(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<u64, String> {
+        if !self.composer_draft.ready_for_replacement() {
+            return Err("The composer is still restoring".into());
+        }
+        self.capture_composer(cx);
+        self.composer_draft.flush()?;
+        let revision = self
+            .composer_draft
+            .writer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .revision;
+        Ok(revision)
+    }
+
+    pub(super) fn mark_bot_draft_discarded(&self, draft_id: &str) -> Result<(), String> {
+        let store = locked(&self.store)?;
+        let key = format!("bot-draft-origin:{}", self.summary.id);
+        let Some(raw) = store.setting(&key)? else {
+            return Ok(());
+        };
+        let mut marker: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        if marker["id"].as_str() == Some(draft_id) || marker["nextId"].as_str() == Some(draft_id) {
+            marker["discarded"] = json!(true);
+            store.compare_swap_setting(&key, Some(&raw), &marker.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn mark_bot_draft_edit_origin(
+        &self,
+        old_id: &str,
+        new_id: &str,
+    ) -> Result<(), String> {
+        let store = locked(&self.store)?;
+        let key = format!("bot-draft-origin:{}", self.summary.id);
+        let Some(raw) = store.setting(&key)? else {
+            return Ok(());
+        };
+        let mut marker: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        if marker["id"].as_str() == Some(old_id) || marker["nextId"].as_str() == Some(old_id) {
+            marker["id"] = json!(old_id);
+            marker["nextId"] = json!(new_id);
+            store.compare_swap_setting(&key, Some(&raw), &marker.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn composer_is_published_bot_draft(
+        &self,
+        saved: &vorkspace_core::store::ComposerDraft,
+    ) -> Result<bool, String> {
+        let store = locked(&self.store)?;
+        let Some(raw) = store.setting(&format!("bot-draft-origin:{}", self.summary.id))? else {
+            return Ok(false);
+        };
+        let marker: Value =
+            serde_json::from_str(&raw).map_err(|e| format!("Cannot verify draft origin: {e}"))?;
+        if marker["revision"].as_u64() != Some(saved.revision) {
+            return Ok(false);
+        }
+        let id = marker["id"]
+            .as_str()
+            .ok_or("Cannot verify draft origin identity")?;
+        let next_id = marker["nextId"].as_str();
+        if marker["discarded"] == true {
+            return Ok(true);
+        }
+        if store
+            .follow_ups(self.summary.id)?
+            .draft
+            .is_some_and(|draft| draft.id == id || Some(draft.id.as_str()) == next_id)
+        {
+            return Ok(true);
+        }
+        for candidate in [Some(id), next_id].into_iter().flatten() {
+            if store
+                .setting(&format!("bot-delivered:{}:{candidate}", self.summary.id))?
+                .is_some()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(vorkspace_core::bot::Roster::load(&store)?
+            .bots
+            .iter()
+            .any(|bot| {
+                bot.session_id == Some(self.summary.id)
+                    && bot
+                        .outbox
+                        .iter()
+                        .any(|message| message.id == id || Some(message.id.as_str()) == next_id)
+            }))
+    }
     pub(super) fn composer_recovery_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (preview, attachments) = {
             let state = self
@@ -229,6 +415,14 @@ impl Conversation {
             completion.restore_mcp_tags(&payload["mcpTags"], cx)
         });
         self.composer_draft.restoring = false;
+        if self.settings.bot.is_some() && payload["botSubmission"].is_object() {
+            let mode = payload["botSubmission"]["mode"].as_str();
+            self.settings.plan = mode == Some("plan");
+            self.settings.operator = mode == Some("operator");
+            self.settings.orchestrator = mode == Some("orchestrator");
+            self.bot_ui.queue = payload["botSubmission"]["queue"].as_bool().unwrap_or(false);
+            self.save_settings(cx);
+        }
     }
     fn resolve_composer_recovery(&mut self, recovered: bool, cx: &mut Context<Self>) {
         if self.composer_draft.resolving {
@@ -257,11 +451,18 @@ impl Conversation {
             let (draft,remaining)={
                 let store=locked(&state.store)?;
                 let latest=store.composer_draft(state.id)?;
+                let retain_submission = choice.payload["botSubmission"].is_object()
+                    && (recovered || latest.as_ref().is_some_and(|draft| same_submission_input(&choice.payload, &draft.payload)));
                 let (payload,revision)=if recovered {
                     let revision=store.save_composer_draft(state.id,latest.as_ref().map_or(0,|d|d.revision),&choice.payload)?;
                     (choice.payload,revision)
                 }else{latest.map(|d|(d.payload,d.revision)).unwrap_or_else(||(json!({"cwd":cwd,"text":"","selectionStart":0,"selectionEnd":0,"attachments":[],"mcpTags":[]}),0))};
-                store.clear_composer_recovery(state.id,&choice.owner)?;
+                // A recovered direct submission retains its original identity
+                // until the outbox acknowledges it, including across a second
+                // crash after restoring the composer.
+                if !retain_submission {
+                    store.clear_composer_recovery(state.id,&choice.owner)?;
+                }
                 ((payload,revision),store.composer_recoveries(state.id)?)
             };
             state.base=draft.0.clone();state.revision=draft.1;state.loaded=true;
@@ -331,6 +532,21 @@ impl Conversation {
                         && let Some(saved) = saved
                         && !saved.deleted
                     {
+                        let published = match this.composer_is_published_bot_draft(&saved) {
+                            Ok(published) => published,
+                            Err(error) => {
+                                this.status = format!("Could not verify saved draft: {error}. Your input was preserved.");
+                                this.composer_draft.error = Some(this.status.clone());
+                                cx.notify();
+                                return;
+                            }
+                        };
+                        if published {
+                            // The saved card/outbox owns exactly this old input.
+                            // A newer revision, even with identical text, stays put.
+                            this.persist_composer(cx);
+                            return;
+                        }
                         this.composer_draft.restoring = true;
                         let payload = &saved.payload;
                         this.attachments = payload["attachments"]
@@ -418,6 +634,9 @@ impl Conversation {
             return false;
         }
         let mut payload = state.base.as_object().cloned().unwrap_or_default();
+        // Submission metadata belongs to the recovery record, not to future
+        // composer edits after that submission has been acknowledged.
+        payload.remove("botSubmission");
         let old_files = payload.get("attachments").and_then(Value::as_array);
         let files:Vec<_>=self.attachments.iter().map(|path|{
             old_files.into_iter().flatten().find(|file|file["path"].as_str()==path.to_str()).cloned().unwrap_or_else(||json!({
@@ -508,6 +727,75 @@ mod tests {
         json!({"cwd":"/project","text":"Keep 🙂 @mcp/docs","selectionStart":5,"selectionEnd":7,
             "attachments":[{"id":"photo-id","path":"/private/photo.png","name":"photo.png","kind":"image","mimeType":"image/png","size":42,"opaque":"retain"}],
             "mcpTags":[{"token":"@mcp/docs","opaque":"keep","server":{"provider":"codex","name":"docs","scope":"user","configPath":"/private/config.toml","transport":"stdio","enabled":true}}],"future":"preserve"})
+    }
+    #[gpui::test]
+    fn bot_recovery_restores_submission_mode_and_queue_intent(cx: &mut TestAppContext) {
+        let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+        let summary = store.create("codex", "/project").unwrap();
+        let chat = cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
+        cx.run_until_parked();
+        chat.update(cx, |chat, cx| {
+            chat.configure_bot(
+                vorkspace_core::bot::Bot::default(),
+                std::env::temp_dir(),
+                Default::default(),
+                cx,
+            );
+            let mut payload = saved();
+            payload["botSubmission"] = json!({"mode":"plan","queue":true});
+            chat.install_composer_payload(&payload, cx);
+            assert!(chat.settings.plan);
+            assert!(chat.bot_ui.queue);
+            assert_eq!(chat.input.read(cx).content, "Keep 🙂 @mcp/docs");
+        });
+    }
+    #[gpui::test]
+    fn restoring_direct_submission_keeps_its_identity_until_acknowledged(cx: &mut TestAppContext) {
+        let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+        let summary = store.create("codex", "/project").unwrap();
+        let id = summary.id;
+        let mut payload = saved();
+        payload["botSubmission"] = json!({"mode":"plan", "queue":true});
+        store
+            .save_composer_recovery(
+                id,
+                vorkspace_core::store::ComposerRecovery {
+                    owner: "pending-send".into(),
+                    revision: 0,
+                    payload,
+                },
+            )
+            .unwrap();
+        let db = Arc::new(Mutex::new(store));
+        let chat = cx.new(|cx| {
+            let mut chat = Conversation::new(summary, db.clone(), cx);
+            chat.configure_bot(
+                vorkspace_core::bot::Bot::default(),
+                std::env::temp_dir(),
+                Default::default(),
+                cx,
+            );
+            chat
+        });
+        cx.run_until_parked();
+        chat.update(cx, |chat, cx| chat.resolve_composer_recovery(true, cx));
+        cx.run_until_parked();
+        chat.update(cx, |chat, cx| {
+            let record = chat
+                .pending_bot_submission(&chat.input.read(cx).content, &chat.attachments)
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.owner, "pending-send");
+            assert!(chat.settings.plan);
+            assert!(chat.bot_ui.queue);
+            // Choosing the identical saved input must not discard its ID.
+            chat.resolve_composer_recovery(false, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            locked(&db).unwrap().composer_recoveries(id).unwrap().len(),
+            1
+        );
     }
     #[gpui::test]
     fn desktop_draft_restores_text_selection_files_and_mcp_then_saves_to_same_row(

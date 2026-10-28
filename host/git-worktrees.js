@@ -151,10 +151,12 @@ export async function createHostWorktree(
     ? `refs/heads/${branch}`
     : base === "HEAD"
       ? "HEAD"
-      : refs.find(
-          (ref) =>
-            ref === `refs/heads/${base}` || ref === `refs/remotes/${base}`,
-        );
+      : refs.includes(base)
+        ? base
+        : refs.find(
+            (ref) =>
+              ref === `refs/heads/${base}` || ref === `refs/remotes/${base}`,
+          );
   if (!source || (existing && !refs.includes(source)))
     throw new Error("Choose an available base branch");
   const commit = (

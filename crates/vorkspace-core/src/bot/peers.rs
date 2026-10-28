@@ -136,6 +136,7 @@ pub fn enqueue(
         return Err("Recipient Bot's message queue is full; wait for it to finish".into());
     }
     roster.get_mut(&accepted.bot).unwrap().outbox.push(Message {
+        prepared_prompt: None,
         id,
         text: prompt,
         peer: Some(peer),

@@ -428,6 +428,9 @@ pub(crate) struct TranscriptView {
     /// botPendingTranscriptBlocks: queued messages, after the transcript.
     pending: Vec<PendingMessage>,
     saved_draft: Option<vorkspace_core::follow_up::Message>,
+    draft_edit: Option<drafts::DraftEdit>,
+    draft_editable: bool,
+    draft_transfer: Option<bool>,
     /// Pending messages just taken, including any entrance still in flight.
     taken: Vec<TakenMessage>,
     pending_entrances: HashMap<String, Instant>,
@@ -2103,6 +2106,9 @@ impl TranscriptView {
             follow: Follow::default(),
             pending: Vec::new(),
             saved_draft: None,
+            draft_edit: None,
+            draft_editable: true,
+            draft_transfer: None,
             taken: Vec::new(),
             pending_entrances: HashMap::new(),
             launches: HashMap::new(),

@@ -5,6 +5,7 @@ use vorkspace_core::bot::{Bot, Message};
 #[cfg(test)]
 #[path = "bot_tests.rs"]
 mod tests;
+type DirectSubmission = (String, String, Vec<PathBuf>, std::ops::Range<usize>, bool);
 #[derive(Default)]
 pub(super) struct ChatState {
     /// Standalone Bot chats opt into identity decoration. Channels keep None;
@@ -15,6 +16,14 @@ pub(super) struct ChatState {
     pub(super) card_versions: std::collections::HashMap<String, u64>,
     /// The next message waits for the current reply instead of steering it.
     pub(super) queue: bool,
+    /// IDs whose outbox publication succeeded, including across a cold load.
+    pub(super) accepted_drafts: std::collections::HashMap<String, Message>,
+    pub(super) draft_sending: Option<String>,
+    /// Composer input remains durable until its outbox publication succeeds.
+    pub(super) direct_sending: Option<DirectSubmission>,
+    pub(super) draft_retry: bool,
+    pub(super) draft_queue: bool,
+    pub(super) draft_error: Option<String>,
     pub(super) delivered: Option<String>,
     /// ModelPicker with `hideSettings`: the model list opens on its own.
     pub(super) models: Option<(Entity<ModelList>, Vec<Subscription>)>,
@@ -22,9 +31,12 @@ pub(super) struct ChatState {
     pub(super) setting_anchors: Vec<AnchorSlot>,
 }
 pub(crate) struct Submitted {
+    pub draft_id: Option<String>,
     pub text: String,
+    pub prepared_prompt: Option<String>,
     pub attachments: Vec<PathBuf>,
     pub queue: bool,
+    pub mode: Option<String>,
 }
 pub(crate) struct QueueChanged {
     pub id: String,
@@ -59,6 +71,154 @@ fn card_at(
 }
 
 impl Conversation {
+    pub(crate) fn bot_draft_outbox_saved(&mut self, message: &Message, cx: &mut Context<Self>) {
+        let id = &message.id;
+        if self
+            .bot_ui
+            .direct_sending
+            .as_ref()
+            .is_some_and(|pending| &pending.0 == id)
+        {
+            let (owner, text, attachments, _selection, _) =
+                self.bot_ui.direct_sending.take().unwrap();
+            let unchanged =
+                self.input.read(cx).content.as_ref() == text && self.attachments == attachments;
+            if unchanged {
+                self.input
+                    .update(cx, |input, cx| input.set_text(String::new(), cx));
+                self.attachments.clear();
+            }
+            // Publish the cleared or newer composer before deleting the only
+            // durable link between the old input and its outbox identity.
+            self.capture_composer(cx);
+            let result = self.composer_draft.flush().and_then(|()| {
+                locked(&self.store)?.clear_composer_recovery(self.summary.id, &owner)
+            });
+            if let Err(error) = result {
+                self.status = format!(
+                    "Message queued, but its composer recovery could not be cleared: {error}"
+                );
+                self.composer_draft.error = Some(self.status.clone());
+            } else {
+                self.composer_draft.forget_recovery(&owner);
+            }
+            self.bot_ui.draft_error = None;
+            cx.notify();
+        }
+        self.bot_ui
+            .accepted_drafts
+            .insert(id.clone(), message.clone());
+        if self
+            .follow_ups
+            .state
+            .draft
+            .as_ref()
+            .is_none_or(|draft| &draft.id != id)
+            && self.bot_ui.draft_sending.as_deref() != Some(id.as_str())
+        {
+            return;
+        }
+        if self.transcript.read(cx).has_saved_draft_edit(id) {
+            self.bot_ui.draft_error = Some("An earlier version was queued while this draft was being edited. Your edit is preserved.".into());
+            cx.notify();
+            return;
+        }
+        if self
+            .follow_ups
+            .state
+            .draft
+            .as_ref()
+            .is_some_and(|draft| &draft.id == id)
+            && self.needs_history_restore()
+        {
+            let message = message.clone();
+            self.defer_history_action(
+                move |this, cx| this.bot_draft_outbox_saved(&message, cx),
+                cx,
+            );
+            return;
+        }
+        if let Some(draft) = self
+            .follow_ups
+            .state
+            .draft
+            .as_ref()
+            .filter(|draft| &draft.id == id)
+        {
+            let same = draft.text == message.text
+                && draft
+                    .attachments
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .eq(message.attachments.iter().cloned());
+            if !same {
+                self.bot_ui.draft_error = Some("This draft changed after an earlier version was queued. Reopen the conversation to review both messages.".into());
+                self.transcript
+                    .update(cx, |view, cx| view.set_draft_transfer(Some(false), cx));
+                cx.notify();
+                return;
+            }
+            let mut next = self.follow_ups.state.clone();
+            next.revision += 1;
+            next.draft = None;
+            let result = locked(&self.store)
+                .and_then(|store| store.accept_follow_ups(self.summary.id, &next));
+            if let Err(error) = result {
+                self.bot_ui.draft_error = Some(format!(
+                    "The message is queued, but its draft could not be cleared: {error}. Reopen the conversation to recover it."
+                ));
+                self.transcript
+                    .update(cx, |view, cx| view.set_draft_transfer(Some(false), cx));
+                cx.notify();
+                return;
+            }
+            self.follow_ups.persisted = next.revision;
+            self.follow_ups.state = next;
+            self.transcript
+                .update(cx, |view, cx| view.set_saved_draft(None, cx));
+            self.sync_bot_pending(cx);
+            cx.emit(SessionChanged);
+        }
+        if self.bot_ui.draft_sending.as_deref() == Some(id.as_str()) {
+            self.bot_ui.draft_sending = None;
+            self.bot_ui.draft_retry = false;
+            self.bot_ui.draft_error = None;
+            self.transcript
+                .update(cx, |view, cx| view.set_draft_transfer(None, cx));
+        }
+        cx.notify();
+    }
+    pub(crate) fn bot_draft_outbox_failed(
+        &mut self,
+        id: &str,
+        error: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .bot_ui
+            .direct_sending
+            .as_ref()
+            .is_some_and(|pending| pending.0 == id)
+        {
+            if let Some(pending) = self.bot_ui.direct_sending.as_mut() {
+                pending.4 = true;
+            }
+            self.status = format!(
+                "Could not queue message: {error}. Your composer was preserved; send the same input to retry."
+            );
+            self.bot_ui.draft_error = Some(self.status.clone());
+            cx.notify();
+        }
+        if self.bot_ui.draft_sending.as_deref() == Some(id) {
+            self.bot_ui.draft_retry = true;
+            self.bot_ui.draft_error = Some(format!(
+                "Could not queue saved draft: {error}. Your draft is preserved; choose Send to retry."
+            ));
+            self.transcript
+                .update(cx, |view, cx| view.set_draft_transfer(Some(true), cx));
+            cx.notify();
+        }
+    }
     pub(crate) fn show_bot_header(&mut self, animate: bool, cx: &mut Context<Self>) {
         if self.bot_ui.header_animation != Some(animate) {
             self.bot_ui.header_animation = Some(animate);
@@ -92,11 +252,16 @@ impl Conversation {
     ) {
         self.input
             .update(cx, |input, cx| input.bot_composer(&bot.label(), cx));
+        self.completion
+            .update(cx, |completion, cx| completion.set_bot_chat(cx));
         let name = bot.label();
         let look = crate::bots::avatar::BotLookConfig::from_bot(&bot);
         self.transcript
             .update(cx, |t, _| t.bot_mode_with_look(look, &name));
         self.settings.environment = environment;
+        self.bot_ui
+            .accepted_drafts
+            .retain(|id, _| bot.outbox.iter().any(|message| &message.id == id));
         self.bot_ui.pending = bot.outbox.clone();
         self.sync_bot_pending(cx);
         self.settings.bot = Some(vorkspace_core::agent::BotContext {
@@ -117,6 +282,12 @@ impl Conversation {
             .filter(|m| {
                 (!m.internal || m.peer.is_some())
                     && (m.error.is_some() || Some(&m.id) != delivered.as_ref())
+                    && self
+                        .follow_ups
+                        .state
+                        .draft
+                        .as_ref()
+                        .is_none_or(|draft| draft.id != m.id)
             })
             .map(|m| {
                 let peer = m
@@ -222,6 +393,14 @@ impl Conversation {
         self.bot_ready()
     }
     pub(crate) fn bot_dispatch(&mut self, message: &Message, cx: &mut Context<Self>) -> bool {
+        self.bot_dispatch_with_mode(message, None, cx)
+    }
+    pub(crate) fn bot_dispatch_with_mode(
+        &mut self,
+        message: &Message,
+        mode: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.history_ready() {
             self.load(cx);
             return false;
@@ -241,7 +420,26 @@ impl Conversation {
         self.settings.bot_sent_at = message.sent_at;
         self.settings.internal_message = message.internal;
         self.settings.attachments = message.attachments.iter().map(PathBuf::from).collect();
+        let previous = (
+            self.settings.plan,
+            self.settings.operator,
+            self.settings.orchestrator,
+        );
+        self.settings.plan = mode == Some("plan");
+        self.settings.operator = mode == Some("operator");
+        self.settings.orchestrator = mode == Some("orchestrator");
+        self.planning_orchestration = self.settings.orchestrator;
+        self.orchestration_plan = None;
+        self.orchestration_error = None;
+        let previous_prepared = self.settings.prepared_prompt.take();
+        self.settings.prepared_prompt = message.prepared_prompt.clone();
         self.launch_prompt(message.text.clone(), cx);
+        self.settings.prepared_prompt = previous_prepared;
+        (
+            self.settings.plan,
+            self.settings.operator,
+            self.settings.orchestrator,
+        ) = previous;
         true
     }
     /// The user's own message joins the active turn through the provider's
@@ -272,11 +470,17 @@ impl Conversation {
         let Some(controls) = &self.controls else {
             return false;
         };
-        let prepared = self.completion.read(cx).prepare_prompt(&message.text);
+        let prepared = message
+            .prepared_prompt
+            .clone()
+            .unwrap_or_else(|| self.completion.read(cx).prepare_prompt(&message.text));
         let steer = vorkspace_core::follow_up::Message {
             id: message.id.clone(),
             text: message.text.clone(),
-            prepared_prompt: (prepared != message.text).then_some(prepared),
+            prepared_prompt: message
+                .prepared_prompt
+                .clone()
+                .or_else(|| (prepared != message.text).then_some(prepared)),
             attachments: message.attachments.iter().map(PathBuf::from).collect(),
             steer: true,
             ..Default::default()
@@ -560,6 +764,19 @@ impl Conversation {
         Ok(())
     }
     pub(super) fn render_bot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let command = if self.follow_ups.draft_selected {
+            Some(input::Command::Draft)
+        } else if self.settings.orchestrator {
+            Some(input::Command::Orchestrator)
+        } else if self.settings.plan {
+            Some(input::Command::Plan)
+        } else if self.settings.operator {
+            Some(input::Command::Operator)
+        } else {
+            None
+        };
+        self.input
+            .update(cx, |input, cx| input.selected_command(command, cx));
         let bot = self.settings.bot.as_ref().unwrap().bot.clone();
         // The fixed Bot header owns identity; the empty state only offers help.
         let body = if !self.summary.has_messages {
@@ -618,6 +835,19 @@ impl Conversation {
             )
             .child(
                 composer_column()
+                    .when_some(self.bot_ui.draft_error.clone(), |d, error| {
+                        d.child(
+                            div()
+                                .mb_1()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .bg(content(0.06))
+                                .text_size(px(12.))
+                                .text_color(content(0.75))
+                                .child(error),
+                        )
+                    })
                     .children(
                         self.bot_ui
                             .pending

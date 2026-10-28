@@ -279,7 +279,7 @@ impl Conversation {
             });
         self.follow_ups.state.draft = draft.clone();
         self.transcript
-            .update(cx, |view, cx| view.set_saved_draft(draft, cx));
+            .update(cx, |view, cx| view.set_remote_saved_draft(draft, cx));
     }
     pub(super) fn remote_send_guard(&mut self, cx: &mut Context<Self>) -> bool {
         let error = if !self.loaded {

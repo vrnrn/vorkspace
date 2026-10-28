@@ -60,6 +60,17 @@ export async function switchHostBranch(cwd, branch, remote) {
     throw new Error("Choose an available remote branch");
   if (!state.branches.includes(branch) && !remoteRef)
     throw new Error("Choose an existing local branch");
+  if (remoteRef && state.branches.includes(branch)) {
+    const { stdout: upstream } = await exec(
+      "git",
+      ["for-each-ref", "--format=%(upstream)", `refs/heads/${branch}`],
+      options(cwd),
+    );
+    if (upstream.trim() !== remoteRef)
+      throw new Error(
+        `Local branch ‘${branch}’ already exists and does not track ${remote}/${branch}. Select the local branch instead.`,
+      );
+  }
   if (state.current === branch) return state;
   const { stdout: changes } = await exec(
     "git",
@@ -76,7 +87,7 @@ export async function switchHostBranch(cwd, branch, remote) {
       ["switch", "--track", "-c", branch, remoteRef],
       options(cwd),
     );
-  else await exec("git", ["switch", branch], options(cwd));
+  else await exec("git", ["switch", "--no-guess", "--", branch], options(cwd));
   invalidateHostFileIndex(cwd);
   return hostBranches(cwd);
 }

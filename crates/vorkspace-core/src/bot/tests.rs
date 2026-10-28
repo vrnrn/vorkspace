@@ -9,6 +9,18 @@ fn named(roster: &Roster, name: &str, projects: Vec<String>) -> Bot {
 }
 
 #[test]
+fn queued_message_preserves_prepared_context_and_reads_legacy_messages() {
+    let legacy = r#"{"id":"old","text":"hello","attachments":[]}"#;
+    let mut message: Message = serde_json::from_str(legacy).unwrap();
+    assert!(message.prepared_prompt.is_none());
+    message.prepared_prompt = Some("Saved MCP context\n\nhello".into());
+    let encoded = serde_json::to_string(&message).unwrap();
+    let restored: Message = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(restored.text, "hello");
+    assert_eq!(restored.prepared_prompt, message.prepared_prompt);
+}
+
+#[test]
 fn setup_does_not_create_an_identity_until_a_nonblank_name_is_confirmed() {
     let mut roster = Roster::default();
     let mut draft = roster.draft(vec!["/project".into()]);
@@ -251,4 +263,374 @@ fn confirmed_setup_configuration_survives_reopen_until_a_session_takes_ownership
     let files = load_files(directory.path(), bot).unwrap();
     assert_eq!(files.soul.as_deref(), Some("Newer soul"));
     assert_eq!(files.memory, "Newer memory");
+}
+
+#[test]
+fn sidecar_and_roster_merge_stale_writes_without_erasing_other_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shared.db");
+    let first = Store::open_vorkspace(&path).unwrap();
+    let mut roster = Roster::default();
+    roster.bots.push(Bot {
+        id: "bot".into(),
+        name: "Bot".into(),
+        ..Default::default()
+    });
+    roster.save(&first).unwrap();
+    let second = Store::open_vorkspace(&path).unwrap();
+    let mut a = Roster::load(&first).unwrap();
+    let mut b = Roster::load(&second).unwrap();
+    first.save_setting("first-only", "preserve").unwrap();
+    second.save_setting("second-only", "preserve").unwrap();
+    a.get_mut("bot").unwrap().outbox.push(Message {
+        prepared_prompt: None,
+        id: "first".into(),
+        text: "one".into(),
+        peer: None,
+        sent_at: None,
+        internal: false,
+        error: None,
+        attachments: vec![],
+    });
+    b.get_mut("bot").unwrap().outbox.push(Message {
+        prepared_prompt: None,
+        id: "second".into(),
+        text: "two".into(),
+        peer: None,
+        sent_at: None,
+        internal: false,
+        error: None,
+        attachments: vec![],
+    });
+    a.held_messages.insert("first".into());
+    a.message_modes.insert("first".into(), "plan".into());
+    b.held_messages.insert("second".into());
+    b.message_modes.insert("second".into(), "operator".into());
+    a.save(&first).unwrap();
+    b.save(&second).unwrap();
+    assert_eq!(b.get("bot").unwrap().outbox[0].id, "second");
+    let reopened = Store::open_vorkspace(&path).unwrap();
+    assert_eq!(
+        reopened.setting("first-only").unwrap().as_deref(),
+        Some("preserve")
+    );
+    assert_eq!(
+        reopened.setting("second-only").unwrap().as_deref(),
+        Some("preserve")
+    );
+    let saved = Roster::load(&reopened).unwrap();
+    assert_eq!(
+        saved
+            .get("bot")
+            .unwrap()
+            .outbox
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "second"]
+    );
+    // A later save of the stale local view must not interpret the merged
+    // message it never observed as a deliberate deletion.
+    b.get_mut("bot").unwrap().name = "Renamed".into();
+    b.save(&second).unwrap();
+    let saved = Roster::load(&reopened).unwrap();
+    assert_eq!(saved.get("bot").unwrap().outbox.len(), 2);
+    assert!(saved.held_messages.contains("first") && saved.held_messages.contains("second"));
+    assert_eq!(
+        saved.message_modes.get("first").map(String::as_str),
+        Some("plan")
+    );
+    assert_eq!(
+        saved.message_modes.get("second").map(String::as_str),
+        Some("operator")
+    );
+    assert_eq!(saved.get("bot").unwrap().name, "Renamed");
+}
+
+fn release_process_race(gate: &Path, one: &Path, two: &Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !(one.exists() && two.exists()) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    // Release even on a failed setup so a child is never left waiting.
+    let ready = one.exists() && two.exists();
+    std::fs::write(gate, "go").unwrap();
+    assert!(
+        ready,
+        "both child processes must load before the race starts"
+    );
+}
+
+#[test]
+fn dispatch_claim_process_worker() {
+    let Some(path) = std::env::var_os("VORKSPACE_CLAIM_TEST_DB") else {
+        return;
+    };
+    let gate = std::env::var_os("VORKSPACE_CLAIM_TEST_GATE").unwrap();
+    let store = Store::open_vorkspace(Path::new(&path)).unwrap();
+    let roster = Roster::load(&store).unwrap();
+    let message = roster.get("bot").unwrap().outbox[0].clone();
+    std::fs::write(
+        std::env::var_os("VORKSPACE_CLAIM_TEST_READY").unwrap(),
+        "ready",
+    )
+    .unwrap();
+    while !Path::new(&gate).exists() {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let claimed = store.claim_bot_message("bot", &message, &new_id()).unwrap();
+    println!("CLAIM_RESULT={claimed}");
+}
+
+#[test]
+fn dispatch_claim_is_unique_across_processes_and_survives_restart() {
+    use std::process::{Command, Stdio};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shared.db");
+    let gate = dir.path().join("gate");
+    let store = Store::open_vorkspace(&path).unwrap();
+    let message = Message {
+        prepared_prompt: None,
+        id: "message".into(),
+        text: "hello".into(),
+        peer: None,
+        sent_at: None,
+        internal: false,
+        error: None,
+        attachments: vec![],
+    };
+    let mut roster = Roster::default();
+    roster.bots.push(Bot {
+        id: "bot".into(),
+        name: "Bot".into(),
+        outbox: vec![message.clone()],
+        ..Default::default()
+    });
+    roster.save(&store).unwrap();
+    let ready_one = dir.path().join("ready-one");
+    let ready_two = dir.path().join("ready-two");
+    let spawn = |ready: &Path| {
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "bot::tests::dispatch_claim_process_worker",
+                "--nocapture",
+            ])
+            .env("VORKSPACE_CLAIM_TEST_DB", &path)
+            .env("VORKSPACE_CLAIM_TEST_GATE", &gate)
+            .env("VORKSPACE_CLAIM_TEST_READY", ready)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let one = spawn(&ready_one);
+    let two = spawn(&ready_two);
+    release_process_race(&gate, &ready_one, &ready_two);
+    let results: Vec<_> = [one, two]
+        .into_iter()
+        .map(|child| child.wait_with_output().unwrap())
+        .collect();
+    for result in &results {
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+    }
+    let output = results
+        .iter()
+        .map(|result| String::from_utf8_lossy(&result.stdout).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(output.matches("CLAIM_RESULT=true").count(), 1, "{output}");
+    assert_eq!(output.matches("CLAIM_RESULT=false").count(), 1, "{output}");
+    drop(store);
+    let reopened = Store::open_vorkspace(&path).unwrap();
+    assert!(!reopened
+        .claim_bot_message("bot", &message, "new-owner")
+        .unwrap());
+    reopened
+        .release_unsubmitted_bot_claim("bot", "message", "wrong-owner")
+        .unwrap();
+    assert!(!reopened
+        .claim_bot_message("bot", &message, "new-owner")
+        .unwrap());
+}
+
+#[test]
+fn claim_rejects_changed_or_missing_outbox_and_rolls_back_on_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    for open in [
+        Store::open as fn(&Path) -> Result<Store, String>,
+        Store::open_vorkspace,
+    ] {
+        let path = dir.path().join(new_id());
+        let store = open(&path).unwrap();
+        let message = Message {
+            prepared_prompt: None,
+            id: "one".into(),
+            text: "original".into(),
+            peer: None,
+            sent_at: None,
+            internal: false,
+            error: None,
+            attachments: vec![],
+        };
+        let mut roster = Roster::default();
+        roster.bots.push(Bot {
+            id: "bot".into(),
+            name: "Bot".into(),
+            outbox: vec![message.clone()],
+            ..Default::default()
+        });
+        roster.save(&store).unwrap();
+        let mut changed = message.clone();
+        changed.text = "changed".into();
+        assert!(store.claim_bot_message("bot", &changed, "token").is_err());
+        assert!(store
+            .claim_bot_message("missing", &message, "token")
+            .is_err());
+        assert!(store.claim_bot_message("bot", &message, "token").unwrap());
+        store
+            .release_unsubmitted_bot_claim("bot", &message.id, "token")
+            .unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TRIGGER fail_claim BEFORE INSERT ON native_bot_dispatch_claims BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+        assert!(store.claim_bot_message("bot", &message, "token").is_err());
+        drop(store);
+        conn.execute_batch("DROP TRIGGER fail_claim").unwrap();
+        drop(conn);
+        let reopened = open(&path).unwrap();
+        assert!(reopened.claim_bot_message("bot", &message, "next").unwrap());
+    }
+}
+
+#[test]
+fn sidecar_write_process_worker() {
+    let Some(path) = std::env::var_os("VORKSPACE_SIDECAR_TEST_DB") else {
+        return;
+    };
+    let gate = std::env::var_os("VORKSPACE_SIDECAR_TEST_GATE").unwrap();
+    let key = std::env::var("VORKSPACE_SIDECAR_TEST_KEY").unwrap();
+    let store = Store::open_vorkspace(Path::new(&path)).unwrap();
+    std::fs::write(
+        std::env::var_os("VORKSPACE_SIDECAR_TEST_READY").unwrap(),
+        "ready",
+    )
+    .unwrap();
+    while !Path::new(&gate).exists() {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    store.save_setting(&key, "preserved").unwrap();
+}
+
+#[test]
+fn sidecar_updates_from_two_processes_survive_the_same_publication_race() {
+    use std::process::Command;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shared.db");
+    let gate = dir.path().join("gate");
+    let store = Store::open_vorkspace(&path).unwrap();
+    let ready_one = dir.path().join("ready-one");
+    let ready_two = dir.path().join("ready-two");
+    let spawn = |key, ready: &Path| {
+        Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "bot::tests::sidecar_write_process_worker"])
+            .env("VORKSPACE_SIDECAR_TEST_DB", &path)
+            .env("VORKSPACE_SIDECAR_TEST_GATE", &gate)
+            .env("VORKSPACE_SIDECAR_TEST_KEY", key)
+            .env("VORKSPACE_SIDECAR_TEST_READY", ready)
+            .spawn()
+            .unwrap()
+    };
+    let mut one = spawn("writer-one", &ready_one);
+    let mut two = spawn("writer-two", &ready_two);
+    release_process_race(&gate, &ready_one, &ready_two);
+    assert!(one.wait().unwrap().success());
+    assert!(two.wait().unwrap().success());
+    assert_eq!(
+        store.setting("writer-one").unwrap().as_deref(),
+        Some("preserved")
+    );
+    assert_eq!(
+        store.setting("writer-two").unwrap().as_deref(),
+        Some("preserved")
+    );
+}
+
+#[test]
+fn concurrent_edits_to_the_same_queued_message_are_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shared.db");
+    let first = Store::open_vorkspace(&path).unwrap();
+    let message = Message {
+        prepared_prompt: None,
+        id: "same".into(),
+        text: "original".into(),
+        peer: None,
+        sent_at: None,
+        internal: false,
+        error: None,
+        attachments: vec![],
+    };
+    let mut initial = Roster::default();
+    initial.bots.push(Bot {
+        id: "bot".into(),
+        name: "Bot".into(),
+        outbox: vec![message],
+        ..Default::default()
+    });
+    initial.save(&first).unwrap();
+    let second = Store::open_vorkspace(&path).unwrap();
+    let mut a = Roster::load(&first).unwrap();
+    let mut b = Roster::load(&second).unwrap();
+    a.get_mut("bot").unwrap().outbox[0].text = "first edit".into();
+    b.get_mut("bot").unwrap().outbox[0].text = "second edit".into();
+    a.save(&first).unwrap();
+    assert!(b.save(&second).unwrap_err().contains("another window"));
+    assert_eq!(b.get("bot").unwrap().outbox[0].text, "second edit");
+    drop(first);
+    drop(second);
+    let reopened = Store::open_vorkspace(&path).unwrap();
+    assert_eq!(
+        Roster::load(&reopened).unwrap().get("bot").unwrap().outbox[0].text,
+        "first edit"
+    );
+}
+
+#[test]
+fn roster_edits_retain_unknown_fields_in_existing_messages_and_bots() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_vorkspace(&dir.path().join("db")).unwrap();
+    let message = Message {
+        prepared_prompt: None,
+        id: "one".into(),
+        text: "original".into(),
+        peer: None,
+        sent_at: None,
+        internal: false,
+        error: None,
+        attachments: vec![],
+    };
+    let mut roster = Roster::default();
+    roster.bots.push(Bot {
+        id: "bot".into(),
+        name: "Bot".into(),
+        outbox: vec![message],
+        ..Default::default()
+    });
+    let mut raw = serde_json::to_value(&roster).unwrap();
+    raw["futureRoot"] = serde_json::json!({"opaque":1});
+    raw["bots"][0]["futureBot"] = serde_json::json!({"opaque":2});
+    raw["bots"][0]["outbox"][0]["futureMessage"] = serde_json::json!({"opaque":3});
+    store.save_setting("bot-roster", &raw.to_string()).unwrap();
+    let mut loaded = Roster::load(&store).unwrap();
+    loaded.get_mut("bot").unwrap().outbox[0].text = "edited".into();
+    loaded.save(&store).unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_str(&store.setting("bot-roster").unwrap().unwrap()).unwrap();
+    assert_eq!(saved["futureRoot"]["opaque"], 1);
+    assert_eq!(saved["bots"][0]["futureBot"]["opaque"], 2);
+    assert_eq!(saved["bots"][0]["outbox"][0]["futureMessage"]["opaque"], 3);
+    assert_eq!(saved["bots"][0]["outbox"][0]["text"], "edited");
 }

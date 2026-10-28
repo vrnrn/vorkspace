@@ -49,6 +49,7 @@ struct Choice {
 pub(crate) struct Completion {
     input: Entity<input::Input>,
     bots: Option<Vec<BotMention>>,
+    bot_chat: bool,
     store: Option<crate::runtime::Database>,
     notes: Vec<vorkspace_core::notes::Note>,
     cwd: String,
@@ -110,6 +111,7 @@ impl Completion {
         Self {
             input,
             bots,
+            bot_chat: false,
             store: None,
             notes: Vec::new(),
             cwd,
@@ -158,6 +160,13 @@ impl Completion {
         self.token = None;
         self.dismissed = None;
         self.sync(cx);
+    }
+    pub(crate) fn set_bot_chat(&mut self, cx: &mut Context<Self>) {
+        if !self.bot_chat {
+            self.bot_chat = true;
+            self.rank();
+            cx.notify();
+        }
     }
     pub(crate) fn with_store(mut self, store: crate::runtime::Database) -> Self {
         self.store = Some(store);
@@ -700,6 +709,9 @@ impl Completion {
                     "Plan and coordinate agent work",
                 ),
             ] {
+                if self.bot_chat && matches!(id, "plan" | "operator" | "orchestrator") {
+                    continue;
+                }
                 if id == "btw"
                     && matches!(
                         self.provider,
@@ -724,6 +736,14 @@ impl Completion {
                 }
             }
             for command in &self.native_commands {
+                if self.bot_chat
+                    && matches!(
+                        command.invocation.trim_start_matches('/'),
+                        "plan" | "operator" | "orchestrator"
+                    )
+                {
+                    continue;
+                }
                 if let Some(score) = composer::score(
                     &token.query,
                     &format!(
@@ -1257,6 +1277,49 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         window
+    }
+    #[gpui::test]
+    fn bot_chat_hides_session_mode_suggestions(cx: &mut TestAppContext) {
+        let window = window(cx);
+        for (query, label) in [
+            ("/pla", "Plan mode"),
+            ("/operator", "Operator"),
+            ("/orchestrator", "Orchestrator"),
+        ] {
+            window
+                .update(cx, |view, _, cx| {
+                    view.input
+                        .update(cx, |input, cx| input.set_text(query.into(), cx))
+                })
+                .unwrap();
+            cx.run_until_parked();
+            window
+                .update(cx, |view, _, _| {
+                    assert!(view.choices.iter().any(|choice| choice.label == label))
+                })
+                .unwrap();
+        }
+        window
+            .update(cx, |view, _, cx| view.set_bot_chat(cx))
+            .unwrap();
+        for (query, label) in [
+            ("/pla", "Plan mode"),
+            ("/operator", "Operator"),
+            ("/orchestrator", "Orchestrator"),
+        ] {
+            window
+                .update(cx, |view, _, cx| {
+                    view.input
+                        .update(cx, |input, cx| input.set_text(query.into(), cx))
+                })
+                .unwrap();
+            cx.run_until_parked();
+            window
+                .update(cx, |view, _, _| {
+                    assert!(!view.choices.iter().any(|choice| choice.label == label))
+                })
+                .unwrap();
+        }
     }
     #[gpui::test]
     fn slash_accept_keeps_input_focus_and_does_not_submit(cx: &mut TestAppContext) {

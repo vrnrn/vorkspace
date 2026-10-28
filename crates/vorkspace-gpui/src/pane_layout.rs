@@ -145,6 +145,135 @@ pub(crate) fn edge_from_point(x: f32, y: f32, rect: Rect) -> Edge {
 }
 
 impl PaneNode {
+    /// Largest number of session leaves intersected by any vertical line.
+    /// File panes are excluded by the caller, but still occupy layout space.
+    pub fn max_session_stack(&self, is_session: impl Fn(i64) -> bool) -> usize {
+        let mut edges: Vec<_> = self
+            .leaves()
+            .into_iter()
+            .filter(|p| is_session(p.id) && p.rect.w > 0.)
+            .flat_map(|p| [(p.rect.x, 1isize), (p.rect.x + p.rect.w, -1)])
+            .collect();
+        // At a shared boundary, close the left interval before opening the
+        // right one; touching columns do not form an extra vertical stack.
+        edges.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let mut current = 0isize;
+        let mut max = 0isize;
+        let mut index = 0;
+        while index < edges.len() {
+            let x = edges[index].0;
+            let mut change = 0;
+            while index < edges.len() && edges[index].0 - x < 0.000_001 {
+                change += edges[index].1;
+                index += 1;
+            }
+            current += change;
+            max = max.max(current);
+        }
+        max as usize
+    }
+
+    /// The width required to render each leaf at least `minimum` wide while
+    /// retaining the persisted split ratios and all leaf identities.
+    pub fn width_for_minimum(&self, minimum: f32) -> f32 {
+        self.leaves()
+            .iter()
+            .map(|p| minimum / p.rect.w.max(0.000_001))
+            .fold(0., f32::max)
+    }
+
+    /// Minimum width of the tree when horizontal shares may be adjusted.
+    pub fn minimum_width(&self, minimum: f32) -> f32 {
+        match self {
+            PaneNode::Leaf { .. } => minimum,
+            PaneNode::Split {
+                dir: SplitDir::Right,
+                children,
+                ..
+            } => children.iter().map(|c| c.minimum_width(minimum)).sum(),
+            PaneNode::Split {
+                dir: SplitDir::Down,
+                children,
+                ..
+            } => children
+                .iter()
+                .map(|c| c.minimum_width(minimum))
+                .fold(0., f32::max),
+        }
+    }
+
+    /// Preserve existing shares unless a child needs more room. Only the
+    /// horizontal axis changes; vertical split sizes and leaf order stay put.
+    pub fn fit_width(&mut self, width: f32, minimum: f32) {
+        let PaneNode::Split {
+            dir,
+            children,
+            sizes,
+        } = self
+        else {
+            return;
+        };
+        if *dir == SplitDir::Down {
+            for child in children {
+                child.fit_width(width, minimum);
+            }
+            return;
+        }
+        let required: Vec<_> = children.iter().map(|c| c.minimum_width(minimum)).collect();
+        if width <= 0. || required.iter().sum::<f32>() > width + 0.01 {
+            return;
+        }
+        let weights = normalize(sizes);
+        let mut allocated = vec![0.; children.len()];
+        let mut remaining = width;
+        let mut open: Vec<usize> = (0..children.len()).collect();
+        loop {
+            let total: f32 = open.iter().map(|i| weights[*i].max(0.)).sum();
+            let under: Vec<_> = open
+                .iter()
+                .copied()
+                .filter(|i| {
+                    let share = if total > 0. {
+                        weights[*i].max(0.) / total
+                    } else {
+                        1. / open.len() as f32
+                    };
+                    remaining * share < required[*i]
+                })
+                .collect();
+            if under.is_empty() {
+                for i in &open {
+                    let share = if total > 0. {
+                        weights[*i].max(0.) / total
+                    } else {
+                        1. / open.len() as f32
+                    };
+                    allocated[*i] = remaining * share;
+                }
+                break;
+            }
+            for i in under {
+                allocated[i] = required[i];
+                remaining -= required[i];
+                open.retain(|v| *v != i);
+            }
+            if open.is_empty() {
+                break;
+            }
+        }
+        for (child, child_width) in children.iter_mut().zip(&allocated) {
+            child.fit_width(*child_width, minimum);
+        }
+        *sizes = allocated.iter().map(|w| *w / width).collect();
+    }
+
+    pub fn height_for_minimum(&self, minimum: f32, is_session: impl Fn(i64) -> bool) -> f32 {
+        self.leaves()
+            .iter()
+            .filter(|p| is_session(p.id))
+            .map(|p| minimum / p.rect.h.max(0.000_001))
+            .fold(0., f32::max)
+    }
     pub fn leaf_ids(&self) -> Vec<i64> {
         match self {
             PaneNode::Leaf { id } => vec![*id],
@@ -298,6 +427,43 @@ impl PaneNode {
         let pair = sizes[index] + sizes[index + 1];
         let min = MIN_SIZE.min(pair / 2.);
         Some((before + sizes[index], before + min, before + pair - min))
+    }
+
+    pub fn horizontal_sash_range(
+        &self,
+        path: &[usize],
+        index: usize,
+        span: f32,
+        minimum: f32,
+    ) -> Option<(f32, f32, f32)> {
+        let PaneNode::Split {
+            dir,
+            children,
+            sizes,
+        } = self
+        else {
+            return None;
+        };
+        if let Some((first, rest)) = path.split_first() {
+            return children
+                .get(*first)?
+                .horizontal_sash_range(rest, index, span, minimum);
+        }
+        if *dir != SplitDir::Right || index + 1 >= sizes.len() || span <= 0. {
+            return None;
+        }
+        let before: f32 = sizes[..index].iter().sum();
+        let pair = sizes[index] + sizes[index + 1];
+        let left = children[index].width_for_minimum(minimum) / span;
+        let right = children[index + 1].width_for_minimum(minimum) / span;
+        if left + right > pair {
+            return None;
+        }
+        Some((
+            before + sizes[index],
+            before + left.min(pair),
+            before + pair - right.min(pair),
+        ))
     }
 
     fn sizes_mut(&mut self, path: &[usize]) -> Option<&mut Vec<f32>> {
@@ -636,6 +802,44 @@ pub(crate) fn sizes_at_boundary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minimum_width_and_stack_follow_nested_geometry_and_exclude_file_panes() {
+        let tree = leaf(1)
+            .split_pane(1, SplitDir::Right, 2)
+            .split_pane(1, SplitDir::Down, 3)
+            .split_pane(3, SplitDir::Down, -1)
+            .split_pane(2, SplitDir::Down, 4);
+        assert_eq!(tree.max_session_stack(|id| id > 0), 2);
+        assert_eq!(tree.max_session_stack(|_| true), 3);
+        assert!((tree.width_for_minimum(420.) - 840.).abs() < 0.01);
+        let four = tree
+            .split_pane(3, SplitDir::Down, 5)
+            .split_pane(5, SplitDir::Down, 6);
+        assert_eq!(four.max_session_stack(|id| id > 0), 4);
+        assert_eq!(tree.leaf_ids(), [1, 3, -1, 2, 4]);
+    }
+
+    #[test]
+    fn fitting_makes_room_without_changing_vertical_splits_or_pane_identity() {
+        let original = leaf(1)
+            .split_pane(1, SplitDir::Right, 2)
+            .split_pane(2, SplitDir::Down, 3)
+            .place_pane(4, 1, Edge::Right);
+        assert_eq!(original.minimum_width(420.), 1260.);
+        assert!(original.width_for_minimum(420.) > 1500.);
+        let mut fitted = original.clone();
+        fitted.fit_width(1500., 420.);
+        assert!(fitted.width_for_minimum(420.) <= 1500.01);
+        assert_eq!(fitted.leaf_ids(), original.leaf_ids());
+        let stacked: Vec<_> = fitted
+            .leaves()
+            .into_iter()
+            .filter(|p| p.id == 2 || p.id == 3)
+            .collect();
+        assert_eq!(stacked[0].rect.h, 0.5);
+        assert_eq!(stacked[1].rect.h, 0.5);
+    }
 
     fn ids(node: &PaneNode) -> Vec<i64> {
         node.leaf_ids()

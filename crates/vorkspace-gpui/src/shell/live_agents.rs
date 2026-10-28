@@ -219,8 +219,23 @@ impl LiveAgents {
         false
     }
 
+    fn working_count(&self) -> usize {
+        self.agents
+            .iter()
+            .filter(|agent| agent.status == Status::Working)
+            .count()
+    }
+
+    fn animation_visible(&self) -> bool {
+        if self.compact {
+            self.visible && self.window_visible && self.working_count() > 0
+        } else {
+            self.visible_has(|agent| agent.status == Status::Working)
+        }
+    }
+
     fn sync_animation(&mut self, cx: &mut Context<Self>) {
-        if !self.visible_has(|agent| agent.status == Status::Working) {
+        if !self.animation_visible() {
             self.animation = None;
         } else if self.animation.is_none() {
             self.animation = Some(cx.spawn(async move |this, cx| {
@@ -229,7 +244,7 @@ impl LiveAgents {
                     let keep = this.update(cx, |this, cx| {
                         // Revalidate admission after every await. Hiding,
                         // scrolling, completion and disposal revoke the clock.
-                        if !this.visible_has(|agent| agent.status == Status::Working) {
+                        if !this.animation_visible() {
                             this.animation = None;
                             return false;
                         }
@@ -352,7 +367,7 @@ impl LiveAgents {
     }
 
     fn present(&mut self, compact: bool, cx: &mut Context<Self>) -> bool {
-        if self.agents.is_empty() {
+        if self.agents.is_empty() || (compact && self.working_count() == 0) {
             self.hide();
             return false;
         }
@@ -565,6 +580,45 @@ impl Render for LiveAgents {
                 },
             ));
         }
+        if self.compact {
+            // The compact surface has no list prepaint callback to admit motion.
+            self.sync_timer(cx);
+            let count = self.working_count();
+            let owner = self.owner.clone();
+            return div()
+                .debug_selector(|| "sidebar-activity-card".into())
+                .w_full()
+                .px_2()
+                .pb_2()
+                .flex()
+                .justify_center()
+                .child(
+                    crate::controls::button(
+                        "compact-working",
+                        format!(
+                            "{count} working {}. Expand sidebar to choose a session",
+                            if count == 1 { "session" } else { "sessions" }
+                        ),
+                        true,
+                    )
+                    .debug_selector(|| "compact-working".into())
+                    .size(px(32.))
+                    .rounded_md()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .hover(|s| s.bg(content(0.08)))
+                    .child(crate::session_mark::spinner_dots(self.frame_ms()))
+                    .on_click(move |_, _, cx| {
+                        let _ = owner.update(cx, |shell, cx| {
+                            if !shell.workspace.project_rail_open {
+                                shell.toggle_project_rail(cx);
+                            }
+                        });
+                    }),
+                )
+                .into_any_element();
+        }
         let count = self.agents.len();
         let extra = count.saturating_sub(DEFAULT_ROWS);
         let compact = self.compact;
@@ -739,6 +793,7 @@ impl Render for LiveAgents {
                     .child(rows)
                     .children(more),
             )
+            .into_any_element()
     }
 }
 
