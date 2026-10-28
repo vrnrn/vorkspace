@@ -70,6 +70,7 @@ impl Shell {
                             })
                             .collect();
                         for id in removed {
+                            this.session_removal_epoch = this.session_removal_epoch.wrapping_add(1);
                             this.remote_marks.remove(&id);
                             this.order.retain(|existing| *existing != id);
                             if let Some(view) = this.sessions.get(&id) {
