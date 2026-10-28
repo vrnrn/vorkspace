@@ -265,19 +265,17 @@ impl Conversation {
                 // retry, while retaining the original composer as recovery.
                 if let Ok(saved) =
                     locked(&self.store).and_then(|store| store.follow_ups(self.summary.id))
-                {
-                    if saved
+                    && saved
                         .draft
                         .as_ref()
                         .is_some_and(|draft| draft.id == message.id)
-                    {
-                        self.follow_ups.persisted = saved.revision;
-                        self.follow_ups.state = saved;
-                        self.summary.has_messages = true;
-                        let draft = self.follow_ups.state.draft.clone();
-                        self.transcript
-                            .update(cx, |view, cx| view.set_saved_draft(draft, cx));
-                    }
+                {
+                    self.follow_ups.persisted = saved.revision;
+                    self.follow_ups.state = saved;
+                    self.summary.has_messages = true;
+                    let draft = self.follow_ups.state.draft.clone();
+                    self.transcript
+                        .update(cx, |view, cx| view.set_saved_draft(draft, cx));
                 }
                 self.status =
                     format!("Could not save draft: {error}. Your composer was preserved.");

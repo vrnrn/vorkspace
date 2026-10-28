@@ -1213,7 +1213,7 @@ mod tests {
         });
         let store = store.clone();
         let window = cx.add_window(move |_, cx| Notes::new(store, cx));
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let visual = VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
         (window, visual)
     }

@@ -500,7 +500,8 @@ fn four_rows_expand_to_bounded_scrolling_and_preserve_footer_and_focus(cx: &mut 
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.simulate_resize(gpui::size(px(1300.), px(900.)));
     visual.run_until_parked();
-    for compact in [false] {
+    {
+        let compact = false;
         window
             .update(visual, |shell, w, cx| {
                 shell.workspace.project_rail_open = !compact;

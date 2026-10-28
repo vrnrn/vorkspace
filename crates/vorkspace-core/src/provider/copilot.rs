@@ -99,7 +99,7 @@ fn catalog(credential: &str) -> Result<Vec<Value>, String> {
 }
 fn catalog_rows(value: &Value) -> Result<Vec<Value>, String> {
     Ok(value["data"].as_array().ok_or("Invalid Copilot catalog")?.iter().filter(|m|{
-        m["id"].as_str().is_some_and(|id|protocol::supported(id))&&m["supported_endpoints"].as_array().is_some_and(|v|v.iter().any(|s|s=="/responses"))&&m["capabilities"]["limits"]["max_context_window_tokens"].as_u64().is_some_and(|v|v>=1_000_000)&&m["capabilities"]["limits"]["max_prompt_tokens"].as_u64().is_some_and(|v|v>0&&v<=9_007_199_254_740_991)&&(m["policy"].is_null()||m["policy"]["state"]=="enabled")
+        m["id"].as_str().is_some_and(protocol::supported)&&m["supported_endpoints"].as_array().is_some_and(|v|v.iter().any(|s|s=="/responses"))&&m["capabilities"]["limits"]["max_context_window_tokens"].as_u64().is_some_and(|v|v>=1_000_000)&&m["capabilities"]["limits"]["max_prompt_tokens"].as_u64().is_some_and(|v|v>0&&v<=9_007_199_254_740_991)&&(m["policy"].is_null()||m["policy"]["state"]=="enabled")
     }).map(|m|json!({"id":m["id"],"name":format!("{} (1M)",m["name"].as_str().unwrap_or_default()),"contextWindow":m["capabilities"]["limits"]["max_prompt_tokens"],"supportedEffortLevels":m["capabilities"]["supports"]["reasoning_effort"]})).collect())
 }
 pub(crate) fn models() -> Result<Vec<Model>, String> {

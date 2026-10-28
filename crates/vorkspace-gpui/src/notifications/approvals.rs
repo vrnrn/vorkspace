@@ -69,7 +69,7 @@ pub(crate) enum Action {
     Decide {
         session_id: String,
         request_id: String,
-        decision: Decision,
+        decision: Box<Decision>,
     },
 }
 
@@ -274,7 +274,7 @@ impl Render for ApprovalNotices {
                                                     cx.emit(Action::Decide {
                                                         session_id: allow_session.clone(),
                                                         request_id: allow_request.clone(),
-                                                        decision: Decision::Allow,
+                                                        decision: Box::new(Decision::Allow),
                                                     })
                                                 })),
                                         )
@@ -298,7 +298,7 @@ impl Render for ApprovalNotices {
                                                     cx.emit(Action::Decide {
                                                         session_id: deny_session.clone(),
                                                         request_id: deny_request.clone(),
-                                                        decision: Decision::Deny,
+                                                        decision: Box::new(Decision::Deny),
                                                     })
                                                 })),
                                         ),

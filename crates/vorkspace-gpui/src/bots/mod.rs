@@ -954,6 +954,7 @@ impl Bots {
     ) {
         self.enqueue_held(id, text, attachments, internal, false, None, None, cx);
     }
+    #[allow(clippy::too_many_arguments)]
     fn enqueue_held(
         &mut self,
         id: &str,

@@ -370,7 +370,7 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
             );
             assert!(view.follow_ups.state.draft.is_none());
             assert_eq!(view.input.read(cx).content, "New unsent message");
-            assert_eq!(view.attachments, [source.clone()]);
+            assert_eq!(view.attachments.as_slice(), std::slice::from_ref(&source));
         })
         .unwrap();
 }

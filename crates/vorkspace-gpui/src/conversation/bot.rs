@@ -5,6 +5,7 @@ use vorkspace_core::bot::{Bot, Message};
 #[cfg(test)]
 #[path = "bot_tests.rs"]
 mod tests;
+type DirectSubmission = (String, String, Vec<PathBuf>, std::ops::Range<usize>, bool);
 #[derive(Default)]
 pub(super) struct ChatState {
     /// Standalone Bot chats opt into identity decoration. Channels keep None;
@@ -19,7 +20,7 @@ pub(super) struct ChatState {
     pub(super) accepted_drafts: std::collections::HashMap<String, Message>,
     pub(super) draft_sending: Option<String>,
     /// Composer input remains durable until its outbox publication succeeds.
-    pub(super) direct_sending: Option<(String, String, Vec<PathBuf>, std::ops::Range<usize>, bool)>,
+    pub(super) direct_sending: Option<DirectSubmission>,
     pub(super) draft_retry: bool,
     pub(super) draft_queue: bool,
     pub(super) draft_error: Option<String>,

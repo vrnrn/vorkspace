@@ -199,7 +199,7 @@ impl Shell {
                         && let Some(view) = this.notification_chat(id, cx)
                     {
                         view.update(cx, |view, cx| {
-                            view.decide_notification_request(request_id, decision.clone(), cx);
+                            view.decide_notification_request(request_id, (**decision).clone(), cx);
                         });
                     }
                     cx.notify();

@@ -2832,6 +2832,8 @@ impl Conversation {
                                     && self.git.as_ref().is_some_and(|git| git.detached)
                                 {
                                     format!("detached {branch}")
+                                } else if draft && self.settings.new_worktree {
+                                    crate::git_picker::base_label(branch).to_owned()
                                 } else {
                                     branch.clone()
                                 },
@@ -4255,7 +4257,25 @@ mod composer_motion_tests {
             .update(visual, |c, _, cx| {
                 c.git = Some(vorkspace_core::git::Snapshot::default());
                 c.branch = Some("main".into());
+                c.settings.worktree_base = Some("refs/remotes/origin/main".into());
                 cx.notify();
+            })
+            .unwrap();
+        window
+            .update(visual, |c, w, cx| {
+                let (_, items, _, _) =
+                    c.menu_items(ComposerMenu::CompactSettings, &mut Vec::new(), w, cx);
+                let branch = items.iter().find_map(|item| match item {
+                    MenuItem::Action(action) if action.id.as_ref() == "compact:branch" => {
+                        action.value.as_deref()
+                    }
+                    _ => None,
+                });
+                assert_eq!(branch, Some("origin/main"));
+                assert_eq!(
+                    c.settings.worktree_base.as_deref(),
+                    Some("refs/remotes/origin/main")
+                );
             })
             .unwrap();
         visual.refresh().unwrap();

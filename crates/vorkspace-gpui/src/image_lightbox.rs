@@ -570,12 +570,11 @@ impl Render for ImageLightbox {
             .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
                 if this.drawing {
                     if event.pressed_button == Some(MouseButton::Left) {
-                        if let Some(p) = this.image_point(event.position, true) {
-                            if let Some(stroke) = this.strokes.last_mut()
-                                && stroke.points.last() != Some(&p)
-                            {
-                                stroke.points.push(p);
-                            }
+                        if let Some(p) = this.image_point(event.position, true)
+                            && let Some(stroke) = this.strokes.last_mut()
+                            && stroke.points.last() != Some(&p)
+                        {
+                            stroke.points.push(p);
                         }
                         if !this
                             .image_bounds(this.displayed_view())
