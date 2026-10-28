@@ -484,6 +484,31 @@ struct FrameCache {
     used_wrapped_lines_by_hash: Vec<Arc<HashedCacheKey>>,
 }
 
+impl FrameCache {
+    fn contains_layout_range(&self, range: &Range<LineLayoutIndex>) -> bool {
+        fn valid(start: usize, end: usize, len: usize) -> bool {
+            start <= end && end <= len
+        }
+        valid(
+            range.start.lines_index,
+            range.end.lines_index,
+            self.used_lines.len(),
+        ) && valid(
+            range.start.wrapped_lines_index,
+            range.end.wrapped_lines_index,
+            self.used_wrapped_lines.len(),
+        ) && valid(
+            range.start.lines_by_hash_index,
+            range.end.lines_by_hash_index,
+            self.used_lines_by_hash.len(),
+        ) && valid(
+            range.start.wrapped_lines_by_hash_index,
+            range.end.wrapped_lines_by_hash_index,
+            self.used_wrapped_lines_by_hash.len(),
+        )
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct LineLayoutIndex {
     font_generation: usize,
@@ -530,6 +555,14 @@ impl LineLayoutCache {
         let mut current_frame = &mut *self.current_frame.write();
         let mut previous_frame = &mut *self.previous_frame.lock();
 
+        // A cached view can hold a range beyond the finalized frame, for
+        // example if prepaint is rolled back. These entries only retain shaped
+        // layouts for future cache hits; the retained scene owns its drawing.
+        // Skip the transfer as a unit when any range is stale.
+        if !previous_frame.contains_layout_range(&range) {
+            return;
+        }
+
         for key in &previous_frame.used_lines[range.start.lines_index..range.end.lines_index] {
             if let Some((key, line)) = previous_frame.lines.remove_entry(key) {
                 current_frame.lines.insert(key, line);
@@ -562,6 +595,21 @@ impl LineLayoutCache {
                 current_frame.wrapped_lines_by_hash.insert(key, line);
             }
             current_frame.used_wrapped_lines_by_hash.push(key.clone());
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn exercise_stale_layout_ranges(&self) {
+        let start = self.layout_index();
+        for field in 0..4 {
+            let mut end = start.clone();
+            match field {
+                0 => end.lines_index = usize::MAX,
+                1 => end.wrapped_lines_index = usize::MAX,
+                2 => end.lines_by_hash_index = usize::MAX,
+                _ => end.wrapped_lines_by_hash_index = usize::MAX,
+            }
+            self.reuse_layouts(start.clone()..end);
         }
     }
 
@@ -1073,6 +1121,24 @@ impl AsCacheKeyRef for CacheKeyRef<'_> {
 mod tests {
     use super::*;
     use crate::GlyphId;
+
+    #[test]
+    fn stale_layout_ranges_are_rejected_before_reuse() {
+        let frame = FrameCache::default();
+        let start = LineLayoutIndex::default();
+        assert!(frame.contains_layout_range(&(start.clone()..start.clone())));
+        for field in 0..4 {
+            let mut end = start.clone();
+            match field {
+                0 => end.lines_index = 1,
+                1 => end.wrapped_lines_index = 1,
+                2 => end.lines_by_hash_index = 1,
+                _ => end.wrapped_lines_by_hash_index = 1,
+            }
+            assert!(!frame.contains_layout_range(&(start.clone()..end.clone())));
+            assert!(!frame.contains_layout_range(&(end..start.clone())));
+        }
+    }
 
     fn glyph_at(x: f32, index: usize) -> ShapedGlyph {
         ShapedGlyph {
