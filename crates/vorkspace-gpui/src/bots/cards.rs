@@ -360,7 +360,9 @@ impl Bots {
             .collect();
         let transcript = chat.read(cx).transcript.clone();
         transcript.update(cx, |t, cx| t.set_launches(launches, cx));
-        if chat.read(cx).needs_history_restore() { return; }
+        if chat.read(cx).needs_history_restore() {
+            return;
+        }
         // Only mutable cards need a snapshot; never clone the conversation's
         // prose or tool output while refreshing a few card states.
         let cards = chat

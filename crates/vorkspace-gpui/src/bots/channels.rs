@@ -951,7 +951,11 @@ impl Bots {
                 continue;
             };
             if !view.read(cx).bot_configuration_ready() || view.read(cx).busy {
-                view.update(cx, |view, cx| { if view.needs_history_restore() { view.load(cx); } });
+                view.update(cx, |view, cx| {
+                    if view.needs_history_restore() {
+                        view.load(cx);
+                    }
+                });
                 continue;
             }
             let Some(primary) = self
@@ -961,7 +965,11 @@ impl Bots {
             else {
                 self.ensure_chat(&bot.id, cx);
                 if let Some(primary) = self.chats.get(&bot.id) {
-                    primary.update(cx, |view, cx| { if view.needs_history_restore() { view.load(cx); } });
+                    primary.update(cx, |view, cx| {
+                        if view.needs_history_restore() {
+                            view.load(cx);
+                        }
+                    });
                 }
                 continue;
             };

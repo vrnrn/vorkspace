@@ -209,7 +209,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, atomic::AtomicBool};
+    use std::sync::{atomic::AtomicBool, Arc};
 
     #[test]
     fn pages_are_ordered_and_snapshot_bound_across_edits_and_retries() {
@@ -273,19 +273,15 @@ mod tests {
 
         let other = Connection::open(&path).unwrap();
         other.execute("UPDATE bot_blocks SET block_json=json_set(block_json,'$.text','external') WHERE session_id=?1 AND seq=1", [&original]).unwrap();
-        assert!(
-            store
-                .indexed_history_page(id, Some(&cursor), 10)
-                .unwrap_err()
-                .contains("changed")
-        );
+        assert!(store
+            .indexed_history_page(id, Some(&cursor), 10)
+            .unwrap_err()
+            .contains("changed"));
         let retry = store.indexed_history_page(id, None, 10).unwrap().unwrap();
-        assert!(
-            store
-                .indexed_history_page(id, retry.before.as_ref(), 10)
-                .unwrap()
-                .is_some()
-        );
+        assert!(store
+            .indexed_history_page(id, retry.before.as_ref(), 10)
+            .unwrap()
+            .is_some());
 
         other
             .execute(
@@ -293,12 +289,10 @@ mod tests {
                 [&original],
             )
             .unwrap();
-        assert!(
-            store
-                .indexed_history_page(id, retry.before.as_ref(), 10)
-                .unwrap_err()
-                .contains("changed")
-        );
+        assert!(store
+            .indexed_history_page(id, retry.before.as_ref(), 10)
+            .unwrap_err()
+            .contains("changed"));
         other
             .execute(
                 "INSERT INTO bot_turns(session_id,seq) VALUES(?1,1)",
@@ -312,12 +306,10 @@ mod tests {
                 [&original],
             )
             .unwrap();
-        assert!(
-            store
-                .indexed_history_page(id, retry.before.as_ref(), 10)
-                .unwrap_err()
-                .contains("changed")
-        );
+        assert!(store
+            .indexed_history_page(id, retry.before.as_ref(), 10)
+            .unwrap_err()
+            .contains("changed"));
         other
             .execute(
                 "UPDATE bot_blocks SET seq=50 WHERE session_id=?1 AND seq=9999",
@@ -329,12 +321,10 @@ mod tests {
         let at = complete.begin("user");
         complete.append("new tail");
         store.write_rows(id, at, &complete.rows[at..]).unwrap();
-        assert!(
-            store
-                .indexed_history_page(id, retry.before.as_ref(), 10)
-                .unwrap_err()
-                .contains("changed")
-        );
+        assert!(store
+            .indexed_history_page(id, retry.before.as_ref(), 10)
+            .unwrap_err()
+            .contains("changed"));
         let stored = store.shared_blocks(id).unwrap();
         assert_eq!(stored.len(), 51);
         assert_eq!(stored[0]["text"], "external");
@@ -381,12 +371,10 @@ mod tests {
             .write_indexed_history_page(id, &page, 1, &[edited])
             .unwrap();
         assert!(store.write_rows(id, 0, &complete.rows[..1]).is_err());
-        assert!(
-            store
-                .write_indexed_history_page(id, &page, 0, &[])
-                .unwrap_err()
-                .contains("changed")
-        );
+        assert!(store
+            .write_indexed_history_page(id, &page, 0, &[])
+            .unwrap_err()
+            .contains("changed"));
         let page = store.indexed_history_page(id, None, 10).unwrap().unwrap();
         let older = store
             .indexed_history_page(id, page.before.as_ref(), 10)
@@ -398,29 +386,20 @@ mod tests {
             first: true,
             sent_at: None,
         };
-        assert!(
-            store
-                .write_indexed_history_page(
-                    id,
-                    &older,
-                    older.rows.len(),
-                    std::slice::from_ref(&new_row)
-                )
-                .is_err()
-        );
+        assert!(store
+            .write_indexed_history_page(
+                id,
+                &older,
+                older.rows.len(),
+                std::slice::from_ref(&new_row)
+            )
+            .is_err());
         let other = Connection::open(&path).unwrap();
         other.execute("UPDATE bot_blocks SET block_json=json_set(block_json,'$.future.external',true) WHERE session_id=?1 AND seq=1", [&original]).unwrap();
-        assert!(
-            store
-                .write_indexed_history_page(
-                    id,
-                    &page,
-                    page.rows.len(),
-                    std::slice::from_ref(&new_row)
-                )
-                .unwrap_err()
-                .contains("changed")
-        );
+        assert!(store
+            .write_indexed_history_page(id, &page, page.rows.len(), std::slice::from_ref(&new_row))
+            .unwrap_err()
+            .contains("changed"));
         let page = store.indexed_history_page(id, None, 10).unwrap().unwrap();
         store
             .write_indexed_history_page(id, &page, page.rows.len(), &[new_row])

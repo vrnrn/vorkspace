@@ -328,7 +328,9 @@ impl Shell {
         for view in views {
             if !view.read(cx).history_loaded() {
                 let id = view.read(cx).summary.id;
-                search.view.update(cx, |v, cx| v.remove_live_session(id, cx));
+                search
+                    .view
+                    .update(cx, |v, cx| v.remove_live_session(id, cx));
                 continue;
             }
             let summary = view.read(cx).summary.clone();
@@ -347,7 +349,9 @@ impl Shell {
         };
         let session = session.read(cx);
         if !session.history_loaded() {
-            search.view.update(cx, |v, cx| v.remove_live_session(id, cx));
+            search
+                .view
+                .update(cx, |v, cx| v.remove_live_session(id, cx));
             return;
         }
         let summary = session.summary.clone();

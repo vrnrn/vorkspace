@@ -206,12 +206,10 @@ fn indexed_bot_stale_older_edit_rejects_append_then_reload_allows_retry() {
     stale.append("Pending append");
     let other = Connection::open(&path).unwrap();
     other.execute("UPDATE bot_blocks SET block_json=json_set(block_json,'$.text','External edit') WHERE session_id=?1 AND seq=1", [&original]).unwrap();
-    assert!(
-        store
-            .write_rows(id, from, &stale.rows[from..])
-            .unwrap_err()
-            .contains("changed in another window")
-    );
+    assert!(store
+        .write_rows(id, from, &stale.rows[from..])
+        .unwrap_err()
+        .contains("changed in another window"));
     let mut fresh = store.load(id).unwrap();
     assert_eq!(fresh.rows[0].text, "External edit");
     let from = fresh.begin("user");
@@ -233,7 +231,7 @@ fn indexed_bot_stale_older_edit_rejects_append_then_reload_allows_retry() {
 #[test]
 fn indexed_bot_saved_and_unsaved_search_results_share_global_row_indices() {
     use crate::search::{self, Scope, Target};
-    use std::sync::{Arc, atomic::AtomicBool};
+    use std::sync::{atomic::AtomicBool, Arc};
 
     let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
     store

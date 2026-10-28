@@ -5,8 +5,8 @@ pub(super) mod blocks;
 mod bot_tables;
 mod card;
 mod edit;
-mod incremental;
 mod history_window;
+mod incremental;
 pub use history_window::{IndexedHistoryCursor, IndexedHistoryPage};
 mod ordinary;
 #[cfg(test)]

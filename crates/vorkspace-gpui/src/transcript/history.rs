@@ -82,8 +82,19 @@ impl TranscriptView {
         let origin = page.global_start;
         let turns = page.turns;
         self.replace_prepared_history(prepared, cx);
-        self.turns = turns.iter().filter_map(|(&at, info)| at.checked_sub(origin).map(|at| (at, info.clone()))).collect();
-        self.storage_history = Some(StorageHistory { store, session, origin, cursor: page.before, turns, search: None, error: None });
+        self.turns = turns
+            .iter()
+            .filter_map(|(&at, info)| at.checked_sub(origin).map(|at| (at, info.clone())))
+            .collect();
+        self.storage_history = Some(StorageHistory {
+            store,
+            session,
+            origin,
+            cursor: page.before,
+            turns,
+            search: None,
+            error: None,
+        });
         self.rebuild(0, cx);
     }
 
@@ -91,30 +102,52 @@ impl TranscriptView {
         self.storage_history.as_ref().map(|state| state.origin)
     }
     pub(crate) fn take_storage_search(&mut self) -> Option<(usize, String)> {
-        self.storage_history.as_mut().and_then(|state| state.search.take())
+        self.storage_history
+            .as_mut()
+            .and_then(|state| state.search.take())
     }
 
     pub(super) fn storage_has_older(&self) -> bool {
-        self.storage_history.as_ref().is_some_and(|state| state.cursor.is_some())
+        self.storage_history
+            .as_ref()
+            .is_some_and(|state| state.cursor.is_some())
     }
 
-    pub(crate) fn reveal_storage_search(&mut self, row: usize, query: &str, cx: &mut Context<Self>) {
-        let Some(state) = self.storage_history.as_mut() else { return; };
+    pub(crate) fn reveal_storage_search(
+        &mut self,
+        row: usize,
+        query: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.storage_history.as_mut() else {
+            return;
+        };
         if let Some(local) = row.checked_sub(state.origin) {
-            if local < self.source.len() { self.reveal_search(local, query, cx); }
-            else { state.search = Some((row, query.to_owned())); cx.emit(StorageHistoryStale); }
+            if local < self.source.len() {
+                self.reveal_search(local, query, cx);
+            } else {
+                state.search = Some((row, query.to_owned()));
+                cx.emit(StorageHistoryStale);
+            }
         } else if state.cursor.is_some() {
             state.search = Some((row, query.to_owned()));
             self.load_older_history(cx);
         }
     }
 
-    pub(crate) fn complete_storage_history(&mut self, mut history: PreparedHistory, cx: &mut Context<Self>) {
+    pub(crate) fn complete_storage_history(
+        &mut self,
+        mut history: PreparedHistory,
+        cx: &mut Context<Self>,
+    ) {
         let origin = self.storage_history.take().map_or(0, |state| state.origin);
         history.start = history.start.min(origin);
         let offset = self.list.logical_scroll_top();
         let position = HistoryPosition {
-            key: self.rows.get(offset.item_ix).map(|row| (row.key.0.saturating_add(origin), row.key.1)),
+            key: self
+                .rows
+                .get(offset.item_ix)
+                .map(|row| (row.key.0.saturating_add(origin), row.key.1)),
             offset,
             following: self.list.is_following_tail(),
         };
@@ -122,12 +155,23 @@ impl TranscriptView {
         self.restore_reading_position(position);
     }
 
-    pub(super) fn replace_rebased_history(&mut self, history: PreparedHistory, shift: usize, cx: &mut Context<Self>) {
+    pub(super) fn replace_rebased_history(
+        &mut self,
+        history: PreparedHistory,
+        shift: usize,
+        cx: &mut Context<Self>,
+    ) {
         fn set(values: HashSet<usize>, shift: usize) -> HashSet<usize> {
-            values.into_iter().map(|at| at.saturating_add(shift)).collect()
+            values
+                .into_iter()
+                .map(|at| at.saturating_add(shift))
+                .collect()
         }
         fn map<T>(values: HashMap<usize, T>, shift: usize) -> HashMap<usize, T> {
-            values.into_iter().map(|(at, value)| (at.saturating_add(shift), value)).collect()
+            values
+                .into_iter()
+                .map(|(at, value)| (at.saturating_add(shift), value))
+                .collect()
         }
         let selection = std::mem::take(&mut self.selection);
         selection.shift_source(shift);
@@ -142,10 +186,19 @@ impl TranscriptView {
         let elapsed = map(std::mem::take(&mut self.elapsed), shift);
         let seen_steps = set(std::mem::take(&mut self.seen_steps), shift);
         let step_queue = map(std::mem::take(&mut self.step_queue), shift);
-        let fold_targets = std::mem::take(&mut self.fold_targets).into_iter()
-            .map(|(at, target)| (at.saturating_add(shift), target.map(|at| at.saturating_add(shift))))
+        let fold_targets = std::mem::take(&mut self.fold_targets)
+            .into_iter()
+            .map(|(at, target)| {
+                (
+                    at.saturating_add(shift),
+                    target.map(|at| at.saturating_add(shift)),
+                )
+            })
             .collect();
-        let search = self.search_match.take().map(|(at, query)| (at.saturating_add(shift), query));
+        let search = self
+            .search_match
+            .take()
+            .map(|(at, query)| (at.saturating_add(shift), query));
         self.replace_prepared_history(history, cx);
         self.selection = selection;
         self.expanded = expanded;
@@ -306,7 +359,11 @@ impl TranscriptView {
             .hover(|s| s.text_color(content(0.8)))
             .child(if self.history_loading {
                 "Loading earlier messages…"
-            } else if self.storage_history.as_ref().is_some_and(|state| state.error.is_some()) {
+            } else if self
+                .storage_history
+                .as_ref()
+                .is_some_and(|state| state.error.is_some())
+            {
                 "Could not load earlier messages. Click to retry."
             } else {
                 "Load earlier messages"
@@ -358,9 +415,15 @@ impl TranscriptView {
     }
 
     fn load_older_storage(&mut self, cx: &mut Context<Self>) {
-        if self.history_loading { return; }
-        let Some(state) = self.storage_history.as_mut() else { return; };
-        let Some(cursor) = state.cursor.clone() else { return; };
+        if self.history_loading {
+            return;
+        }
+        let Some(state) = self.storage_history.as_mut() else {
+            return;
+        };
+        let Some(cursor) = state.cursor.clone() else {
+            return;
+        };
         state.error = None;
         let origin = state.origin;
         let store = state.store.clone();
@@ -369,7 +432,8 @@ impl TranscriptView {
         self.history_loading = true;
         self.list.pause_following_tail();
         let work = cx.background_executor().spawn(async move {
-            let page = crate::runtime::locked(&store)?.indexed_history_page(session, Some(&cursor), PAGE_TURNS)?
+            let page = crate::runtime::locked(&store)?
+                .indexed_history_page(session, Some(&cursor), PAGE_TURNS)?
                 .ok_or_else(|| "Indexed history is no longer available".to_owned())?;
             let parsers = prepare_parsers(&page.rows, 0);
             Ok::<_, String>((page, parsers))
@@ -377,27 +441,43 @@ impl TranscriptView {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                if this.highlight_epoch != epoch || this.storage_origin() != Some(origin) { return; }
+                if this.highlight_epoch != epoch || this.storage_origin() != Some(origin) {
+                    return;
+                }
                 this.history_loading = false;
                 let (page, mut parsers) = match result {
                     Ok(page) => page,
                     Err(error) => {
-                        let stale = error.contains("changed") || error.contains("no longer available");
-                        if let Some(state) = this.storage_history.as_mut() { state.error = Some(error); }
-                        if stale { cx.emit(StorageHistoryStale); }
+                        let stale =
+                            error.contains("changed") || error.contains("no longer available");
+                        if let Some(state) = this.storage_history.as_mut() {
+                            state.error = Some(error);
+                        }
+                        if stale {
+                            cx.emit(StorageHistoryStale);
+                        }
                         cx.notify();
                         return;
                     }
                 };
                 if page.global_start.checked_add(page.rows.len()) != Some(origin) {
-                    if let Some(state) = this.storage_history.as_mut() { state.error = Some("History changed; reload before retrying".into()); }
+                    if let Some(state) = this.storage_history.as_mut() {
+                        state.error = Some("History changed; reload before retrying".into());
+                    }
                     cx.emit(StorageHistoryStale);
                     cx.notify();
                     return;
                 }
                 let added = page.rows.len();
                 let offset = this.list.logical_scroll_top();
-                let position = HistoryPosition { key: this.rows.get(offset.item_ix).map(|row| (row.key.0.saturating_add(added), row.key.1)), offset, following: false };
+                let position = HistoryPosition {
+                    key: this
+                        .rows
+                        .get(offset.item_ix)
+                        .map(|row| (row.key.0.saturating_add(added), row.key.1)),
+                    offset,
+                    following: false,
+                };
                 let mut state = this.storage_history.take().unwrap();
                 state.origin = page.global_start;
                 state.cursor = page.before;
@@ -405,18 +485,39 @@ impl TranscriptView {
                 let mut rows = page.rows;
                 rows.extend(std::mem::take(&mut this.source));
                 for message in &mut this.messages {
-                    parsers.entry(message.start.saturating_add(added)).or_insert_with(|| std::mem::replace(&mut message.parser, MarkdownParser::new()));
+                    parsers
+                        .entry(message.start.saturating_add(added))
+                        .or_insert_with(|| {
+                            std::mem::replace(&mut message.parser, MarkdownParser::new())
+                        });
                 }
-                this.replace_rebased_history(PreparedHistory { rows, parsers, start: 0 }, added, cx);
-                this.turns = state.turns.iter().filter_map(|(&at, info)| at.checked_sub(state.origin).map(|at| (at, info.clone()))).collect();
+                this.replace_rebased_history(
+                    PreparedHistory {
+                        rows,
+                        parsers,
+                        start: 0,
+                    },
+                    added,
+                    cx,
+                );
+                this.turns = state
+                    .turns
+                    .iter()
+                    .filter_map(|(&at, info)| {
+                        at.checked_sub(state.origin).map(|at| (at, info.clone()))
+                    })
+                    .collect();
                 let search = state.search.take();
                 this.storage_history = Some(state);
                 this.rebuild(0, cx);
                 this.restore_reading_position(position);
-                if let Some((row, query)) = search { this.reveal_storage_search(row, &query, cx); }
+                if let Some((row, query)) = search {
+                    this.reveal_storage_search(row, &query, cx);
+                }
                 cx.notify();
             });
-        }).detach();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -597,13 +698,33 @@ mod tests {
         let id = store.create("codex", "/project").unwrap().id;
         let original = store.persisted_session_id(id).unwrap();
         let conn = rusqlite::Connection::open(&path).unwrap();
-        conn.execute_batch(include_str!("../../../vorkspace-core/tests/fixtures/bot-schema.sql")).unwrap();
-        conn.execute("INSERT INTO bot_transcripts VALUES(?1)", [&original]).unwrap();
+        conn.execute_batch(include_str!(
+            "../../../vorkspace-core/tests/fixtures/bot-schema.sql"
+        ))
+        .unwrap();
+        conn.execute("INSERT INTO bot_transcripts VALUES(?1)", [&original])
+            .unwrap();
         for i in 0..70 {
             let role = if i % 2 == 0 { "user" } else { "assistant" };
             let block = serde_json::json!({"id":format!("block-{i}"),"role":role,"text":format!("needle {i}")});
-            conn.execute("INSERT INTO bot_blocks VALUES(?1,?2,?3,?4,'',?5,0)", rusqlite::params![original, i + 1, format!("block-{i}"), block.to_string(), i % 2 == 0]).unwrap();
-            if i % 2 == 0 { conn.execute("INSERT INTO bot_turns VALUES(?1,?2)", rusqlite::params![original, i + 1]).unwrap(); }
+            conn.execute(
+                "INSERT INTO bot_blocks VALUES(?1,?2,?3,?4,'',?5,0)",
+                rusqlite::params![
+                    original,
+                    i + 1,
+                    format!("block-{i}"),
+                    block.to_string(),
+                    i % 2 == 0
+                ],
+            )
+            .unwrap();
+            if i % 2 == 0 {
+                conn.execute(
+                    "INSERT INTO bot_turns VALUES(?1,?2)",
+                    rusqlite::params![original, i + 1],
+                )
+                .unwrap();
+            }
         }
         let mut page = store.indexed_history_page(id, None, 10).unwrap().unwrap();
         assert_eq!(page.global_start, 50);
@@ -616,7 +737,10 @@ mod tests {
             assert_eq!(view.source.len(), 20);
             assert_eq!(view.storage_origin(), Some(50));
             view.list.pause_following_tail();
-            view.list.scroll_to(ListOffset { item_ix: 4, offset_in_item: px(7.) });
+            view.list.scroll_to(ListOffset {
+                item_ix: 4,
+                offset_in_item: px(7.),
+            });
             let key = view.rows[4].key;
             view.expanded.insert(2);
             view.expanded_prompts.insert(2);
@@ -626,7 +750,8 @@ mod tests {
         let _ = std::thread::spawn(move || {
             let _guard = poison.lock().unwrap();
             panic!("simulate a temporarily unavailable store");
-        }).join();
+        })
+        .join();
         view.update(cx, |view, cx| view.load_older_history(cx));
         cx.run_until_parked();
         view.update(cx, |view, _| {

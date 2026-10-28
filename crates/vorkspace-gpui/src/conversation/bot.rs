@@ -300,7 +300,8 @@ impl Conversation {
         self.transcript.read(cx).storage_origin().unwrap_or(0)
     }
     pub(crate) fn bot_row_count(&self, cx: &App) -> usize {
-        self.bot_row_origin(cx).saturating_add(self.bot_rows(cx).len())
+        self.bot_row_origin(cx)
+            .saturating_add(self.bot_rows(cx).len())
     }
     pub(crate) fn bot_patch_card(
         &mut self,

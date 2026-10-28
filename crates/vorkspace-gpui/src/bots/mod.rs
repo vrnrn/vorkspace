@@ -951,9 +951,17 @@ impl Bots {
             return;
         }
 
-        if self.roster.get(id).is_some_and(|bot| !bot.pending_reports.is_empty()) {
+        if self
+            .roster
+            .get(id)
+            .is_some_and(|bot| !bot.pending_reports.is_empty())
+        {
             if let Some(view) = self.chats.get(id) {
-                view.update(cx, |view, cx| { if view.needs_history_restore() { view.load(cx); } });
+                view.update(cx, |view, cx| {
+                    if view.needs_history_restore() {
+                        view.load(cx);
+                    }
+                });
             }
         }
         if let Some(view) = self
@@ -1046,7 +1054,10 @@ impl Bots {
             return;
         };
         if self.active.as_deref() != Some(id)
-            && self.roster.get(id).is_some_and(|bot| bot.seen_rows < view.read(cx).bot_row_origin(cx))
+            && self
+                .roster
+                .get(id)
+                .is_some_and(|bot| bot.seen_rows < view.read(cx).bot_row_origin(cx))
         {
             view.update(cx, |view, cx| view.load(cx));
             return;
