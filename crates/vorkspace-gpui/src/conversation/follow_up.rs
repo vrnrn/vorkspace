@@ -696,7 +696,7 @@ mod tests {
                         .painted_quads()
                         .into_iter()
                         .find(|quad| {
-                            (quad.corner_radii.top_left.0 / window.scale_factor() - 12.).abs() < 0.1
+                            (quad.corner_radii.top_left.0 / window.scale_factor() - 8.).abs() < 0.1
                                 && quad.bounds.size.width.0 / window.scale_factor() > 300.
                         })
                         .expect("the composer surface must be painted");

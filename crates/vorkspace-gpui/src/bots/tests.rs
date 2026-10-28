@@ -2257,7 +2257,7 @@ fn queued_messages_are_saved_before_dispatch_and_do_not_run_while_blocked(cx: &m
 }
 
 #[gpui::test]
-fn chat_composer_keeps_attach_under_the_box_and_opens_the_model_list(cx: &mut TestAppContext) {
+fn chat_composer_keeps_add_under_the_box_and_opens_the_model_list(cx: &mut TestAppContext) {
     let s = setup(cx);
     crate::clock::use_test_clock(cx);
     let handle: gpui::AnyWindowHandle = s.window.into();
@@ -2270,9 +2270,9 @@ fn chat_composer_keeps_attach_under_the_box_and_opens_the_model_list(cx: &mut Te
     visual.run_until_parked();
     let field = visual.debug_bounds("bot-composer").unwrap();
     let send = visual.debug_bounds("bot-send").unwrap();
-    let attach = visual.debug_bounds("bot-attach").unwrap();
+    let attach = visual.debug_bounds("composer-add").unwrap();
     let model = visual.debug_bounds("bot-model").unwrap();
-    // BotComposer with controls: send inside the box, attach and the model
+    // BotComposer with controls: send inside the box, `+` and the model
     // on the row beneath it, the model at its right end.
     assert!(field.contains(&send.center()));
     assert!(attach.top() >= field.bottom());
@@ -3550,4 +3550,44 @@ fn a_users_message_steers_the_running_turn_but_never_a_peer_turn(cx: &mut TestAp
         received.try_recv().is_err(),
         "a peer turn's reply must not absorb the user's message"
     );
+}
+
+#[gpui::test]
+fn a_queued_message_waits_for_the_running_turn_instead_of_steering(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let (controls, received) = mpsc::channel();
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |v, _| v.app_steerable_turn(controls));
+        m.inflight.insert(
+            s.id.clone(),
+            bot::Message {
+                id: "running".into(),
+                text: "Start the change".into(),
+                peer: None,
+                sent_at: None,
+                internal: false,
+                error: None,
+                attachments: Vec::new(),
+            },
+        );
+        m.enqueue_held(
+            &s.id,
+            "After this, run the tests".into(),
+            Vec::new(),
+            false,
+            true,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert!(
+        received.try_recv().is_err(),
+        "a queued message is never steered into the running turn"
+    );
+    s.manager.update(cx, |m, _| {
+        let outbox = &m.roster.get(&s.id).unwrap().outbox;
+        assert_eq!(outbox.len(), 1);
+        assert_eq!(outbox[0].text, "After this, run the tests");
+        assert!(m.held.contains(&outbox[0].id));
+    });
 }

@@ -702,3 +702,55 @@ fn card_refresh_from_an_older_submission_is_rejected_before_store_admission(
         .unwrap();
     drop(guard);
 }
+
+#[gpui::test]
+fn bot_plus_offers_upload_and_queue_and_queue_applies_to_one_message(cx: &mut TestAppContext) {
+    let window = chat(cx);
+    let sent = Rc::new(RefCell::new(Vec::new()));
+    let output = sent.clone();
+    let _events = window
+        .update(cx, |_, _, cx| {
+            cx.subscribe(&cx.entity(), move |_, _, event: &Submitted, _| {
+                output.borrow_mut().push((event.text.clone(), event.queue))
+            })
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("composer-add").is_some());
+    assert!(visual.debug_bounds("bot-queue-mode").is_none());
+    window
+        .update(visual, |view, window, cx| {
+            let mut events = Vec::new();
+            let (_, items, _, _) = view.menu_items(ComposerMenu::Add, &mut events, window, cx);
+            let ids: Vec<_> = items
+                .iter()
+                .filter_map(|item| match item {
+                    MenuItem::Action(action) => Some(action.id.to_string()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(ids, ["upload", "queue"]);
+            view.menu_choice("queue", cx);
+            assert!(view.bot_ui.queue);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-queue-mode").is_some());
+    window
+        .update(visual, |view, _, cx| {
+            view.send(cx);
+            assert!(!view.bot_ui.queue, "queueing applies to one message");
+            view.input
+                .update(cx, |input, cx| input.set_text("Next".into(), cx));
+            view.send(cx);
+        })
+        .unwrap();
+    assert_eq!(
+        *sent.borrow(),
+        [
+            ("Unsent draft".to_owned(), true),
+            ("Next".to_owned(), false)
+        ]
+    );
+}

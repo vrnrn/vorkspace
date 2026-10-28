@@ -1,5 +1,5 @@
 use super::*;
-use gpui::{App, EntityInputHandler};
+use gpui::App;
 use std::path::PathBuf;
 use vorkspace_core::bot::{Bot, Message};
 #[cfg(test)]
@@ -13,7 +13,8 @@ pub(super) struct ChatState {
     pub(super) header: Option<Entity<crate::bots::ChatHeader>>,
     pub(super) pending: Vec<Message>,
     pub(super) card_versions: std::collections::HashMap<String, u64>,
-    pub(super) emoji: bool,
+    /// The next message waits for the current reply instead of steering it.
+    pub(super) queue: bool,
     pub(super) delivered: Option<String>,
     /// ModelPicker with `hideSettings`: the model list opens on its own.
     pub(super) models: Option<(Entity<ModelList>, Vec<Subscription>)>,
@@ -23,6 +24,7 @@ pub(super) struct ChatState {
 pub(crate) struct Submitted {
     pub text: String,
     pub attachments: Vec<PathBuf>,
+    pub queue: bool,
 }
 pub(crate) struct QueueChanged {
     pub id: String,
@@ -1045,23 +1047,9 @@ impl Conversation {
         }
         pills
     }
-    /// Under the box: attach and emoji on the left, the model, its settings
+    /// Under the box: `+` (files and queueing) on the left, the model, its settings
     /// and the context meter on the right, the last lined up under send.
     fn bot_composer_tools(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let tool = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .role(Role::Button)
-                .aria_label(label)
-                .group(id)
-                .flex_shrink_0()
-                .size(px(26.))
-                .rounded_md()
-                .flex()
-                .items_center()
-                .justify_center()
-                .hover(|s| s.bg(content(0.08)))
-        };
         let text_control = |id: SharedString, open: bool| {
             div()
                 .id(id)
@@ -1101,51 +1089,18 @@ impl Conversation {
             .pt_1()
             .pl_1()
             .pr_1p5()
-            .child(
-                tool("bot-attach", "Attach files")
-                    .debug_selector(|| "bot-attach".into())
-                    .child(
-                        icon("bot-attach", 17.)
-                            .text_color(content(0.55))
-                            .group_hover("bot-attach", |s| s.text_color(content(1.))),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.choose_attachments(cx))),
-            )
-            .child(
-                tool("bot-emoji", "Add emoji")
-                    .when(self.bot_ui.emoji, |d| d.bg(content(0.08)))
-                    .child(
-                        icon("smile", 13.)
-                            .text_color(content(if self.bot_ui.emoji { 1. } else { 0.55 }))
-                            .group_hover("bot-emoji", |s| s.text_color(content(1.))),
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        window.focus(&this.input.focus_handle(cx), cx);
-                        window.show_character_palette();
-                    })),
-            )
-            .when(self.bot_ui.emoji, |d| {
+            .child(self.add_button(cx))
+            .when(self.bot_ui.queue, |d| {
                 d.child(
-                    div().flex().gap_1().children(
-                        ["👍", "❤️", "🙂", "🎉", "👀", "✨", "🙏", "🚀"]
-                            .into_iter()
-                            .enumerate()
-                            .map(|(ix, emoji)| {
-                                div()
-                                    .id(("bot-emoji", ix))
-                                    .text_size(px(18.))
-                                    .rounded_md()
-                                    .hover(|s| s.bg(content(0.1)))
-                                    .child(emoji)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.input.update(cx, |i, cx| {
-                                            i.replace_text_in_range(None, emoji, window, cx)
-                                        });
-                                        this.bot_ui.emoji = false;
-                                        cx.notify();
-                                    }))
-                            }),
-                    ),
+                    text_control("bot-queue-mode".into(), true)
+                        .debug_selector(|| "bot-queue-mode".into())
+                        .aria_label("Queue is on; click to send normally")
+                        .child(icon("queue-list", 14.))
+                        .child("Queue")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.bot_ui.queue = false;
+                            cx.notify();
+                        })),
                 )
             })
             .child(

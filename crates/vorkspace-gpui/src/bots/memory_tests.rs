@@ -226,8 +226,13 @@ fn memory_cli_refreshes_existing_and_new_topics_and_reopening_settings_reloads(
         .unwrap();
     visual.run_until_parked();
     save(&s, Some("ui"), &format!("{SHARED}\n"));
-    let settings = visual.debug_bounds("bot-settings").unwrap();
-    visual.simulate_click(settings.center(), Default::default());
+    // Bot settings open from the Bot's menu; there is no top-bar button.
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager
+                .update(cx, |m, cx| m.open_bot_settings(&s.id, window, cx));
+        })
+        .unwrap();
     visual.run_until_parked();
     let memory = visual.debug_bounds("bot-settings-label-Memory").unwrap();
     visual.simulate_click(memory.center(), Default::default());
