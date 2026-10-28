@@ -65,6 +65,24 @@ pub struct Store {
     shared: Option<shared::Shared>,
     project_deletions: std::collections::HashSet<String>,
 }
+fn validate_bot_claim(raw: &str, bot: &str, message: &crate::bot::Message) -> Result<(), String> {
+    let roster: crate::bot::Roster =
+        serde_json::from_str(raw).map_err(|e| format!("Cannot verify Bot outbox: {e}"))?;
+    let queued = roster
+        .get(bot)
+        .and_then(|bot| bot.outbox.iter().find(|queued| queued.id == message.id));
+    if queued
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| e.to_string())?
+        != Some(serde_json::to_value(message).map_err(|e| e.to_string())?)
+        || message.error.is_some()
+    {
+        return Err("Bot outbox changed in another window; reopen it before sending.".into());
+    }
+    Ok(())
+}
+
 impl Store {
     /// Runtime admission guard held until the project deletion publishes its result.
     pub fn begin_project_deletion(&mut self, path: &str) -> Result<(), String> {
@@ -268,6 +286,84 @@ impl Store {
             )
             .optional()
             .map_err(|e| e.to_string())
+    }
+    /// Replace one setting only if it still matches the value the caller read.
+    pub fn compare_swap_setting(
+        &self,
+        key: &str,
+        expected: Option<&str>,
+        value: &str,
+    ) -> Result<(), String> {
+        self.mark_attachment_activity();
+        if self.shared.is_some() {
+            return self.shared_compare_swap_setting(key, expected, value);
+        }
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|e| e.to_string())?;
+        use rusqlite::OptionalExtension;
+        let current: Option<String> = tx
+            .query_row(
+                "SELECT value FROM native_settings WHERE key=?1",
+                [key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if current.as_deref() != expected {
+            return Err(
+                "Setting changed in another window; your changes were preserved in this window."
+                    .into(),
+            );
+        }
+        tx.execute("INSERT INTO native_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key,value]).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+    /// Persist a dispatch claim before any provider effect. Claims are never
+    /// leased or automatically retried: a crash leaves an ambiguous outcome.
+    pub fn claim_bot_message(
+        &self,
+        bot: &str,
+        message: &crate::bot::Message,
+        token: &str,
+    ) -> Result<bool, String> {
+        if self.shared.is_some() {
+            return self.shared_claim_bot_message(bot, message, token);
+        }
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|e| e.to_string())?;
+        let roster = self
+            .setting("bot-roster")?
+            .ok_or("Bot outbox is unavailable")?;
+        validate_bot_claim(&roster, bot, message)?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS native_bot_dispatch_claims(bot_id TEXT NOT NULL,message_id TEXT NOT NULL,token TEXT NOT NULL,PRIMARY KEY(bot_id,message_id))").map_err(|e| e.to_string())?;
+        let inserted = tx
+            .execute(
+                "INSERT OR IGNORE INTO native_bot_dispatch_claims VALUES(?1,?2,?3)",
+                params![bot, message.id, token],
+            )
+            .map_err(|e| e.to_string())?
+            == 1;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(inserted)
+    }
+    /// Only call when dispatch was rejected before any provider call.
+    pub fn release_unsubmitted_bot_claim(
+        &self,
+        bot: &str,
+        message: &str,
+        token: &str,
+    ) -> Result<(), String> {
+        if !shared::has_table(&self.conn, "native_bot_dispatch_claims")? {
+            return Ok(());
+        }
+        self.conn.execute("DELETE FROM native_bot_dispatch_claims WHERE bot_id=?1 AND message_id=?2 AND token=?3", params![bot,message,token]).map_err(|e| e.to_string())?;
+        Ok(())
     }
     pub fn save_setting(&self, key: &str, value: &str) -> Result<(), String> {
         self.mark_attachment_activity();
@@ -1316,8 +1412,8 @@ mod tests {
         assert!(db
             .save_settings(&[("history", "new"), ("draft", "")])
             .is_err());
-        assert_eq!(db.setting("history").unwrap().as_deref(), Some("old"));
-        assert_eq!(db.setting("draft").unwrap().as_deref(), Some("keep"));
+        assert!(db.setting("history").is_err());
+        assert!(db.setting("draft").is_err());
         drop(db);
         std::fs::remove_dir(&sidecar).unwrap();
         std::fs::rename(&backup, &sidecar).unwrap();

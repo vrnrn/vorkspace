@@ -18,6 +18,8 @@ pub(super) struct ChatState {
     /// IDs whose outbox publication succeeded, including across a cold load.
     pub(super) accepted_drafts: std::collections::HashMap<String, Message>,
     pub(super) draft_sending: Option<String>,
+    /// Composer input remains durable until its outbox publication succeeds.
+    pub(super) direct_sending: Option<(String, String, Vec<PathBuf>, std::ops::Range<usize>, bool)>,
     pub(super) draft_retry: bool,
     pub(super) draft_queue: bool,
     pub(super) draft_error: Option<String>,
@@ -69,6 +71,33 @@ fn card_at(
 impl Conversation {
     pub(crate) fn bot_draft_outbox_saved(&mut self, message: &Message, cx: &mut Context<Self>) {
         let id = &message.id;
+        if self
+            .bot_ui
+            .direct_sending
+            .as_ref()
+            .is_some_and(|pending| &pending.0 == id)
+        {
+            let (owner, text, attachments, selection, _) =
+                self.bot_ui.direct_sending.take().unwrap();
+            if let Err(error) = locked(&self.store)
+                .and_then(|store| store.clear_composer_recovery(self.summary.id, &owner))
+            {
+                self.status = format!(
+                    "Message queued, but its composer recovery could not be cleared: {error}"
+                );
+            }
+            let unchanged = self.input.read(cx).content.as_ref() == text
+                && self.input.read(cx).selection_utf16() == selection
+                && self.attachments == attachments;
+            if unchanged {
+                self.input
+                    .update(cx, |input, cx| input.set_text(String::new(), cx));
+                self.attachments.clear();
+                self.persist_composer(cx);
+            }
+            self.bot_ui.draft_error = None;
+            cx.notify();
+        }
         self.bot_ui
             .accepted_drafts
             .insert(id.clone(), message.clone());
@@ -158,6 +187,21 @@ impl Conversation {
         error: &str,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .bot_ui
+            .direct_sending
+            .as_ref()
+            .is_some_and(|pending| pending.0 == id)
+        {
+            if let Some(pending) = self.bot_ui.direct_sending.as_mut() {
+                pending.4 = true;
+            }
+            self.status = format!(
+                "Could not queue message: {error}. Your composer was preserved; send the same input to retry."
+            );
+            self.bot_ui.draft_error = Some(self.status.clone());
+            cx.notify();
+        }
         if self.bot_ui.draft_sending.as_deref() == Some(id) {
             self.bot_ui.draft_retry = true;
             self.bot_ui.draft_error = Some(format!(

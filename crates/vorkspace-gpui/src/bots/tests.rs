@@ -3943,3 +3943,57 @@ fn a_queued_message_waits_for_the_running_turn_instead_of_steering(cx: &mut Test
         assert!(m.held.contains(&outbox[0].id));
     });
 }
+
+#[gpui::test]
+fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let id = format!("uncertain-{}", bot::new_id());
+    s.manager.update(cx, |manager, cx| {
+        manager.chats.remove(&s.id);
+        manager.enqueue_held(
+            &s.id,
+            "Possible delivery".into(),
+            vec![],
+            false,
+            false,
+            Some(id.clone()),
+            None,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let other = Store::open(&Path::new(&s.project).join("native.sqlite")).unwrap();
+    let queued = Roster::load(&other)
+        .unwrap()
+        .get(&s.id)
+        .unwrap()
+        .outbox
+        .iter()
+        .find(|message| message.id == id)
+        .unwrap()
+        .clone();
+    assert!(
+        other
+            .claim_bot_message(&s.id, &queued, "crashed-owner")
+            .unwrap()
+    );
+    drop(other);
+    s.manager.update(cx, |manager, cx| {
+        assert!(manager.claim_dispatch(&s.id, &queued, cx).is_none());
+        let message = manager
+            .roster
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .iter()
+            .find(|message| message.id == id)
+            .unwrap();
+        assert!(message.error.as_deref().unwrap().contains("uncertain"));
+    });
+    let reopened = Store::open(&Path::new(&s.project).join("native.sqlite")).unwrap();
+    assert!(
+        !reopened
+            .claim_bot_message(&s.id, &queued, "later-owner")
+            .unwrap()
+    );
+}

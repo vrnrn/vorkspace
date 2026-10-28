@@ -1040,16 +1040,43 @@ impl Conversation {
             return;
         }
         if self.settings.bot.is_some() {
-            if self.attaching || self.input.read(cx).is_composing() {
+            if self.attaching
+                || self.input.read(cx).is_composing()
+                || self
+                    .bot_ui
+                    .direct_sending
+                    .as_ref()
+                    .is_some_and(|pending| !pending.4)
+            {
                 return;
             }
-            let text = self
-                .input
-                .update(cx, |input, cx| input.take(cx))
-                .unwrap_or_default();
-            let attachments = std::mem::take(&mut self.attachments);
-            if !text.trim().is_empty() || !attachments.is_empty() {
-                let text = self.consume_mode_command(text, cx);
+            let raw = self.input.read(cx).content.to_string();
+            let attachments = self.attachments.clone();
+            if !raw.trim().is_empty() || !attachments.is_empty() {
+                // The outbox acknowledgement clears only this exact input. A
+                // failed write or process exit before admission leaves a saved
+                // composer instead of silently discarding the submission.
+                self.capture_composer(cx);
+                if let Err(error) = self.composer_draft.flush() {
+                    self.status =
+                        format!("Could not save composer: {error}. Your input was preserved.");
+                    cx.notify();
+                    return;
+                }
+                let selection = self.input.read(cx).selection_utf16();
+                if self
+                    .bot_ui
+                    .direct_sending
+                    .as_ref()
+                    .is_some_and(|(_, previous, files, _, _)| {
+                        previous != &raw || files != &attachments
+                    })
+                {
+                    self.status = "The previous message was not queued. Restore its original input and send it to retry; your current input is preserved.".into();
+                    cx.notify();
+                    return;
+                }
+                let text = self.consume_mode_command(raw.clone(), cx);
                 let mode = if self.settings.orchestrator {
                     Some("orchestrator")
                 } else if self.settings.plan {
@@ -1059,10 +1086,40 @@ impl Conversation {
                 } else {
                     None
                 };
-                // Queue applies to this message only, like a session mode.
-                let queue = std::mem::take(&mut self.bot_ui.queue);
+                let queue = self.bot_ui.queue;
+                let id = if let Some((id, _, _, _, _)) = &self.bot_ui.direct_sending {
+                    id.clone()
+                } else {
+                    let id = vorkspace_core::bot::new_id();
+                    let result = locked(&self.store).and_then(|store| {
+                        let mut saved = store
+                            .composer_draft(self.summary.id)?
+                            .ok_or("Composer was not saved")?;
+                        saved.payload["botSubmission"] =
+                            serde_json::json!({"mode": mode, "queue": queue});
+                        store.save_composer_recovery(
+                            self.summary.id,
+                            vorkspace_core::store::ComposerRecovery {
+                                owner: id.clone(),
+                                revision: saved.revision,
+                                payload: saved.payload,
+                            },
+                        )
+                    });
+                    if let Err(error) = result {
+                        self.status = format!(
+                            "Could not preserve composer before sending: {error}. Your input was preserved."
+                        );
+                        cx.notify();
+                        return;
+                    }
+                    id
+                };
+                self.bot_ui.queue = false;
+                self.bot_ui.direct_sending =
+                    Some((id.clone(), raw, attachments.clone(), selection, false));
                 cx.emit(bot::Submitted {
-                    draft_id: None,
+                    draft_id: Some(id),
                     text,
                     attachments,
                     queue,

@@ -160,14 +160,11 @@ fn current_record(state: &Writer) -> Option<vorkspace_core::store::ComposerDraft
     })
 }
 impl Conversation {
-    /// Record the exact composer revision before publishing a Bot draft. The
-    /// marker alone never consumes input: recovery also requires the draft,
-    /// its durable outbox entry, or a provider delivery receipt.
-    pub(super) fn mark_bot_draft_origin(
+    /// Flush the input so the database can compare its revision when publishing the draft.
+    pub(super) fn bot_draft_origin_revision(
         &mut self,
-        draft_id: &str,
         cx: &mut Context<Self>,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         if !self.composer_draft.ready_for_replacement() {
             return Err("The composer is still restoring".into());
         }
@@ -179,8 +176,7 @@ impl Conversation {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .revision;
-        let marker = json!({"id": draft_id, "revision": revision}).to_string();
-        locked(&self.store)?.save_setting(&format!("bot-draft-origin:{}", self.summary.id), &marker)
+        Ok(revision)
     }
 
     pub(super) fn mark_bot_draft_discarded(&self, draft_id: &str) -> Result<(), String> {
@@ -192,7 +188,7 @@ impl Conversation {
         let mut marker: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
         if marker["id"].as_str() == Some(draft_id) || marker["nextId"].as_str() == Some(draft_id) {
             marker["discarded"] = json!(true);
-            store.save_setting(&key, &marker.to_string())?;
+            store.compare_swap_setting(&key, Some(&raw), &marker.to_string())?;
         }
         Ok(())
     }
@@ -211,7 +207,7 @@ impl Conversation {
         if marker["id"].as_str() == Some(old_id) || marker["nextId"].as_str() == Some(old_id) {
             marker["id"] = json!(old_id);
             marker["nextId"] = json!(new_id);
-            store.save_setting(&key, &marker.to_string())?;
+            store.compare_swap_setting(&key, Some(&raw), &marker.to_string())?;
         }
         Ok(())
     }
@@ -344,6 +340,14 @@ impl Conversation {
             completion.restore_mcp_tags(&payload["mcpTags"], cx)
         });
         self.composer_draft.restoring = false;
+        if self.settings.bot.is_some() && payload["botSubmission"].is_object() {
+            let mode = payload["botSubmission"]["mode"].as_str();
+            self.settings.plan = mode == Some("plan");
+            self.settings.operator = mode == Some("operator");
+            self.settings.orchestrator = mode == Some("orchestrator");
+            self.bot_ui.queue = payload["botSubmission"]["queue"].as_bool().unwrap_or(false);
+            self.save_settings(cx);
+        }
     }
     fn resolve_composer_recovery(&mut self, recovered: bool, cx: &mut Context<Self>) {
         if self.composer_draft.resolving {
@@ -638,6 +642,27 @@ mod tests {
         json!({"cwd":"/project","text":"Keep 🙂 @mcp/docs","selectionStart":5,"selectionEnd":7,
             "attachments":[{"id":"photo-id","path":"/private/photo.png","name":"photo.png","kind":"image","mimeType":"image/png","size":42,"opaque":"retain"}],
             "mcpTags":[{"token":"@mcp/docs","opaque":"keep","server":{"provider":"codex","name":"docs","scope":"user","configPath":"/private/config.toml","transport":"stdio","enabled":true}}],"future":"preserve"})
+    }
+    #[gpui::test]
+    fn bot_recovery_restores_submission_mode_and_queue_intent(cx: &mut TestAppContext) {
+        let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+        let summary = store.create("codex", "/project").unwrap();
+        let chat = cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
+        cx.run_until_parked();
+        chat.update(cx, |chat, cx| {
+            chat.configure_bot(
+                vorkspace_core::bot::Bot::default(),
+                std::env::temp_dir(),
+                Default::default(),
+                cx,
+            );
+            let mut payload = saved();
+            payload["botSubmission"] = json!({"mode":"plan","queue":true});
+            chat.install_composer_payload(&payload, cx);
+            assert!(chat.settings.plan);
+            assert!(chat.bot_ui.queue);
+            assert_eq!(chat.input.read(cx).content, "Keep 🙂 @mcp/docs");
+        });
     }
     #[gpui::test]
     fn desktop_draft_restores_text_selection_files_and_mcp_then_saves_to_same_row(

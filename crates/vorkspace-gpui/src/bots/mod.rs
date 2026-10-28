@@ -145,6 +145,8 @@ pub(crate) struct Bots {
     persisted_messages: HashSet<String>,
     failed_reports: HashSet<String>,
     inflight: HashMap<String, Message>,
+    /// Claims submitted by this manager, retained until the message leaves its queue.
+    dispatch_claims: HashSet<String>,
     /// Outbox messages the user queued: they wait for the running reply
     /// instead of being steered into it.
     held: HashSet<String>,
@@ -392,6 +394,7 @@ impl Bots {
             persisted_messages,
             failed_reports: HashSet::new(),
             inflight: HashMap::new(),
+            dispatch_claims: HashSet::new(),
             held,
             card_refresh: HashMap::new(),
             session_filters,
@@ -584,6 +587,7 @@ impl Bots {
         self.roster.held_messages.retain(|id| live.contains(id));
         self.roster.message_modes.retain(|id, _| live.contains(id));
         self.held.retain(|id| live.contains(id));
+        self.dispatch_claims.retain(|id| live.contains(id));
         let roster = self.roster.clone();
         let store = self.store.clone();
         let queued = roster
@@ -1097,11 +1101,65 @@ impl Bots {
             self.steer(id, cx);
             return;
         }
+        let Some(token) = self.claim_dispatch(id, &message, cx) else {
+            return;
+        };
         let mode = self.roster.message_modes.get(&message.id).cloned();
         if view.update(cx, |v, cx| {
             v.bot_dispatch_with_mode(&message, mode.as_deref(), cx)
         }) {
+            self.dispatch_claims.insert(message.id.clone());
             self.inflight.insert(id.into(), message);
+        } else {
+            self.release_unsubmitted_claim(id, &message.id, &token, cx);
+        }
+    }
+    fn claim_dispatch(
+        &mut self,
+        bot: &str,
+        message: &Message,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        if self.dispatch_claims.contains(&message.id) {
+            return None;
+        }
+        let token = bot::new_id();
+        let result =
+            locked(&self.store).and_then(|store| store.claim_bot_message(bot, message, &token));
+        match result {
+            Ok(true) => Some(token),
+            Ok(false) => {
+                if let Some(queued) = self
+                    .roster
+                    .get_mut(bot)
+                    .and_then(|bot| bot.outbox.iter_mut().find(|item| item.id == message.id))
+                {
+                    queued.error = Some("Delivery is uncertain or another window is sending this message. Inspect the conversation before choosing Retry or Discard.".into());
+                }
+                self.configure_chat(bot, cx);
+                None
+            }
+            Err(error) => {
+                self.error = Some(format!("Could not claim Bot message: {error}"));
+                self.changed(cx);
+                None
+            }
+        }
+    }
+    fn release_unsubmitted_claim(
+        &mut self,
+        bot: &str,
+        message: &str,
+        token: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = locked(&self.store)
+            .and_then(|store| store.release_unsubmitted_bot_claim(bot, message, token))
+        {
+            self.error = Some(format!(
+                "Could not release Bot message claim: {error}. Inspect the conversation before retrying."
+            ));
+            self.changed(cx);
         }
     }
     /// A user message waiting behind a running turn steers that turn. A peer
@@ -1121,7 +1179,14 @@ impl Bots {
             return;
         };
         if let Some(view) = self.chats.get(id).cloned() {
-            view.update(cx, |v, cx| v.bot_steer(&message, cx));
+            let Some(token) = self.claim_dispatch(id, &message, cx) else {
+                return;
+            };
+            if view.update(cx, |v, cx| v.bot_steer(&message, cx)) {
+                self.dispatch_claims.insert(message.id.clone());
+            } else {
+                self.release_unsubmitted_claim(id, &message.id, &token, cx);
+            }
         }
     }
     fn steer_failed(&mut self, id: &str, message: &str, error: &str, cx: &mut Context<Self>) {

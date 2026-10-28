@@ -204,6 +204,32 @@ pub(super) fn has_table(conn: &Connection, table: &str) -> Result<bool, String> 
         |r| r.get(0),
     ))
 }
+// The sidecar is shared by independent Store instances and processes. Lock a
+// stable sibling (not the atomically replaced sidecar inode) across read/modify/
+// publish, and always start from the latest on-disk root.
+fn lock_extras(path: &Path) -> Result<std::fs::File, String> {
+    let lock = path.with_file_name(format!(
+        "{}.lock",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(lock).map_err(|e| e.to_string())?;
+    file.lock().map_err(|e| e.to_string())?;
+    Ok(file)
+}
+fn read_extras(path: &Path) -> Result<BTreeMap<String, String>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => crate::compatibility::settings(parse(&raw)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+        Err(error) => Err(error.to_string()),
+    }
+}
 fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     let temporary = path.with_extension(format!("{}.tmp", crate::bot::new_id()));
     let result = (|| {
@@ -219,7 +245,14 @@ fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<(), String>
         file.write_all(encode(value)?.as_bytes())
             .map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
-        std::fs::rename(&temporary, path).map_err(|e| e.to_string())
+        std::fs::rename(&temporary, path).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            std::fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(temporary);
@@ -537,6 +570,21 @@ impl Store {
         Ok(())
     }
     pub(super) fn shared_setting(&self, key: &str) -> Result<Option<String>, String> {
+        if key.starts_with("bot-draft-origin:")
+            && has_table(&self.conn, "native_bot_draft_origins")?
+        {
+            let value: Option<String> = sql(self
+                .conn
+                .query_row(
+                    "SELECT value FROM native_bot_draft_origins WHERE key=?1",
+                    [key],
+                    |row| row.get(0),
+                )
+                .optional())?;
+            if value.is_some() {
+                return Ok(value);
+            }
+        }
         if let Some((id, message)) = key
             .strip_prefix("bot-delivered:")
             .and_then(|v| v.split_once(':'))
@@ -551,37 +599,113 @@ impl Store {
                 }
             }
         }
-        Ok(self
-            .shared
-            .as_ref()
-            .unwrap()
-            .extras
-            .borrow()
-            .get(key)
-            .cloned())
+        let shared = self.shared.as_ref().unwrap();
+        if let Some(path) = &shared.extras_path {
+            *shared.extras.borrow_mut() = read_extras(path)?;
+        }
+        Ok(shared.extras.borrow().get(key).cloned())
+    }
+    pub(super) fn shared_claim_bot_message(
+        &self,
+        bot: &str,
+        message: &crate::bot::Message,
+        token: &str,
+    ) -> Result<bool, String> {
+        self.shared_writable()?;
+        let shared = self.shared.as_ref().unwrap();
+        // Lock ordering is sidecar then SQL; roster publication uses the same
+        // sidecar lock, so validation and claim cannot race a roster update.
+        let _lock = shared.extras_path.as_deref().map(lock_extras).transpose()?;
+        let extras = match &shared.extras_path {
+            Some(path) => read_extras(path)?,
+            None => shared.extras.borrow().clone(),
+        };
+        super::validate_bot_claim(
+            extras
+                .get("bot-roster")
+                .ok_or("Bot outbox is unavailable")?,
+            bot,
+            message,
+        )?;
+        let tx = sql(rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
+        sql(tx.execute_batch("CREATE TABLE IF NOT EXISTS native_bot_dispatch_claims(bot_id TEXT NOT NULL,message_id TEXT NOT NULL,token TEXT NOT NULL,PRIMARY KEY(bot_id,message_id))"))?;
+        let inserted = sql(tx.execute(
+            "INSERT OR IGNORE INTO native_bot_dispatch_claims VALUES(?1,?2,?3)",
+            params![bot, message.id, token],
+        ))? == 1;
+        sql(tx.commit())?;
+        Ok(inserted)
+    }
+    pub(super) fn shared_compare_swap_setting(
+        &self,
+        key: &str,
+        expected: Option<&str>,
+        value: &str,
+    ) -> Result<(), String> {
+        self.shared_writable()?;
+        if key.starts_with("bot-draft-origin:") {
+            let tx = sql(rusqlite::Transaction::new_unchecked(
+                &self.conn,
+                rusqlite::TransactionBehavior::Immediate,
+            ))?;
+            let current = self.shared_setting(key)?;
+            if current.as_deref() != expected {
+                return Err("Setting changed in another window; your changes were preserved in this window.".into());
+            }
+            sql(tx.execute_batch("CREATE TABLE IF NOT EXISTS native_bot_draft_origins(key TEXT PRIMARY KEY,value TEXT NOT NULL)"))?;
+            sql(tx.execute("INSERT INTO native_bot_draft_origins(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key,value]))?;
+            return sql(tx.commit());
+        }
+        let shared = self.shared.as_ref().unwrap();
+        let _lock = shared.extras_path.as_deref().map(lock_extras).transpose()?;
+        let mut next = match &shared.extras_path {
+            Some(path) => read_extras(path)?,
+            None => shared.extras.borrow().clone(),
+        };
+        if next.get(key).map(String::as_str) != expected {
+            return Err(
+                "Setting changed in another window; your changes were preserved in this window."
+                    .into(),
+            );
+        }
+        next.insert(key.into(), value.into());
+        if let Some(path) = &shared.extras_path {
+            atomic_json(path, &next)?;
+        }
+        *shared.extras.borrow_mut() = next;
+        Ok(())
     }
     pub(super) fn shared_save_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        if key.starts_with("bot-draft-origin:") {
+            self.shared_writable()?;
+            self.conn.execute_batch("CREATE TABLE IF NOT EXISTS native_bot_draft_origins(key TEXT PRIMARY KEY,value TEXT NOT NULL)").map_err(|e| e.to_string())?;
+            self.conn.execute("INSERT INTO native_bot_draft_origins(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key,value]).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
         self.shared_save_settings(&[(key, value)])
     }
     pub(super) fn shared_save_settings(&self, values: &[(&str, &str)]) -> Result<(), String> {
         self.mark_attachment_activity();
         self.shared_writable()?;
         let shared = self.shared.as_ref().unwrap();
-        if values.iter().all(|(key, value)| {
-            shared
-                .extras
-                .borrow()
-                .get(*key)
-                .is_some_and(|old| old == value)
-        }) {
-            return Ok(());
-        }
-        let mut next = shared.extras.borrow().clone();
+        let _lock = shared.extras_path.as_deref().map(lock_extras).transpose()?;
+        let mut next = match &shared.extras_path {
+            Some(path) => read_extras(path)?,
+            None => shared.extras.borrow().clone(),
+        };
+        let changed = values
+            .iter()
+            .any(|(key, value)| next.get(*key).is_none_or(|old| old != value));
         for (key, value) in values {
             next.insert((*key).into(), (*value).into());
         }
-        if let Some(path) = &shared.extras_path {
-            atomic_json(path, &next)?;
+        if changed {
+            if let Some(path) = &shared.extras_path {
+                atomic_json(path, &next)?;
+            }
         }
         *shared.extras.borrow_mut() = next;
         Ok(())
@@ -1461,10 +1585,11 @@ impl Store {
         &self,
         prefix: &str,
     ) -> Result<Vec<(i64, String)>, String> {
-        Ok(self
-            .shared
-            .as_ref()
-            .unwrap()
+        let shared = self.shared.as_ref().unwrap();
+        if let Some(path) = &shared.extras_path {
+            *shared.extras.borrow_mut() = read_extras(path)?;
+        }
+        Ok(shared
             .extras
             .borrow()
             .iter()
@@ -1630,11 +1755,16 @@ impl Store {
             "inbox-ask",
             "automation",
             "composer",
+            "bot-draft-origin",
             "edit-recovery",
         ]
         .map(|prefix| format!("{prefix}:{id}"));
         let delivered = format!("bot-delivered:{id}:");
-        let mut next = shared.extras.borrow().clone();
+        let _lock = shared.extras_path.as_deref().map(lock_extras).transpose()?;
+        let mut next = match &shared.extras_path {
+            Some(path) => read_extras(path)?,
+            None => shared.extras.borrow().clone(),
+        };
         let before = next.len();
         next.retain(|key, _| !exact.contains(key) && !key.starts_with(&delivered));
         if next.len() == before {
@@ -1679,6 +1809,7 @@ impl Store {
             ("ordinary_detached_leads", "session_id"),
             ("composer_drafts", "session_id"),
             ("composer_draft_recoveries", "session_id"),
+            ("native_follow_up_metadata", "session_id"),
             ("in_flight_sessions", "session_id"),
             ("orchestration_workers", "session_id"),
             ("orchestration_sidebar", "lead_id"),
@@ -1690,6 +1821,12 @@ impl Store {
                     [&original],
                 ))?;
             }
+        }
+        if has_table(&self.conn, "native_bot_draft_origins")? {
+            sql(self.conn.execute(
+                "DELETE FROM native_bot_draft_origins WHERE key=?1",
+                [format!("bot-draft-origin:{id}")],
+            ))?;
         }
         sql(self
             .conn
@@ -1839,6 +1976,27 @@ impl Store {
             result
         }
     }
+    // SQL owns the queue revision with the queue and draft blocks. The sidecar
+    // remains a read-only fallback for databases written by older versions.
+    fn shared_follow_up_metadata(&self, id: i64) -> Result<crate::follow_up::State, String> {
+        if has_table(&self.conn, "native_follow_up_metadata")? {
+            let raw: Option<String> = sql(self
+                .conn
+                .query_row(
+                    "SELECT state_json FROM native_follow_up_metadata WHERE session_id=?1",
+                    [self.persisted_session_id(id)?],
+                    |row| row.get(0),
+                )
+                .optional())?;
+            if let Some(raw) = raw {
+                return parse(&raw);
+            }
+        }
+        self.shared_setting(&format!("follow-up:{id}"))?
+            .map(|raw| parse(&raw))
+            .transpose()
+            .map(|state| state.unwrap_or_default())
+    }
     pub(crate) fn shared_follow_ups(&self, id: i64) -> Result<crate::follow_up::State, String> {
         let fields = format!(
             "{},{}",
@@ -1850,11 +2008,7 @@ impl Store {
             [self.persisted_session_id(id)?],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
         ))?;
-        let mut state: crate::follow_up::State = self
-            .shared_setting(&format!("follow-up:{id}"))?
-            .map(|raw| parse(&raw))
-            .transpose()?
-            .unwrap_or_default();
+        let mut state = self.shared_follow_up_metadata(id)?;
         self.shared
             .as_ref()
             .unwrap()
@@ -1877,31 +2031,51 @@ impl Store {
         id: i64,
         state: &crate::follow_up::State,
     ) -> Result<(), String> {
-        self.shared_write_follow_ups(id, state, false)
+        self.shared_write_follow_ups(id, state, false, None)
     }
     pub(crate) fn shared_accept_follow_ups(
         &self,
         id: i64,
         state: &crate::follow_up::State,
     ) -> Result<(), String> {
-        self.shared_write_follow_ups(id, state, true)
+        self.shared_write_follow_ups(id, state, true, None)
+    }
+    pub(crate) fn shared_accept_bot_draft(
+        &self,
+        id: i64,
+        state: &crate::follow_up::State,
+        revision: u64,
+        draft_id: &str,
+    ) -> Result<(), String> {
+        self.shared_write_follow_ups(id, state, true, Some((revision, draft_id)))
     }
     fn shared_write_follow_ups(
         &self,
         id: i64,
         state: &crate::follow_up::State,
         strict: bool,
+        origin: Option<(u64, &str)>,
     ) -> Result<(), String> {
         self.shared_writable()?;
         let tx = sql(rusqlite::Transaction::new_unchecked(
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         ))?;
-        let previous: crate::follow_up::State = self
-            .shared_setting(&format!("follow-up:{id}"))?
-            .map(|raw| parse(&raw))
-            .transpose()?
-            .unwrap_or_default();
+        if let Some((revision, draft_id)) = origin {
+            let current = self.composer_draft(id)?;
+            if current.as_ref().map_or(0, |draft| draft.revision) != revision
+                || state
+                    .draft
+                    .as_ref()
+                    .is_none_or(|draft| draft.id != draft_id)
+            {
+                return Err("Composer changed in another window; your input was preserved".into());
+            }
+            sql(tx.execute_batch("CREATE TABLE IF NOT EXISTS native_bot_draft_origins(key TEXT PRIMARY KEY,value TEXT NOT NULL)"))?;
+            let marker = json!({"id": draft_id, "revision": revision}).to_string();
+            sql(tx.execute("INSERT INTO native_bot_draft_origins(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("bot-draft-origin:{id}"), marker]))?;
+        }
+        let previous = self.shared_follow_up_metadata(id)?;
         if strict && previous.revision >= state.revision {
             return Err("The message queue changed before this prompt could be saved. Reopen it before sending; saved messages were preserved.".into());
         }
@@ -1974,6 +2148,8 @@ impl Store {
             blocks.insert(at, value);
         }
         self.shared_store_blocks(id, &blocks)?;
+        sql(tx.execute_batch("CREATE TABLE IF NOT EXISTS native_follow_up_metadata(session_id TEXT PRIMARY KEY, state_json TEXT NOT NULL)"))?;
+        sql(tx.execute("INSERT INTO native_follow_up_metadata(session_id,state_json) VALUES(?1,?2) ON CONFLICT(session_id) DO UPDATE SET state_json=excluded.state_json", params![self.persisted_session_id(id)?, encode(state)?]))?;
         sql(tx.commit())?;
         self.shared
             .as_ref()
@@ -1987,7 +2163,7 @@ impl Store {
             .queues
             .borrow_mut()
             .insert(id, encode(&messages)?);
-        self.shared_save_setting(&format!("follow-up:{id}"), &encode(state)?)
+        Ok(())
     }
 }
 

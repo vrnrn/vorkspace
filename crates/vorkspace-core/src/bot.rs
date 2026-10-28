@@ -275,16 +275,225 @@ pub struct Roster {
     /// without discarding deliberate native edits or resurrecting deletions.
     #[serde(skip_serializing_if = "Option::is_none")]
     desktop_source: Option<Vec<Bot>>,
+    /// Shared by local snapshots so queued saves compare with the last successful publication.
+    #[serde(skip)]
+    storage_baseline: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
+// Three-way reconciliation applies only this snapshot's changes to the latest
+// durable roster. Identified arrays allow independent Bots and messages to be
+// edited concurrently; ambiguous edits are rejected rather than overwritten.
+fn merge_roster_value(
+    base: Option<&serde_json::Value>,
+    local: Option<&serde_json::Value>,
+    remote: Option<&serde_json::Value>,
+    field: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    use serde_json::Value;
+    if local == base {
+        return Ok(remote.cloned());
+    }
+    if remote == base || local == remote {
+        return Ok(local.cloned());
+    }
+    if let (Some(Value::Object(base)), Some(Value::Object(local)), Some(Value::Object(remote))) =
+        (base, local, remote)
+    {
+        let mut result = remote.clone();
+        let keys: std::collections::BTreeSet<_> = base
+            .keys()
+            .chain(local.keys())
+            .chain(remote.keys())
+            .collect();
+        for key in keys {
+            match merge_roster_value(base.get(key), local.get(key), remote.get(key), key)? {
+                Some(value) => {
+                    result.insert(key.clone(), value);
+                }
+                None => {
+                    result.remove(key);
+                }
+            }
+        }
+        return Ok(Some(Value::Object(result)));
+    }
+    if field == "held_messages" {
+        let read = |value: Option<&Value>| -> Result<std::collections::BTreeSet<String>, String> {
+            match value {
+                None => Ok(Default::default()),
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .map(|item| {
+                        item.as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| "Invalid held Bot message identity".into())
+                    })
+                    .collect(),
+                _ => Err("Invalid held Bot messages".into()),
+            }
+        };
+        let b = read(base)?;
+        let l = read(local)?;
+        let r = read(remote)?;
+        let ids: std::collections::BTreeSet<_> = b
+            .union(&l)
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .union(&r)
+            .cloned()
+            .collect();
+        let merged: Vec<Value> = ids
+            .into_iter()
+            .filter(|id| {
+                if l.contains(id) == b.contains(id) {
+                    r.contains(id)
+                } else {
+                    l.contains(id)
+                }
+            })
+            .map(Value::String)
+            .collect();
+        return Ok((!merged.is_empty()).then_some(Value::Array(merged)));
+    }
+    if field == "message_modes" && base.is_none() {
+        let empty = Value::Object(Default::default());
+        return merge_roster_value(Some(&empty), local, remote, "modes");
+    }
+    if matches!(field, "bots" | "outbox") {
+        if let (Some(Value::Array(base)), Some(Value::Array(local)), Some(Value::Array(remote))) =
+            (base, local, remote)
+        {
+            let ids = |items: &[Value]| -> Result<Vec<String>, String> {
+                let mut seen = HashSet::new();
+                items
+                    .iter()
+                    .map(|item| {
+                        let id = item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .ok_or("Invalid Bot roster identity")?;
+                        if !seen.insert(id.to_owned()) {
+                            return Err("Duplicate Bot roster identity".into());
+                        }
+                        Ok(id.to_owned())
+                    })
+                    .collect()
+            };
+            let base_ids = ids(base)?;
+            let local_ids = ids(local)?;
+            let remote_ids = ids(remote)?;
+            let common: HashSet<_> = base_ids
+                .iter()
+                .filter(|id| local_ids.contains(id) && remote_ids.contains(id))
+                .collect();
+            let order = |ids: &[String]| {
+                ids.iter()
+                    .filter(|id| common.contains(id))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            let base_order = order(&base_ids);
+            let local_order = order(&local_ids);
+            let remote_order = order(&remote_ids);
+            if local_order != base_order
+                && remote_order != base_order
+                && local_order != remote_order
+            {
+                return Err("Bot roster order changed in another window; your changes were preserved in this window.".into());
+            }
+            let mut ordered = if local_order != base_order {
+                local_ids.clone()
+            } else {
+                remote_ids.clone()
+            };
+            for id in local_ids.iter().chain(remote_ids.iter()) {
+                if !ordered.contains(id) {
+                    ordered.push(id.clone());
+                }
+            }
+            let find = |items: &[Value], id: &str| {
+                items
+                    .iter()
+                    .position(|item| item["id"].as_str() == Some(id))
+            };
+            let mut result = Vec::new();
+            for id in ordered {
+                let b = find(base, &id).map(|i| &base[i]);
+                let l = find(local, &id).map(|i| &local[i]);
+                let r = find(remote, &id).map(|i| &remote[i]);
+                if let Some(value) = merge_roster_value(b, l, r, &id)? {
+                    result.push(value);
+                }
+            }
+            return Ok(Some(Value::Array(result)));
+        }
+    }
+    Err(format!("Bot roster field {field} changed in another window; your changes were preserved in this window."))
+}
+
+// Apply understood changes back onto the original JSON, retaining fields
+// written by newer or other clients which the native model does not understand.
+fn overlay_roster_value(
+    old: Option<&serde_json::Value>,
+    new: &serde_json::Value,
+    raw: Option<&serde_json::Value>,
+    field: &str,
+) -> serde_json::Value {
+    use serde_json::Value;
+    if old == Some(new) {
+        return raw.cloned().unwrap_or_else(|| new.clone());
+    }
+    if let (Some(Value::Object(old)), Value::Object(new)) = (old, new) {
+        let mut result = raw.and_then(Value::as_object).cloned().unwrap_or_default();
+        for key in old.keys().filter(|key| !new.contains_key(*key)) {
+            result.remove(key);
+        }
+        for (key, value) in new {
+            result.insert(
+                key.clone(),
+                overlay_roster_value(old.get(key), value, raw.and_then(|raw| raw.get(key)), key),
+            );
+        }
+        return Value::Object(result);
+    }
+    if matches!(field, "bots" | "outbox") {
+        if let (Some(Value::Array(old)), Value::Array(new)) = (old, new) {
+            let raw = raw.and_then(Value::as_array);
+            return Value::Array(
+                new.iter()
+                    .map(|item| {
+                        let id = item.get("id").and_then(Value::as_str);
+                        let previous = old
+                            .iter()
+                            .find(|value| value.get("id").and_then(Value::as_str) == id);
+                        let original = raw.and_then(|values| {
+                            values
+                                .iter()
+                                .find(|value| value.get("id").and_then(Value::as_str) == id)
+                        });
+                        overlay_roster_value(previous, item, original, "item")
+                    })
+                    .collect(),
+            );
+        }
+    }
+    new.clone()
+}
+
 impl Roster {
     pub fn load(store: &Store) -> Result<Self, String> {
-        let mut roster: Self = store
-            .setting("bot-roster")?
+        let raw = store.setting("bot-roster")?;
+        let mut roster: Self = raw
+            .as_ref()
             .map(|text| {
-                serde_json::from_str(&text).map_err(|e| format!("Cannot read Bot roster: {e}"))
+                serde_json::from_str(text).map_err(|e| format!("Cannot read Bot roster: {e}"))
             })
             .transpose()?
             .unwrap_or_default();
+        if raw.is_some() {
+            *roster.storage_baseline.lock().map_err(|e| e.to_string())? =
+                Some(serde_json::to_string(&roster).map_err(|e| e.to_string())?);
+        }
         if store.uses_vorkspace_schema() {
             if let Some(preferences) = store.desktop_preferences() {
                 roster.reconcile_desktop(store, preferences)?;
@@ -302,10 +511,45 @@ impl Roster {
         Ok(roster)
     }
     pub fn save(&self, store: &Store) -> Result<(), String> {
-        store.save_setting(
-            "bot-roster",
-            &serde_json::to_string(self).map_err(|e| e.to_string())?,
-        )
+        let value = serde_json::to_string(self).map_err(|e| e.to_string())?;
+        let mut baseline = self.storage_baseline.lock().map_err(|e| e.to_string())?;
+        let empty = serde_json::to_value(Roster::default()).map_err(|e| e.to_string())?;
+        let base: serde_json::Value = baseline
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|e| e.to_string())?
+            .unwrap_or(empty.clone());
+        let local: serde_json::Value = serde_json::from_str(&value).map_err(|e| e.to_string())?;
+        for _ in 0..8 {
+            let current = store.setting("bot-roster")?;
+            let raw: serde_json::Value = current
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .map_err(|e| e.to_string())?
+                .unwrap_or(empty.clone());
+            let remote: serde_json::Value = if current.is_some() {
+                let parsed: Roster = serde_json::from_value(raw.clone())
+                    .map_err(|e| format!("Cannot read Bot roster: {e}"))?;
+                serde_json::to_value(parsed).map_err(|e| e.to_string())?
+            } else {
+                empty.clone()
+            };
+            let merged = merge_roster_value(Some(&base), Some(&local), Some(&remote), "roster")?
+                .ok_or("Cannot remove the Bot roster")?;
+            let merged = overlay_roster_value(Some(&remote), &merged, Some(&raw), "roster");
+            let merged = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
+            match store.compare_swap_setting("bot-roster", current.as_deref(), &merged) {
+                Ok(()) => {
+                    *baseline = Some(value);
+                    return Ok(());
+                }
+                Err(error) if error.contains("another window") => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err("Bot roster is being changed in another window; your changes were preserved in this window.".into())
     }
     /// Prepare an unsaved identity without changing the roster or its storage.
     pub fn draft(&self, projects: Vec<String>) -> Bot {

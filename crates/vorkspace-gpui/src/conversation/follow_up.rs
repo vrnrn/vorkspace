@@ -241,20 +241,23 @@ impl Conversation {
         // Bot drafts are accepted before clearing the composer. An attachment
         // copy or storage failure must leave the user's input untouched.
         if self.settings.bot.is_some() {
-            if let Err(error) = self.mark_bot_draft_origin(&message.id, cx) {
-                self.status =
-                    format!("Could not save draft: {error}. Your composer was preserved.");
-                self.bot_ui.draft_error = Some(self.status.clone());
-                cx.notify();
-                return;
-            }
+            let origin_revision = match self.bot_draft_origin_revision(cx) {
+                Ok(revision) => revision,
+                Err(error) => {
+                    self.status =
+                        format!("Could not save draft: {error}. Your composer was preserved.");
+                    self.bot_ui.draft_error = Some(self.status.clone());
+                    cx.notify();
+                    return;
+                }
+            };
             let mut next = self.follow_ups.state.clone();
             next.revision += 1;
             next.draft = Some(message.clone());
             let result = (|| {
                 let store = locked(&self.store)?;
                 next.retain_attachments(self.summary.id, store.data_dir())?;
-                store.accept_follow_ups(self.summary.id, &next)
+                store.accept_bot_draft(self.summary.id, &next, origin_revision, &message.id)
             })();
             if let Err(error) = result {
                 // A shared-store root publication can fail after its database

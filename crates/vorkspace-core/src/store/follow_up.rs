@@ -2,6 +2,49 @@
 use super::Store;
 use crate::follow_up::State;
 impl Store {
+    /// Publish a Bot draft and its exact composer origin in the same transaction.
+    pub fn accept_bot_draft(
+        &self,
+        session: i64,
+        state: &State,
+        revision: u64,
+        draft_id: &str,
+    ) -> Result<(), String> {
+        if self.uses_vorkspace_schema() && session >= 0 {
+            return self.shared_accept_bot_draft(session, state, revision, draft_id);
+        }
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|e| e.to_string())?;
+        let current = self.composer_draft(session)?;
+        if current.as_ref().map_or(0, |draft| draft.revision) != revision
+            || state
+                .draft
+                .as_ref()
+                .is_none_or(|draft| draft.id != draft_id)
+        {
+            return Err("Composer changed in another window; your input was preserved".into());
+        }
+        let key = format!("follow-up:{session}");
+        let previous = self
+            .setting(&key)?
+            .map(|raw| serde_json::from_str::<State>(&raw).map_err(|e| e.to_string()))
+            .transpose()?;
+        if previous.is_some_and(|previous| previous.revision >= state.revision) {
+            return Err("The message queue changed before this prompt could be saved. Reopen it before sending; saved messages were preserved.".into());
+        }
+        self.save_setting(
+            &key,
+            &serde_json::to_string(state).map_err(|e| e.to_string())?,
+        )?;
+        self.save_setting(
+            &format!("bot-draft-origin:{session}"),
+            &serde_json::json!({"id":draft_id,"revision":revision}).to_string(),
+        )?;
+        tx.commit().map_err(|e| e.to_string())
+    }
     /// Synchronous external admission must prove that this complete queue was
     /// written. Async stale completions may skip; accepted prompts may not.
     pub fn accept_follow_ups(&self, session: i64, state: &State) -> Result<(), String> {
@@ -36,6 +79,61 @@ mod tests {
     use super::*;
     use crate::follow_up::Message;
     use std::path::Path;
+    #[test]
+    fn bot_draft_origin_queue_and_revision_commit_together() {
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.db");
+        let first = Store::open_vorkspace(&path).unwrap();
+        let id = first.create("codex", "/project").unwrap().id;
+        let second = Store::open_vorkspace(&path).unwrap();
+        let payload = json!({"cwd":"/project","text":"original","selectionStart":0,"selectionEnd":0,"attachments":[],"mcpTags":[]});
+        first.save_composer_draft(id, 0, &payload).unwrap();
+        let mut state = first.follow_ups(id).unwrap();
+        state.revision += 1;
+        state.draft = Some(Message {
+            id: "draft-one".into(),
+            text: "original".into(),
+            ..Default::default()
+        });
+        first.accept_bot_draft(id, &state, 1, "draft-one").unwrap();
+        let key = format!("bot-draft-origin:{id}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&second.setting(&key).unwrap().unwrap())
+                .unwrap()["id"],
+            "draft-one"
+        );
+        let mut changed = payload.clone();
+        changed["text"] = json!("other input");
+        second.save_composer_draft(id, 1, &changed).unwrap();
+        let mut next = first.follow_ups(id).unwrap();
+        next.revision += 1;
+        next.draft = Some(Message {
+            id: "draft-two".into(),
+            text: "stale".into(),
+            ..Default::default()
+        });
+        assert!(first.accept_bot_draft(id, &next, 1, "draft-two").is_err());
+        assert_eq!(first.follow_ups(id).unwrap().draft.unwrap().id, "draft-one");
+        first.conn.execute_batch("CREATE TRIGGER fail_origin BEFORE UPDATE ON native_bot_draft_origins BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+        assert!(first.accept_bot_draft(id, &next, 2, "draft-two").is_err());
+        drop(first);
+        drop(second);
+        let reopened = Store::open_vorkspace(&path).unwrap();
+        assert_eq!(
+            reopened.composer_draft(id).unwrap().unwrap().payload["text"],
+            "other input"
+        );
+        assert_eq!(
+            reopened.follow_ups(id).unwrap().draft.unwrap().id,
+            "draft-one"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&reopened.setting(&key).unwrap().unwrap())
+                .unwrap()["id"],
+            "draft-one"
+        );
+    }
     #[test]
     fn strict_admission_rejects_another_connections_newer_queue() {
         for open in [

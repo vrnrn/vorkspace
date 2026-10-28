@@ -1633,14 +1633,14 @@ fn failed_sidecar_removal_reports_committed_deletion_and_can_finish_cleanup() {
     std::fs::rename(&sidecar, &backup).unwrap();
     std::fs::create_dir(&sidecar).unwrap();
     let error = store.delete(child).unwrap_err();
-    assert!(
-        error.contains("Conversation was deleted, but its settings"),
-        "{error}"
-    );
-    assert!(store.bot_session(child).unwrap().is_none());
-    assert!(store.setting(&key).unwrap().is_some());
+    // A broken sidecar makes ownership unavailable; do not delete based on a
+    // stale cached view. The original session and settings remain recoverable.
+    assert!(error.contains("directory"), "{error}");
+    assert!(store.setting(&key).is_err());
     std::fs::remove_dir(&sidecar).unwrap();
     std::fs::rename(&backup, &sidecar).unwrap();
+    assert!(store.bot_session(child).unwrap().is_some());
+    assert!(store.setting(&key).unwrap().is_some());
     store.delete(child).unwrap();
     assert!(store.setting(&key).unwrap().is_none());
     drop(store);
