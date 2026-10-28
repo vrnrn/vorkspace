@@ -1346,7 +1346,7 @@ impl Bots {
                 this.roster.hidden_sessions.push(session);
                 if let Some(m)=this.roster.get_mut(&target){m.habit_sessions.push(session);}
                 this.save(cx);
-                let message=Message{peer:None,sent_at:Some(vorkspace_core::time::now_ms()),id:bot::new_id(),text:format!("[Scheduled habit: {}]\n{}\n\nDo this scheduled work independently. Return a concise report; if nothing requires attention, reply exactly NOTHING_TO_REPORT. Any session you start belongs to this habit. Do not change the habit unless asked.",habit.name,habit.instructions),internal:true,error:None,attachments:Vec::new()};
+                let message=Message{peer:None,sent_at:Some(vorkspace_core::time::now_ms()),id:bot::new_id(),text:format!("[Scheduled habit: {}]\n{}\n\nDo this scheduled work independently. Return a concise report; if nothing requires attention, reply exactly NOTHING_TO_REPORT. Any session you start belongs to this habit. Do not change the habit unless asked.",habit.name,habit.instructions),prepared_prompt:None,internal:true,error:None,attachments:Vec::new()};
                 view.update(cx,|v,cx|v.bot_dispatch(&message,cx));
             }}this.changed(cx);
         });}).detach();
@@ -1369,6 +1369,7 @@ impl Bots {
         }) {
             let view = self.running[&session].view.clone();
             let message = Message {
+                prepared_prompt: None,
                 peer: None,
                 id: bot::new_id(),
                 text,

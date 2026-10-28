@@ -250,6 +250,9 @@ pub type Work = (Vec<Document>, Vec<Launch>);
 pub struct Message {
     pub id: String,
     pub text: String,
+    /// Saved transport context, kept separate from the visible message text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer: Option<peers::Peer>,
     #[serde(default)]

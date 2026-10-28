@@ -343,6 +343,7 @@ fn switching_from_peer_to_channel_keeps_the_autonomous_budget(cx: &mut TestAppCo
     let s = setup(cx);
     s.manager.update(cx, |m, cx| {
         let mut sent = Message {
+            prepared_prompt: None,
             peer: Some(bot::peers::Peer {
                 from: "peer".into(),
                 hop: 4,
@@ -447,6 +448,7 @@ fn cold_peer_recovery_loads_inactive_recipients_and_pauses_submitted_work(cx: &m
             ]);
             if human_head {
                 m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                    prepared_prompt: None,
                     id: "cold-human".into(),
                     text: "Already queued human work".into(),
                     peer: None,
@@ -589,6 +591,7 @@ fn usage_resume_preserves_uncertain_peer_requests_until_explicit_retry(cx: &mut 
             message.peer.clone(),
         );
         m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+            prepared_prompt: None,
             id: "human-queued".into(),
             text: "Queued human follow-up".into(),
             error: Some("Usage limit".into()),
@@ -1628,11 +1631,38 @@ fn setup(cx: &mut TestAppContext) -> Setup {
 }
 
 #[gpui::test]
+fn image_draft_owner_lookup_covers_bot_and_channel_views(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let chat = s
+        .manager
+        .read_with(cx, |manager, _| manager.chats[&s.id].clone());
+    s.manager.read_with(cx, |manager, cx| {
+        assert_eq!(
+            manager.conversation_for_session(s.session, cx),
+            Some(chat.clone())
+        );
+        assert!(manager.conversation_for_session(-1, cx).is_none());
+    });
+    s.manager.update(cx, |manager, cx| {
+        manager.chats.remove(&s.id);
+        manager
+            .channels
+            .views
+            .insert(("channel".into(), s.id.clone()), chat.clone());
+        assert_eq!(
+            manager.conversation_for_session(s.session, cx),
+            Some(chat.clone())
+        );
+    });
+}
+
+#[gpui::test]
 fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &mut TestAppContext) {
     let s = setup(cx);
     let draft = vorkspace_core::follow_up::Message {
         id: format!("draft-{}", bot::new_id()),
         text: "Send this once".into(),
+        prepared_prompt: Some("Saved MCP context\n\nSend this once".into()),
         attachments: vec![PathBuf::from("/tmp/saved-attachment.txt")],
         ..Default::default()
     };
@@ -1654,6 +1684,7 @@ fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &m
                 true,
                 Some(draft.id.clone()),
                 None,
+                draft.prepared_prompt.clone(),
                 cx,
             );
         }
@@ -1670,6 +1701,7 @@ fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &m
         .collect();
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].text, draft.text);
+    assert_eq!(queued[0].prepared_prompt, draft.prepared_prompt);
     assert_eq!(queued[0].attachments, ["/tmp/saved-attachment.txt"]);
     assert!(roster.held_messages.contains(&draft.id));
     assert_eq!(
@@ -1724,6 +1756,7 @@ fn failed_outbox_write_preserves_saved_draft_and_retry_steers_only_once(cx: &mut
         manager.inflight.insert(
             s.id.clone(),
             bot::Message {
+                prepared_prompt: None,
                 id: "already-running".into(),
                 text: "running".into(),
                 peer: None,
@@ -1741,6 +1774,7 @@ fn failed_outbox_write_preserves_saved_draft_and_retry_steers_only_once(cx: &mut
             cx.emit(crate::conversation::BotSubmitted {
                 draft_id: Some(draft.id.clone()),
                 text: draft.text.clone(),
+                prepared_prompt: None,
                 attachments: Vec::new(),
                 queue: false,
                 mode: None,
@@ -2562,6 +2596,7 @@ fn queued_messages_are_saved_before_dispatch_and_do_not_run_while_blocked(cx: &m
     cx.update(|cx| {
         s.manager.update(cx, |m, cx| {
             m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                prepared_prompt: None,
                 peer: None,
                 sent_at: None,
                 id: message.clone(),
@@ -3805,6 +3840,7 @@ fn a_users_message_steers_the_running_turn_but_never_a_peer_turn(cx: &mut TestAp
     let s = setup(cx);
     let (controls, received) = mpsc::channel();
     let turn = |id: &str, peer| bot::Message {
+        prepared_prompt: None,
         id: id.into(),
         text: "Start the change".into(),
         peer,
@@ -3893,6 +3929,7 @@ fn a_queued_message_waits_for_the_running_turn_instead_of_steering(cx: &mut Test
         m.inflight.insert(
             s.id.clone(),
             bot::Message {
+                prepared_prompt: None,
                 id: "running".into(),
                 text: "Start the change".into(),
                 peer: None,
@@ -3908,6 +3945,7 @@ fn a_queued_message_waits_for_the_running_turn_instead_of_steering(cx: &mut Test
             Vec::new(),
             false,
             true,
+            None,
             None,
             None,
             cx,
@@ -3957,6 +3995,7 @@ fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAp
             false,
             false,
             Some(id.clone()),
+            None,
             None,
             cx,
         );

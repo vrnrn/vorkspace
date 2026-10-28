@@ -5,6 +5,7 @@ use vorkspace_core::{bot::peers::Peer, store::Store};
 
 fn message(id: &str, text: &str, internal: bool) -> Message {
     Message {
+        prepared_prompt: None,
         id: id.into(),
         text: text.into(),
         internal,
@@ -17,6 +18,7 @@ fn message(id: &str, text: &str, internal: bool) -> Message {
 
 fn peer_message() -> Message {
     Message {
+        prepared_prompt: None,
         peer: Some(Peer {
             from: "merlin".into(),
             hop: 1,
@@ -306,6 +308,7 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
                     event.text.clone(),
                     event.attachments.clone(),
                     event.queue,
+                    event.prepared_prompt.clone(),
                 ));
             });
             let saved = view.follow_ups.state.draft.as_ref().unwrap();
@@ -318,6 +321,12 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
                     .0,
                 [255, 59, 48, 255]
             );
+            view.follow_ups
+                .state
+                .draft
+                .as_mut()
+                .unwrap()
+                .prepared_prompt = Some("Saved MCP context\n\nEdited message".into());
             view.input.update(cx, |input, cx| {
                 input.set_text("New unsent message".into(), cx)
             });
@@ -340,6 +349,10 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
         [255, 59, 48, 255]
     );
     assert!(first.3);
+    assert_eq!(
+        first.4.as_deref(),
+        Some("Saved MCP context\n\nEdited message")
+    );
     window
         .update(cx, |view, _, cx| {
             view.bot_draft_outbox_failed(first.0.as_ref().unwrap(), "disk full", cx);
@@ -354,6 +367,7 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
         .update(cx, |view, _, cx| {
             view.bot_draft_outbox_saved(
                 &Message {
+                    prepared_prompt: first.4.clone(),
                     id: first.0.clone().unwrap(),
                     text: first.1.clone(),
                     attachments: first
@@ -857,6 +871,7 @@ fn only_the_users_own_message_steers_a_running_bot_turn(cx: &mut TestAppContext)
             view.busy = true;
             view.controls = Some(controls);
             let user = Message {
+                prepared_prompt: Some("Saved MCP context\n\nUse the other approach".into()),
                 attachments: vec!["/tmp/plan.png".into()],
                 ..message("user", "Use the other approach", false)
             };
@@ -885,6 +900,10 @@ fn only_the_users_own_message_steers_a_running_bot_turn(cx: &mut TestAppContext)
     };
     assert_eq!(steer.id, "user");
     assert_eq!(steer.text, "Use the other approach");
+    assert_eq!(
+        steer.prepared_prompt.as_deref(),
+        Some("Saved MCP context\n\nUse the other approach")
+    );
     assert_eq!(steer.attachments, [PathBuf::from("/tmp/plan.png")]);
     assert!(matches!(received.try_recv().unwrap().decision, Decision::Steer(m) if m.id == "next"));
     assert!(received.try_recv().is_err());
@@ -1402,6 +1421,7 @@ fn reopened_direct_submission_reuses_identity_and_intent_after_outbox_publicatio
     cx.run_until_parked();
     let original = sent.borrow()[0].clone();
     let queued = Message {
+        prepared_prompt: None,
         id: original.0.clone(),
         text: original.1.clone(),
         attachments: vec![image.to_string_lossy().into_owned()],

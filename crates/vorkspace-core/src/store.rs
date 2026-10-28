@@ -1672,6 +1672,7 @@ mod tests {
             .unwrap()
             .outbox
             .push(crate::bot::Message {
+                prepared_prompt: None,
                 peer: None,
                 id: "queued".into(),
                 text: "Tomorrow".into(),

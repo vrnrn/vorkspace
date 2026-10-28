@@ -33,6 +33,7 @@ pub(super) struct ChatState {
 pub(crate) struct Submitted {
     pub draft_id: Option<String>,
     pub text: String,
+    pub prepared_prompt: Option<String>,
     pub attachments: Vec<PathBuf>,
     pub queue: bool,
     pub mode: Option<String>,
@@ -428,7 +429,10 @@ impl Conversation {
         self.planning_orchestration = self.settings.orchestrator;
         self.orchestration_plan = None;
         self.orchestration_error = None;
+        let previous_prepared = self.settings.prepared_prompt.take();
+        self.settings.prepared_prompt = message.prepared_prompt.clone();
         self.launch_prompt(message.text.clone(), cx);
+        self.settings.prepared_prompt = previous_prepared;
         (
             self.settings.plan,
             self.settings.operator,
@@ -464,11 +468,17 @@ impl Conversation {
         let Some(controls) = &self.controls else {
             return false;
         };
-        let prepared = self.completion.read(cx).prepare_prompt(&message.text);
+        let prepared = message
+            .prepared_prompt
+            .clone()
+            .unwrap_or_else(|| self.completion.read(cx).prepare_prompt(&message.text));
         let steer = vorkspace_core::follow_up::Message {
             id: message.id.clone(),
             text: message.text.clone(),
-            prepared_prompt: (prepared != message.text).then_some(prepared),
+            prepared_prompt: message
+                .prepared_prompt
+                .clone()
+                .or_else(|| (prepared != message.text).then_some(prepared)),
             attachments: message.attachments.iter().map(PathBuf::from).collect(),
             steer: true,
             ..Default::default()

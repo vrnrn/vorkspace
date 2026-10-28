@@ -7936,9 +7936,13 @@ impl Render for Shell {
                     if let Some((old, _)) = this.image_lightbox.take() {
                         old.update(cx, |view, _| view.cancel());
                     }
-                    let owner = open
-                        .draft_session
-                        .and_then(|id| this.sessions.get(&id).cloned());
+                    let owner = open.draft_session.and_then(|id| {
+                        this.sessions.get(&id).cloned().or_else(|| {
+                            this.bots
+                                .as_ref()
+                                .and_then(|bots| bots.read(cx).conversation_for_session(id, cx))
+                        })
+                    });
                     let view = cx.new(|cx| {
                         crate::image_lightbox::ImageLightbox::new(open.clone(), owner, window, cx)
                     });

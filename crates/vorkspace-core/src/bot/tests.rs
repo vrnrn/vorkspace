@@ -9,6 +9,18 @@ fn named(roster: &Roster, name: &str, projects: Vec<String>) -> Bot {
 }
 
 #[test]
+fn queued_message_preserves_prepared_context_and_reads_legacy_messages() {
+    let legacy = r#"{"id":"old","text":"hello","attachments":[]}"#;
+    let mut message: Message = serde_json::from_str(legacy).unwrap();
+    assert!(message.prepared_prompt.is_none());
+    message.prepared_prompt = Some("Saved MCP context\n\nhello".into());
+    let encoded = serde_json::to_string(&message).unwrap();
+    let restored: Message = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(restored.text, "hello");
+    assert_eq!(restored.prepared_prompt, message.prepared_prompt);
+}
+
+#[test]
 fn setup_does_not_create_an_identity_until_a_nonblank_name_is_confirmed() {
     let mut roster = Roster::default();
     let mut draft = roster.draft(vec!["/project".into()]);
@@ -271,6 +283,7 @@ fn sidecar_and_roster_merge_stale_writes_without_erasing_other_settings() {
     first.save_setting("first-only", "preserve").unwrap();
     second.save_setting("second-only", "preserve").unwrap();
     a.get_mut("bot").unwrap().outbox.push(Message {
+        prepared_prompt: None,
         id: "first".into(),
         text: "one".into(),
         peer: None,
@@ -280,6 +293,7 @@ fn sidecar_and_roster_merge_stale_writes_without_erasing_other_settings() {
         attachments: vec![],
     });
     b.get_mut("bot").unwrap().outbox.push(Message {
+        prepared_prompt: None,
         id: "second".into(),
         text: "two".into(),
         peer: None,
@@ -376,6 +390,7 @@ fn dispatch_claim_is_unique_across_processes_and_survives_restart() {
     let gate = dir.path().join("gate");
     let store = Store::open_vorkspace(&path).unwrap();
     let message = Message {
+        prepared_prompt: None,
         id: "message".into(),
         text: "hello".into(),
         peer: None,
@@ -452,6 +467,7 @@ fn claim_rejects_changed_or_missing_outbox_and_rolls_back_on_failure() {
         let path = dir.path().join(new_id());
         let store = open(&path).unwrap();
         let message = Message {
+            prepared_prompt: None,
             id: "one".into(),
             text: "original".into(),
             peer: None,
@@ -548,6 +564,7 @@ fn concurrent_edits_to_the_same_queued_message_are_rejected() {
     let path = dir.path().join("shared.db");
     let first = Store::open_vorkspace(&path).unwrap();
     let message = Message {
+        prepared_prompt: None,
         id: "same".into(),
         text: "original".into(),
         peer: None,
@@ -586,6 +603,7 @@ fn roster_edits_retain_unknown_fields_in_existing_messages_and_bots() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open_vorkspace(&dir.path().join("db")).unwrap();
     let message = Message {
+        prepared_prompt: None,
         id: "one".into(),
         text: "original".into(),
         peer: None,

@@ -1011,6 +1011,7 @@ impl Bots {
                 .starts
                 .insert(delivery.id.clone(), view.read(cx).bot_rows(cx).len());
             let message = Message {
+                prepared_prompt: None,
                 peer: None,
                 id: delivery.id.clone(),
                 text: prompt,

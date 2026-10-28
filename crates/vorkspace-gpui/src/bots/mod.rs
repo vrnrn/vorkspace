@@ -158,6 +158,17 @@ impl EventEmitter<Changed> for Bots {}
 impl EventEmitter<TabOpened> for Bots {}
 impl EventEmitter<ShowDetails> for Bots {}
 impl Bots {
+    pub(crate) fn conversation_for_session(
+        &self,
+        id: i64,
+        cx: &App,
+    ) -> Option<Entity<Conversation>> {
+        self.chats
+            .values()
+            .chain(self.channels.views.values())
+            .find(|view| view.read(cx).summary.id == id)
+            .cloned()
+    }
     pub(crate) fn resource_sessions(
         &self,
         cx: &App,
@@ -780,6 +791,7 @@ impl Bots {
                             event.queue,
                             event.draft_id.clone(),
                             event.mode.clone(),
+                            event.prepared_prompt.clone(),
                             cx,
                         )
                     },
@@ -952,7 +964,7 @@ impl Bots {
         internal: bool,
         cx: &mut Context<Self>,
     ) {
-        self.enqueue_held(id, text, attachments, internal, false, None, None, cx);
+        self.enqueue_held(id, text, attachments, internal, false, None, None, None, cx);
     }
     #[allow(clippy::too_many_arguments)]
     fn enqueue_held(
@@ -964,6 +976,7 @@ impl Bots {
         hold: bool,
         draft_id: Option<String>,
         mode: Option<String>,
+        prepared_prompt: Option<String>,
         cx: &mut Context<Self>,
     ) {
         if self.roster.get(id).is_none() {
@@ -977,7 +990,10 @@ impl Bots {
         if let Some(bot) = self.roster.get_mut(id) {
             let message = draft_id.unwrap_or_else(bot::new_id);
             if let Some(queued) = bot.outbox.iter().find(|queued| queued.id == message) {
-                if queued.text != text || queued.attachments != attachments {
+                if queued.text != text
+                    || queued.attachments != attachments
+                    || queued.prepared_prompt != prepared_prompt
+                {
                     if let Some(view) = self.chats.get(id) {
                         view.update(cx, |view, cx| {
                             view.bot_draft_outbox_failed(
@@ -996,6 +1012,7 @@ impl Bots {
                 peer: None,
                 id: message.clone(),
                 text,
+                prepared_prompt,
                 sent_at: Some(vorkspace_core::time::now_ms()),
                 internal,
                 error: None,

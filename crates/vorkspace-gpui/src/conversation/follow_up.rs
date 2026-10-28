@@ -365,6 +365,11 @@ impl Conversation {
                     .update(cx, |view, cx| view.set_draft_transfer(Some(false), cx));
                 cx.emit(bot::Submitted {
                     draft_id: Some(message.id),
+                    prepared_prompt: Some(
+                        message
+                            .prepared_prompt
+                            .unwrap_or_else(|| message.text.clone()),
+                    ),
                     text: message.text,
                     attachments: message.attachments,
                     queue: self.bot_ui.draft_queue,

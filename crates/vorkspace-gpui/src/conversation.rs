@@ -1148,6 +1148,7 @@ impl Conversation {
                 cx.emit(bot::Submitted {
                     draft_id: Some(id),
                     text,
+                    prepared_prompt: None,
                     attachments,
                     queue,
                     mode: mode.clone(),
