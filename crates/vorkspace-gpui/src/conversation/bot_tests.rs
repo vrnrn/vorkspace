@@ -223,7 +223,14 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
     roster.save(&other).unwrap();
 
     visual.simulate_keystrokes("cmd-a");
-    visual.simulate_input("Final version");
+    // Typing publishes one identity per keystroke. Capture the immediate
+    // predecessor while keeping the earlier queued snapshot unchanged.
+    visual.simulate_input("Final versio");
+    visual.run_until_parked();
+    let predecessor = other.follow_ups(session).unwrap().draft.unwrap();
+    assert_eq!(predecessor.text, "Final versio");
+    assert_ne!(predecessor.id, intermediate.id);
+    visual.simulate_input("n");
     visual.run_until_parked();
     let final_draft = other.follow_ups(session).unwrap().draft.unwrap();
     assert_eq!(final_draft.text, "Final version");
@@ -235,8 +242,12 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(marker["id"], intermediate.id);
+    assert_eq!(marker["id"], predecessor.id);
     assert_eq!(marker["nextId"], final_draft.id);
+    assert_eq!(
+        final_draft.replaces_draft_id.as_deref(),
+        Some(predecessor.id.as_str())
+    );
     assert_eq!(final_draft.attachments.len(), 1);
     assert_eq!(
         std::fs::read(&final_draft.attachments[0]).unwrap(),
