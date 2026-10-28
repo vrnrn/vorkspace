@@ -64,6 +64,18 @@ pub(crate) struct TextSelection {
     cursor: gpui::CursorStyle,
 }
 impl Selection {
+    /// A prepended history page moves local source indices but not the text
+    /// the user selected. Layout fragments are rebuilt in the next frame.
+    pub(super) fn shift_source(&self, amount: usize) {
+        let mut state = self.0.borrow_mut();
+        let shift = |position: &mut Position| position.row.0 = position.row.0.saturating_add(amount);
+        if let Some(position) = &mut state.anchor { shift(position); }
+        if let Some(position) = &mut state.head { shift(position); }
+        if let Some(drag) = &mut state.drag { shift(&mut drag.anchor.start); shift(&mut drag.anchor.end); }
+        state.response = state.response.saturating_add(amount);
+        state.layouts.clear();
+        state.reader = None;
+    }
     pub(super) fn hide_menu(&self) {
         let mut state = self.0.borrow_mut();
         state.menu = None;
@@ -829,6 +841,23 @@ impl TranscriptView {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+    #[gpui::test]
+    fn prepending_history_preserves_the_selected_text(cx: &mut TestAppContext) {
+        let view = cx.new(|_| TranscriptView::new());
+        view.update(cx, |view, cx| {
+            let row = |text: &str| Row { role: "assistant".into(), text: text.into(), first: true, sent_at: None };
+            view.install_prepared_history(PreparedHistory::new(vec![row("First answer")], false), cx);
+            let key = view.rows.iter().find(|row| matches!(row.body, Body::Markdown(_))).unwrap().key;
+            {
+                let mut state = view.selection.0.borrow_mut();
+                state.response = 0;
+                state.anchor = Some(Position { row: key, byte: 0 });
+                state.head = Some(Position { row: key, byte: 5 });
+            }
+            view.replace_rebased_history(PreparedHistory::new(vec![row("Older"), row("First answer")], false), 1, cx);
+            assert_eq!(view.selected_text().as_deref(), Some("First"));
+        });
+    }
     #[gpui::test]
     fn authoritative_snapshot_tails_keep_valid_prefix_selection_and_reading_anchor(
         cx: &mut TestAppContext,

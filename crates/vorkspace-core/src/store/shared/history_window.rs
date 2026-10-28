@@ -15,6 +15,8 @@ pub struct IndexedHistoryCursor {
 #[derive(Debug)]
 pub struct IndexedHistoryPage {
     pub rows: Vec<Row>,
+    /// Turn receipts keyed by global projected-row offset in this snapshot.
+    pub turns: HashMap<usize, crate::agent::TurnInfo>,
     /// Position of the first row in the complete projected transcript.
     pub global_start: usize,
     pub before: Option<IndexedHistoryCursor>,
@@ -86,6 +88,7 @@ impl Store {
         let turn_revision: [u8; 32] = turn_hash.finalize().into();
         let start = (boundaries.len() > page_turns).then(|| boundaries[page_turns - 1]);
         let mut rows = Vec::new();
+        let mut turns = HashMap::new();
         let mut global_start = 0usize;
         let mut older = false;
         let mut count = 0usize;
@@ -113,6 +116,7 @@ impl Store {
                     older = true;
                     global_start += blocks::project(std::slice::from_ref(&block))?.len();
                 } else if cursor.is_none_or(|cursor| seq < cursor.before) {
+                    project_turn(&block, global_start + rows.len(), &mut turns)?;
                     rows.extend(blocks::project(std::slice::from_ref(&block))?);
                 }
             }
@@ -149,6 +153,7 @@ impl Store {
         let saved_len = rows.len();
         Ok(Some(IndexedHistoryPage {
             rows,
+            turns,
             global_start,
             before,
             guard,
@@ -225,7 +230,8 @@ mod tests {
             .map(|i| {
                 json!({
                     "id": format!("{i}"), "role": if i % 2 == 0 { "user" } else { "assistant" },
-                    "text": format!("needle {i}"), "future": {"keep": i}
+                    "text": format!("needle {i}"), "future": {"keep": i},
+                    "turnModel": if i % 2 == 0 { json!({"harness":"codex", "name":format!("model-{i}")}) } else { Value::Null }
                 })
             })
             .collect();
@@ -234,6 +240,11 @@ mod tests {
         let newest = store.indexed_history_page(id, None, 10).unwrap().unwrap();
         assert_eq!(newest.global_start, 30);
         assert_eq!(newest.rows, full[30..]);
+        let full_turns = project_turns(&blocks).unwrap();
+        assert_eq!(newest.turns.len(), 10);
+        for (row, info) in &newest.turns {
+            assert_eq!(info.model, full_turns[row].model);
+        }
         let cursor = newest.before.unwrap();
         let middle = store
             .indexed_history_page(id, Some(&cursor), 10)
@@ -241,6 +252,9 @@ mod tests {
             .unwrap();
         assert_eq!(middle.global_start, 10);
         assert_eq!(middle.rows, full[10..30]);
+        for (row, info) in &middle.turns {
+            assert_eq!(info.model, full_turns[row].model);
+        }
         let first = store
             .indexed_history_page(id, middle.before.as_ref(), 10)
             .unwrap()

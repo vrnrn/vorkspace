@@ -3,12 +3,21 @@ use super::*;
 
 pub(super) type HistoryAction = Box<dyn FnOnce(&mut Conversation, &mut Context<Conversation>)>;
 
+pub(super) enum InitialHistory {
+    Complete(crate::transcript::PreparedHistory),
+    Window(vorkspace_core::store::IndexedHistoryPage, crate::transcript::PreparedHistory),
+}
+pub(super) enum InitialRows {
+    Complete(Vec<vorkspace_core::transcript::Row>),
+    Window(vorkspace_core::store::IndexedHistoryPage),
+}
+
 impl Conversation {
     pub(super) fn history_ready(&self) -> bool {
-        self.loaded && !self.history_unloaded && !self.loading
+        self.loaded && !self.history_unloaded && !self.history_partial && !self.loading
     }
     pub(crate) fn needs_history_restore(&self) -> bool {
-        self.history_unloaded || self.loading || (!self.loaded && self.summary.has_messages)
+        self.history_unloaded || self.history_partial || self.loading || (!self.loaded && self.summary.has_messages)
     }
     pub(crate) fn defer_history_action(
         &mut self,
@@ -49,7 +58,7 @@ impl Conversation {
         self.attachments = attachments;
     }
     pub(crate) fn history_loaded(&self) -> bool {
-        self.loaded && !self.history_unloaded
+        self.loaded && !self.history_unloaded && !self.history_partial
     }
     pub(crate) fn history_weight(&self, cx: &gpui::App) -> usize {
         self.transcript.read(cx).history_weight()
@@ -139,12 +148,15 @@ impl Conversation {
                 match result {
                     Ok((history, turns, rev)) => {
                         this.settings.turns = turns.clone();
+                        let partial = this.history_partial;
                         this.transcript.update(cx, |view, cx| {
                             view.turns = turns;
-                            view.restore_prepared_history(history, cx);
+                            if partial { view.complete_storage_history(history, cx); }
+                            else { view.restore_prepared_history(history, cx); }
                         });
                         this.loaded_history_revision = Some(rev);
                         this.history_unloaded = false;
+                        this.history_partial = false;
                         this.status = "Ready".into();
                         if let Some((row, query)) = this.pending_search.take() {
                             this.reveal_search(row, query, cx);
@@ -168,6 +180,77 @@ mod tests {
     use gpui::TestAppContext;
     use std::sync::Mutex;
     use vorkspace_core::{store::Store, transcript::Row};
+
+    #[gpui::test]
+    fn partial_history_restores_before_queued_mutation(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let store = Store::open_vorkspace(&path).unwrap();
+        let session = store.create("codex", "/project").unwrap();
+        let id = session.id;
+        let original = store.persisted_session_id(session.id).unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(include_str!("../../../vorkspace-core/tests/fixtures/bot-schema.sql")).unwrap();
+        conn.execute("INSERT INTO bot_transcripts VALUES(?1)", [&original]).unwrap();
+        for i in 0..50 {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            let block = serde_json::json!({"id": format!("block-{i}"), "role": role, "text": format!("message {i}")});
+            conn.execute("INSERT INTO bot_blocks VALUES(?1,?2,?3,?4,'',?5,0)", rusqlite::params![original, i+1, format!("block-{i}"), block.to_string(), i%2 == 0]).unwrap();
+            if i%2 == 0 { conn.execute("INSERT INTO bot_turns VALUES(?1,?2)", rusqlite::params![original, i+1]).unwrap(); }
+        }
+        let store = Arc::new(Mutex::new(store));
+        let chat = cx.new(|cx| Conversation::new(session, store.clone(), cx));
+        chat.update(cx, |chat, cx| {
+            chat.allow_storage_paging = true;
+            chat.configure_bot(vorkspace_core::bot::Bot::default(), dir.path().to_owned(), Default::default(), cx);
+            chat.load(cx);
+        });
+        cx.run_until_parked();
+        chat.update(cx, |chat, cx| {
+            assert!(chat.history_partial);
+            assert_eq!(chat.transcript.read(cx).source_rows().len(), 20);
+            assert_eq!(chat.bot_row_origin(cx), 30);
+            assert_eq!(chat.bot_row_count(cx), 50);
+            assert!(!chat.history_ready());
+            chat.defer_history_action(|chat, cx| {
+                let rows = chat.transcript.read(cx).source_rows();
+                assert_eq!(rows.len(), 50);
+                let row = Row { role: "user".into(), text: "new message".into(), first: true, sent_at: None };
+                locked(&chat.store).unwrap().write_rows(chat.summary.id, rows.len(), &[row]).unwrap();
+            }, cx);
+        });
+        cx.run_until_parked();
+        chat.update(cx, |chat, _| {
+            assert!(chat.history_ready());
+            assert!(!chat.history_partial);
+        });
+        let rows = store.lock().unwrap().load(id).unwrap().rows;
+        assert_eq!(rows.len(), 51);
+        assert_eq!(rows[0].text, "message 0");
+        assert_eq!(rows[50].text, "new message");
+        chat.update(cx, |chat, cx| {
+            chat.transcript.update(cx, |view, cx| view.patch(50, vec![Row { role: "user".into(), text: "unsaved needle".into(), first: true, sent_at: None }], cx));
+            let hits = vorkspace_core::search::messages(&chat.summary, chat.transcript.read(cx).source_rows(), "unsaved needle", &std::sync::atomic::AtomicBool::new(false));
+            assert!(hits.iter().any(|hit| hit.target == vorkspace_core::search::Target::Message { session: id, row: 50 }));
+        });
+        let reopened = store.lock().unwrap().sessions().unwrap().into_iter().find(|session| session.id == id).unwrap();
+        let second = cx.new(|cx| Conversation::new(reopened, store.clone(), cx));
+        second.update(cx, |chat, cx| {
+            chat.allow_storage_paging = true;
+            chat.configure_bot(vorkspace_core::bot::Bot::default(), dir.path().to_owned(), Default::default(), cx);
+            chat.load(cx);
+        });
+        cx.run_until_parked();
+        second.update(cx, |chat, _| assert!(chat.history_partial));
+        conn.execute("UPDATE bot_blocks SET block_json=json_set(block_json,'$.text','external needle') WHERE session_id=?1 AND seq=1", [&original]).unwrap();
+        second.update(cx, |chat, cx| chat.reveal_search(0, "external needle".into(), cx));
+        cx.run_until_parked();
+        second.update(cx, |chat, cx| {
+            assert!(chat.history_ready());
+            assert_eq!(chat.transcript.read(cx).source_rows()[0].text, "external needle");
+            assert!(chat.pending_search.is_none());
+        });
+    }
 
     #[gpui::test]
     fn history_eviction_keeps_live_state_and_pins_drafts_running_and_failed_saves(

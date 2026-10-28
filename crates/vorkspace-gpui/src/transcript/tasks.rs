@@ -190,6 +190,24 @@ struct PanelPart {
     source: usize,
 }
 impl AgentPanels {
+    pub(super) fn shift_source(&mut self, amount: usize) {
+        fn shift_key(key: String, amount: usize) -> String {
+            let Some((prefix, rest)) = key.split_once(':') else { return key; };
+            if !matches!(prefix, "agent" | "agent-phase" | "agent-note") { return key; }
+            let Some((at, suffix)) = rest.split_once(':') else { return key; };
+            let Ok(at) = at.parse::<usize>() else { return key; };
+            format!("{prefix}:{}:{suffix}", at.saturating_add(amount))
+        }
+        fn shift_map<T>(map: &mut HashMap<String, T>, amount: usize) {
+            *map = std::mem::take(map).into_iter().map(|(key, value)| (shift_key(key, amount), value)).collect();
+        }
+        for part in self.parts.values_mut() { part.source = part.source.saturating_add(amount); }
+        for arrival in self.arrivals.values_mut() { arrival.source = arrival.source.saturating_add(amount); }
+        shift_map(&mut self.parts, amount);
+        shift_map(&mut self.scrolls, amount);
+        shift_map(&mut self.groups, amount);
+        shift_map(&mut self.arrivals, amount);
+    }
     pub(super) fn animating(&self) -> bool {
         !self.arrivals.is_empty() || self.parts.values().any(|part| part.motion.is_some())
     }
