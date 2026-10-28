@@ -398,10 +398,8 @@ impl Shell {
     }
     pub(super) fn default_kind(&self) -> Kind {
         let p = &self.workspace.preferences;
-        p.project_providers
-            .get(&self.workspace.project)
-            .and_then(|p| p.provider.as_deref())
-            .or(p.default_provider.as_deref())
+        p.default_provider
+            .as_deref()
             .and_then(Kind::parse)
             .unwrap_or(Kind::Codex)
     }

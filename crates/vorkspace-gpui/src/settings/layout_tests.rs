@@ -206,3 +206,27 @@ fn models_menu_hides_and_restores_individual_models(cx: &mut TestAppContext) {
         })
         .unwrap();
 }
+
+#[gpui::test]
+fn providers_without_an_open_conversation_list_their_loaded_models(cx: &mut TestAppContext) {
+    use vorkspace_core::provider::Kind;
+    let window = window(Section::Providers, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.discovery.binaries = vec![(Kind::Codex, Some("/bin/codex".into()))];
+            view.discovered_catalogs
+                .insert("codex".into(), vec![("a".into(), "Alpha".into())]);
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("models-codex").is_some());
+    assert!(visual.debug_bounds("settings-select-codex").is_some());
+    // Provider defaults are global; there is no project scope selector.
+    assert!(
+        visual
+            .debug_bounds("settings-select-provider-scope")
+            .is_none()
+    );
+}

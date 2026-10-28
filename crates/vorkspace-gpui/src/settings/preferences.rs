@@ -70,7 +70,6 @@ pub(crate) struct Preferences {
     pub hidden_providers: Vec<String>,
     /// Models left out of the picker, as `provider:model` (see `model_key`).
     pub hidden_models: Vec<String>,
-    pub project_providers: HashMap<String, ProviderDefaults>,
     pub favorite_models: Vec<ModelChoice>,
     pub recent_models: Vec<ModelChoice>,
     pub model_picker_tab: Option<String>,
@@ -169,7 +168,6 @@ impl Default for Preferences {
             default_models: HashMap::new(),
             hidden_providers: Vec::new(),
             hidden_models: Vec::new(),
-            project_providers: HashMap::new(),
             favorite_models: Vec::new(),
             recent_models: Vec::new(),
             model_picker_tab: None,
@@ -254,14 +252,6 @@ impl Preferences {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub(crate) struct ProviderDefaults {
-    pub provider: Option<String>,
-    pub models: HashMap<String, String>,
-    pub hidden: Vec<String>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ModelChoice {
     pub provider: String,
@@ -277,14 +267,5 @@ impl gpui::Global for Preferences {}
 impl Preferences {
     pub(crate) fn model_hidden(&self, provider: &str, model: &str) -> bool {
         self.hidden_models.contains(&model_key(provider, model))
-    }
-    pub(crate) fn hidden_for(&self, project: &str) -> Vec<String> {
-        let mut hidden = self.hidden_providers.clone();
-        if let Some(settings) = self.project_providers.get(project) {
-            hidden.extend(settings.hidden.clone());
-        }
-        hidden.sort();
-        hidden.dedup();
-        hidden
     }
 }

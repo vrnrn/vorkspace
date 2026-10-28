@@ -33,7 +33,7 @@ impl Conversation {
         let remote = self.is_remote().then(|| self.summary.cwd.clone());
         let hidden = cx
             .try_global::<crate::settings::Preferences>()
-            .map(|prefs| prefs.hidden_for(&self.summary.cwd))
+            .map(|prefs| prefs.hidden_providers.clone())
             .unwrap_or_default();
         let work = cx.background_executor().spawn(async move {
             if let Some(project) = remote {

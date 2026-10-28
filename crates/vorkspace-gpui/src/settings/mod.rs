@@ -232,6 +232,10 @@ pub(crate) struct SettingsView {
     select_active: usize,
     select_focus: FocusHandle,
     select_anchors: RefCell<HashMap<&'static str, AnchorSlot>>,
+    /// Provider catalogs loaded for this page, so a provider without an open
+    /// conversation still lists its models.
+    discovered_catalogs: HashMap<String, Vec<(String, String)>>,
+    catalogs_loading: Vec<vorkspace_core::provider::Kind>,
     models_open: Option<vorkspace_core::provider::Kind>,
     model_menu_anchors: RefCell<HashMap<vorkspace_core::provider::Kind, AnchorSlot>>,
     model_filter: Entity<Input>,
@@ -257,7 +261,6 @@ pub(crate) struct SettingsView {
     discovery_loading: bool,
     discovery_task: Option<Task<()>>,
     selected_project: String,
-    provider_scope: String,
     mcp_filter: String,
     fields: HashMap<&'static str, Entity<Input>>,
     inbox: pages::InboxState,
@@ -379,6 +382,8 @@ impl SettingsView {
             select_active: 0,
             select_focus: cx.focus_handle(),
             select_anchors: Default::default(),
+            discovered_catalogs: HashMap::new(),
+            catalogs_loading: Vec::new(),
             models_open: None,
             model_menu_anchors: Default::default(),
             model_filter,
@@ -403,7 +408,6 @@ impl SettingsView {
             discovery_loading: false,
             discovery_task: None,
             selected_project,
-            provider_scope: "global".into(),
             mcp_filter: "all".into(),
             fields: HashMap::new(),
             inbox: pages::InboxState::default(),
@@ -451,6 +455,9 @@ impl SettingsView {
                 this.skill_documents.clear();
                 this.discovery = data;
                 this.discovery_loading = false;
+                if this.section == Section::Providers {
+                    this.load_catalogs(cx);
+                }
                 if this.section == Section::Mcp {
                     this.refresh_mcp_health(cx);
                 }
@@ -458,6 +465,42 @@ impl SettingsView {
             });
         }));
         cx.notify();
+    }
+    /// Load every installed provider's model list off the render path.
+    fn load_catalogs(&mut self, cx: &mut Context<Self>) {
+        for (kind, path) in self.discovery.binaries.clone() {
+            if path.is_none() || self.catalogs_loading.contains(&kind) {
+                continue;
+            }
+            self.catalogs_loading.push(kind);
+            let work = cx
+                .background_executor()
+                .spawn(async move { vorkspace_core::catalog::models(kind) });
+            cx.spawn(async move |this, cx| {
+                let result = work.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.catalogs_loading.retain(|loading| *loading != kind);
+                    if let Ok(models) = result {
+                        this.discovered_catalogs.insert(
+                            kind.id().into(),
+                            models
+                                .into_iter()
+                                .map(|model| {
+                                    let name = crate::pickers::model_display_name(
+                                        kind,
+                                        &model.id,
+                                        &model.name,
+                                    );
+                                    (model.id, name.to_string())
+                                })
+                                .collect(),
+                        );
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
     }
     pub(crate) fn set_context(&mut self, ctx: SettingsContext, cx: &mut Context<Self>) {
         if self.ctx != ctx {
@@ -496,6 +539,9 @@ impl SettingsView {
             self.leave_connections(cx);
             self.section = section;
             self.watch_connections(cx);
+            if section == Section::Providers {
+                self.load_catalogs(cx);
+            }
             if section == Section::Mcp {
                 self.refresh_mcp_health(cx);
             }

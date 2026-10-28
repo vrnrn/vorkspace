@@ -182,18 +182,11 @@ impl QuickComposer {
                 this.cwd = path.clone();
                 let p = cx.global::<crate::settings::Preferences>();
                 this.kind = p
-                    .project_providers
-                    .get(&this.cwd)
-                    .and_then(|v| v.provider.as_deref())
-                    .or(p.default_provider.as_deref())
+                    .default_provider
+                    .as_deref()
                     .map(Kind::from_id)
                     .unwrap_or(Kind::Codex);
-                this.model = p
-                    .project_providers
-                    .get(&this.cwd)
-                    .and_then(|v| v.models.get(this.kind.id()))
-                    .or(p.default_models.get(this.kind.id()))
-                    .cloned();
+                this.model = p.default_models.get(this.kind.id()).cloned();
                 this.completion.update(cx, |c, cx| {
                     c.set_cwd(&this.cwd, cx);
                     c.set_provider(this.kind.id(), cx);
@@ -257,7 +250,8 @@ impl QuickComposer {
             ModelList::new_for(self.kind, self.model.clone(), &self.cwd, profile, cx)
                 .hide_providers(
                     cx.global::<crate::settings::Preferences>()
-                        .hidden_for(&self.cwd),
+                        .hidden_providers
+                        .clone(),
                 )
         });
         self.picker_events = Some(cx.subscribe_in(
