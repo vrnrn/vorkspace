@@ -838,6 +838,7 @@ impl Render for ModelList {
                 let current = entry.kind == self.provider && entry.id == self.current;
                 div()
                     .id(("model-option", ix))
+                    .debug_selector(move || format!("model-option-{ix}"))
                     .role(Role::ListBoxOption)
                     .aria_label(entry.name.clone())
                     .aria_selected(current)
