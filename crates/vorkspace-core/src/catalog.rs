@@ -212,6 +212,16 @@ pub fn invalidate(kind: Kind, account: &crate::accounts::Profile) {
         .entries
         .retain(|(k, p, _, _)| *k != kind || p != account);
 }
+/// Generation changes whenever credentials invalidate this account's catalog.
+pub fn generation(kind: Kind, account: &crate::accounts::Profile) -> u64 {
+    cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .generation
+        .get(&(kind, account.clone()))
+        .copied()
+        .unwrap_or(0)
+}
 /// A model's catalog name from any account's cached catalog, without querying.
 pub fn cached_name(kind: Kind, id: &str) -> Option<String> {
     let cache = cache().lock().unwrap_or_else(|e| e.into_inner());

@@ -105,7 +105,7 @@ impl SettingsView {
                 .ctx
                 .catalogs
                 .get(kind.id())
-                .or_else(|| self.discovered_catalogs.get(kind.id()))
+                .or_else(|| self.discovered_models(kind, cx))
                 .cloned()
                 .unwrap_or_default();
             let selected_model = p
