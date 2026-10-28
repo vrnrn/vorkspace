@@ -178,8 +178,10 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
 ) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("draft.sqlite");
-    let source = dir.path().join("attachment.txt");
-    std::fs::write(&source, "original bytes").unwrap();
+    let source = dir.path().join("attachment.png");
+    image::RgbaImage::from_pixel(100, 80, image::Rgba([255, 255, 255, 255]))
+        .save(&source)
+        .unwrap();
     let store = Store::open(&path).unwrap();
     let summary = store.create("codex", "/private/tmp/bot-draft").unwrap();
     let session = summary.id;
@@ -196,12 +198,62 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
         .unwrap()
     });
     cx.run_until_parked();
-    window
+    let owner = window
         .update(cx, |view, _, cx| {
             view.input.update(cx, |input, cx| {
                 input.set_text("/draft Original message".into(), cx)
             });
             view.attachments.push(source.clone());
+            view.capture_composer(cx);
+            view.composer_draft.flush().unwrap();
+            cx.entity()
+        })
+        .unwrap();
+    let lightbox = cx.update(|cx| {
+        cx.open_window(Default::default(), |window, cx| {
+            cx.new(|cx| {
+                crate::image_lightbox::ImageLightbox::new(
+                    crate::image_lightbox::Open {
+                        source: crate::image_lightbox::Source::Path(source.clone()),
+                        alt: "Draft image".into(),
+                        draft_session: Some(session),
+                    },
+                    Some(owner.clone()),
+                    window,
+                    cx,
+                )
+            })
+        })
+        .unwrap()
+    });
+    let visual = &mut VisualTestContext::from_window(lightbox.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let brush = visual.debug_bounds("annotation-brush").unwrap().center();
+    visual.simulate_click(brush, Default::default());
+    let bounds = visual.debug_bounds("lightbox-image").unwrap();
+    let start = gpui::point(bounds.left() + px(25.), bounds.top() + px(40.));
+    let end = gpui::point(bounds.left() + px(75.), bounds.top() + px(40.));
+    visual.simulate_mouse_down(start, gpui::MouseButton::Left, Default::default());
+    visual.simulate_mouse_move(end, Some(gpui::MouseButton::Left), Default::default());
+    visual.simulate_mouse_up(end, gpui::MouseButton::Left, Default::default());
+    let save = visual.debug_bounds("annotation-save").unwrap().center();
+    visual.simulate_click(save, Default::default());
+    visual.run_until_parked();
+    let annotated = owner.read_with(visual, |view, _| view.attachments[0].clone());
+    assert_eq!(
+        image::open(&annotated)
+            .unwrap()
+            .into_rgba8()
+            .get_pixel(50, 40)
+            .0,
+        [255, 59, 48, 255]
+    );
+    lightbox
+        .update(visual, |_, window, _| window.remove_window())
+        .unwrap();
+    window
+        .update(cx, |view, _, cx| {
             view.send(cx);
             assert!(view.follow_ups.state.draft.is_some());
             view.app_flush_draft(cx).unwrap();
@@ -211,6 +263,7 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
     window
         .update(cx, |_, window, _| window.remove_window())
         .unwrap();
+    drop(owner);
     std::fs::write(&source, "changed bytes").unwrap();
     let store = Store::open(&path).unwrap();
     let summary = store
@@ -231,6 +284,18 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
         .unwrap()
     });
     cx.run_until_parked();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(size(px(900.), px(680.)));
+    visual.run_until_parked();
+    crate::clock::settle_animations(window, visual);
+    let edit = visual.debug_bounds("edit-message-draft").unwrap().center();
+    visual.simulate_click(edit, Default::default());
+    visual.simulate_keystrokes("cmd-a");
+    visual.simulate_input("Edited message");
+    visual.run_until_parked();
+    let save = visual.debug_bounds("save-draft-edit").unwrap().center();
+    visual.simulate_click(save, Default::default());
+    visual.run_until_parked();
     let events = Rc::new(RefCell::new(Vec::new()));
     let observed = events.clone();
     let _subscription = window
@@ -244,10 +309,14 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
                 ));
             });
             let saved = view.follow_ups.state.draft.as_ref().unwrap();
-            assert_eq!(saved.text, "Original message");
+            assert_eq!(saved.text, "Edited message");
             assert_eq!(
-                std::fs::read_to_string(&saved.attachments[0]).unwrap(),
-                "original bytes"
+                image::open(&saved.attachments[0])
+                    .unwrap()
+                    .into_rgba8()
+                    .get_pixel(50, 40)
+                    .0,
+                [255, 59, 48, 255]
             );
             view.input.update(cx, |input, cx| {
                 input.set_text("New unsent message".into(), cx)
@@ -261,7 +330,15 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
         .unwrap();
     cx.run_until_parked();
     let first = events.borrow()[0].clone();
-    assert_eq!(first.1, "Original message");
+    assert_eq!(first.1, "Edited message");
+    assert_eq!(
+        image::open(&first.2[0])
+            .unwrap()
+            .into_rgba8()
+            .get_pixel(50, 40)
+            .0,
+        [255, 59, 48, 255]
+    );
     assert!(first.3);
     window
         .update(cx, |view, _, cx| {
@@ -1265,6 +1342,8 @@ fn direct_bot_send_retains_recovery_until_outbox_ack_and_reuses_retry_identity(
             assert!(view.bot_ui.direct_sending.as_ref().unwrap().4);
             view.send(cx);
             assert_eq!(view.bot_ui.direct_sending.as_ref().unwrap().0, id);
+            view.input
+                .update(cx, |input, cx| input.select_utf16(0..0, cx));
             view.bot_draft_outbox_saved(&message(&id, "Keep this message", false), cx);
             assert!(view.input.read(cx).content.is_empty());
             assert!(
@@ -1276,4 +1355,148 @@ fn direct_bot_send_retains_recovery_until_outbox_ack_and_reuses_retry_identity(
             );
         })
         .unwrap();
+}
+
+#[gpui::test]
+fn reopened_direct_submission_reuses_identity_and_intent_after_outbox_publication(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shared.db");
+    let image = dir.path().join("annotated.png");
+    std::fs::write(&image, b"annotated pixels").unwrap();
+    let store = Store::open_vorkspace(&path).unwrap();
+    let summary = store.create("codex", "/project").unwrap();
+    let session = summary.id;
+    let db = Arc::new(Mutex::new(store));
+    let create = |cx: &mut gpui::App, summary: vorkspace_core::store::Session| {
+        cx.new(|cx| {
+            let mut view = Conversation::new(summary, db.clone(), cx);
+            view.loaded = true;
+            view.configure_bot(Bot::default(), dir.path().into(), Default::default(), cx);
+            view
+        })
+    };
+    let first = cx.update(|cx| create(cx, summary.clone()));
+    cx.run_until_parked();
+    let sent = Rc::new(RefCell::new(Vec::new()));
+    let observed = sent.clone();
+    let subscription = first.update(cx, |view, cx| {
+        let sub = cx.subscribe(&cx.entity(), move |_, _, event: &Submitted, _| {
+            observed.borrow_mut().push((
+                event.draft_id.clone().unwrap(),
+                event.text.clone(),
+                event.attachments.clone(),
+                event.queue,
+                event.mode.clone(),
+            ));
+        });
+        view.input
+            .update(cx, |input, cx| input.set_text("Send this image".into(), cx));
+        view.attachments.push(image.clone());
+        view.settings.plan = true;
+        view.bot_ui.queue = true;
+        view.send(cx);
+        sub
+    });
+    cx.run_until_parked();
+    let original = sent.borrow()[0].clone();
+    let queued = Message {
+        id: original.0.clone(),
+        text: original.1.clone(),
+        attachments: vec![image.to_string_lossy().into_owned()],
+        peer: None,
+        sent_at: None,
+        internal: false,
+        error: None,
+    };
+    let mut roster = vorkspace_core::bot::Roster::default();
+    roster.bots.push(Bot {
+        id: "bot".into(),
+        session_id: Some(session),
+        outbox: vec![queued.clone()],
+        ..Default::default()
+    });
+    roster.save(&locked(&db).unwrap()).unwrap();
+    assert!(
+        locked(&db)
+            .unwrap()
+            .claim_bot_message("bot", &queued, "first-owner")
+            .unwrap()
+    );
+    drop(subscription);
+    drop(first);
+    let reopened = cx.update(|cx| create(cx, summary));
+    cx.run_until_parked();
+    let observed = sent.clone();
+    let _subscription = reopened.update(cx, |view, cx| {
+        let sub = cx.subscribe(&cx.entity(), move |_, _, event: &Submitted, _| {
+            observed.borrow_mut().push((
+                event.draft_id.clone().unwrap(),
+                event.text.clone(),
+                event.attachments.clone(),
+                event.queue,
+                event.mode.clone(),
+            ));
+        });
+        view.send(cx);
+        sub
+    });
+    cx.run_until_parked();
+    assert_eq!(sent.borrow()[1], original);
+    assert!(
+        !locked(&db)
+            .unwrap()
+            .claim_bot_message("bot", &queued, "second-owner")
+            .unwrap()
+    );
+    reopened.update(cx, |view, cx| {
+        view.bot_draft_outbox_saved(&queued, cx);
+        assert!(view.input.read(cx).content.is_empty());
+        assert!(
+            locked(&view.store)
+                .unwrap()
+                .composer_recoveries(session)
+                .unwrap()
+                .is_empty()
+        );
+    });
+}
+
+#[gpui::test]
+fn failed_composer_clear_keeps_the_submission_recovery(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shared.db");
+    let store = Store::open_vorkspace(&path).unwrap();
+    let summary = store.create("codex", "/project").unwrap();
+    let id = summary.id;
+    let chat = cx.new(|cx| {
+        let mut chat = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
+        chat.loaded = true;
+        chat.configure_bot(Bot::default(), dir.path().into(), Default::default(), cx);
+        chat
+    });
+    cx.run_until_parked();
+    let pending = chat.update(cx, |chat, cx| {
+        chat.input
+            .update(cx, |input, cx| input.set_text("Pending".into(), cx));
+        chat.send(cx);
+        chat.bot_ui.direct_sending.as_ref().unwrap().0.clone()
+    });
+    let other = Store::open_vorkspace(&path).unwrap();
+    let saved = other.composer_draft(id).unwrap().unwrap();
+    other
+        .save_composer_draft(id, saved.revision, &saved.payload)
+        .unwrap();
+    chat.update(cx, |chat, cx| {
+        chat.bot_draft_outbox_saved(&message(&pending, "Pending", false), cx);
+        assert!(chat.composer_draft.error.is_some());
+    });
+    assert!(
+        other
+            .composer_recoveries(id)
+            .unwrap()
+            .iter()
+            .any(|record| record.owner == pending)
+    );
 }

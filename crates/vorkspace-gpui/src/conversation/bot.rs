@@ -77,23 +77,28 @@ impl Conversation {
             .as_ref()
             .is_some_and(|pending| &pending.0 == id)
         {
-            let (owner, text, attachments, selection, _) =
+            let (owner, text, attachments, _selection, _) =
                 self.bot_ui.direct_sending.take().unwrap();
-            if let Err(error) = locked(&self.store)
-                .and_then(|store| store.clear_composer_recovery(self.summary.id, &owner))
-            {
-                self.status = format!(
-                    "Message queued, but its composer recovery could not be cleared: {error}"
-                );
-            }
-            let unchanged = self.input.read(cx).content.as_ref() == text
-                && self.input.read(cx).selection_utf16() == selection
-                && self.attachments == attachments;
+            let unchanged =
+                self.input.read(cx).content.as_ref() == text && self.attachments == attachments;
             if unchanged {
                 self.input
                     .update(cx, |input, cx| input.set_text(String::new(), cx));
                 self.attachments.clear();
-                self.persist_composer(cx);
+            }
+            // Publish the cleared or newer composer before deleting the only
+            // durable link between the old input and its outbox identity.
+            self.capture_composer(cx);
+            let result = self.composer_draft.flush().and_then(|()| {
+                locked(&self.store)?.clear_composer_recovery(self.summary.id, &owner)
+            });
+            if let Err(error) = result {
+                self.status = format!(
+                    "Message queued, but its composer recovery could not be cleared: {error}"
+                );
+                self.composer_draft.error = Some(self.status.clone());
+            } else {
+                self.composer_draft.forget_recovery(&owner);
             }
             self.bot_ui.draft_error = None;
             cx.notify();

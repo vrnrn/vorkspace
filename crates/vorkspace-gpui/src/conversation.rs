@@ -1076,6 +1076,16 @@ impl Conversation {
                     cx.notify();
                     return;
                 }
+                let recovery = match self.pending_bot_submission(&raw, &attachments) {
+                    Ok(recovery) => recovery,
+                    Err(error) => {
+                        self.status = format!(
+                            "Could not verify the previous submission: {error}. Your input was preserved."
+                        );
+                        cx.notify();
+                        return;
+                    }
+                };
                 let text = self.consume_mode_command(raw.clone(), cx);
                 let mode = if self.settings.orchestrator {
                     Some("orchestrator")
@@ -1086,9 +1096,20 @@ impl Conversation {
                 } else {
                     None
                 };
-                let queue = self.bot_ui.queue;
+                let mode = recovery.as_ref().map_or(mode.map(str::to_owned), |record| {
+                    record.payload["botSubmission"]["mode"]
+                        .as_str()
+                        .map(str::to_owned)
+                });
+                let queue = recovery.as_ref().map_or(self.bot_ui.queue, |record| {
+                    record.payload["botSubmission"]["queue"]
+                        .as_bool()
+                        .unwrap_or(false)
+                });
                 let id = if let Some((id, _, _, _, _)) = &self.bot_ui.direct_sending {
                     id.clone()
+                } else if let Some(record) = &recovery {
+                    record.owner.clone()
                 } else {
                     let id = vorkspace_core::bot::new_id();
                     let result = locked(&self.store).and_then(|store| {
@@ -1123,7 +1144,7 @@ impl Conversation {
                     text,
                     attachments,
                     queue,
-                    mode: mode.map(str::to_owned),
+                    mode: mode.clone(),
                 });
                 if mode.is_some() {
                     self.clear_submitted_mode(cx);
