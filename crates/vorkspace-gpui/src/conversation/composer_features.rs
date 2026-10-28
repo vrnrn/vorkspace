@@ -289,6 +289,12 @@ impl Conversation {
         self.composer_draft.generation()
     }
 
+    pub(crate) fn annotation_draft_generation(&mut self, cx: &mut Context<Self>) -> u64 {
+        // Capture input and attachment changes even if their notification has not run yet.
+        self.persist_composer(cx);
+        self.attachment_draft_generation()
+    }
+
     /// Publish a newly encoded image only while this exact draft still owns its source.
     pub(crate) fn apply_annotated_attachment(
         &mut self,
@@ -297,6 +303,7 @@ impl Conversation {
         bytes: &[u8],
         cx: &mut Context<Self>,
     ) -> Result<PathBuf, String> {
+        self.persist_composer(cx);
         if !self.composer_draft.ready_for_replacement()
             || self.attaching
             || self.composer_draft.generation() != generation
@@ -760,6 +767,110 @@ mod annotation_tests {
             draft.payload["attachments"][0]["path"],
             path.to_str().unwrap()
         );
+    }
+
+    #[gpui::test]
+    fn close_controls_save_to_original_draft_and_stale_draft_keeps_preview(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui::{VisualTestContext, point, px};
+        cx.update(crate::input::bind);
+        for (outside, stale) in [(false, false), (true, false), (false, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = dir.path().join("source.png");
+            image::RgbaImage::from_pixel(120, 80, image::Rgba([255, 255, 255, 255]))
+                .save(&source)
+                .unwrap();
+            let original = std::fs::read(&source).unwrap();
+            let store = Store::open_vorkspace(&dir.path().join("draft.db")).unwrap();
+            let session = store.create("codex", "/missing/close-test").unwrap();
+            let id = session.id;
+            let db = Arc::new(std::sync::Mutex::new(store));
+            let owner = cx.new(|cx| Conversation::new(session, db.clone(), cx));
+            cx.run_until_parked();
+            owner.update(cx, |view, cx| {
+                view.attachments.push(source.clone());
+                view.capture_composer(cx);
+                view.composer_draft.flush().unwrap();
+            });
+            let window = cx.update(|cx| {
+                cx.open_window(Default::default(), |window, cx| {
+                    cx.new(|cx| {
+                        crate::image_lightbox::ImageLightbox::new(
+                            crate::image_lightbox::Open {
+                                source: crate::image_lightbox::Source::Path(source.clone()),
+                                alt: "Source".into(),
+                                draft_session: Some(id),
+                            },
+                            Some(owner.clone()),
+                            window,
+                            cx,
+                        )
+                    })
+                })
+                .unwrap()
+            });
+            let visual = &mut VisualTestContext::from_window(window.into(), cx);
+            visual.run_until_parked();
+            visual.refresh().unwrap();
+            let brush = visual.debug_bounds("annotation-brush").unwrap().center();
+            visual.simulate_click(brush, Default::default());
+            let bounds = visual.debug_bounds("lightbox-image").unwrap();
+            visual.simulate_click(bounds.center(), Default::default());
+            let text_tool = visual.debug_bounds("annotation-text").unwrap().center();
+            visual.simulate_click(text_tool, Default::default());
+            visual.simulate_click(
+                point(bounds.left() + px(10.), bounds.top() + px(10.)),
+                Default::default(),
+            );
+            visual.simulate_input("OK");
+            if stale {
+                owner.update(visual, |view, cx| {
+                    view.input
+                        .update(cx, |input, cx| input.set_text("Changed draft".into(), cx));
+                });
+            }
+            let target = if outside {
+                point(px(4.), px(4.))
+            } else {
+                visual.debug_bounds("close-image-preview").unwrap().center()
+            };
+            visual.simulate_click(target, Default::default());
+            // Repeated close requests cannot launch another publication.
+            visual.simulate_click(target, Default::default());
+            visual.run_until_parked();
+            visual.refresh().unwrap();
+            let attachment = owner.read_with(visual, |view, _| view.attachments[0].clone());
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            if stale {
+                assert_eq!(attachment, source);
+                assert!(visual.debug_bounds("annotation-error").is_some());
+                assert!(visual.debug_bounds("lightbox-image").is_some());
+                assert!(visual.debug_bounds("annotation-text-box-0").is_some());
+            } else {
+                assert_ne!(attachment, source);
+                assert_eq!(
+                    image::open(&attachment)
+                        .unwrap()
+                        .into_rgba8()
+                        .get_pixel(60, 40)
+                        .0,
+                    [255, 59, 48, 255]
+                );
+                let flattened = image::open(&attachment).unwrap().into_rgba8();
+                assert!((10..35).any(|y| {
+                    (10..70).any(|x| flattened.get_pixel(x, y).0 != [255, 255, 255, 255])
+                }));
+                let draft = locked(&db).unwrap().composer_draft(id).unwrap().unwrap();
+                assert_eq!(
+                    draft.payload["attachments"][0]["path"],
+                    attachment.to_str().unwrap()
+                );
+            }
+            window
+                .update(visual, |_, window, _| window.remove_window())
+                .unwrap();
+        }
     }
 
     #[gpui::test]

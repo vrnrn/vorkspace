@@ -6075,6 +6075,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-apple",
  "gpui-pre-platform",
+ "cosmic-text",
  "image",
  "libc",
  "objc2 0.6.4",

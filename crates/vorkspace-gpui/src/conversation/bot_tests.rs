@@ -304,8 +304,8 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
     visual.simulate_mouse_down(start, gpui::MouseButton::Left, Default::default());
     visual.simulate_mouse_move(end, Some(gpui::MouseButton::Left), Default::default());
     visual.simulate_mouse_up(end, gpui::MouseButton::Left, Default::default());
-    let save = visual.debug_bounds("annotation-save").unwrap().center();
-    visual.simulate_click(save, Default::default());
+    let close = visual.debug_bounds("close-image-preview").unwrap().center();
+    visual.simulate_click(close, Default::default());
     visual.run_until_parked();
     let annotated = owner.read_with(visual, |view, _| view.attachments[0].clone());
     assert_eq!(

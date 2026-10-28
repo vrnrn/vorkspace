@@ -9,6 +9,7 @@ publish = false
 tempfile = "3"
 serde.workspace = true
 serde_json.workspace = true
+cosmic-text = "0.19"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 vorkspace-core = { path = "../vorkspace-core" }
 pulldown-cmark = "0.13"

@@ -13,6 +13,15 @@ pub(super) struct Stroke {
     pub points: Vec<(f32, f32)>,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct TextBox {
+    pub position: (f32, f32),
+    /// Font size is relative to image width, just like brush width.
+    pub size: f32,
+    pub color: u32,
+    pub text: String,
+}
+
 pub(super) fn read_image(path: &Path) -> Result<RgbaImage, String> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
@@ -67,7 +76,11 @@ pub(super) fn read_image(path: &Path) -> Result<RgbaImage, String> {
     Ok(image.into_rgba8())
 }
 
-pub(super) fn png(image: &RgbaImage, strokes: &[Stroke]) -> Result<Vec<u8>, String> {
+pub(super) fn png(
+    image: &RgbaImage,
+    strokes: &[Stroke],
+    texts: &[TextBox],
+) -> Result<Vec<u8>, String> {
     let mut image = image.clone();
     let (w, h) = image.dimensions();
     for stroke in strokes {
@@ -117,6 +130,61 @@ pub(super) fn png(image: &RgbaImage, strokes: &[Stroke]) -> Result<Vec<u8>, Stri
                 let t = i as f32 / steps as f32;
                 draw_dot(&mut image, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
             }
+        }
+    }
+    if !texts.is_empty() {
+        use cosmic_text::{Attrs, Buffer, Color, FontSystem, Metrics, Shaping, SwashCache, Wrap};
+        let mut fonts = FontSystem::new();
+        let mut cache = SwashCache::new();
+        for text in texts.iter().filter(|text| !text.text.is_empty()) {
+            let font_size = (text.size * w as f32).max(1.);
+            let mut buffer = Buffer::new(&mut fonts, Metrics::new(font_size, font_size * 1.25));
+            buffer.set_wrap(Wrap::None);
+            buffer.set_size(None, None);
+            buffer.set_text(&text.text, &Attrs::new(), Shaping::Advanced, None);
+            buffer.shape_until_scroll(&mut fonts, false);
+            let available_width = (1. - text.position.0) * w as f32;
+            let available_height = (1. - text.position.1) * h as f32;
+            if buffer.layout_runs().any(|run| run.line_w > available_width)
+                || font_size * 1.25 > available_height
+            {
+                return Err(
+                    "Text extends beyond the image; shorten it or place it farther from the edge"
+                        .into(),
+                );
+            }
+            let color = Color::rgb(
+                (text.color >> 16) as u8,
+                (text.color >> 8) as u8,
+                text.color as u8,
+            );
+            let origin_x = (text.position.0 * w as f32).round() as i32;
+            let origin_y = (text.position.1 * h as f32).round() as i32;
+            buffer.draw(&mut fonts, &mut cache, color, |x, y, width, height, ink| {
+                for dy in 0..height {
+                    for dx in 0..width {
+                        let x = origin_x + x + dx as i32;
+                        let y = origin_y + y + dy as i32;
+                        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+                            continue;
+                        }
+                        let dest = image.get_pixel_mut(x as u32, y as u32);
+                        let a = ink.a() as f32 / 255.;
+                        let old_a = dest[3] as f32 / 255.;
+                        let out_a = a + old_a * (1. - a);
+                        if out_a == 0. {
+                            continue;
+                        }
+                        for (channel, source) in [ink.r(), ink.g(), ink.b()].iter().enumerate() {
+                            dest[channel] = ((*source as f32 * a
+                                + dest[channel] as f32 * old_a * (1. - a))
+                                / out_a)
+                                .round() as u8;
+                        }
+                        dest[3] = (out_a * 255.).round() as u8;
+                    }
+                }
+            });
         }
     }
     let mut output = Cursor::new(Vec::new());
@@ -177,17 +245,48 @@ mod tests {
                 points: vec![(0.5, 0.2)],
             },
         ];
-        let bytes = png(&original, &strokes).unwrap();
+        let bytes = png(&original, &strokes, &[]).unwrap();
         let flattened = image::load_from_memory(&bytes).unwrap().into_rgba8();
         assert_eq!(original.get_pixel(50, 25).0, [255, 255, 255, 255]);
         assert_eq!(flattened.get_pixel(50, 25).0, [255, 59, 48, 255]);
         assert_eq!(flattened.get_pixel(50, 10).0, [0, 85, 255, 255]);
         assert_eq!(flattened.get_pixel(5, 5).0, [255, 255, 255, 255]);
         assert_eq!(
-            image::load_from_memory(&png(&original, &[]).unwrap())
+            image::load_from_memory(&png(&original, &[], &[]).unwrap())
                 .unwrap()
                 .into_rgba8(),
             original
+        );
+    }
+    #[test]
+    fn text_flattens_with_brush_and_rejects_clipped_content() {
+        let original = RgbaImage::from_pixel(400, 160, image::Rgba([255, 255, 255, 255]));
+        let text = TextBox {
+            position: (0.1, 0.25),
+            size: 0.08,
+            color: 0x0055ff,
+            text: "Hello".into(),
+        };
+        let stroke = Stroke {
+            color: 0xff3b30,
+            width: 0.02,
+            points: vec![(0.7, 0.7)],
+        };
+        let flattened =
+            image::load_from_memory(&png(&original, &[stroke], &[text.clone()]).unwrap())
+                .unwrap()
+                .into_rgba8();
+        assert_eq!(flattened.get_pixel(280, 112).0, [255, 59, 48, 255]);
+        assert!(flattened.pixels().any(|p| p[2] > p[0] && p[2] > p[1]));
+        assert_eq!(original.get_pixel(280, 112).0, [255, 255, 255, 255]);
+        let clipped = TextBox {
+            position: (0.99, 0.25),
+            ..text
+        };
+        assert!(
+            png(&original, &[], &[clipped])
+                .unwrap_err()
+                .contains("beyond the image")
         );
     }
 }

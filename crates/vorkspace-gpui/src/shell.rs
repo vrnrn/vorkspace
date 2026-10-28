@@ -7933,8 +7933,10 @@ impl Render for Shell {
             .track_focus(&self.focus)
             .on_action(
                 cx.listener(|this, open: &crate::image_lightbox::Open, window, cx| {
-                    if let Some((old, _)) = this.image_lightbox.take() {
-                        old.update(cx, |view, _| view.cancel());
+                    if let Some((old, _)) = &this.image_lightbox {
+                        old.update(cx, |view, cx| view.reject_replacement(cx));
+                        cx.stop_propagation();
+                        return;
                     }
                     let owner = open.draft_session.and_then(|id| {
                         this.sessions.get(&id).cloned().or_else(|| {

@@ -2,9 +2,9 @@
 mod annotation;
 use crate::theme::{black, icon, white};
 use gpui::{
-    App, Bounds, BoxShadow, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Image,
-    ImageFormat, ImgResourceLoader, KeyBinding, MouseButton, Pixels, Point, RenderImage, Role,
-    SharedString, Size, Window, actions, canvas, div, img, point, prelude::*, px, size,
+    App, Bounds, BoxShadow, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable,
+    Image, ImageFormat, ImgResourceLoader, KeyBinding, MouseButton, Pixels, Point, RenderImage,
+    Role, SharedString, Size, Window, actions, canvas, div, img, point, prelude::*, px, size,
 };
 use std::time::Instant;
 use std::{path::PathBuf, sync::Arc};
@@ -98,6 +98,14 @@ fn fitted_size(natural: Size<Pixels>, viewport: Size<Pixels>) -> Size<Pixels> {
     size(natural.width * ratio, natural.height * ratio)
 }
 
+struct EditableText {
+    position: (f32, f32),
+    size: f32,
+    color: u32,
+    input: Entity<crate::input::Input>,
+    _change: gpui::Subscription,
+}
+
 pub(crate) struct Closed;
 pub(crate) struct ImageLightbox {
     source: Source,
@@ -117,6 +125,9 @@ pub(crate) struct ImageLightbox {
     strokes: Vec<annotation::Stroke>,
     drawing: bool,
     brush: bool,
+    text_tool: bool,
+    texts: Vec<EditableText>,
+    close_after_save: bool,
     color: u32,
     palette_open: bool,
     picker: Entity<crate::bots::color_picker::ColorPicker>,
@@ -136,7 +147,7 @@ impl ImageLightbox {
     ) -> Self {
         let generation = owner
             .as_ref()
-            .map(|owner| owner.read(cx).attachment_draft_generation());
+            .map(|owner| owner.update(cx, |owner, cx| owner.annotation_draft_generation(cx)));
         let restore = window.focused(cx);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -155,7 +166,7 @@ impl ImageLightbox {
             let renderer = cx.svg_renderer();
             let work = cx.background_executor().spawn(async move {
                 let pixels = annotation::read_image(&path)?;
-                let bytes = annotation::png(&pixels, &[])?;
+                let bytes = annotation::png(&pixels, &[], &[])?;
                 let image = Image::from_bytes(ImageFormat::Png, bytes)
                     .to_image_data(renderer)
                     .map_err(|e| e.to_string())?;
@@ -216,6 +227,9 @@ impl ImageLightbox {
             strokes: Vec::new(),
             drawing: false,
             brush: false,
+            text_tool: false,
+            texts: Vec::new(),
+            close_after_save: false,
             color: 0xff3b30,
             palette_open: false,
             picker,
@@ -240,8 +254,16 @@ impl ImageLightbox {
         ))
     }
 
-    fn save(&mut self, cx: &mut Context<Self>) {
-        if self.saving || self.strokes.is_empty() {
+    fn has_edits(&self, cx: &App) -> bool {
+        !self.strokes.is_empty()
+            || self
+                .texts
+                .iter()
+                .any(|text| !text.input.read(cx).content.is_empty())
+    }
+
+    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.saving || !self.has_edits(cx) {
             return;
         }
         let (Some(owner), Some(original), Source::Path(path)) =
@@ -254,11 +276,25 @@ impl ImageLightbox {
             return;
         };
         let strokes = self.strokes.clone();
+        let texts: Vec<_> = self
+            .texts
+            .iter()
+            .map(|text| annotation::TextBox {
+                position: text.position,
+                size: text.size,
+                color: text.color,
+                text: text.input.read(cx).content.to_string(),
+            })
+            .collect();
+        for text in &self.texts {
+            text.input.update(cx, |input, _| input.set_read_only(true));
+        }
+        self.drawing = false;
         self.saving = true;
         self.error = None;
         let renderer = cx.svg_renderer();
         let work = cx.background_executor().spawn(async move {
-            let bytes = annotation::png(&original, &strokes)?;
+            let bytes = annotation::png(&original, &strokes, &texts)?;
             let image = Image::from_bytes(ImageFormat::Png, bytes.clone())
                 .to_image_data(renderer)
                 .map_err(|e| e.to_string())?;
@@ -267,9 +303,9 @@ impl ImageLightbox {
                 .into_rgba8();
             Ok::<_, String>((bytes, image, pixels))
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
-            let _ = this.update(cx, |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
                 if this.cancelled {
                     return;
                 }
@@ -282,6 +318,9 @@ impl ImageLightbox {
                     Ok::<_, String>((path, image, pixels, generation))
                 });
                 this.saving = false;
+                for text in &this.texts {
+                    text.input.update(cx, |input, _| input.set_read_only(false));
+                }
                 match result {
                     Ok((path, image, pixels, generation)) => {
                         this.generation = Some(generation);
@@ -289,9 +328,20 @@ impl ImageLightbox {
                         this.image = Some(image);
                         this.original = Some(Arc::new(pixels));
                         this.strokes.clear();
+                        let had_text = !this.texts.is_empty();
+                        this.texts.clear();
                         this.error = None;
+                        if had_text && !this.close_after_save {
+                            window.focus(&this.focus, cx);
+                        }
+                        if this.close_after_save {
+                            this.finish_close(window, cx);
+                        }
                     }
-                    Err(error) => this.error = Some(error),
+                    Err(error) => {
+                        this.close_after_save = false;
+                        this.error = Some(format!("Could not save annotation: {error}"));
+                    }
                 }
                 cx.notify();
             });
@@ -319,7 +369,7 @@ impl ImageLightbox {
             .flex()
             .gap(px(6.))
             .child(
-                button("annotation-color", "Brush color")
+                button("annotation-color", "Annotation color")
                     .debug_selector(|| "annotation-color".into())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.palette_open = !this.palette_open;
@@ -346,6 +396,7 @@ impl ImageLightbox {
                     .when(self.brush, |d| d.bg(white(0.25)))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.brush = !this.brush;
+                        this.text_tool = false;
                         this.drawing = false;
                         this.palette_open = false;
                         cx.stop_propagation();
@@ -354,13 +405,36 @@ impl ImageLightbox {
                     .child(icon("annotation-brush-icon", 16.)),
             )
             .child(
+                button("annotation-text", "Add text")
+                    .debug_selector(|| "annotation-text".into())
+                    .aria_toggled(if self.text_tool {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .when(self.text_tool, |d| d.bg(white(0.25)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.text_tool = !this.text_tool;
+                        this.brush = false;
+                        this.drawing = false;
+                        this.palette_open = false;
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+                    .child("T"),
+            )
+            .child(
                 button("annotation-clear", "Clear drawing")
                     .debug_selector(|| "annotation-clear".into())
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(|this, _, window, cx| {
                         if this.saving {
                             return;
                         }
+                        if !this.texts.is_empty() {
+                            window.focus(&this.focus, cx);
+                        }
                         this.strokes.clear();
+                        this.texts.clear();
                         this.drawing = false;
                         this.error = None;
                         cx.stop_propagation();
@@ -371,8 +445,8 @@ impl ImageLightbox {
             .child(
                 button("annotation-save", "Save drawing to attachment (⌘S)")
                     .debug_selector(|| "annotation-save".into())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.save(cx);
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save(window, cx);
                         cx.stop_propagation();
                     }))
                     .child(icon("annotation-save-icon", 16.)),
@@ -407,7 +481,30 @@ impl ImageLightbox {
         self.cancelled = true;
     }
 
+    pub(crate) fn reject_replacement(&mut self, cx: &mut Context<Self>) {
+        self.error = Some("Close this image preview before opening another".into());
+        cx.notify();
+    }
+
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        if self.saving {
+            self.close_after_save = true;
+        } else if self.has_edits(cx) {
+            self.close_after_save = true;
+            self.save(window, cx);
+            if !self.saving {
+                self.close_after_save = false;
+                self.error = Some("Could not save annotation: the draft is unavailable".into());
+                cx.notify();
+            }
+        } else {
+            self.finish_close(window, cx);
+        }
+    }
+
+    // Escape discards the unsaved overlay, including an in-flight encoding.
+    fn finish_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel();
         if let Some(restore) = self.restore.take() {
             window.focus(&restore, cx);
@@ -517,9 +614,9 @@ impl Render for ImageLightbox {
             .w(self.viewport.width)
             .h(self.viewport.height)
             .overflow_hidden()
-            .on_action(cx.listener(|this, _: &Close, window, cx| this.close(window, cx)))
-            .on_action(cx.listener(|this, _: &Save, _, cx| {
-                this.save(cx);
+            .on_action(cx.listener(|this, _: &Close, window, cx| this.finish_close(window, cx)))
+            .on_action(cx.listener(|this, _: &Save, window, cx| {
+                this.save(window, cx);
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_key(KEY_ZOOM_STEP, cx)))
@@ -540,6 +637,33 @@ impl Render for ImageLightbox {
                         || this.image.is_none()
                     {
                         this.close(window, cx);
+                    } else if this.text_tool && this.original.is_some() && !this.saving {
+                        this.view = this.displayed_view();
+                        this.transition = None;
+                        if let Some(position) = this.image_point(event.position, false) {
+                            let text_size = 20. / this.image_size.width.as_f32().max(1.);
+                            let input = cx.new(|cx| {
+                                crate::input::Input::field(
+                                    "Annotation text",
+                                    "Type text",
+                                    white(0.6),
+                                    cx,
+                                )
+                            });
+                            let change = cx
+                                .subscribe(&input, |_, _, _: &crate::input::Changed, cx| {
+                                    cx.notify()
+                                });
+                            window.focus(&input.focus_handle(cx), cx);
+                            this.texts.push(EditableText {
+                                position,
+                                size: text_size,
+                                color: this.color,
+                                input,
+                                _change: change,
+                            });
+                            cx.notify();
+                        }
                     } else if this.brush && this.original.is_some() && !this.saving {
                         this.view = this.displayed_view();
                         this.transition = None;
@@ -676,7 +800,7 @@ impl Render for ImageLightbox {
                         .w(bounds.size.width)
                         .h(bounds.size.height)
                         .debug_selector(|| "lightbox-image".into())
-                        .cursor(if self.brush {
+                        .cursor(if self.brush || self.text_tool {
                             CursorStyle::Crosshair
                         } else if !zoomed {
                             CursorStyle::PointingHand
@@ -733,7 +857,24 @@ impl Render for ImageLightbox {
                             .top_0()
                             .left_0()
                             .size_full()
-                        }),
+                        })
+                        .children(self.texts.iter().enumerate().map(|(index, text)| {
+                            let font_size = (bounds.size.width.as_f32() * text.size).max(1.);
+                            text.input
+                                .update(cx, |input, _| input.set_annotation_metrics(font_size));
+                            div()
+                                .id(("annotation-text-box", index))
+                                .debug_selector(move || {
+                                    format!("annotation-text-box-{index}").into()
+                                })
+                                .absolute()
+                                .left(bounds.size.width * text.position.0)
+                                .top(bounds.size.height * text.position.1)
+                                .w(bounds.size.width * (1. - text.position.0))
+                                .text_color(gpui::rgb(text.color))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .child(text.input.clone())
+                        })),
                 )
             })
             .when(self.failed, |d| {
@@ -760,6 +901,7 @@ impl Render for ImageLightbox {
             .when_some(self.error.clone(), |d, error| {
                 d.child(
                     div()
+                        .debug_selector(|| "annotation-error".into())
                         .absolute()
                         .bottom(px(20.))
                         .left(px(24.))
@@ -768,7 +910,15 @@ impl Render for ImageLightbox {
                 )
             })
             .when(self.owner.is_some() && self.original.is_some(), |d| {
-                d.child(self.toolbar(cx))
+                d.child(self.toolbar(cx)).child(
+                    div()
+                        .absolute()
+                        .bottom(px(20.))
+                        .right(px(24.))
+                        .text_size(px(12.))
+                        .text_color(white(0.7))
+                        .child("Close saves · Esc discards unsaved edits"),
+                )
             })
             .child(
                 div()
@@ -910,6 +1060,25 @@ mod tests {
                 .update(&mut cx, |view, _, cx| {
                     assert!(view.original.is_some());
                     view.brush = true;
+                    let input = cx.new(|cx| {
+                        let mut input = crate::input::Input::field(
+                            "Annotation text",
+                            "Type text",
+                            white(0.6),
+                            cx,
+                        );
+                        input.set_text("Review this".into(), cx);
+                        input
+                    });
+                    let change =
+                        cx.subscribe(&input, |_, _, _: &crate::input::Changed, cx| cx.notify());
+                    view.texts.push(EditableText {
+                        position: (0.25, 0.65),
+                        size: 0.035,
+                        color: 0x0055ff,
+                        input,
+                        _change: change,
+                    });
                     view.strokes.push(annotation::Stroke {
                         color: 0xff3b30,
                         width: 0.01,
@@ -959,6 +1128,7 @@ mod tests {
 
     #[gpui::test]
     fn drawing_tracks_image_coordinates_and_clear_across_zoom_and_resize(cx: &mut TestAppContext) {
+        cx.update(crate::input::bind);
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("sample.png");
         image::RgbaImage::from_pixel(800, 400, image::Rgba([255, 255, 255, 255]))
@@ -1059,22 +1229,62 @@ mod tests {
         window
             .update(visual, |view, _, _| assert_eq!(view.color, 0x0055ff))
             .unwrap();
+        let text_tool = visual.debug_bounds("annotation-text").unwrap().center();
+        visual.simulate_click(text_tool, Default::default());
+        let image_bounds = visual.debug_bounds("lightbox-image").unwrap();
+        let position = point(
+            image_bounds.left() + image_bounds.size.width * 0.5,
+            image_bounds.top() + image_bounds.size.height * 0.5,
+        );
+        visual.simulate_click(position, Default::default());
+        visual.simulate_input("Note");
+        visual.refresh().unwrap();
+        window
+            .update(visual, |view, _, cx| {
+                assert_eq!(view.texts.len(), 1);
+                assert_eq!(view.texts[0].input.read(cx).content.as_ref(), "Note");
+                assert_eq!(view.texts[0].color, 0x0055ff);
+                assert!((view.texts[0].position.0 - 0.5).abs() < 0.001);
+                assert!((view.texts[0].position.1 - 0.5).abs() < 0.001);
+            })
+            .unwrap();
+        let before = visual.debug_bounds("annotation-text-box-0").unwrap();
+        assert!((before.left() - position.x).as_f32().abs() < 1.);
+        visual.simulate_resize(size(px(900.), px(650.)));
+        visual.refresh().unwrap();
+        let image_bounds = visual.debug_bounds("lightbox-image").unwrap();
+        let after = visual.debug_bounds("annotation-text-box-0").unwrap();
+        assert!(
+            (after.left() - (image_bounds.left() + image_bounds.size.width * 0.5))
+                .as_f32()
+                .abs()
+                < 1.
+        );
+        assert!(
+            (after.top() - (image_bounds.top() + image_bounds.size.height * 0.5))
+                .as_f32()
+                .abs()
+                < 1.
+        );
         let clear = visual.debug_bounds("annotation-clear").unwrap().center();
         visual.simulate_click(clear, Default::default());
         window
-            .update(visual, |view, _, _| assert!(view.strokes.is_empty()))
+            .update(visual, |view, _, _| {
+                assert!(view.strokes.is_empty());
+                assert!(view.texts.is_empty());
+            })
             .unwrap();
         // Cancel in the same event turn in which encoding starts, before the
         // background executor can publish. The preview is deliberately kept
         // alive to prove cancellation does not rely on entity destruction.
         window
-            .update(visual, |view, _, cx| {
+            .update(visual, |view, window, cx| {
                 view.strokes.push(annotation::Stroke {
                     color: view.color,
                     width: 0.01,
                     points: vec![(0.5, 0.5)],
                 });
-                view.save(cx);
+                view.save(window, cx);
                 assert!(view.saving);
                 view.cancel();
             })

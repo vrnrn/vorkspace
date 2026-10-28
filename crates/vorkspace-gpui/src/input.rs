@@ -406,6 +406,11 @@ impl Input {
     pub(crate) fn set_max_chars(&mut self, value: usize) {
         self.max_chars = Some(value);
     }
+    pub(crate) fn set_annotation_metrics(&mut self, font_size: f32) {
+        self.font_size = font_size;
+        self.line_height = font_size * 1.25;
+        self.height = self.line_height;
+    }
     pub(crate) fn set_font_size(&mut self, size: f32) {
         self.font_size = size;
     }
