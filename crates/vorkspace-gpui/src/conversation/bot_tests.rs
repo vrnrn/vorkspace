@@ -165,15 +165,8 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
         cx.open_window(Default::default(), |_, cx| {
             cx.new(|cx| {
                 let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
-                view.loaded = true;
-                // A real load marks a saved draft as transcript content.
-                view.summary.has_messages = true;
                 view.configure_bot(Bot::default(), dir.path().into(), Default::default(), cx);
-                view.follow_ups.persisted = state.revision;
-                view.follow_ups.state = state.clone();
-                view.transcript.update(cx, |transcript, cx| {
-                    transcript.set_saved_draft(state.draft.clone(), cx)
-                });
+                view.load(cx);
                 view
             })
         })
@@ -188,6 +181,24 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
     visual.simulate_keystrokes("cmd-a");
     visual.simulate_input("Intermediate");
     visual.run_until_parked();
+    window
+        .update(visual, |view, _, cx| {
+            assert!(
+                view.transcript
+                    .read(cx)
+                    .saved_draft_edit_matches("Intermediate", cx),
+                "input missed the draft editor; composer={:?}, status={:?}",
+                view.input.read(cx).content,
+                view.status
+            );
+            assert_eq!(
+                view.follow_ups.state.draft.as_ref().unwrap().text,
+                "Intermediate",
+                "status={:?}",
+                view.status
+            );
+        })
+        .unwrap();
 
     // The second connection queues exactly the intermediate snapshot while
     // the first window keeps the same editor open.
