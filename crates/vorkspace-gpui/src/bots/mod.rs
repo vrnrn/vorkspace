@@ -955,14 +955,13 @@ impl Bots {
             .roster
             .get(id)
             .is_some_and(|bot| !bot.pending_reports.is_empty())
+            && let Some(view) = self.chats.get(id)
         {
-            if let Some(view) = self.chats.get(id) {
-                view.update(cx, |view, cx| {
-                    if view.needs_history_restore() {
-                        view.load(cx);
-                    }
-                });
-            }
+            view.update(cx, |view, cx| {
+                if view.needs_history_restore() {
+                    view.load(cx);
+                }
+            });
         }
         if let Some(view) = self
             .chats

@@ -787,7 +787,7 @@ impl Shell {
         let message = format!("Could not delete conversation {id}: {reason}");
         match &mut self.error {
             Some(error) if error.starts_with("Could not delete conversation ") => {
-                error.push_str("\n");
+                error.push('\n');
                 error.push_str(&message);
             }
             _ => self.error = Some(message),

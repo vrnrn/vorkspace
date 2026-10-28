@@ -395,7 +395,11 @@ impl Shell {
                 } else {
                     this.workspace.projects.retain(|p| vorkspace_core::files::path_key(p) != key);
                     this.workspace.deleted_projects.insert(key.clone());
-                    let rail = this.workspace.project_rail_mut(); rail.pinned.remove(&key); rail.assignments.remove(&key); if rail.awaiting_legacy_pins { rail.pin_overrides.insert(key.clone(), false); } if rail.awaiting_legacy_assignments { rail.assignment_overrides.insert(key.clone(), None); }
+                    let rail = this.workspace.project_rail_mut();
+                    rail.pinned.remove(&key);
+                    rail.assignments.remove(&key);
+                    if rail.awaiting_legacy_pins { rail.pin_overrides.insert(key.clone(), false); }
+                    if rail.awaiting_legacy_assignments { rail.assignment_overrides.insert(key.clone(), None); }
                     this.workspace.project_focus.remove(&path);
                     this.persist(cx);
                 }

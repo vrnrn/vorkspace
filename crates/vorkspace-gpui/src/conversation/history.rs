@@ -6,13 +6,13 @@ pub(super) type HistoryAction = Box<dyn FnOnce(&mut Conversation, &mut Context<C
 pub(super) enum InitialHistory {
     Complete(crate::transcript::PreparedHistory),
     Window(
-        vorkspace_core::store::IndexedHistoryPage,
+        Box<vorkspace_core::store::IndexedHistoryPage>,
         crate::transcript::PreparedHistory,
     ),
 }
 pub(super) enum InitialRows {
     Complete(Vec<vorkspace_core::transcript::Row>),
-    Window(vorkspace_core::store::IndexedHistoryPage),
+    Window(Box<vorkspace_core::store::IndexedHistoryPage>),
 }
 
 impl Conversation {

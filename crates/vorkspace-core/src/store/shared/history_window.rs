@@ -51,7 +51,7 @@ impl Store {
         cursor: Option<&IndexedHistoryCursor>,
         page_turns: usize,
     ) -> Result<Option<IndexedHistoryPage>, String> {
-        let Some(tables) = self.shared_bot_tables(&original)? else {
+        let Some(tables) = self.shared_bot_tables(original)? else {
             if cursor.is_some() {
                 return Err("Indexed history owner changed; reload the conversation".into());
             }

@@ -749,7 +749,7 @@ impl Conversation {
                             && let Ok(Some(page)) = s.indexed_history_page(id, None, 10)
                             && page.before.is_some()
                         {
-                            return Ok(history::InitialRows::Window(page));
+                            return Ok(history::InitialRows::Window(Box::new(page)));
                         }
                         Ok(history::InitialRows::Complete(s.load(id)?.rows))
                     })
@@ -850,7 +850,7 @@ impl Conversation {
                                 this.history_partial = true;
                                 this.transcript.update(cx, |v, cx| {
                                     v.install_storage_history(
-                                        page,
+                                        *page,
                                         prepared,
                                         this.store.clone(),
                                         id,
