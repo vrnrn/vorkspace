@@ -218,6 +218,7 @@ impl SettingsView {
                         },
                     ),
                 );
+                controls.insert(1, self.models_menu(kind, &models, cx));
             }
             if installed.is_some() {
                 controls.push(
@@ -225,16 +226,14 @@ impl SettingsView {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(content(0.5))
-                                .child(if locked {
-                                    "Hidden globally"
-                                } else {
-                                    "Show in picker"
-                                }),
-                        )
+                        .when(locked, |d| {
+                            d.child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(content(0.5))
+                                    .child("Hidden globally"),
+                            )
+                        })
                         .child(self.toggle(
                             kind.id(),
                             "Show provider in the model picker",

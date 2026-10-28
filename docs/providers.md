@@ -14,7 +14,7 @@ One provider is enough. vorkspace probes for each CLI at startup and disables th
 
 Once a provider is installed and signed in, open a project folder in vorkspace, choose that agent, and send a message. For sessions on another machine, install and authenticate the providers on the host as described in [remote access](remote-access.md).
 
-In **Settings → Providers**, use **Models** beside an agent to choose which models appear in pickers, favorites, and recent choices. Search for a model and uncheck it to hide it; **Show all** restores the list. The Global/project scope applies to model visibility too, and a model hidden globally stays hidden in every project. Existing conversations keep their selected model.
+In **Settings → Providers**, use **Models** beside an agent to choose which models appear in pickers, favorites, and recent choices. Search for a model and uncheck it to hide it; **Show all** restores the list. Model visibility is global, saved with your preferences, and a hidden model stays in the **Models** list so you can restore it. The model a conversation is using stays visible in its own picker. Existing conversations keep their selected model.
 
 ## Multiple accounts & usage-limit continuation
 

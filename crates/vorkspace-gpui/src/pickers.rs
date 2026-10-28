@@ -135,6 +135,60 @@ mod model_label_tests {
     }
 
     #[gpui::test]
+    fn hidden_models_leave_the_picker_but_the_current_model_stays(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::settings::Preferences {
+                hidden_models: vec![
+                    crate::settings::model_key("codex", "a"),
+                    crate::settings::model_key("codex", "b"),
+                    // Another provider's model with the same id is unaffected.
+                    crate::settings::model_key("claude", "c"),
+                ],
+                ..Default::default()
+            });
+            let list = cx.new(|cx| {
+                ModelList::new_for(
+                    Kind::Codex,
+                    Some("a".into()),
+                    "/project",
+                    Default::default(),
+                    cx,
+                )
+            });
+            list.update(cx, |list, cx| {
+                list.catalogs.push((
+                    Kind::Codex,
+                    ["a", "b", "c"]
+                        .map(|id| vorkspace_core::catalog::Model {
+                            id: id.into(),
+                            name: id.into(),
+                            alias_target: None,
+                            efforts: Vec::new(),
+                            default_effort: None,
+                            fast: false,
+                            thinking: false,
+                            default: false,
+                            tiers: Vec::new(),
+                            controls: Vec::new(),
+                        })
+                        .into(),
+                ));
+                let ids: Vec<_> = list
+                    .entries(cx)
+                    .into_iter()
+                    .filter_map(|entry| entry.id)
+                    .collect();
+                assert!(
+                    ids.contains(&"a".to_string()),
+                    "current model stays: {ids:?}"
+                );
+                assert!(!ids.contains(&"b".to_string()), "{ids:?}");
+                assert!(ids.contains(&"c".to_string()), "{ids:?}");
+            });
+        });
+    }
+
+    #[gpui::test]
     fn remote_model_availability_comes_from_the_host(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let list = cx.new(|cx| {
@@ -596,8 +650,21 @@ impl ModelList {
             });
         }
         let query = self.query(cx);
+        let hidden = cx
+            .try_global::<crate::settings::Preferences>()
+            .map(|prefs| prefs.hidden_models.clone())
+            .unwrap_or_default();
         entries
             .into_iter()
+            .filter(|e| {
+                // The model in use stays listed so the picker never hides what
+                // the conversation is running.
+                let current = kind == self.provider && e.id == self.current;
+                current
+                    || e.id.as_deref().is_none_or(|id| {
+                        !hidden.contains(&crate::settings::model_key(kind.id(), id))
+                    })
+            })
             .filter(|e| {
                 query.is_empty()
                     || format!("{} {}", e.name, kind.label())

@@ -15,7 +15,7 @@ pub(crate) mod widgets;
 
 pub(crate) use keymap::apply as apply_keybindings;
 pub(crate) use model::Section;
-pub(crate) use preferences::{ModelChoice, Preferences};
+pub(crate) use preferences::{ModelChoice, Preferences, model_key};
 
 use crate::{
     input::{self, Input},
@@ -232,6 +232,9 @@ pub(crate) struct SettingsView {
     select_active: usize,
     select_focus: FocusHandle,
     select_anchors: RefCell<HashMap<&'static str, AnchorSlot>>,
+    models_open: Option<vorkspace_core::provider::Kind>,
+    model_menu_anchors: RefCell<HashMap<vorkspace_core::provider::Kind, AnchorSlot>>,
+    model_filter: Entity<Input>,
     search: Entity<Input>,
     search_query: String,
     search_active: usize,
@@ -306,12 +309,18 @@ impl SettingsView {
             input
         });
         let chat_background_preview = cx.new(|_| ProjectBackground::preview());
+        let model_filter = cx.new(|cx| {
+            let mut input = Input::field("Search models", "Search models", content(0.35), cx);
+            input.set_font_size(12.);
+            input
+        });
         let skill_filter = cx.new(|cx| {
             let mut input = Input::field("Filter skills", "Filter", content(0.35), cx);
             input.set_font_size(12.);
             input
         });
         let mut subscriptions = vec![
+            cx.subscribe(&model_filter, |_, _, _: &input::Changed, cx| cx.notify()),
             cx.subscribe(&skill_filter, |this, input, _: &input::Changed, cx| {
                 this.skill_query = input.read(cx).content.to_string();
                 cx.notify();
@@ -370,6 +379,9 @@ impl SettingsView {
             select_active: 0,
             select_focus: cx.focus_handle(),
             select_anchors: Default::default(),
+            models_open: None,
+            model_menu_anchors: Default::default(),
+            model_filter,
             search,
             search_query: String::new(),
             search_active: 0,
@@ -488,6 +500,7 @@ impl SettingsView {
                 self.refresh_mcp_health(cx);
             }
             self.select_open = None;
+            self.models_open = None;
             self.recording = None;
             self.scroll.set_offset(gpui::point(px(0.), px(0.)));
             cx.notify();
@@ -507,6 +520,11 @@ impl SettingsView {
         }
         if self.recording.take().is_some() {
             self.recording_preview.clear();
+            window.focus(&self.focus, cx);
+            cx.notify();
+            return true;
+        }
+        if self.models_open.take().is_some() {
             window.focus(&self.focus, cx);
             cx.notify();
             return true;

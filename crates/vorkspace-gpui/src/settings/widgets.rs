@@ -744,6 +744,177 @@ impl SettingsView {
 }
 
 impl SettingsView {
+    /// Choose which of a provider's models the picker offers. The full catalog
+    /// stays listed here so a hidden model can always be restored.
+    pub(super) fn models_menu(
+        &self,
+        kind: vorkspace_core::provider::Kind,
+        models: &[(String, String)],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use super::preferences::model_key;
+        let provider = kind.id();
+        let open = self.models_open == Some(kind);
+        let slot = self
+            .model_menu_anchors
+            .borrow_mut()
+            .entry(kind)
+            .or_default()
+            .clone();
+        let visible = models
+            .iter()
+            .filter(|(id, _)| !self.prefs.model_hidden(provider, id))
+            .count();
+        let weak = cx.weak_entity();
+        let trigger = secondary_button(
+            SharedString::from(format!("models-{provider}")),
+            format!("Choose visible {} models", kind.label()),
+            false,
+            models.is_empty(),
+        )
+        .relative()
+        .gap_1()
+        .debug_selector(move || format!("models-{provider}"))
+        .child(slot.probe())
+        .child(format!("Models {visible}/{}", models.len()))
+        .when(!models.is_empty(), |d| {
+            d.aria_expanded(open)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if this.models_open == Some(kind) {
+                        this.models_open = None;
+                    } else {
+                        this.models_open = Some(kind);
+                        this.model_filter
+                            .update(cx, |input, cx| input.set_text(String::new(), cx));
+                        window.focus(&gpui::Focusable::focus_handle(&this.model_filter, cx), cx);
+                    }
+                    cx.notify();
+                }))
+        });
+        div()
+            .relative()
+            .child(trigger)
+            .when(open, |d| {
+                let query = self.model_filter.read(cx).content.trim().to_lowercase();
+                let rows = models
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, name))| {
+                        query.is_empty() || name.to_lowercase().contains(&query)
+                    })
+                    .map(|(ix, (id, name))| {
+                        let shown = !self.prefs.model_hidden(provider, id);
+                        let key = model_key(provider, id);
+                        div()
+                            .id(SharedString::from(format!("model-visible-{provider}-{ix}")))
+                            .debug_selector(move || format!("model-visible-{provider}-{ix}"))
+                            .role(Role::CheckBox)
+                            .aria_label(name.clone())
+                            .aria_selected(shown)
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .rounded_lg()
+                            .px_2()
+                            .py(px(6.))
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(content(if shown { 1. } else { 0.5 }))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(content(0.05)))
+                            .child(
+                                div()
+                                    .size_4()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .when(shown, |d| {
+                                        d.child(icon("check-hi", 14.).text_color(content(1.)))
+                                    }),
+                            )
+                            .child(div().min_w_0().flex_1().truncate().child(name.clone()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let key = key.clone();
+                                this.update(cx, |p| {
+                                    if let Some(at) =
+                                        p.hidden_models.iter().position(|saved| *saved == key)
+                                    {
+                                        p.hidden_models.remove(at);
+                                    } else {
+                                        p.hidden_models.push(key);
+                                    }
+                                })
+                            }))
+                    })
+                    .collect::<Vec<_>>();
+                let any_hidden = visible < models.len();
+                d.child(
+                    popover(
+                        SharedString::from(format!("models-popover-{provider}")),
+                        Anchor::Slot(slot),
+                    )
+                    .side(Side::Bottom)
+                    .align(Align::End)
+                    .width(320.)
+                    .max_height(380.)
+                    .padding(4.)
+                    .on_dismiss(move |window, cx| {
+                        let _ = weak.update(cx, |this, cx| {
+                            this.models_open = None;
+                            window.focus(&this.focus, cx);
+                            cx.notify();
+                        });
+                    })
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("models-list-{provider}")))
+                            .role(Role::Group)
+                            .aria_label(format!("{} model visibility", kind.label()))
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_2()
+                                    .py_1()
+                                    .child(
+                                        div().flex_1().min_w_0().child(self.model_filter.clone()),
+                                    )
+                                    .when(any_hidden, |d| {
+                                        d.child(
+                                            secondary_button(
+                                                SharedString::from(format!(
+                                                    "models-show-all-{provider}"
+                                                )),
+                                                "Show all models",
+                                                false,
+                                                false,
+                                            )
+                                            .child("Show all")
+                                            .on_click(
+                                                cx.listener(move |this, _, _, cx| {
+                                                    this.update(cx, |p| {
+                                                        let prefix = format!("{provider}:");
+                                                        p.hidden_models.retain(|key| {
+                                                            !key.starts_with(&prefix)
+                                                        });
+                                                    })
+                                                }),
+                                            ),
+                                        )
+                                    }),
+                            )
+                            .children(rows),
+                    ),
+                )
+            })
+            .into_any_element()
+    }
     pub(super) fn project_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let options = self
             .ctx

@@ -161,3 +161,48 @@ fn bot_mascot_is_beside_name_and_sidebar_switch_stays_visible(cx: &mut TestAppCo
     assert_eq!(switch.size, size(px(36.), px(20.)));
     assert!(switch.right() <= px(700.));
 }
+
+#[gpui::test]
+fn models_menu_hides_and_restores_individual_models(cx: &mut TestAppContext) {
+    use vorkspace_core::provider::Kind;
+    let window = window(Section::Providers, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.discovery.binaries = vec![(Kind::Claude, Some("/bin/claude".into()))];
+            view.ctx.catalogs.insert(
+                "claude".into(),
+                vec![("a".into(), "Alpha".into()), ("b".into(), "Beta".into())],
+            );
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let at = visual.debug_bounds("models-claude").unwrap().center();
+    visual.simulate_click(at, Default::default());
+    visual.run_until_parked();
+    let row = |visual: &mut VisualTestContext, ix: usize| {
+        let selector = ["model-visible-claude-0", "model-visible-claude-1"][ix];
+        visual.debug_bounds(selector).unwrap().center()
+    };
+    let at = row(visual, 1);
+    visual.simulate_click(at, Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            assert_eq!(view.prefs.hidden_models, ["claude:b"]);
+            assert!(view.prefs.model_hidden("claude", "b"));
+            assert!(!view.prefs.model_hidden("claude", "a"));
+            assert!(!view.prefs.model_hidden("codex", "b"));
+        })
+        .unwrap();
+    // A hidden model stays in the list so it can be restored.
+    let at = row(visual, 1);
+    visual.simulate_click(at, Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            assert!(view.prefs.hidden_models.is_empty())
+        })
+        .unwrap();
+}

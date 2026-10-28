@@ -68,6 +68,8 @@ pub(crate) struct Preferences {
     pub default_provider: Option<String>,
     pub default_models: HashMap<String, String>,
     pub hidden_providers: Vec<String>,
+    /// Models left out of the picker, as `provider:model` (see `model_key`).
+    pub hidden_models: Vec<String>,
     pub project_providers: HashMap<String, ProviderDefaults>,
     pub favorite_models: Vec<ModelChoice>,
     pub recent_models: Vec<ModelChoice>,
@@ -166,6 +168,7 @@ impl Default for Preferences {
             default_provider: None,
             default_models: HashMap::new(),
             hidden_providers: Vec::new(),
+            hidden_models: Vec::new(),
             project_providers: HashMap::new(),
             favorite_models: Vec::new(),
             recent_models: Vec::new(),
@@ -265,8 +268,16 @@ pub(crate) struct ModelChoice {
     pub model: Option<String>,
 }
 
+/// Picker-visibility key; model ids alone can repeat across providers.
+pub(crate) fn model_key(provider: &str, model: &str) -> String {
+    format!("{provider}:{model}")
+}
+
 impl gpui::Global for Preferences {}
 impl Preferences {
+    pub(crate) fn model_hidden(&self, provider: &str, model: &str) -> bool {
+        self.hidden_models.contains(&model_key(provider, model))
+    }
     pub(crate) fn hidden_for(&self, project: &str) -> Vec<String> {
         let mut hidden = self.hidden_providers.clone();
         if let Some(settings) = self.project_providers.get(project) {
