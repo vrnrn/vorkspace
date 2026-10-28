@@ -3655,6 +3655,13 @@ mod composer_motion_tests {
                     let composer = visual.debug_bounds("composer-box").unwrap();
                     let field = visual.debug_bounds("composer-text-field").unwrap();
                     let toolbar = visual.debug_bounds("composer-toolbar").unwrap();
+                    // The column is centred in the pane, not pushed to an edge.
+                    let left = composer.left();
+                    let right = px(width) - composer.right();
+                    assert!(
+                        (left - right).abs() <= px(1.),
+                        "composer is centred: {left:?} vs {right:?} at {width}px"
+                    );
                     let top = if attached {
                         visual
                             .debug_bounds("composer-attachments")
@@ -3853,16 +3860,13 @@ impl Render for Conversation {
                 ),
             )
             .child(
-                div()
-                    .flex_shrink_0()
-                    .w_full()
-                    .flex()
-                    .justify_center()
-                    .child(
-                        composer_column()
-                            .when_some(self.questions.front(), |d, (card, _)| d.child(card.clone()))
-                            .child(self.composer_motion.clone().wrap(self.composer(window, cx))),
-                    ),
+                // A column, as in a Bot chat, so the shared column's auto
+                // margins centre it.
+                div().flex_shrink_0().w_full().flex().flex_col().child(
+                    composer_column()
+                        .when_some(self.questions.front(), |d, (card, _)| d.child(card.clone()))
+                        .child(self.composer_motion.clone().wrap(self.composer(window, cx))),
+                ),
             )
             .when_some(self.btw.as_ref(), |d, sheet| d.child(sheet.clone()))
             .children(self.remote_plan_reader(cx))
