@@ -932,13 +932,13 @@ impl Bots {
             .and_then(|v| v.read(cx).bot_delivered())
             .map(str::to_owned);
         if let Some(message) = delivered
-            && let Some(m) = self.roster.get_mut(id).filter(|m| {
-                m.outbox
-                    .first()
-                    .is_some_and(|q| q.id == message && q.peer.is_none())
-            })
+            && let Some(m) = self.roster.get_mut(id)
+            && let Some(index) = m
+                .outbox
+                .iter()
+                .position(|q| q.id == message && q.peer.is_none())
         {
-            let sent = m.outbox.remove(0);
+            let sent = m.outbox.remove(index);
             self.held.remove(&sent.id);
             self.save(cx);
             self.configure_chat(id, cx);
@@ -1013,8 +1013,8 @@ impl Bots {
         let Some(message) = self
             .roster
             .get(id)
-            .and_then(|m| m.outbox.first())
-            .filter(|m| self.persisted_messages.contains(&m.id) && !self.held.contains(&m.id))
+            .and_then(|m| m.outbox.iter().find(|m| !self.held.contains(&m.id)))
+            .filter(|m| self.persisted_messages.contains(&m.id))
             .cloned()
         else {
             return;

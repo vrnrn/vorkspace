@@ -3584,6 +3584,24 @@ fn a_queued_message_waits_for_the_running_turn_instead_of_steering(cx: &mut Test
         received.try_recv().is_err(),
         "a queued message is never steered into the running turn"
     );
+    s.manager.update(cx, |m, cx| {
+        let outbox = &m.roster.get(&s.id).unwrap().outbox;
+        assert_eq!(outbox.len(), 1);
+        assert_eq!(outbox[0].text, "After this, run the tests");
+        assert!(m.held.contains(&outbox[0].id));
+        m.send_message(&s.id, "Change course now".into(), Vec::new(), cx)
+            .unwrap();
+    });
+    cx.run_until_parked();
+    let vorkspace_core::agent::Decision::Steer(steer) = received.try_recv().unwrap().decision
+    else {
+        panic!("expected the unheld message to steer");
+    };
+    assert_eq!(steer.text, "Change course now");
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |v, cx| v.app_steer_delivered(&steer.id, cx));
+    });
+    cx.run_until_parked();
     s.manager.update(cx, |m, _| {
         let outbox = &m.roster.get(&s.id).unwrap().outbox;
         assert_eq!(outbox.len(), 1);

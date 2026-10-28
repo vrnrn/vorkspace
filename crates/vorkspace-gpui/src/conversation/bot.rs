@@ -867,6 +867,7 @@ impl Conversation {
                 };
                 pills.push(
                     quiet_control("model-effort", open)
+                        .debug_selector(|| "model-effort".into())
                         .max_w(px(112.))
                         .aria_label(format!("{label}: {value}"))
                         .aria_expanded(open)

@@ -3115,6 +3115,7 @@ impl Conversation {
                 },
                 label.into(),
             )
+            .debug_selector(|| "composer-workspace".into())
             .aria_label(format!("Workspace {label}"))
             .aria_expanded(self.menu_is(ComposerMenu::Workspace))
             .child(self.workspace_anchor.probe())
@@ -3130,6 +3131,7 @@ impl Conversation {
             // WorkspaceIdentity: a started conversation owns this working copy.
             div()
                 .id("composer-workspace")
+                .debug_selector(|| "composer-workspace".into())
                 .role(Role::Group)
                 .aria_label(format!("Workspace {label}"))
                 .flex_shrink_0()
@@ -3195,12 +3197,20 @@ impl Conversation {
                     }),
                 )
                 .child(provider_icon(&self.summary.provider, 14.))
-                .child(div().min_w_0().truncate().child(self.model_label()))
+                .child(
+                    div()
+                        .debug_selector(|| "composer-model-label".into())
+                        .min_w_0()
+                        .truncate()
+                        .child(self.model_label()),
+                )
                 .when_some(trigger_effort, |d, effort| {
                     d.child(
                         div()
                             .debug_selector(|| "composer-model-effort".into())
-                            .flex_shrink_0()
+                            .min_w_0()
+                            .flex_shrink(1.)
+                            .truncate()
                             .text_size(px(11.))
                             .text_color(content(0.5))
                             .child(effort),
@@ -3208,6 +3218,7 @@ impl Conversation {
                 });
         let access_open = self.menu_is(ComposerMenu::Access);
         let access = quiet_control("composer-access", access_open)
+            .debug_selector(|| "composer-access".into())
             .aria_label(format!("Access, {}", self.settings.access.label()))
             .aria_expanded(access_open)
             .child(self.access_anchor.probe())
@@ -3237,6 +3248,7 @@ impl Conversation {
             .debug_selector(|| "composer-toolbar".into())
             .min_w_0()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(2.))
             .pt_1()
@@ -3267,6 +3279,7 @@ impl Conversation {
                 };
                 d.child(
                     bar_trigger("composer-branch", "git-branch", label.clone().into())
+                        .debug_selector(|| "composer-branch".into())
                         .aria_label(format!(
                             "{} {label}",
                             if new { "Worktree base" } else { "Branch" }
@@ -3291,7 +3304,10 @@ impl Conversation {
                     .ml_auto()
                     .pl_2()
                     .min_w_0()
+                    .max_w_full()
+                    .flex_shrink_0()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap_1()
                     .child(model)
@@ -3335,6 +3351,7 @@ impl Conversation {
                         d.child(
                             div()
                                 .id("context-meter")
+                                .debug_selector(|| "context-meter".into())
                                 .role(Role::Image)
                                 .aria_label(format!(
                                     "{headline}{}",
@@ -3617,6 +3634,202 @@ mod composer_motion_tests {
         cx.refresh().unwrap();
         cx.run_until_parked();
         from
+    }
+    #[gpui::test]
+    fn composer_toolbar_wraps_without_overlapping_and_keeps_menus_clickable(
+        cx: &mut TestAppContext,
+    ) {
+        crate::theme::configure(&Default::default(), false, true);
+        cx.update(|cx| {
+            cx.set_global(crate::settings::Preferences::default());
+            crate::clock::use_test_clock(cx);
+        });
+        let window = window(cx, 760.);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        for width in [760., 480., 360., 260., 760.] {
+            visual.simulate_resize(size(px(width), px(700.)));
+            for started in [false, true] {
+                for beside in [false, true] {
+                    window
+                        .update(visual, |view, _, cx| {
+                            cx.global_mut::<crate::settings::Preferences>()
+                                .model_controls = if beside { "beside" } else { "combined" }.into();
+                            view.summary.has_messages = started;
+                            view.branch = Some("feature/a-very-long-branch-name".into());
+                            view.model = Some("gpt-6.1-sol".into());
+                            view.settings.effort = Some("xhigh".into());
+                            view.settings.access = AccessMode::FullAccess;
+                            view.catalog = vec![Model {
+                                alias_target: None,
+                                id: "gpt-6.1-sol".into(),
+                                name: "GPT-6.1 Sol".into(),
+                                efforts: vec!["high".into(), "xhigh".into()],
+                                default_effort: Some("high".into()),
+                                fast: false,
+                                thinking: false,
+                                default: true,
+                                tiers: Vec::new(),
+                                controls: Vec::new(),
+                            }];
+                            cx.notify();
+                        })
+                        .unwrap();
+                    visual.run_until_parked();
+                    visual.refresh().unwrap();
+                    let toolbar = visual.debug_bounds("composer-toolbar").unwrap();
+                    let mut names = vec![
+                        "composer-add",
+                        "composer-workspace",
+                        "composer-branch",
+                        "composer-model",
+                        "composer-access",
+                    ];
+                    if !started {
+                        names.push("context-meter");
+                    }
+                    let mut bounds: Vec<_> = names
+                        .iter()
+                        .map(|name| visual.debug_bounds(name).unwrap())
+                        .collect();
+                    if beside {
+                        names.push("model-effort");
+                        bounds.push(visual.debug_bounds("model-effort").unwrap());
+                    }
+                    for (i, a) in bounds.iter().enumerate() {
+                        assert!(
+                            a.left() >= toolbar.left()
+                                && a.right() <= toolbar.right()
+                                && a.top() >= toolbar.top()
+                                && a.bottom() <= toolbar.bottom(),
+                            "{} outside toolbar at {width}, started={started}, beside={beside}: {a:?}, {toolbar:?}",
+                            names[i]
+                        );
+                        for (j, b) in bounds.iter().enumerate().skip(i + 1) {
+                            assert!(
+                                a.right() <= b.left()
+                                    || b.right() <= a.left()
+                                    || a.bottom() <= b.top()
+                                    || b.bottom() <= a.top(),
+                                "{} overlaps {} at {width}, started={started}, beside={beside}: {a:?}, {b:?}",
+                                names[i],
+                                names[j]
+                            );
+                        }
+                    }
+                    if !beside {
+                        let effort = visual.debug_bounds("composer-model-effort").unwrap();
+                        let label = visual.debug_bounds("composer-model-label").unwrap();
+                        let model = bounds[3];
+                        assert!(effort.left() >= model.left() && effort.right() <= model.right());
+                        assert!(label.right() <= effort.left());
+                    }
+                    visual.simulate_click(bounds[3].center(), Default::default());
+                    assert!(
+                        window
+                            .update(visual, |view, _, _| view.menu_is(ComposerMenu::Model)
+                                || view.bot_ui.models.is_some())
+                            .unwrap()
+                    );
+                    window
+                        .update(visual, |view, _, cx| {
+                            view.menu = None;
+                            view.bot_ui.models = None;
+                            cx.notify();
+                        })
+                        .unwrap();
+                    visual.refresh().unwrap();
+                    let access = visual.debug_bounds("composer-access").unwrap();
+                    visual.simulate_click(access.center(), Default::default());
+                    assert!(
+                        window
+                            .update(visual, |view, _, _| view.menu_is(ComposerMenu::Access))
+                            .unwrap()
+                    );
+                    window
+                        .update(visual, |view, _, cx| {
+                            view.menu = None;
+                            cx.notify();
+                        })
+                        .unwrap();
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "Requires Metal and VORKSPACE_COMPOSER_CAPTURE_DIR"]
+    fn native_narrow_composer_capture() {
+        struct Capture(Entity<Conversation>);
+        impl gpui::Render for Capture {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().bg(pane_fill()).child(self.0.clone())
+            }
+        }
+        let output =
+            std::path::PathBuf::from(std::env::var_os("VORKSPACE_COMPOSER_CAPTURE_DIR").unwrap());
+        assert!(output.is_absolute() && output.is_dir());
+        let mut cx = gpui::HeadlessAppContext::with_platform(
+            Arc::new(gpui_apple::AppleTextSystem::new()),
+            Arc::new(crate::assets::Assets),
+            || {
+                Ok(Some(Box::new(
+                    gpui_apple::metal_renderer::MetalHeadlessRenderer::new(),
+                )))
+            },
+        );
+        crate::clock::use_test_clock(&cx);
+        for light in [false, true] {
+            let prefs = crate::settings::Preferences {
+                theme: if light { "light" } else { "dark" }.into(),
+                ..Default::default()
+            };
+            crate::theme::configure(&prefs, false, true);
+            cx.update(|cx| cx.set_global(prefs));
+            for width in [260., 360., 480., 760.] {
+                let store = Store::open(Path::new(":memory:")).unwrap();
+                let summary = store.create("codex", "/work/vorkspace").unwrap();
+                let store = Arc::new(Mutex::new(store));
+                let window = cx
+                    .open_window(size(px(width), px(700.)), |_, cx| {
+                        let conversation = cx.new(|cx| {
+                            let mut view = Conversation::new(summary, store, cx);
+                            view.loaded = true;
+                            view.status = "Ready".into();
+                            view.branch = Some("feature/a-very-long-branch-name".into());
+                            view.settings.access = AccessMode::FullAccess;
+                            view.model = Some("gpt-6.1-sol".into());
+                            view.settings.effort = Some("xhigh".into());
+                            view.catalog = vec![Model {
+                                alias_target: None,
+                                id: "gpt-6.1-sol".into(),
+                                name: "GPT-6.1 Sol".into(),
+                                efforts: vec!["high".into(), "xhigh".into()],
+                                default_effort: Some("high".into()),
+                                fast: false,
+                                thinking: false,
+                                default: true,
+                                tiers: Vec::new(),
+                                controls: Vec::new(),
+                            }];
+                            view
+                        });
+                        cx.new(|_| Capture(conversation))
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                crate::clock::settle_headless_animations(window, &mut cx);
+                cx.capture_screenshot(window.into())
+                    .unwrap()
+                    .save(output.join(format!(
+                        "composer-{}-{width}.png",
+                        if light { "light" } else { "dark" }
+                    )))
+                    .unwrap();
+                cx.update_window(window.into(), |_, window, _| window.remove_window())
+                    .unwrap();
+            }
+        }
+        crate::theme::configure(&Default::default(), false, true);
     }
     #[gpui::test]
     fn composer_uses_react_surface_and_equal_text_padding_with_attachments(
