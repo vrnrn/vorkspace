@@ -3859,13 +3859,7 @@ impl Render for Conversation {
                     .flex()
                     .justify_center()
                     .child(
-                        div()
-                            .w_full()
-                            .max_w(px(COMPOSER_COLUMN))
-                            .flex()
-                            .flex_col()
-                            .px(px(10.))
-                            .pb(px(6.))
+                        composer_column()
                             .when_some(self.questions.front(), |d, (card, _)| d.child(card.clone()))
                             .child(self.composer_motion.clone().wrap(self.composer(window, cx))),
                     ),
@@ -3896,6 +3890,17 @@ fn tool_pill(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div>
         .text_color(content(1.))
         .hover(|s| s.bg(content(0.15)))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+}
+/// The column a composer sits in, shared by sessions and Bots.
+pub(super) fn composer_column() -> gpui::Div {
+    div()
+        .w_full()
+        .max_w(px(COMPOSER_COLUMN))
+        .mx_auto()
+        .px(px(10.))
+        .pb(px(6.))
+        .flex()
+        .flex_col()
 }
 /// BotComposer's quiet control under the box: plain until hovered or open.
 pub(super) fn quiet_control(

@@ -610,14 +610,7 @@ impl Conversation {
                 ),
             )
             .child(
-                div()
-                    .w_full()
-                    .max_w(px(COMPOSER_COLUMN))
-                    .mx_auto()
-                    .px_1p5()
-                    .pb_1p5()
-                    .flex()
-                    .flex_col()
+                composer_column()
                     .children(
                         self.bot_ui
                             .pending
