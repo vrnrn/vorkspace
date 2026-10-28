@@ -62,8 +62,21 @@ impl State {
         writer.discarded = true;
         writer.pending = None;
     }
+    pub(super) fn generation(&self) -> u64 {
+        self.writer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .generation
+    }
     pub(super) fn ready_for_replacement(&self) -> bool {
-        !self.hydrating && self.error.is_none() && !self.resolving
+        !self.hydrating
+            && self.error.is_none()
+            && !self.resolving
+            && !self
+                .writer
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .discarded
     }
 }
 pub(super) fn flush(writer: &Arc<Mutex<Writer>>) -> Result<(), String> {

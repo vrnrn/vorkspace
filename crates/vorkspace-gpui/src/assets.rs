@@ -157,6 +157,12 @@ impl AssetSource for Assets {
 }
 fn icon_body(path: &str) -> Option<&'static str> {
     Some(match path {
+        "annotation-brush-icon" => {
+            "<path d='M14 14 21 5a2 2 0 0 0-3-3l-9 7 5 5Z'/><path d='M10 11c-3-1-5 1-5 4 0 2-1 3-3 4 4 1 8 1 10-2 1-2 0-4-2-6Z'/>"
+        }
+        "annotation-save-icon" => {
+            "<path d='M5 3h12l3 3v15H4V3h1Z'/><path d='M8 3v6h8V3M8 21v-8h8v8'/>"
+        }
         "circle-alert" => "<circle cx='12' cy='12' r='9'/><path d='M12 7v6m0 4h.01'/>",
         "refresh" => {
             "<path d='M20 7v5h-5M4 17v-5h5'/><path d='M6 6a8 8 0 0 1 13 2l1 4M4 12l1 4a8 8 0 0 0 13 2'/>"

@@ -7533,8 +7533,14 @@ impl Render for Shell {
             .track_focus(&self.focus)
             .on_action(
                 cx.listener(|this, open: &crate::image_lightbox::Open, window, cx| {
+                    if let Some((old, _)) = this.image_lightbox.take() {
+                        old.update(cx, |view, _| view.cancel());
+                    }
+                    let owner = open
+                        .draft_session
+                        .and_then(|id| this.sessions.get(&id).cloned());
                     let view = cx.new(|cx| {
-                        crate::image_lightbox::ImageLightbox::new(open.clone(), window, cx)
+                        crate::image_lightbox::ImageLightbox::new(open.clone(), owner, window, cx)
                     });
                     let closed =
                         cx.subscribe(&view, |this, _, _: &crate::image_lightbox::Closed, cx| {
