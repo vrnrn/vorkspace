@@ -6,6 +6,21 @@ use super::*;
 const CHANGED: &str =
     "This conversation changed in another window. Reopen it before saving; its data was preserved.";
 
+/// Prepare every lazy queue/Bot table before a scalar history guard can go live.
+/// Writers also call this inside their own transactions for databases that have
+/// not saved history yet. Once a guard exists, bookkeeping must never add DDL.
+pub(super) fn ensure_bookkeeping_schema(conn: &Connection) -> Result<(), String> {
+    sql(conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS native_bot_dispatch_claims(
+            bot_id TEXT NOT NULL,message_id TEXT NOT NULL,token TEXT NOT NULL,
+            PRIMARY KEY(bot_id,message_id));
+         CREATE TABLE IF NOT EXISTS native_bot_draft_origins(
+            key TEXT PRIMARY KEY,value TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS native_follow_up_metadata(
+            session_id TEXT PRIMARY KEY,state_json TEXT NOT NULL);",
+    ))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
     Ordinary,
@@ -244,6 +259,7 @@ impl Store {
         // These local tables must exist before scalar history guards are live.
         super::super::composer_draft::ensure_draft_schema(&tx)?;
         super::super::composer_draft::ensure_recovery_schema(&tx)?;
+        ensure_bookkeeping_schema(&tx)?;
         sql(tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS session_history_revisions(
                 session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
@@ -619,7 +635,10 @@ mod tests {
         ]
     }
     fn fixture(bot: bool) -> (Store, i64, String, Transcript) {
-        let mut store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+        fixture_at(Path::new(":memory:"), bot)
+    }
+    fn fixture_at(path: &Path, bot: bool) -> (Store, i64, String, Transcript) {
+        let mut store = Store::open_vorkspace(path).unwrap();
         let id = store.create("codex", "/project").unwrap().id;
         let original = store.persisted_session_id(id).unwrap();
         if bot {
@@ -637,6 +656,175 @@ mod tests {
         // Prime native normalized storage and its compact projection index.
         store.write_rows(id, transcript.rows.len(), &[]).unwrap();
         (store, id, original, transcript)
+    }
+
+    #[test]
+    fn first_bookkeeping_writes_preserve_other_active_histories_and_reopen() {
+        for bot in [false, true] {
+            for (operation, separate_writer) in [
+                ("queue", false),
+                ("origin", false),
+                ("claim", false),
+                ("queue", true),
+                ("origin", true),
+                ("claim", true),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let path = directory.path().join("history.db");
+                let (mut store, id, original, mut history) = fixture_at(&path, bot);
+                let other = store.create("codex", "/other").unwrap().id;
+                let other_original = store.persisted_session_id(other).unwrap();
+                let writer = separate_writer.then(|| Store::open_vorkspace(&path).unwrap());
+                let actor = writer.as_ref().unwrap_or(&store);
+                let target = actor.resolve_session_id(&other_original).unwrap();
+                let before = store.shared_blocks(id).unwrap();
+                let schema: i64 = store
+                    .conn
+                    .query_row("PRAGMA schema_version", [], |row| row.get(0))
+                    .unwrap();
+                let queued = crate::follow_up::State {
+                    revision: 1,
+                    messages: vec![crate::follow_up::Message {
+                        id: "queued-once".into(),
+                        text: "Keep the unsent prompt".into(),
+                        prepared_prompt: Some("Keep its transport context too".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                };
+                let message = crate::bot::Message {
+                    id: "claimed-once".into(),
+                    text: "Pending Bot work".into(),
+                    prepared_prompt: None,
+                    peer: None,
+                    sent_at: None,
+                    internal: false,
+                    error: None,
+                    attachments: vec![],
+                };
+                match operation {
+                    "queue" => actor.accept_follow_ups(target, &queued).unwrap(),
+                    "origin" => actor
+                        .save_setting(
+                            &format!("bot-draft-origin:{target}"),
+                            r#"{"id":"draft","revision":1}"#,
+                        )
+                        .unwrap(),
+                    _ => {
+                        let mut roster = crate::bot::Roster::default();
+                        roster.bots.push(crate::bot::Bot {
+                            id: "bot".into(),
+                            outbox: vec![message.clone()],
+                            ..Default::default()
+                        });
+                        roster.save(actor).unwrap();
+                        assert!(actor.claim_bot_message("bot", &message, "owner").unwrap());
+                    }
+                }
+                let from = history.append(" continued after bookkeeping");
+                store.write_rows(id, from, &history.rows[from..]).unwrap();
+                assert_eq!(
+                    store
+                        .conn
+                        .query_row("PRAGMA schema_version", [], |row| row.get::<_, i64>(0))
+                        .unwrap(),
+                    schema
+                );
+                assert_eq!(store.shared_blocks(id).unwrap()[..3], before[..3]);
+                drop(writer);
+                drop(store);
+                let reopened = Store::open_vorkspace(&path).unwrap();
+                let id = reopened.resolve_session_id(&original).unwrap();
+                let other = reopened.resolve_session_id(&other_original).unwrap();
+                assert_eq!(reopened.load(id).unwrap().rows, history.rows);
+                assert_eq!(reopened.shared_blocks(id).unwrap()[1], before[1]);
+                match operation {
+                    "queue" => assert_eq!(
+                        reopened.follow_ups(other).unwrap().messages,
+                        queued.messages
+                    ),
+                    "origin" => assert_eq!(
+                        reopened
+                            .setting(&format!("bot-draft-origin:{other}"))
+                            .unwrap()
+                            .as_deref(),
+                        Some(r#"{"id":"draft","revision":1}"#)
+                    ),
+                    _ => {
+                        assert!(!reopened
+                            .claim_bot_message("bot", &message, "other-owner")
+                            .unwrap());
+                        assert_eq!(
+                            crate::bot::Roster::load(&reopened)
+                                .unwrap()
+                                .get("bot")
+                                .unwrap()
+                                .outbox
+                                .len(),
+                            1
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn first_bot_draft_acceptance_preserves_active_history_input_and_receipt() {
+        for bot in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("history.db");
+            let (store, id, original, history) = fixture_at(&path, bot);
+            let before = store.shared_blocks(id).unwrap();
+            let input = json!({"cwd":"/project","text":"Unsent Bot draft","selectionStart":4,"selectionEnd":9,"attachments":[],"mcpTags":[{"token":"@mcp/docs","opaque":true,"server":{"provider":"codex","name":"docs","scope":"user","configPath":"/private/config.toml","transport":"stdio","enabled":true}}]});
+            let revision = store.save_composer_draft(id, 0, &input).unwrap();
+            let mut state = store.follow_ups(id).unwrap();
+            state.revision += 1;
+            state.draft = Some(crate::follow_up::Message {
+                id: "draft-version".into(),
+                text: "Unsent Bot draft".into(),
+                prepared_prompt: Some("MCP context: docs\n\nUnsent Bot draft".into()),
+                at: history.rows.len(),
+                ..Default::default()
+            });
+            store
+                .accept_bot_draft(id, &state, revision, "draft-version")
+                .unwrap();
+            assert!(
+                store.shared_blocks(id).unwrap()[..before.len()] == before,
+                "accepting a draft must retain every existing source field"
+            );
+            let mut settings = store.agent_settings(id).unwrap().unwrap_or_default();
+            settings.turns.insert(
+                1,
+                crate::agent::TurnInfo {
+                    duration_known: true,
+                    duration_ms: 1200,
+                    ..Default::default()
+                },
+            );
+            store.save_agent_settings(id, &settings).unwrap();
+            drop(store);
+            let reopened = Store::open_vorkspace(&path).unwrap();
+            let id = reopened.resolve_session_id(&original).unwrap();
+            let draft = reopened.follow_ups(id).unwrap().draft.unwrap();
+            assert_eq!(draft.id, "draft-version");
+            assert_eq!(draft.prepared_prompt, state.draft.unwrap().prepared_prompt);
+            assert_eq!(reopened.composer_draft(id).unwrap().unwrap().payload, input);
+            assert_eq!(
+                reopened.agent_settings(id).unwrap().unwrap().turns[&1].duration_ms,
+                1200
+            );
+            assert_eq!(reopened.shared_blocks(id).unwrap()[1], before[1]);
+            let marker: Value = serde_json::from_str(
+                &reopened
+                    .setting(&format!("bot-draft-origin:{id}"))
+                    .unwrap()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(marker, json!({"id":"draft-version","revision":revision}));
+        }
     }
 
     #[test]

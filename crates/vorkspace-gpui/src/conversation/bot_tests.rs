@@ -166,6 +166,8 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
             cx.new(|cx| {
                 let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
                 view.loaded = true;
+                // A real load marks a saved draft as transcript content.
+                view.summary.has_messages = true;
                 view.configure_bot(Bot::default(), dir.path().into(), Default::default(), cx);
                 view.follow_ups.persisted = state.revision;
                 view.follow_ups.state = state.clone();

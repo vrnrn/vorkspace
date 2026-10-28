@@ -632,7 +632,7 @@ impl Store {
             bot,
             message,
         )?;
-        sql(tx.execute_batch("CREATE TABLE IF NOT EXISTS native_bot_dispatch_claims(bot_id TEXT NOT NULL,message_id TEXT NOT NULL,token TEXT NOT NULL,PRIMARY KEY(bot_id,message_id))"))?;
+        incremental::ensure_bookkeeping_schema(&tx)?;
         let inserted = sql(tx.execute(
             "INSERT OR IGNORE INTO native_bot_dispatch_claims VALUES(?1,?2,?3)",
             params![bot, message.id, token],
@@ -656,7 +656,7 @@ impl Store {
             if current.as_deref() != expected {
                 return Err("Setting changed in another window; your changes were preserved in this window.".into());
             }
-            sql(tx.execute_batch("CREATE TABLE IF NOT EXISTS native_bot_draft_origins(key TEXT PRIMARY KEY,value TEXT NOT NULL)"))?;
+            incremental::ensure_bookkeeping_schema(&tx)?;
             sql(tx.execute("INSERT INTO native_bot_draft_origins(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key,value]))?;
             return sql(tx.commit());
         }
@@ -682,7 +682,7 @@ impl Store {
     pub(super) fn shared_save_setting(&self, key: &str, value: &str) -> Result<(), String> {
         if key.starts_with("bot-draft-origin:") {
             self.shared_writable()?;
-            self.conn.execute_batch("CREATE TABLE IF NOT EXISTS native_bot_draft_origins(key TEXT PRIMARY KEY,value TEXT NOT NULL)").map_err(|e| e.to_string())?;
+            incremental::ensure_bookkeeping_schema(&self.conn)?;
             self.conn.execute("INSERT INTO native_bot_draft_origins(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key,value]).map_err(|e| e.to_string())?;
             return Ok(());
         }
@@ -2064,6 +2064,7 @@ impl Store {
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         ))?;
+        incremental::ensure_bookkeeping_schema(&tx)?;
         if let Some((revision, draft_id)) = origin {
             let current = self.composer_draft(id)?;
             if current.as_ref().map_or(0, |draft| draft.revision) != revision
@@ -2074,7 +2075,6 @@ impl Store {
             {
                 return Err("Composer changed in another window; your input was preserved".into());
             }
-            sql(tx.execute_batch("CREATE TABLE IF NOT EXISTS native_bot_draft_origins(key TEXT PRIMARY KEY,value TEXT NOT NULL)"))?;
             let marker = json!({"id": draft_id, "revision": revision}).to_string();
             sql(tx.execute("INSERT INTO native_bot_draft_origins(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("bot-draft-origin:{id}"), marker]))?;
         }
@@ -2151,7 +2151,6 @@ impl Store {
             blocks.insert(at, value);
         }
         self.shared_store_blocks(id, &blocks)?;
-        sql(tx.execute_batch("CREATE TABLE IF NOT EXISTS native_follow_up_metadata(session_id TEXT PRIMARY KEY, state_json TEXT NOT NULL)"))?;
         sql(tx.execute("INSERT INTO native_follow_up_metadata(session_id,state_json) VALUES(?1,?2) ON CONFLICT(session_id) DO UPDATE SET state_json=excluded.state_json", params![self.persisted_session_id(id)?, encode(state)?]))?;
         sql(tx.commit())?;
         self.shared
