@@ -160,6 +160,108 @@ fn current_record(state: &Writer) -> Option<vorkspace_core::store::ComposerDraft
     })
 }
 impl Conversation {
+    /// Record the exact composer revision before publishing a Bot draft. The
+    /// marker alone never consumes input: recovery also requires the draft,
+    /// its durable outbox entry, or a provider delivery receipt.
+    pub(super) fn mark_bot_draft_origin(
+        &mut self,
+        draft_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if !self.composer_draft.ready_for_replacement() {
+            return Err("The composer is still restoring".into());
+        }
+        self.capture_composer(cx);
+        self.composer_draft.flush()?;
+        let revision = self
+            .composer_draft
+            .writer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .revision;
+        let marker = json!({"id": draft_id, "revision": revision}).to_string();
+        locked(&self.store)?.save_setting(&format!("bot-draft-origin:{}", self.summary.id), &marker)
+    }
+
+    pub(super) fn mark_bot_draft_discarded(&self, draft_id: &str) -> Result<(), String> {
+        let store = locked(&self.store)?;
+        let key = format!("bot-draft-origin:{}", self.summary.id);
+        let Some(raw) = store.setting(&key)? else {
+            return Ok(());
+        };
+        let mut marker: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        if marker["id"].as_str() == Some(draft_id) || marker["nextId"].as_str() == Some(draft_id) {
+            marker["discarded"] = json!(true);
+            store.save_setting(&key, &marker.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn mark_bot_draft_edit_origin(
+        &self,
+        old_id: &str,
+        new_id: &str,
+    ) -> Result<(), String> {
+        let store = locked(&self.store)?;
+        let key = format!("bot-draft-origin:{}", self.summary.id);
+        let Some(raw) = store.setting(&key)? else {
+            return Ok(());
+        };
+        let mut marker: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        if marker["id"].as_str() == Some(old_id) || marker["nextId"].as_str() == Some(old_id) {
+            marker["id"] = json!(old_id);
+            marker["nextId"] = json!(new_id);
+            store.save_setting(&key, &marker.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn composer_is_published_bot_draft(
+        &self,
+        saved: &vorkspace_core::store::ComposerDraft,
+    ) -> Result<bool, String> {
+        let store = locked(&self.store)?;
+        let Some(raw) = store.setting(&format!("bot-draft-origin:{}", self.summary.id))? else {
+            return Ok(false);
+        };
+        let marker: Value =
+            serde_json::from_str(&raw).map_err(|e| format!("Cannot verify draft origin: {e}"))?;
+        if marker["revision"].as_u64() != Some(saved.revision) {
+            return Ok(false);
+        }
+        let id = marker["id"]
+            .as_str()
+            .ok_or("Cannot verify draft origin identity")?;
+        let next_id = marker["nextId"].as_str();
+        if marker["discarded"] == true {
+            return Ok(true);
+        }
+        if store
+            .follow_ups(self.summary.id)?
+            .draft
+            .is_some_and(|draft| draft.id == id || Some(draft.id.as_str()) == next_id)
+        {
+            return Ok(true);
+        }
+        for candidate in [Some(id), next_id].into_iter().flatten() {
+            if store
+                .setting(&format!("bot-delivered:{}:{candidate}", self.summary.id))?
+                .is_some()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(vorkspace_core::bot::Roster::load(&store)?
+            .bots
+            .iter()
+            .any(|bot| {
+                bot.session_id == Some(self.summary.id)
+                    && bot
+                        .outbox
+                        .iter()
+                        .any(|message| message.id == id || Some(message.id.as_str()) == next_id)
+            }))
+    }
     pub(super) fn composer_recovery_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (preview, attachments) = {
             let state = self
@@ -344,6 +446,21 @@ impl Conversation {
                         && let Some(saved) = saved
                         && !saved.deleted
                     {
+                        let published = match this.composer_is_published_bot_draft(&saved) {
+                            Ok(published) => published,
+                            Err(error) => {
+                                this.status = format!("Could not verify saved draft: {error}. Your input was preserved.");
+                                this.composer_draft.error = Some(this.status.clone());
+                                cx.notify();
+                                return;
+                            }
+                        };
+                        if published {
+                            // The saved card/outbox owns exactly this old input.
+                            // A newer revision, even with identical text, stays put.
+                            this.persist_composer(cx);
+                            return;
+                        }
                         this.composer_draft.restoring = true;
                         let payload = &saved.payload;
                         this.attachments = payload["attachments"]

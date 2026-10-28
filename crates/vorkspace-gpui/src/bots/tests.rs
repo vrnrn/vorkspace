@@ -1,7 +1,10 @@
 use super::*;
 use gpui::{TestAppContext, WindowHandle};
 use serde_json::{Value, json};
-use std::sync::{Arc, Mutex, mpsc};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex, mpsc},
+};
 use vorkspace_core::store::Store;
 #[path = "memory_tests.rs"]
 mod memory_tests;
@@ -1622,6 +1625,167 @@ fn setup(cx: &mut TestAppContext) -> Setup {
         root,
         store,
     }
+}
+
+#[gpui::test]
+fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let draft = vorkspace_core::follow_up::Message {
+        id: format!("draft-{}", bot::new_id()),
+        text: "Send this once".into(),
+        attachments: vec![PathBuf::from("/tmp/saved-attachment.txt")],
+        ..Default::default()
+    };
+    {
+        let db = locked(&s.store).unwrap();
+        let mut state = db.follow_ups(s.session).unwrap();
+        state.revision += 1;
+        state.draft = Some(draft.clone());
+        db.accept_follow_ups(s.session, &state).unwrap();
+    }
+    s.manager.update(cx, |manager, cx| {
+        manager.chats.remove(&s.id);
+        for _ in 0..2 {
+            manager.enqueue_held(
+                &s.id,
+                draft.text.clone(),
+                vec!["/tmp/saved-attachment.txt".into()],
+                false,
+                true,
+                Some(draft.id.clone()),
+                None,
+                cx,
+            );
+        }
+    });
+    cx.run_until_parked();
+    let db = Store::open(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
+    let roster = Roster::load(&db).unwrap();
+    let queued: Vec<_> = roster
+        .get(&s.id)
+        .unwrap()
+        .outbox
+        .iter()
+        .filter(|message| message.id == draft.id)
+        .collect();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].text, draft.text);
+    assert_eq!(queued[0].attachments, ["/tmp/saved-attachment.txt"]);
+    assert!(roster.held_messages.contains(&draft.id));
+    assert_eq!(
+        db.follow_ups(s.session).unwrap().draft.unwrap().id,
+        draft.id
+    );
+    // A delivery receipt dominates both an old draft and an old outbox after
+    // a crash, so restoring either cannot replay an accepted prompt.
+    db.save_setting(&format!("bot-delivered:{}:{}", s.session, draft.id), "1")
+        .unwrap();
+    drop(db);
+    let reopened = Store::open(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
+    assert!(reopened.follow_ups(s.session).unwrap().draft.is_none());
+    s.manager
+        .update(cx, |manager, cx| manager.ensure_chat(&s.id, cx));
+    cx.run_until_parked();
+    s.manager.read_with(cx, |manager, _| {
+        assert!(
+            manager
+                .roster
+                .get(&s.id)
+                .unwrap()
+                .outbox
+                .iter()
+                .all(|message| message.id != draft.id)
+        );
+    });
+}
+#[gpui::test]
+fn failed_outbox_write_preserves_saved_draft_and_retry_steers_only_once(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let draft = vorkspace_core::follow_up::Message {
+        id: format!("draft-{}", bot::new_id()),
+        text: "A durable steer".into(),
+        ..Default::default()
+    };
+    {
+        let db = locked(&s.store).unwrap();
+        let mut state = db.follow_ups(s.session).unwrap();
+        state.revision += 1;
+        state.draft = Some(draft.clone());
+        db.accept_follow_ups(s.session, &state).unwrap();
+    }
+    s.manager.update(cx, |manager, cx| {
+        manager.chats.remove(&s.id);
+        manager.ensure_chat(&s.id, cx);
+    });
+    cx.run_until_parked();
+    let (controls, received) = mpsc::channel();
+    s.manager.update(cx, |manager, cx| {
+        manager.chats[&s.id].update(cx, |view, _| view.app_steerable_turn(controls));
+        manager.inflight.insert(
+            s.id.clone(),
+            bot::Message {
+                id: "already-running".into(),
+                text: "running".into(),
+                peer: None,
+                sent_at: None,
+                internal: false,
+                error: None,
+                attachments: Vec::new(),
+            },
+        );
+    });
+    let conn = rusqlite::Connection::open(Path::new(&s.project).join("native.sqlite")).unwrap();
+    conn.execute_batch("CREATE TRIGGER fail_bot_roster BEFORE UPDATE ON native_settings WHEN NEW.key = 'bot-roster' BEGIN SELECT RAISE(FAIL, 'simulated outbox failure'); END;").unwrap();
+    let submit = |manager: &mut Bots, cx: &mut Context<Bots>| {
+        manager.chats[&s.id].update(cx, |_, cx| {
+            cx.emit(crate::conversation::BotSubmitted {
+                draft_id: Some(draft.id.clone()),
+                text: draft.text.clone(),
+                attachments: Vec::new(),
+                queue: false,
+                mode: None,
+            })
+        });
+    };
+    s.manager.update(cx, submit);
+    cx.run_until_parked();
+    assert!(received.try_recv().is_err());
+    assert_eq!(
+        locked(&s.store)
+            .unwrap()
+            .follow_ups(s.session)
+            .unwrap()
+            .draft
+            .unwrap()
+            .id,
+        draft.id
+    );
+    s.manager.read_with(cx, |manager, _| {
+        assert!(
+            manager
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("simulated outbox failure")
+        )
+    });
+    conn.execute_batch("DROP TRIGGER fail_bot_roster").unwrap();
+    s.manager.update(cx, submit);
+    cx.run_until_parked();
+    let control = received.try_recv().expect("persisted retry should steer");
+    let vorkspace_core::agent::Decision::Steer(message) = control.decision else {
+        panic!("expected steer");
+    };
+    assert_eq!(message.id, draft.id);
+    assert!(received.try_recv().is_err());
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .follow_ups(s.session)
+            .unwrap()
+            .draft
+            .is_none()
+    );
 }
 fn call(
     s: &Setup,
@@ -3744,6 +3908,8 @@ fn a_queued_message_waits_for_the_running_turn_instead_of_steering(cx: &mut Test
             Vec::new(),
             false,
             true,
+            None,
+            None,
             cx,
         );
     });

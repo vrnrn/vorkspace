@@ -236,11 +236,60 @@ impl Conversation {
         if text.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
-        self.input.update(cx, |i, cx| i.set_text(String::new(), cx));
-        let attachments = std::mem::take(&mut self.attachments);
-        let mut message = self.message(text, attachments, None, cx);
+        let mut message = self.message(text, self.attachments.clone(), None, cx);
         message.at = self.transcript.read(cx).source_rows().len();
-        if self.summary.title.starts_with("New ") {
+        // Bot drafts are accepted before clearing the composer. An attachment
+        // copy or storage failure must leave the user's input untouched.
+        if self.settings.bot.is_some() {
+            if let Err(error) = self.mark_bot_draft_origin(&message.id, cx) {
+                self.status =
+                    format!("Could not save draft: {error}. Your composer was preserved.");
+                self.bot_ui.draft_error = Some(self.status.clone());
+                cx.notify();
+                return;
+            }
+            let mut next = self.follow_ups.state.clone();
+            next.revision += 1;
+            next.draft = Some(message.clone());
+            let result = (|| {
+                let store = locked(&self.store)?;
+                next.retain_attachments(self.summary.id, store.data_dir())?;
+                store.accept_follow_ups(self.summary.id, &next)
+            })();
+            if let Err(error) = result {
+                // A shared-store root publication can fail after its database
+                // commit. Adopt any matching durable card before permitting a
+                // retry, while retaining the original composer as recovery.
+                if let Ok(saved) =
+                    locked(&self.store).and_then(|store| store.follow_ups(self.summary.id))
+                {
+                    if saved
+                        .draft
+                        .as_ref()
+                        .is_some_and(|draft| draft.id == message.id)
+                    {
+                        self.follow_ups.persisted = saved.revision;
+                        self.follow_ups.state = saved;
+                        self.summary.has_messages = true;
+                        let draft = self.follow_ups.state.draft.clone();
+                        self.transcript
+                            .update(cx, |view, cx| view.set_saved_draft(draft, cx));
+                    }
+                }
+                self.status =
+                    format!("Could not save draft: {error}. Your composer was preserved.");
+                self.bot_ui.draft_error = Some(self.status.clone());
+                cx.notify();
+                return;
+            }
+            self.bot_ui.draft_error = None;
+            message = next.draft.clone().unwrap();
+            self.follow_ups.persisted = next.revision;
+            self.follow_ups.state = next;
+        }
+        self.input.update(cx, |i, cx| i.set_text(String::new(), cx));
+        self.attachments.clear();
+        if self.settings.bot.is_none() && self.summary.title.starts_with("New ") {
             self.summary.title = message
                 .label()
                 .split_whitespace()
@@ -274,7 +323,9 @@ impl Conversation {
             .update(cx, |view, cx| view.introduce_saved_draft(message, cx));
         self.completion
             .update(cx, |completion, cx| completion.dismiss(cx));
-        self.save_follow_ups(cx);
+        if self.settings.bot.is_none() {
+            self.save_follow_ups(cx);
+        }
         cx.emit(SessionChanged);
     }
     pub(super) fn draft_action(&mut self, send: bool, cx: &mut Context<Self>) {
@@ -287,6 +338,64 @@ impl Conversation {
             return;
         }
         if send && (!self.loaded || self.preparing_worktree) {
+            return;
+        }
+        if self.settings.bot.is_some() {
+            if self.bot_ui.draft_sending.is_some() && (!send || !self.bot_ui.draft_retry) {
+                return;
+            }
+            if send {
+                let Some(message) = self.follow_ups.state.draft.as_ref().cloned() else {
+                    return;
+                };
+                if self.execution_provider().is_err()
+                    || self.follow_ups.persisted < self.follow_ups.state.revision
+                {
+                    self.status = "Draft is not ready to send; it was preserved.".into();
+                    cx.notify();
+                    return;
+                }
+                if self.bot_ui.draft_sending.is_none() {
+                    self.bot_ui.draft_queue = std::mem::take(&mut self.bot_ui.queue);
+                }
+                self.bot_ui.draft_sending = Some(message.id.clone());
+                self.bot_ui.draft_retry = false;
+                self.transcript
+                    .update(cx, |view, cx| view.set_draft_transfer(Some(false), cx));
+                cx.emit(bot::Submitted {
+                    draft_id: Some(message.id),
+                    text: message.text,
+                    attachments: message.attachments,
+                    queue: self.bot_ui.draft_queue,
+                    mode: message.mode,
+                });
+                cx.notify();
+                return;
+            }
+            let Some(draft) = self.follow_ups.state.draft.as_ref() else {
+                return;
+            };
+            let mut next = self.follow_ups.state.clone();
+            next.draft = None;
+            next.revision += 1;
+            let result = self
+                .mark_bot_draft_discarded(&draft.id)
+                .and_then(|()| locked(&self.store)?.accept_follow_ups(self.summary.id, &next));
+            if let Err(error) = result {
+                self.bot_ui.draft_error = Some(format!(
+                    "Could not remove draft: {error}. Your draft was preserved."
+                ));
+                cx.notify();
+                return;
+            }
+            self.follow_ups.persisted = next.revision;
+            self.follow_ups.state = next;
+            self.summary.has_messages = !self.transcript.read(cx).source_rows().is_empty();
+            self.transcript
+                .update(cx, |view, cx| view.set_saved_draft(None, cx));
+            self.bot_ui.draft_error = None;
+            cx.emit(SessionChanged);
+            cx.notify();
             return;
         }
         let Some(mut message) = self.follow_ups.state.draft.take() else {
@@ -312,6 +421,116 @@ impl Conversation {
             .update(cx, |view, cx| view.set_saved_draft(None, cx));
         self.save_follow_ups(cx);
         cx.emit(SessionChanged);
+    }
+    pub(super) fn edit_saved_draft(
+        &mut self,
+        id: &str,
+        edit_id: &str,
+        text: &str,
+        finish: bool,
+        cancel: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.transcript.read(cx).is_saved_draft_edit(id, edit_id) {
+            return;
+        }
+        if !cancel && !self.transcript.read(cx).saved_draft_edit_matches(text, cx) {
+            return;
+        }
+        if self.bot_ui.draft_sending.is_some()
+            || self.follow_ups.persisted < self.follow_ups.state.revision
+        {
+            self.status = "Wait for the draft to finish saving before editing.".into();
+            cx.notify();
+            return;
+        }
+        let mut next = self.follow_ups.state.clone();
+        let Some(draft) = next.draft.as_mut().filter(|draft| draft.id == id) else {
+            return;
+        };
+        if text.trim().is_empty() && draft.attachments.is_empty() {
+            return;
+        }
+        if draft.text == text {
+            if finish {
+                let draft = next.draft.clone();
+                self.transcript
+                    .update(cx, |view, cx| view.finish_saved_draft_edit(draft, cx));
+            }
+            return;
+        }
+        let prepared = self.completion.read(cx).prepare_prompt(text);
+        draft.replace_text(text.to_owned(), prepared);
+        // An edited version must never share a delivery receipt with a
+        // previous version that another window has already queued.
+        if draft.id != edit_id {
+            draft.replaces_draft_id = Some(draft.id.clone());
+            draft.id = edit_id.to_owned();
+        }
+        next.revision += 1;
+        let result = (|| {
+            if self.settings.bot.is_some() && id != edit_id {
+                self.mark_bot_draft_edit_origin(id, edit_id)?;
+            }
+            let store = locked(&self.store)?;
+            next.retain_attachments(self.summary.id, store.data_dir())?;
+            store.accept_follow_ups(self.summary.id, &next)
+        })();
+        match result {
+            Ok(()) => {
+                let _ = locked(&self.store).and_then(|store| {
+                    store.clear_composer_recovery(
+                        self.summary.id,
+                        &format!("saved-draft-edit:{edit_id}"),
+                    )
+                });
+                self.bot_ui.draft_error = None;
+                self.follow_ups.persisted = next.revision;
+                self.follow_ups.state = next;
+                let draft = self.follow_ups.state.draft.clone();
+                self.transcript.update(cx, |view, cx| {
+                    if finish {
+                        view.finish_saved_draft_edit(draft, cx);
+                    } else {
+                        view.update_saved_draft_edit(draft);
+                    }
+                });
+                cx.emit(SessionChanged);
+            }
+            Err(error) => {
+                let end = text.encode_utf16().count();
+                let files = next
+                    .draft
+                    .as_ref()
+                    .map(|draft| {
+                        draft
+                            .attachments
+                            .iter()
+                            .map(|path| serde_json::json!({"path":path}))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let recovery = vorkspace_core::store::ComposerRecovery {
+                    owner: format!("saved-draft-edit:{edit_id}"),
+                    revision: next.revision,
+                    payload: serde_json::json!({"cwd":self.summary.cwd, "text":text, "selectionStart":end, "selectionEnd":end, "attachments":files, "mcpTags":[]}),
+                };
+                let recovery_result = locked(&self.store)
+                    .and_then(|store| store.save_composer_recovery(self.summary.id, recovery));
+                self.status =
+                    format!("Could not save draft edit: {error}. Your edit is still open.");
+                if let Err(recovery_error) = recovery_result {
+                    self.status = format!(
+                        "{}. Could not save a recovery copy: {recovery_error}",
+                        self.status
+                    );
+                }
+                if self.settings.bot.is_some() {
+                    self.bot_ui.draft_error = Some(self.status.clone());
+                }
+            }
+        }
+        cx.notify();
     }
     pub(super) fn follow_up_delivered(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.follow_ups.sending.as_deref() == Some(id) {

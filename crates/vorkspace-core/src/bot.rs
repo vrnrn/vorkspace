@@ -266,6 +266,11 @@ pub struct Message {
 pub struct Roster {
     pub bots: Vec<Bot>,
     pub hidden_sessions: Vec<i64>,
+    /// Per-message delivery intent travels with the durable outbox.
+    #[serde(default, skip_serializing_if = "std::collections::HashSet::is_empty")]
+    pub held_messages: std::collections::HashSet<String>,
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub message_modes: std::collections::HashMap<String, String>,
     /// Last observed desktop identities, for reconciling later desktop edits
     /// without discarding deliberate native edits or resurrecting deletions.
     #[serde(skip_serializing_if = "Option::is_none")]

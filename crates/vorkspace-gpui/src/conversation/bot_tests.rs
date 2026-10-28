@@ -61,6 +61,468 @@ fn chat(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
 }
 
 #[gpui::test]
+fn bot_plus_menu_and_saved_draft_card_share_session_actions(cx: &mut TestAppContext) {
+    let window = chat(cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(size(px(900.), px(680.)));
+    visual.run_until_parked();
+    let add = visual.debug_bounds("composer-add").unwrap();
+    visual.simulate_click(add.center(), Default::default());
+    visual.run_until_parked();
+    for selector in [
+        "menu-action-upload",
+        "menu-action-plan",
+        "menu-action-operator",
+        "menu-action-orchestrator",
+        "menu-action-draft",
+        "menu-action-queue",
+    ] {
+        assert!(
+            visual.debug_bounds(selector).is_some(),
+            "missing {selector}"
+        );
+    }
+    let draft = visual.debug_bounds("menu-action-draft").unwrap();
+    visual.simulate_click(draft.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, cx| {
+            assert_eq!(view.input.read(cx).content, "/draft Unsent draft");
+            view.send(cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    crate::clock::settle_animations(window, visual);
+    assert!(visual.debug_bounds("edit-message-draft").is_some());
+    assert!(visual.debug_bounds("remove-message-draft").is_some());
+    assert!(visual.debug_bounds("send-message-draft").is_some());
+    for width in [260., 360., 900.] {
+        visual.simulate_resize(size(px(width), px(680.)));
+        visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
+        for selector in [
+            "edit-message-draft",
+            "remove-message-draft",
+            "send-message-draft",
+        ] {
+            let bounds = visual.debug_bounds(selector).unwrap();
+            assert!(
+                bounds.left() >= px(0.) && bounds.right() <= px(width),
+                "{selector} escapes the {width}px pane: {bounds:?}"
+            );
+        }
+    }
+    let original_id = window
+        .read_with(visual, |view, _| {
+            view.follow_ups.state.draft.as_ref().unwrap().id.clone()
+        })
+        .unwrap();
+    let edit = visual.debug_bounds("edit-message-draft").unwrap();
+    visual.simulate_click(edit.center(), Default::default());
+    visual.run_until_parked();
+    visual.simulate_keystrokes("cmd-a");
+    visual.simulate_input("Edited draft");
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            let db = locked(&view.store).unwrap();
+            db.save_setting(
+                &format!("bot-delivered:{}:{original_id}", view.summary.id),
+                "1",
+            )
+            .unwrap();
+            assert_eq!(
+                db.follow_ups(view.summary.id).unwrap().draft.unwrap().text,
+                "Edited draft",
+                "an in-progress edit survives an older version's delivery receipt"
+            );
+        })
+        .unwrap();
+    let save = visual.debug_bounds("save-draft-edit").unwrap();
+    visual.simulate_click(save.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, cx| {
+            assert_eq!(
+                view.follow_ups.state.draft.as_ref().unwrap().text,
+                "Edited draft"
+            );
+            assert_eq!(
+                locked(&view.store)
+                    .unwrap()
+                    .follow_ups(view.summary.id)
+                    .unwrap()
+                    .draft
+                    .unwrap()
+                    .text,
+                "Edited draft"
+            );
+            view.input
+                .update(cx, |input, cx| input.set_text("Keep composing".into(), cx));
+        })
+        .unwrap();
+    let remove = visual.debug_bounds("remove-message-draft").unwrap();
+    visual.simulate_click(remove.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, cx| {
+            assert!(view.follow_ups.state.draft.is_none());
+            assert_eq!(view.input.read(cx).content, "Keep composing");
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identity(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("draft.sqlite");
+    let source = dir.path().join("attachment.txt");
+    std::fs::write(&source, "original bytes").unwrap();
+    let store = Store::open(&path).unwrap();
+    let summary = store.create("codex", "/private/tmp/bot-draft").unwrap();
+    let session = summary.id;
+    let window = cx.update(|cx| {
+        input::bind(cx);
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| {
+                let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
+                view.loaded = true;
+                view.configure_bot(Bot::default(), dir.path().into(), Default::default(), cx);
+                view
+            })
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_text("/draft Original message".into(), cx)
+            });
+            view.attachments.push(source.clone());
+            view.send(cx);
+            assert!(view.follow_ups.state.draft.is_some());
+            view.app_flush_draft(cx).unwrap();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    std::fs::write(&source, "changed bytes").unwrap();
+    let store = Store::open(&path).unwrap();
+    let summary = store
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.id == session)
+        .unwrap();
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| {
+                let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
+                view.configure_bot(Bot::default(), dir.path().into(), Default::default(), cx);
+                view.load(cx);
+                view
+            })
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let observed = events.clone();
+    let _subscription = window
+        .update(cx, |view, _, cx| {
+            let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Submitted, _| {
+                observed.borrow_mut().push((
+                    event.draft_id.clone(),
+                    event.text.clone(),
+                    event.attachments.clone(),
+                    event.queue,
+                ));
+            });
+            let saved = view.follow_ups.state.draft.as_ref().unwrap();
+            assert_eq!(saved.text, "Original message");
+            assert_eq!(
+                std::fs::read_to_string(&saved.attachments[0]).unwrap(),
+                "original bytes"
+            );
+            view.input.update(cx, |input, cx| {
+                input.set_text("New unsent message".into(), cx)
+            });
+            view.attachments.push(source.clone());
+            view.bot_ui.queue = true;
+            view.draft_action(true, cx);
+            assert!(view.follow_ups.state.draft.is_some());
+            subscription
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let first = events.borrow()[0].clone();
+    assert_eq!(first.1, "Original message");
+    assert!(first.3);
+    window
+        .update(cx, |view, _, cx| {
+            view.bot_draft_outbox_failed(first.0.as_ref().unwrap(), "disk full", cx);
+            view.draft_action(false, cx);
+            assert!(view.follow_ups.state.draft.is_some());
+            view.draft_action(true, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(events.borrow()[1], first);
+    window
+        .update(cx, |view, _, cx| {
+            view.bot_draft_outbox_saved(
+                &Message {
+                    id: first.0.clone().unwrap(),
+                    text: first.1.clone(),
+                    attachments: first
+                        .2
+                        .iter()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect(),
+                    peer: None,
+                    sent_at: None,
+                    internal: false,
+                    error: None,
+                },
+                cx,
+            );
+            assert!(view.follow_ups.state.draft.is_none());
+            assert_eq!(view.input.read(cx).content, "New unsent message");
+            assert_eq!(view.attachments, [source.clone()]);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn older_outbox_ack_cannot_remove_an_edited_draft_from_another_connection(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ownership.sqlite");
+    let store = Store::open(&path).unwrap();
+    let summary = store.create("codex", "/tmp").unwrap();
+    let id = summary.id;
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| {
+                let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
+                view.loaded = true;
+                view.configure_bot(Bot::default(), dir.path().into(), Default::default(), cx);
+                view
+            })
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    let old = window
+        .update(cx, |view, _, cx| {
+            view.input
+                .update(cx, |input, cx| input.set_text("/draft Original".into(), cx));
+            view.send(cx);
+            view.follow_ups.state.draft.clone().unwrap()
+        })
+        .unwrap();
+    let other = Store::open(&path).unwrap();
+    let mut newer = other.follow_ups(id).unwrap();
+    newer.revision += 1;
+    newer.draft.as_mut().unwrap().id = "edited-version".into();
+    newer.draft.as_mut().unwrap().text = "Newer edit".into();
+    other.accept_follow_ups(id, &newer).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.bot_draft_outbox_saved(&message(&old.id, &old.text, false), cx);
+            assert!(
+                view.follow_ups.state.draft.is_some(),
+                "a stale view must not clear its draft"
+            );
+        })
+        .unwrap();
+    assert_eq!(
+        other.follow_ups(id).unwrap().draft.unwrap().text,
+        "Newer edit"
+    );
+}
+
+#[gpui::test]
+fn restart_consumes_only_the_composer_revision_that_became_a_saved_bot_draft(
+    cx: &mut TestAppContext,
+) {
+    for (open, newer) in [
+        (Store::open as fn(&Path) -> Result<Store, String>, false),
+        (Store::open, true),
+        (Store::open_vorkspace, false),
+        (Store::open_vorkspace, true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open(&dir.path().join("crash.sqlite")).unwrap();
+        let summary = store.create("codex", "/tmp").unwrap();
+        let payload = serde_json::json!({"cwd":"/tmp", "text":"/draft recover me", "selectionStart":17, "selectionEnd":17, "attachments":[], "mcpTags":[]});
+        let revision = store.save_composer_draft(summary.id, 0, &payload).unwrap();
+        store
+            .save_setting(
+                &format!("bot-draft-origin:{}", summary.id),
+                &serde_json::json!({"id":"draft-crash", "revision":revision}).to_string(),
+            )
+            .unwrap();
+        let mut state = store.follow_ups(summary.id).unwrap();
+        state.revision += 1;
+        state.draft = Some(vorkspace_core::follow_up::Message {
+            id: "draft-crash".into(),
+            text: "recover me".into(),
+            ..Default::default()
+        });
+        store.accept_follow_ups(summary.id, &state).unwrap();
+        if newer {
+            store
+                .save_composer_draft(summary.id, revision, &payload)
+                .unwrap();
+        }
+        let persisted_id = store.persisted_session_id(summary.id).unwrap();
+        drop(store);
+        let store = open(&dir.path().join("crash.sqlite")).unwrap();
+        let reopened_id = store.resolve_session_id(&persisted_id).unwrap();
+        let summary = store
+            .sessions()
+            .unwrap()
+            .into_iter()
+            .find(|session| session.id == reopened_id)
+            .unwrap();
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
+                    view.configure_bot(Bot::default(), dir.path().into(), Default::default(), cx);
+                    view.load(cx);
+                    view
+                })
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(
+                    view.follow_ups.state.draft.as_ref().unwrap().text,
+                    "recover me"
+                );
+                assert_eq!(
+                    view.input.read(cx).content,
+                    if newer { "/draft recover me" } else { "" }
+                );
+            })
+            .unwrap();
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "Requires Metal and VORKSPACE_BOT_DRAFT_CAPTURE_DIR"]
+fn native_bot_draft_and_add_menu_capture() {
+    struct Capture(Entity<Conversation>);
+    impl gpui::Render for Capture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().bg(pane_fill()).child(self.0.clone())
+        }
+    }
+    let output = PathBuf::from(std::env::var_os("VORKSPACE_BOT_DRAFT_CAPTURE_DIR").unwrap());
+    assert!(output.is_absolute() && output.is_dir());
+    let mut cx = gpui::HeadlessAppContext::with_platform(
+        Arc::new(gpui_apple::AppleTextSystem::new()),
+        Arc::new(crate::assets::Assets),
+        || {
+            Ok(Some(Box::new(
+                gpui_apple::metal_renderer::MetalHeadlessRenderer::new(),
+            )))
+        },
+    );
+    crate::clock::use_test_clock(&cx);
+    for light in [false, true] {
+        let prefs = crate::settings::Preferences {
+            theme: if light { "light" } else { "dark" }.into(),
+            ..Default::default()
+        };
+        crate::theme::configure(&prefs, false, true);
+        cx.update(|cx| {
+            cx.set_global(prefs);
+            input::bind(cx);
+        });
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let summary = store.create("codex", "/tmp").unwrap();
+        let captured_chat = Rc::new(RefCell::new(None));
+        let captured = captured_chat.clone();
+        let window = cx
+            .open_window(size(px(900.), px(680.)), |_, cx| {
+                let chat = cx.new(|cx| {
+                    let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
+                    view.loaded = true;
+                    view.configure_bot(
+                        Bot {
+                            name: "Sam".into(),
+                            ..Default::default()
+                        },
+                        "/tmp".into(),
+                        Default::default(),
+                        cx,
+                    );
+                    view.bot_post("assistant", "What would you like me to work on?".into(), cx)
+                        .unwrap();
+                    view
+                });
+                *captured.borrow_mut() = Some(chat.clone());
+                cx.new(|_| Capture(chat))
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, _, cx| {
+            captured_chat
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .update(cx, |chat, cx| {
+                    chat.input.update(cx, |input, cx| {
+                        input.set_text("/draft Review the next change".into(), cx)
+                    });
+                    chat.send(cx);
+                    assert!(chat.follow_ups.state.draft.is_some());
+                });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        crate::clock::settle_headless_animations(window, &mut cx);
+        let theme = if light { "light" } else { "dark" };
+        cx.capture_screenshot(window.into())
+            .unwrap()
+            .save(output.join(format!("bot-draft-{theme}.png")))
+            .unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            captured_chat
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .update(cx, |chat, cx| {
+                    chat.toggle_menu(ComposerMenu::Add, window, cx)
+                });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        crate::clock::settle_headless_animations(window, &mut cx);
+        cx.capture_screenshot(window.into())
+            .unwrap()
+            .save(output.join(format!("bot-menu-{theme}.png")))
+            .unwrap();
+        cx.update_window(window.into(), |_, window, _| window.remove_window())
+            .unwrap();
+    }
+    crate::theme::configure(&Default::default(), false, true);
+}
+
+#[gpui::test]
 fn typing_keeps_the_unchanged_bot_transcript_rendered(cx: &mut TestAppContext) {
     let window = chat(cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
@@ -730,7 +1192,17 @@ fn bot_plus_offers_upload_and_queue_and_queue_applies_to_one_message(cx: &mut Te
                     _ => None,
                 })
                 .collect();
-            assert_eq!(ids, ["upload", "queue"]);
+            assert_eq!(
+                ids,
+                [
+                    "upload",
+                    "plan",
+                    "operator",
+                    "orchestrator",
+                    "draft",
+                    "queue"
+                ]
+            );
             view.menu_choice("queue", cx);
             assert!(view.bot_ui.queue);
         })

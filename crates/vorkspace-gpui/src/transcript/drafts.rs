@@ -1,8 +1,121 @@
 use super::*;
-use gpui::{PathBuilder, point};
+use gpui::{Entity, Focusable, PathBuilder, Subscription, point};
 use vorkspace_core::follow_up::Message as Draft;
 
+pub(super) struct DraftEdit {
+    id: String,
+    edit_id: String,
+    original: String,
+    input: Entity<crate::input::Input>,
+    _submit: Subscription,
+    _observe: Subscription,
+}
+
 impl TranscriptView {
+    pub(crate) fn set_draft_transfer(&mut self, retry: Option<bool>, cx: &mut Context<Self>) {
+        self.draft_transfer = retry;
+        cx.notify();
+    }
+    pub(crate) fn set_remote_saved_draft(&mut self, draft: Option<Draft>, cx: &mut Context<Self>) {
+        self.draft_editable = false;
+        self.set_saved_draft(draft, cx);
+    }
+    pub(crate) fn finish_saved_draft_edit(&mut self, draft: Option<Draft>, cx: &mut Context<Self>) {
+        self.draft_edit = None;
+        self.set_saved_draft(draft, cx);
+        cx.notify();
+    }
+    pub(crate) fn update_saved_draft_edit(&mut self, draft: Option<Draft>) {
+        if let (Some(edit), Some(draft)) = (&mut self.draft_edit, &draft) {
+            edit.id = draft.id.clone();
+        }
+        self.saved_draft = draft;
+    }
+    pub(crate) fn is_saved_draft_edit(&self, id: &str, edit_id: &str) -> bool {
+        self.draft_edit
+            .as_ref()
+            .is_some_and(|edit| edit.id == id && edit.edit_id == edit_id)
+    }
+    pub(crate) fn has_saved_draft_edit(&self, id: &str) -> bool {
+        self.draft_edit.as_ref().is_some_and(|edit| edit.id == id)
+    }
+    pub(crate) fn saved_draft_edit_matches(&self, text: &str, cx: &gpui::App) -> bool {
+        self.draft_edit
+            .as_ref()
+            .is_some_and(|edit| edit.input.read(cx).content == text)
+    }
+    fn begin_saved_draft_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(draft) = self.saved_draft.as_ref() else {
+            return;
+        };
+        let id = draft.id.clone();
+        let text = draft.text.clone();
+        let original = text.clone();
+        let input = cx.new(|cx| {
+            let mut input = crate::input::Input::queued_message(cx);
+            input.set_text(text, cx);
+            input
+        });
+        let submit = cx.subscribe_in(
+            &input,
+            window,
+            |this, _, _: &crate::input::Submitted, _, cx| {
+                this.submit_saved_draft_edit(true, cx);
+            },
+        );
+        let observe = cx.observe(&input, |this, _, cx| {
+            this.submit_saved_draft_edit(false, cx)
+        });
+        window.focus(&input.focus_handle(cx), cx);
+        self.draft_edit = Some(DraftEdit {
+            id,
+            edit_id: vorkspace_core::bot::new_id(),
+            original,
+            input,
+            _submit: submit,
+            _observe: observe,
+        });
+        cx.notify();
+    }
+    fn submit_saved_draft_edit(&self, finish: bool, cx: &mut Context<Self>) {
+        let Some(edit) = self.draft_edit.as_ref() else {
+            return;
+        };
+        if edit.input.read(cx).is_composing() {
+            return;
+        }
+        let text = edit.input.read(cx).content.to_string();
+        if text.trim().is_empty()
+            && self
+                .saved_draft
+                .as_ref()
+                .is_none_or(|draft| draft.attachments.is_empty())
+        {
+            return;
+        }
+        cx.emit(ResponseRequest::EditDraft {
+            id: edit.id.clone(),
+            edit_id: edit.edit_id.clone(),
+            text,
+            finish,
+            cancel: false,
+        });
+    }
+    fn cancel_saved_draft_edit(&self, cx: &mut Context<Self>) {
+        let Some(edit) = self.draft_edit.as_ref() else {
+            return;
+        };
+        if edit.input.read(cx).is_composing() {
+            return;
+        }
+        cx.emit(ResponseRequest::EditDraft {
+            id: edit.id.clone(),
+            edit_id: edit.edit_id.clone(),
+            text: edit.original.clone(),
+            finish: true,
+            cancel: true,
+        });
+    }
     /// Saving a new draft is a user submission, even though no provider starts.
     /// Cold restores and persistence updates use set_saved_draft without replay.
     pub(crate) fn introduce_saved_draft(&mut self, draft: Draft, cx: &mut Context<Self>) {
@@ -23,6 +136,13 @@ impl TranscriptView {
     }
 
     pub(crate) fn set_saved_draft(&mut self, draft: Option<Draft>, cx: &mut Context<Self>) {
+        if self
+            .draft_edit
+            .as_ref()
+            .is_some_and(|edit| draft.as_ref().is_none_or(|draft| draft.id != edit.id))
+        {
+            self.draft_edit = None;
+        }
         if self.saved_draft == draft {
             return;
         }
@@ -112,6 +232,7 @@ impl TranscriptView {
                             .px_3()
                             .py_2()
                             .text_size(px(14.))
+                            .text_color(content(1.))
                             .line_height(px(20.))
                             .child(draft_dashes(Some(12.), 0.3))
                             .children(draft.attachments.iter().map(|path| {
@@ -130,13 +251,30 @@ impl TranscriptView {
                                             .to_string(),
                                     )
                             }))
-                            .child(
-                                div()
-                                    .id("saved-draft-text")
-                                    .role(Role::Label)
-                                    .aria_label(draft.text.clone())
-                                    .child(draft.text.clone()),
-                            )
+                            .map(|card| {
+                                if let Some(edit) = &self.draft_edit {
+                                    card.child(
+                                        div()
+                                            .id("saved-draft-editor")
+                                            .min_w(px(120.))
+                                            .max_w_full()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(content(0.3))
+                                            .px_2()
+                                            .py_1()
+                                            .child(edit.input.clone()),
+                                    )
+                                } else {
+                                    card.child(
+                                        div()
+                                            .id("saved-draft-text")
+                                            .role(Role::Label)
+                                            .aria_label(draft.text.clone())
+                                            .child(draft.text.clone()),
+                                    )
+                                }
+                            })
                             .child(
                                 div()
                                     .relative()
@@ -145,9 +283,10 @@ impl TranscriptView {
                                     .border_t_1()
                                     .border_color(content(0.))
                                     .flex()
+                                    .flex_wrap()
                                     .items_center()
                                     .justify_between()
-                                    .gap_4()
+                                    .gap_2()
                                     .child(draft_dashes(None, 0.2))
                                     .child(
                                         div()
@@ -159,38 +298,104 @@ impl TranscriptView {
                                             .child(icon("circle-dashed-hi", 14.))
                                             .child("Draft"),
                                     )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .child(
-                                                draft_button(
-                                                    "remove-message-draft",
-                                                    "Remove draft",
-                                                )
-                                                .px_2()
-                                                .text_color(content(0.55))
-                                                .child(icon("trash", 14.))
-                                                .child("Remove")
-                                                .on_click(cx.listener(|_, _, _, cx| {
-                                                    cx.emit(ResponseRequest::Draft { send: false })
-                                                })),
-                                            )
-                                            .child(
-                                                draft_button("send-message-draft", "Send draft")
-                                                    .px(px(10.))
-                                                    .bg(white(1.))
-                                                    .text_color(black(1.))
-                                                    .child("Send")
-                                                    .child(icon("send", 14.).text_color(black(1.)))
-                                                    .on_click(cx.listener(|_, _, _, cx| {
-                                                        cx.emit(ResponseRequest::Draft {
-                                                            send: true,
-                                                        })
-                                                    })),
-                                            ),
-                                    ),
+                                    .child(div().flex().flex_wrap().items_center().gap_1().map(
+                                        |actions| {
+                                            if self.draft_edit.is_some() {
+                                                actions
+                                                    .child(
+                                                        draft_button(
+                                                            "cancel-draft-edit",
+                                                            "Cancel draft edit",
+                                                        )
+                                                        .px_2()
+                                                        .child("Cancel")
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.cancel_saved_draft_edit(cx)
+                                                        })),
+                                                    )
+                                                    .child(
+                                                        draft_button(
+                                                            "save-draft-edit",
+                                                            "Save draft edit",
+                                                        )
+                                                        .px_2()
+                                                        .child("Save")
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.submit_saved_draft_edit(true, cx)
+                                                        })),
+                                                    )
+                                            } else {
+                                                actions
+                                                    .when(
+                                                        self.draft_editable
+                                                            && self.draft_transfer.is_none(),
+                                                        |actions| {
+                                                            actions.child(
+                                                                draft_button(
+                                                                    "edit-message-draft",
+                                                                    "Edit draft",
+                                                                )
+                                                                .px_2()
+                                                                .text_color(content(0.55))
+                                                                .child(icon("pencil-edit", 14.))
+                                                                .child("Edit")
+                                                                .on_click(cx.listener(
+                                                                    |this, _, window, cx| {
+                                                                        this.begin_saved_draft_edit(
+                                                                            window, cx,
+                                                                        )
+                                                                    },
+                                                                )),
+                                                            )
+                                                        },
+                                                    )
+                                                    .when(
+                                                        self.draft_transfer.is_none(),
+                                                        |actions| {
+                                                            actions.child(
+                                                        draft_button(
+                                                            "remove-message-draft",
+                                                            "Remove draft",
+                                                        )
+                                                        .px_2()
+                                                        .text_color(content(0.55))
+                                                        .child(icon("trash", 14.))
+                                                        .child("Remove")
+                                                        .on_click(cx.listener(|_, _, _, cx| {
+                                                            cx.emit(ResponseRequest::Draft {
+                                                                send: false,
+                                                            })
+                                                        })),
+                                                    )
+                                                        },
+                                                    )
+                                                    .when(
+                                                        self.draft_transfer != Some(false),
+                                                        |actions| {
+                                                            actions.child(
+                                                            draft_button(
+                                                                "send-message-draft",
+                                                                "Send draft",
+                                                            )
+                                                            .px(px(10.))
+                                                            .bg(white(1.))
+                                                            .text_color(black(1.))
+                                                            .child("Send")
+                                                            .child(
+                                                                icon("send", 14.)
+                                                                    .text_color(black(1.)),
+                                                            )
+                                                            .on_click(cx.listener(|_, _, _, cx| {
+                                                                cx.emit(ResponseRequest::Draft {
+                                                                    send: true,
+                                                                })
+                                                            })),
+                                                        )
+                                                        },
+                                                    )
+                                            }
+                                        },
+                                    )),
                             ),
                     ),
             )
@@ -242,6 +447,7 @@ fn draft_dashes(radius: Option<f32>, alpha: f32) -> impl IntoElement {
 fn draft_button(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
+        .debug_selector(move || id.into())
         .role(Role::Button)
         .aria_label(label)
         .h(px(28.))

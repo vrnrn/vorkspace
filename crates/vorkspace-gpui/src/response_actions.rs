@@ -21,6 +21,13 @@ pub(crate) enum Request {
     Draft {
         send: bool,
     },
+    EditDraft {
+        id: String,
+        edit_id: String,
+        text: String,
+        finish: bool,
+        cancel: bool,
+    },
     SaveNote {
         turn: usize,
         text: String,

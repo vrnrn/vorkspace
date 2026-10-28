@@ -1956,7 +1956,10 @@ impl Store {
         blocks.retain(|b| b["draft"] != true);
         if let Some(draft) = &state.draft {
             let mut value = old_draft
-                .filter(|v| v["id"].as_str() == Some(&draft.id))
+                .filter(|v| {
+                    v["id"].as_str() == Some(&draft.id)
+                        || v["id"].as_str() == draft.replaces_draft_id.as_deref()
+                })
                 .unwrap_or(json!({"id":draft.id,"role":"user","draft":true}));
             update_follow_up(&mut value, draft);
             let mut at = blocks.len();
@@ -2014,6 +2017,15 @@ fn update_follow_up(value: &mut Value, message: &crate::follow_up::Message) {
     }
     if let Some(error) = &message.error {
         value["error"] = json!(error);
+    }
+    if message.replaces_draft_id.is_some() {
+        if let Some(files) = value["attachments"].as_array_mut() {
+            if files.len() == message.attachments.len() {
+                for (file, path) in files.iter_mut().zip(&message.attachments) {
+                    file["path"] = json!(path);
+                }
+            }
+        }
     }
     if value["attachments"].is_null() {
         value["attachments"]=json!(message.attachments.iter().map(|p|json!({"id":p.to_string_lossy(),"path":p,"name":p.file_name().unwrap_or_default().to_string_lossy(),

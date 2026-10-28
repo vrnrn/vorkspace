@@ -812,6 +812,35 @@ fn concurrent_queue_changes_are_preserved_and_transaction_is_rolled_back() {
 }
 
 #[test]
+fn edited_draft_identity_preserves_unknown_block_and_attachment_fields_on_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("draft-metadata.db");
+    let store = Store::open_vorkspace(&path).unwrap();
+    let (id, _) = saved(
+        &store,
+        json!([{"id":"old", "role":"user", "draft":true, "text":"Before", "futureDraft":{"keep":true}, "attachments":[{"id":"photo", "path":"/old.png", "mimeType":"image/png", "futureFile":"keep"}]}]),
+    );
+    store.load(id).unwrap();
+    let mut state = store.follow_ups(id).unwrap();
+    let draft = state.draft.as_mut().unwrap();
+    draft.id = "edited".into();
+    draft.replaces_draft_id = Some("old".into());
+    draft.text = "After".into();
+    draft.attachments = vec!["/retained.png".into()];
+    state.revision += 1;
+    store.accept_follow_ups(id, &state).unwrap();
+    drop(store);
+    let reopened = Store::open_vorkspace(&path).unwrap();
+    let block = reopened.shared_blocks(id).unwrap().pop().unwrap();
+    assert_eq!(block["id"], "edited");
+    assert_eq!(block["text"], "After");
+    assert_eq!(block["futureDraft"]["keep"], true);
+    assert_eq!(block["attachments"][0]["path"], "/retained.png");
+    assert_eq!(block["attachments"][0]["mimeType"], "image/png");
+    assert_eq!(block["attachments"][0]["futureFile"], "keep");
+}
+
+#[test]
 fn drafts_queues_and_receipts_keep_desktop_metadata_and_do_not_replay() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vorkspace.db");

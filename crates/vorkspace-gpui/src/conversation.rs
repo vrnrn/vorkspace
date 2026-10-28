@@ -803,6 +803,9 @@ impl Conversation {
                         }
                         this.transcript
                             .update(cx, |view, cx| view.set_saved_draft(draft, cx));
+                        if this.settings.bot.is_some() {
+                            this.sync_bot_pending(cx);
+                        }
                     }
                     Err(error) => {
                         this.status = error;
@@ -861,6 +864,16 @@ impl Conversation {
                         }
                         this.status = "Ready".into();
                         this.loaded = true;
+                        if let Some(message) = this
+                            .follow_ups
+                            .state
+                            .draft
+                            .as_ref()
+                            .and_then(|draft| this.bot_ui.accepted_drafts.get(&draft.id))
+                            .cloned()
+                        {
+                            this.bot_draft_outbox_saved(&message, cx);
+                        }
                         if let Some((row, query)) = this.pending_search.take() {
                             this.reveal_search(row, query, cx);
                         }
@@ -1022,6 +1035,10 @@ impl Conversation {
         if self.handle_local_command(cx) {
             return;
         }
+        if self.settings.bot.is_some() && self.draft_active(cx) {
+            self.save_message_draft(cx);
+            return;
+        }
         if self.settings.bot.is_some() {
             if self.attaching || self.input.read(cx).is_composing() {
                 return;
@@ -1032,13 +1049,28 @@ impl Conversation {
                 .unwrap_or_default();
             let attachments = std::mem::take(&mut self.attachments);
             if !text.trim().is_empty() || !attachments.is_empty() {
+                let text = self.consume_mode_command(text, cx);
+                let mode = if self.settings.orchestrator {
+                    Some("orchestrator")
+                } else if self.settings.plan {
+                    Some("plan")
+                } else if self.settings.operator {
+                    Some("operator")
+                } else {
+                    None
+                };
                 // Queue applies to this message only, like a session mode.
                 let queue = std::mem::take(&mut self.bot_ui.queue);
                 cx.emit(bot::Submitted {
+                    draft_id: None,
                     text,
                     attachments,
                     queue,
+                    mode: mode.map(str::to_owned),
                 });
+                if mode.is_some() {
+                    self.clear_submitted_mode(cx);
+                }
                 cx.notify();
             }
             return;
@@ -1241,12 +1273,14 @@ impl Conversation {
             .is_some_and(|p| !p.claude_hooks);
         settings.model = self.model.clone();
         settings.environment.extend(self.app_environment.clone());
-        if settings.remote_action.as_ref().is_none_or(|action| {
-            (action["type"] == "send"
-                && action["draftBlockId"].is_null()
-                && action["planBlockId"].is_null())
-                || action["type"] == "draft"
-        }) {
+        if settings.bot.is_none()
+            && settings.remote_action.as_ref().is_none_or(|action| {
+                (action["type"] == "send"
+                    && action["draftBlockId"].is_null()
+                    && action["planBlockId"].is_null())
+                    || action["type"] == "draft"
+            })
+        {
             settings
                 .attachments
                 .extend(std::mem::take(&mut self.attachments));
@@ -1816,6 +1850,13 @@ impl Conversation {
             ResponseRequest::QuoteSelection { text } => self.bot_quote(text, window, cx),
             ResponseRequest::EditLastTurn { turn } => self.begin_edit_last_turn(*turn, window, cx),
             ResponseRequest::Draft { send } => self.draft_action(*send, cx),
+            ResponseRequest::EditDraft {
+                id,
+                edit_id,
+                text,
+                finish,
+                cancel,
+            } => self.edit_saved_draft(id, edit_id, text, *finish, *cancel, cx),
             ResponseRequest::SaveNote {
                 turn,
                 text,
@@ -2707,21 +2748,6 @@ impl Conversation {
                 )
             }
             // Composer.tsx's plus menu with native mode and attachment actions.
-            ComposerMenu::Add if self.settings.bot.is_some() => {
-                let items = vec![
-                    MenuItem::Header("Add to message".into()),
-                    MenuAction::new("upload", "Upload file")
-                        .icon("file-add")
-                        .description("Attach files or images")
-                        .into(),
-                    MenuAction::new("queue", "Queue")
-                        .icon("queue-list")
-                        .description("Send after the current reply instead of steering it")
-                        .checked(self.bot_ui.queue)
-                        .into(),
-                ];
-                ("Add to message", items, 250., MenuStyle::Composer)
-            }
             ComposerMenu::Add => {
                 let mut items = vec![MenuItem::Header("Add to message".into())];
                 items.extend(
@@ -2761,6 +2787,15 @@ impl Conversation {
                         action.checked(checked).into()
                     }),
                 );
+                if self.settings.bot.is_some() {
+                    items.push(
+                        MenuAction::new("queue", "Queue")
+                            .icon("queue-list")
+                            .description("Send after the current reply instead of steering it")
+                            .checked(self.bot_ui.queue)
+                            .into(),
+                    );
+                }
                 ("Add to message", items, 250., MenuStyle::Composer)
             }
             // ModelPicker: a "Model" row whose flyout lists the models.
