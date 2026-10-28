@@ -25,6 +25,7 @@ mod session_preview;
 pub use session_preview::SessionPreviewData;
 mod edit;
 mod shared;
+pub use shared::{IndexedHistoryCursor, IndexedHistoryPage};
 mod side_threads;
 use crate::transcript::{Row, Transcript};
 pub use edit::EditSnapshot;
@@ -62,8 +63,62 @@ pub struct Store {
     conn: Connection,
     path: std::path::PathBuf,
     shared: Option<shared::Shared>,
+    project_deletions: std::collections::HashSet<String>,
 }
 impl Store {
+    /// Runtime admission guard held until the project deletion publishes its result.
+    pub fn begin_project_deletion(&mut self, path: &str) -> Result<(), String> {
+        let key = crate::files::path_key(path);
+        if !self.project_deletions.insert(key) {
+            return Err("Project deletion is already in progress.".into());
+        }
+        Ok(())
+    }
+    pub fn end_project_deletion(&mut self, path: &str) {
+        self.project_deletions.remove(&crate::files::path_key(path));
+    }
+    fn check_project_creation(&self, path: &str) -> Result<(), String> {
+        let key = crate::files::path_key(path);
+        if self.project_deletions.iter().any(|root| {
+            std::path::Path::new(&key).starts_with(std::path::Path::new(root))
+                || match (std::fs::canonicalize(&key), std::fs::canonicalize(root)) {
+                    (Ok(path), Ok(root)) => path.starts_with(root),
+                    _ => false,
+                }
+        }) {
+            return Err("This project is being deleted; try again afterward.".into());
+        }
+        Ok(())
+    }
+    /// Read a snapshot-bound page of indexed Bot history. Blob, ordinary and
+    /// remote histories return None and retain their existing loading path.
+    /// Use `write_indexed_history_page` for page-relative writes; `write_rows`
+    /// requires a complete transcript and a separate revision guard.
+    pub fn indexed_history_page(
+        &self,
+        session: i64,
+        before: Option<&IndexedHistoryCursor>,
+        page_turns: usize,
+    ) -> Result<Option<IndexedHistoryPage>, String> {
+        if self.shared.is_none() || self.remote_session(session)?.is_some() {
+            return Ok(None);
+        }
+        self.shared_indexed_history_page(session, before, page_turns)
+    }
+    /// Merge a page-relative edit or tail append against the exact snapshot
+    /// that produced the page. Older pages cannot append into newer history.
+    pub fn write_indexed_history_page(
+        &mut self,
+        session: i64,
+        page: &IndexedHistoryPage,
+        start: usize,
+        rows: &[Row],
+    ) -> Result<(), String> {
+        if self.shared.is_none() || self.remote_session(session)?.is_some() {
+            return Err("Indexed Bot history is not available for this session".into());
+        }
+        self.shared_write_indexed_history_page(session, page, start, rows)
+    }
     pub fn reset_provider_id_if(&self, id: i64, expected: Option<&str>) -> Result<(), String> {
         if self.shared.is_some() {
             return self.shared_reset_provider_id_if(id, expected);
@@ -187,6 +242,7 @@ impl Store {
             conn,
             path: path.into(),
             shared: None,
+            project_deletions: Default::default(),
         })
     }
     /// The selected desktop or isolated-development database.
@@ -611,6 +667,7 @@ impl Store {
             conn,
             path: self.path.clone(),
             shared: None,
+            project_deletions: Default::default(),
         }))
     }
     /// Stream saved message bodies without loading conversations into the UI.
@@ -1220,6 +1277,17 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn project_deletion_admission_releases_after_completion() {
+        let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        store.begin_project_deletion("/project/").unwrap();
+        assert!(store.create("codex", "/project").is_err());
+        assert!(store.create("codex", "/project/sub").is_err());
+        assert!(store.create("codex", "/project-other").is_ok());
+        store.end_project_deletion("/project");
+        assert!(store.create("codex", "/project").is_ok());
+    }
+
     #[test]
     fn related_settings_publish_atomically_on_native_and_shared_failures() {
         use super::Store;

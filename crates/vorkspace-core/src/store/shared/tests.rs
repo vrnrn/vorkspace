@@ -178,6 +178,114 @@ fn streamed_indexed_bot_load_preserves_projection_and_revision_guards() {
 }
 
 #[test]
+fn indexed_bot_stale_older_edit_rejects_append_then_reload_allows_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vorkspace.db");
+    let mut store = Store::open_vorkspace(&path).unwrap();
+    store
+        .conn
+        .execute_batch(include_str!("../../../tests/fixtures/bot-schema.sql"))
+        .unwrap();
+    let id = store.create("codex", "/project").unwrap().id;
+    let original = store.persisted_session_id(id).unwrap();
+    store
+        .conn
+        .execute("INSERT INTO bot_transcripts VALUES(?1)", [&original])
+        .unwrap();
+    let blocks: Vec<_> = (0..40)
+        .map(|i| {
+            json!({
+                "id": format!("block-{i}"), "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "text": format!("Message {i}"), "future": {"ordinal": i}
+            })
+        })
+        .collect();
+    store.shared_store_blocks(id, &blocks).unwrap();
+    let mut stale = store.load(id).unwrap();
+    let from = stale.begin("user");
+    stale.append("Pending append");
+    let other = Connection::open(&path).unwrap();
+    other.execute("UPDATE bot_blocks SET block_json=json_set(block_json,'$.text','External edit') WHERE session_id=?1 AND seq=1", [&original]).unwrap();
+    assert!(store
+        .write_rows(id, from, &stale.rows[from..])
+        .unwrap_err()
+        .contains("changed in another window"));
+    let mut fresh = store.load(id).unwrap();
+    assert_eq!(fresh.rows[0].text, "External edit");
+    let from = fresh.begin("user");
+    fresh.append("Pending append");
+    store.write_rows(id, from, &fresh.rows[from..]).unwrap();
+    drop(store);
+    let store = Store::open_vorkspace(&path).unwrap();
+    let id = store.resolve_session_id(&original).unwrap();
+    let saved = store.shared_blocks(id).unwrap();
+    assert_eq!(saved.len(), 41);
+    assert_eq!(saved[0]["text"], "External edit");
+    for (i, block) in saved[..40].iter().enumerate() {
+        assert_eq!(block["id"], format!("block-{i}"));
+        assert_eq!(block["future"]["ordinal"], i);
+    }
+    assert_eq!(saved[40]["text"], "Pending append");
+}
+
+#[test]
+fn indexed_bot_saved_and_unsaved_search_results_share_global_row_indices() {
+    use crate::search::{self, Scope, Target};
+    use std::sync::{atomic::AtomicBool, Arc};
+
+    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    store
+        .conn
+        .execute_batch(include_str!("../../../tests/fixtures/bot-schema.sql"))
+        .unwrap();
+    let id = store.create("codex", "/project").unwrap().id;
+    let original = store.persisted_session_id(id).unwrap();
+    store
+        .conn
+        .execute("INSERT INTO bot_transcripts VALUES(?1)", [&original])
+        .unwrap();
+    let blocks: Vec<_> = (0..40).map(|i| json!({
+        "id": format!("block-{i}"), "role": if i % 2 == 0 { "user" } else { "assistant" },
+        "text": if i == 0 { "needle in old history".to_owned() } else { format!("Message {i}") }
+    })).collect();
+    store.shared_store_blocks(id, &blocks).unwrap();
+    let summary = store
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.id == id)
+        .unwrap();
+    let mut live = store.load(id).unwrap();
+    live.begin("user");
+    live.append("needle in unsaved message");
+    let flag = Arc::new(AtomicBool::new(false));
+    let (saved, truncated) = store.search_sessions("needle", flag.clone()).unwrap();
+    assert!(!truncated);
+    let local = search::messages(&summary, &live.rows, "needle", &flag);
+    assert!(saved.iter().any(|hit| hit.target
+        == Target::Message {
+            session: id,
+            row: 0
+        }));
+    assert!(!saved.iter().any(|hit| hit.target
+        == Target::Message {
+            session: id,
+            row: 40
+        }));
+    let grouped = search::grouped(local.into_iter().chain(saved), Scope::Conversations);
+    let targets: Vec<_> = grouped.into_iter().map(|hit| hit.target).collect();
+    assert_eq!(targets.len(), 2);
+    assert!(targets.contains(&Target::Message {
+        session: id,
+        row: 0
+    }));
+    assert!(targets.contains(&Target::Message {
+        session: id,
+        row: 40
+    }));
+}
+
+#[test]
 fn desktop_sidebar_recovers_only_hidden_launches_of_listed_callers_without_history_reads() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("vorkspace.db");

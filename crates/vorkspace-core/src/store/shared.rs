@@ -5,7 +5,9 @@ pub(super) mod blocks;
 mod bot_tables;
 mod card;
 mod edit;
+mod history_window;
 mod incremental;
+pub use history_window::{IndexedHistoryCursor, IndexedHistoryPage};
 mod ordinary;
 #[cfg(test)]
 mod tests;
@@ -364,6 +366,7 @@ impl Store {
         let store = Self {
             conn,
             path: path.into(),
+            project_deletions: Default::default(),
             shared: Some(Shared {
                 earlier_bot_tables,
                 columns,

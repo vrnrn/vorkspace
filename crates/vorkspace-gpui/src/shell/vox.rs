@@ -200,6 +200,11 @@ impl Shell {
             }
             "composer.read" | "composer.write" => {
                 if !view.read(cx).voice_composer_ready() {
+                    view.update(cx, |v, cx| {
+                        if v.needs_history_restore() {
+                            v.load(cx);
+                        }
+                    });
                     return Err("The saved composer is still loading; try again".into());
                 }
                 let input_entity = view.read(cx).input.clone();
@@ -227,6 +232,11 @@ impl Shell {
             }
             "sessions.read" | "bots.read" => {
                 if !view.read(cx).voice_composer_ready() {
+                    view.update(cx, |v, cx| {
+                        if v.needs_history_restore() {
+                            v.load(cx);
+                        }
+                    });
                     return Err("Saved conversation is loading; try again".into());
                 }
                 let rows = view.read(cx).bot_rows(cx);

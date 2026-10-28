@@ -326,6 +326,13 @@ impl Shell {
             .map(|m| m.read(cx).search_conversations())
             .unwrap_or_default();
         for view in views {
+            if !view.read(cx).history_loaded() {
+                let id = view.read(cx).summary.id;
+                search
+                    .view
+                    .update(cx, |v, cx| v.remove_live_session(id, cx));
+                continue;
+            }
             let summary = view.read(cx).summary.clone();
             let rows = Arc::new(view.read(cx).transcript.read(cx).source_rows().to_vec());
             search
@@ -341,6 +348,12 @@ impl Shell {
             return;
         };
         let session = session.read(cx);
+        if !session.history_loaded() {
+            search
+                .view
+                .update(cx, |v, cx| v.remove_live_session(id, cx));
+            return;
+        }
         let summary = session.summary.clone();
         let rows = Arc::new(session.transcript.read(cx).source_rows().to_vec());
         search

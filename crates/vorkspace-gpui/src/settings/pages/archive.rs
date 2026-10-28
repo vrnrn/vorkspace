@@ -98,6 +98,55 @@ impl SettingsView {
         } else {
             format!("Archived in {}", self.ctx.project_label)
         };
-        vec![self.group(None,true,"Archived projects",Some("Archive a project from the rail to keep its chats without listing it in the sidebar.".into()),None,vec![note("No archived projects.")]),self.group(None,false,SharedString::from(title),None,None,rows)]
+        let mut projects = Vec::new();
+        if self.ctx.archived_projects.is_empty() {
+            projects.push(note("No archived projects."));
+        }
+        for path in &self.ctx.archived_projects {
+            let path = path.clone();
+            let restore = path.clone();
+            projects.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .border_t_1()
+                    .border_color(content(0.05))
+                    .px_4()
+                    .py(px(10.))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .text_size(px(13.))
+                            .child(path.clone()),
+                    )
+                    .child(
+                        secondary_button(
+                            SharedString::from(format!("restore-project-{path}")),
+                            "Restore project",
+                            false,
+                            false,
+                        )
+                        .debug_selector(move || format!("restore-project-{path}"))
+                        .child("Restore")
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(SettingsEvent::RestoreProject(restore.clone()))
+                        })),
+                    )
+                    .into_any_element(),
+            );
+        }
+        vec![
+            self.group(
+                None,
+                true,
+                "Archived projects",
+                Some("Archived projects keep their conversations and files.".into()),
+                None,
+                projects,
+            ),
+            self.group(None, false, SharedString::from(title), None, None, rows),
+        ]
     }
 }

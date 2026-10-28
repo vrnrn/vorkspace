@@ -283,6 +283,7 @@ impl Store {
         Ok(sessions)
     }
     pub fn create(&self, provider: &str, cwd: &str) -> Result<Session, String> {
+        self.check_project_creation(cwd)?;
         if !cwd.starts_with("remote://") {
             return self.local_create(provider, cwd);
         }

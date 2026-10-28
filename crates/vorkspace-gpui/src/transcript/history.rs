@@ -3,6 +3,16 @@ use super::*;
 
 const PAGE_TURNS: usize = 10;
 
+pub(super) struct StorageHistory {
+    store: crate::runtime::Database,
+    session: i64,
+    origin: usize,
+    cursor: Option<vorkspace_core::store::IndexedHistoryCursor>,
+    turns: HashMap<usize, vorkspace_core::agent::TurnInfo>,
+    search: Option<(usize, String)>,
+    error: Option<String>,
+}
+
 /// Keep source row indices intact for persistence, tools and live patches.
 /// Only the displayed window needs Markdown and presentation objects.
 pub(crate) struct PreparedHistory {
@@ -61,6 +71,152 @@ pub(super) struct HistoryPosition {
     following: bool,
 }
 impl TranscriptView {
+    pub(crate) fn install_storage_history(
+        &mut self,
+        page: vorkspace_core::store::IndexedHistoryPage,
+        prepared: PreparedHistory,
+        store: crate::runtime::Database,
+        session: i64,
+        cx: &mut Context<Self>,
+    ) {
+        let origin = page.global_start;
+        let turns = page.turns;
+        self.replace_prepared_history(prepared, cx);
+        self.turns = turns
+            .iter()
+            .filter_map(|(&at, info)| at.checked_sub(origin).map(|at| (at, info.clone())))
+            .collect();
+        self.storage_history = Some(StorageHistory {
+            store,
+            session,
+            origin,
+            cursor: page.before,
+            turns,
+            search: None,
+            error: None,
+        });
+        self.rebuild(0, cx);
+    }
+
+    pub(crate) fn storage_origin(&self) -> Option<usize> {
+        self.storage_history.as_ref().map(|state| state.origin)
+    }
+    pub(crate) fn take_storage_search(&mut self) -> Option<(usize, String)> {
+        self.storage_history
+            .as_mut()
+            .and_then(|state| state.search.take())
+    }
+
+    pub(super) fn storage_has_older(&self) -> bool {
+        self.storage_history
+            .as_ref()
+            .is_some_and(|state| state.cursor.is_some())
+    }
+
+    pub(crate) fn reveal_storage_search(
+        &mut self,
+        row: usize,
+        query: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.storage_history.as_mut() else {
+            return;
+        };
+        if let Some(local) = row.checked_sub(state.origin) {
+            if local < self.source.len() {
+                self.reveal_search(local, query, cx);
+            } else {
+                state.search = Some((row, query.to_owned()));
+                cx.emit(StorageHistoryStale);
+            }
+        } else if state.cursor.is_some() {
+            state.search = Some((row, query.to_owned()));
+            self.load_older_history(cx);
+        }
+    }
+
+    pub(crate) fn complete_storage_history(
+        &mut self,
+        mut history: PreparedHistory,
+        cx: &mut Context<Self>,
+    ) {
+        let origin = self.storage_history.take().map_or(0, |state| state.origin);
+        history.start = history.start.min(origin);
+        let offset = self.list.logical_scroll_top();
+        let position = HistoryPosition {
+            key: self
+                .rows
+                .get(offset.item_ix)
+                .map(|row| (row.key.0.saturating_add(origin), row.key.1)),
+            offset,
+            following: self.list.is_following_tail(),
+        };
+        self.replace_rebased_history(history, origin, cx);
+        self.restore_reading_position(position);
+    }
+
+    pub(super) fn replace_rebased_history(
+        &mut self,
+        history: PreparedHistory,
+        shift: usize,
+        cx: &mut Context<Self>,
+    ) {
+        fn set(values: HashSet<usize>, shift: usize) -> HashSet<usize> {
+            values
+                .into_iter()
+                .map(|at| at.saturating_add(shift))
+                .collect()
+        }
+        fn map<T>(values: HashMap<usize, T>, shift: usize) -> HashMap<usize, T> {
+            values
+                .into_iter()
+                .map(|(at, value)| (at.saturating_add(shift), value))
+                .collect()
+        }
+        let selection = std::mem::take(&mut self.selection);
+        selection.shift_source(shift);
+        self.agent_panels.shift_source(shift);
+        let expanded = set(std::mem::take(&mut self.expanded), shift);
+        let prompts = set(std::mem::take(&mut self.expanded_prompts), shift);
+        let clamped = set(std::mem::take(&mut self.clamped_prompts), shift);
+        let phases = map(std::mem::take(&mut self.phases), shift);
+        let phase_scrolls = map(std::mem::take(&mut self.phase_scrolls), shift);
+        let folds = map(std::mem::take(&mut self.work_folds), shift);
+        let windowed = set(std::mem::take(&mut self.windowed_phases), shift);
+        let elapsed = map(std::mem::take(&mut self.elapsed), shift);
+        let seen_steps = set(std::mem::take(&mut self.seen_steps), shift);
+        let step_queue = map(std::mem::take(&mut self.step_queue), shift);
+        let fold_targets = std::mem::take(&mut self.fold_targets)
+            .into_iter()
+            .map(|(at, target)| {
+                (
+                    at.saturating_add(shift),
+                    target.map(|at| at.saturating_add(shift)),
+                )
+            })
+            .collect();
+        let search = self
+            .search_match
+            .take()
+            .map(|(at, query)| (at.saturating_add(shift), query));
+        self.replace_prepared_history(history, cx);
+        self.selection = selection;
+        self.expanded = expanded;
+        self.expanded_prompts = prompts;
+        self.clamped_prompts = clamped;
+        self.phases = phases;
+        self.phase_scrolls = phase_scrolls;
+        self.work_folds = folds;
+        self.windowed_phases = windowed;
+        self.elapsed = elapsed;
+        self.seen_steps = seen_steps;
+        self.step_queue = step_queue;
+        self.fold_targets = fold_targets;
+        self.search_match = search;
+        self.target_action = None;
+        self.rebuild(0, cx);
+    }
+
     pub(crate) fn install_prepared_history(
         &mut self,
         history: PreparedHistory,
@@ -203,6 +359,12 @@ impl TranscriptView {
             .hover(|s| s.text_color(content(0.8)))
             .child(if self.history_loading {
                 "Loading earlier messages…"
+            } else if self
+                .storage_history
+                .as_ref()
+                .is_some_and(|state| state.error.is_some())
+            {
+                "Could not load earlier messages. Click to retry."
             } else {
                 "Load earlier messages"
             })
@@ -211,6 +373,10 @@ impl TranscriptView {
     }
 
     pub(super) fn load_older_history(&mut self, cx: &mut Context<Self>) {
+        if self.storage_history.is_some() {
+            self.load_older_storage(cx);
+            return;
+        }
         if self.history_start == 0 || self.history_loading {
             return;
         }
@@ -242,6 +408,113 @@ impl TranscriptView {
                 if let Some((row, query)) = this.history_search.take() {
                     this.reveal_search(row, &query, cx);
                 }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn load_older_storage(&mut self, cx: &mut Context<Self>) {
+        if self.history_loading {
+            return;
+        }
+        let Some(state) = self.storage_history.as_mut() else {
+            return;
+        };
+        let Some(cursor) = state.cursor.clone() else {
+            return;
+        };
+        state.error = None;
+        let origin = state.origin;
+        let store = state.store.clone();
+        let session = state.session;
+        let epoch = self.highlight_epoch;
+        self.history_loading = true;
+        self.list.pause_following_tail();
+        let work = cx.background_executor().spawn(async move {
+            let page = crate::runtime::locked(&store)?
+                .indexed_history_page(session, Some(&cursor), PAGE_TURNS)?
+                .ok_or_else(|| "Indexed history is no longer available".to_owned())?;
+            let parsers = prepare_parsers(&page.rows, 0);
+            Ok::<_, String>((page, parsers))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.highlight_epoch != epoch || this.storage_origin() != Some(origin) {
+                    return;
+                }
+                this.history_loading = false;
+                let (page, mut parsers) = match result {
+                    Ok(page) => page,
+                    Err(error) => {
+                        let stale =
+                            error.contains("changed") || error.contains("no longer available");
+                        if let Some(state) = this.storage_history.as_mut() {
+                            state.error = Some(error);
+                        }
+                        if stale {
+                            cx.emit(StorageHistoryStale);
+                        }
+                        cx.notify();
+                        return;
+                    }
+                };
+                if page.global_start.checked_add(page.rows.len()) != Some(origin) {
+                    if let Some(state) = this.storage_history.as_mut() {
+                        state.error = Some("History changed; reload before retrying".into());
+                    }
+                    cx.emit(StorageHistoryStale);
+                    cx.notify();
+                    return;
+                }
+                let added = page.rows.len();
+                let offset = this.list.logical_scroll_top();
+                let position = HistoryPosition {
+                    key: this
+                        .rows
+                        .get(offset.item_ix)
+                        .map(|row| (row.key.0.saturating_add(added), row.key.1)),
+                    offset,
+                    following: false,
+                };
+                let mut state = this.storage_history.take().unwrap();
+                state.origin = page.global_start;
+                state.cursor = page.before;
+                state.turns.extend(page.turns);
+                let mut rows = page.rows;
+                rows.extend(std::mem::take(&mut this.source));
+                for message in &mut this.messages {
+                    parsers
+                        .entry(message.start.saturating_add(added))
+                        .or_insert_with(|| {
+                            std::mem::replace(&mut message.parser, MarkdownParser::new())
+                        });
+                }
+                this.replace_rebased_history(
+                    PreparedHistory {
+                        rows,
+                        parsers,
+                        start: 0,
+                    },
+                    added,
+                    cx,
+                );
+                this.turns = state
+                    .turns
+                    .iter()
+                    .filter_map(|(&at, info)| {
+                        at.checked_sub(state.origin).map(|at| (at, info.clone()))
+                    })
+                    .collect();
+                let search = state.search.take();
+                this.storage_history = Some(state);
+                this.rebuild(0, cx);
+                this.restore_reading_position(position);
+                if let Some((row, query)) = search {
+                    this.reveal_storage_search(row, &query, cx);
+                }
+                cx.notify();
             });
         })
         .detach();
@@ -416,6 +689,99 @@ impl TranscriptView {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn indexed_bot_pages_reveal_saved_global_rows_and_keep_scroll_anchor(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let store = vorkspace_core::store::Store::open_vorkspace(&path).unwrap();
+        let id = store.create("codex", "/project").unwrap().id;
+        let original = store.persisted_session_id(id).unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(include_str!(
+            "../../../vorkspace-core/tests/fixtures/bot-schema.sql"
+        ))
+        .unwrap();
+        conn.execute("INSERT INTO bot_transcripts VALUES(?1)", [&original])
+            .unwrap();
+        for i in 0..70 {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            let block = serde_json::json!({"id":format!("block-{i}"),"role":role,"text":format!("needle {i}")});
+            conn.execute(
+                "INSERT INTO bot_blocks VALUES(?1,?2,?3,?4,'',?5,0)",
+                rusqlite::params![
+                    original,
+                    i + 1,
+                    format!("block-{i}"),
+                    block.to_string(),
+                    i % 2 == 0
+                ],
+            )
+            .unwrap();
+            if i % 2 == 0 {
+                conn.execute(
+                    "INSERT INTO bot_turns VALUES(?1,?2)",
+                    rusqlite::params![original, i + 1],
+                )
+                .unwrap();
+            }
+        }
+        let mut page = store.indexed_history_page(id, None, 10).unwrap().unwrap();
+        assert_eq!(page.global_start, 50);
+        let prepared = PreparedHistory::new(std::mem::take(&mut page.rows), false);
+        let store = std::sync::Arc::new(std::sync::Mutex::new(store));
+        let view = cx.new(|_| TranscriptView::new());
+        let key = view.update(cx, |view, cx| {
+            view.bot_mode("bot", 0xffffff, "Bot");
+            view.install_storage_history(page, prepared, store.clone(), id, cx);
+            assert_eq!(view.source.len(), 20);
+            assert_eq!(view.storage_origin(), Some(50));
+            view.list.pause_following_tail();
+            view.list.scroll_to(ListOffset {
+                item_ix: 4,
+                offset_in_item: px(7.),
+            });
+            let key = view.rows[4].key;
+            view.expanded.insert(2);
+            view.expanded_prompts.insert(2);
+            key
+        });
+        let poison = store.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poison.lock().unwrap();
+            panic!("simulate a temporarily unavailable store");
+        })
+        .join();
+        view.update(cx, |view, cx| view.load_older_history(cx));
+        cx.run_until_parked();
+        view.update(cx, |view, _| {
+            assert_eq!(view.storage_origin(), Some(50));
+            assert!(view.storage_history.as_ref().unwrap().error.is_some());
+            assert!(view.storage_has_older());
+        });
+        store.clear_poison();
+        view.update(cx, |view, cx| {
+            view.load_older_history(cx);
+            view.load_older_history(cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            assert_eq!(view.storage_origin(), Some(30));
+            assert_eq!(view.source.len(), 40);
+            assert!(view.expanded.contains(&22));
+            assert!(view.expanded_prompts.contains(&22));
+            let offset = view.list.logical_scroll_top();
+            assert_eq!(view.rows[offset.item_ix].key, (key.0 + 20, key.1));
+            assert_eq!(offset.offset_in_item, px(7.));
+            view.reveal_storage_search(1, "needle", cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, _| {
+            assert_eq!(view.storage_origin(), Some(0));
+            assert_eq!(view.search_match, Some((1, "needle".into())));
+            assert_eq!(view.source.len(), 70);
+        });
+    }
 
     fn long_bot(turns: usize) -> Vec<Row> {
         (0..turns).flat_map(|turn| [

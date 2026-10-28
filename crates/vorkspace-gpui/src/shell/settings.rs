@@ -157,6 +157,17 @@ impl Shell {
             cwd: self.workspace.project.clone(),
             project_label: self.project_label(&self.workspace.project),
             archived,
+            archived_projects: {
+                let mut paths: Vec<_> = self
+                    .workspace
+                    .project_archive
+                    .iter()
+                    .filter(|(_, archived)| **archived)
+                    .map(|(path, _)| path.clone())
+                    .collect();
+                paths.sort();
+                paths
+            },
             projects: self
                 .workspace
                 .projects
@@ -326,7 +337,13 @@ impl Shell {
                         this.toggle_archive(*id, cx);
                     }
                 }
-                SettingsEvent::Delete(id) => this.delete_from_settings(*id, window, cx),
+                SettingsEvent::RestoreProject(path) => {
+                    let mut next = this.workspace.clone();
+                    next.restore_project(path);
+                    this.commit_project_archive(next, cx);
+                    this.sync_settings(cx);
+                }
+                SettingsEvent::Delete(id) => this.request_delete_sessions(vec![*id], window, cx),
                 SettingsEvent::RemoveWorktree {
                     cwd,
                     path,
@@ -571,24 +588,6 @@ impl Shell {
         }).detach();
         let _ = window;
     }
-    fn delete_from_settings(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
-        let prompt = window.prompt(
-            gpui::PromptLevel::Warning,
-            "Delete this conversation permanently?",
-            Some("Its messages and saved settings will be removed."),
-            &["Delete", "Cancel"],
-            cx,
-        );
-        cx.spawn(async move |this, cx| {
-            if prompt.await != Ok(0) {
-                return;
-            }
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.delete_session(id, window, cx);
-            });
-        })
-        .detach();
-    }
 }
 fn this_update(this: &mut Shell, cx: &mut Context<Shell>) {
     this.invalidate_chrome(cx);
@@ -601,6 +600,63 @@ mod tests {
     use super::*;
     use crate::shell::tests::window;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn project_archive_refuses_open_work_and_inventory_restores(cx: &mut TestAppContext) {
+        let (window, a, _) = window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.archive_project("/work/vorkspace", cx);
+                assert!(
+                    shell
+                        .error
+                        .as_deref()
+                        .is_some_and(|e| e.contains("switch to another"))
+                );
+                shell.archive_project("/work/another-project", cx);
+                assert_ne!(
+                    shell.workspace.project_archive.get("/work/another-project"),
+                    Some(&true)
+                );
+                shell.workspace.tabs.retain(|id| *id != a);
+                shell
+                    .workspace
+                    .title_order
+                    .retain(|tab| *tab != TitleTab::Session(a));
+                shell.workspace.add_project("/work/archive");
+                shell.archive_project("/work/archive", cx);
+                assert_eq!(
+                    shell.workspace.project_archive.get("/work/archive"),
+                    Some(&true)
+                );
+                assert!(!shell.workspace.projects.contains(&"/work/archive".into()));
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open_settings(Section::Archive, w, cx)
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let restore = visual
+            .debug_bounds("restore-project-/work/archive")
+            .expect("restore control");
+        visual.simulate_click(restore.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                assert_eq!(
+                    shell.workspace.project_archive.get("/work/archive"),
+                    Some(&false)
+                );
+                assert!(shell.workspace.projects.contains(&"/work/archive".into()));
+                let saved = locked(&shell.store).unwrap().ui_state().unwrap().unwrap();
+                let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
+                assert_eq!(saved["project_archive"]["/work/archive"], false);
+            })
+            .unwrap();
+    }
 
     #[gpui::test]
     fn settings_skill_form_opens_and_cancels_without_leaving_settings(cx: &mut TestAppContext) {

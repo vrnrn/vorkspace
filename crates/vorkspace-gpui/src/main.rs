@@ -379,7 +379,7 @@ fn main() {
         .collect::<Vec<_>>();
     let workspace = workspace::Workspace::restore(saved.as_deref(), &metadata, &cwd);
     let mut projects = workspace.projects;
-    if !projects.contains(&workspace.project) {
+    if !workspace.project.is_empty() && !projects.contains(&workspace.project) {
         projects.push(workspace.project);
     }
     let sidebar_metadata = db.session_sidebar_metadata(&projects);

@@ -704,6 +704,7 @@ impl Bots {
                     } else { false }
                 });
                 let bot = bot.clone();
+                let page_chat = this.active.as_deref() == Some(id.as_str());
                 let view = cx.new(|cx| Conversation::new(summary, this.store.clone(), cx));
                 let root = this.root.clone();
                 let env = this
@@ -712,6 +713,7 @@ impl Bots {
                     .map(|b| b.environment(view.read(cx).summary.id))
                     .unwrap_or_default();
                 view.update(cx, |view, cx| {
+                    view.allow_storage_paging = page_chat;
                     view.configure_bot(bot, root, env, cx);
                     if let Some(settings) = settings {
                         let config = view.settings.bot.take();
@@ -949,6 +951,18 @@ impl Bots {
             return;
         }
 
+        if self
+            .roster
+            .get(id)
+            .is_some_and(|bot| !bot.pending_reports.is_empty())
+            && let Some(view) = self.chats.get(id)
+        {
+            view.update(cx, |view, cx| {
+                if view.needs_history_restore() {
+                    view.load(cx);
+                }
+            });
+        }
         if let Some(view) = self
             .chats
             .get(id)
@@ -1038,8 +1052,17 @@ impl Bots {
         let Some(view) = self.chats.get(id) else {
             return;
         };
+        if self.active.as_deref() != Some(id)
+            && self
+                .roster
+                .get(id)
+                .is_some_and(|bot| bot.seen_rows < view.read(cx).bot_row_origin(cx))
+        {
+            view.update(cx, |view, cx| view.load(cx));
+            return;
+        }
         let view = view.read(cx);
-        let row_count = view.bot_rows(cx).len();
+        let row_count = view.bot_row_count(cx);
         let finished = view.bot_settled();
         let completion =
             (finished && self.inflight.contains_key(id)).then(|| NotificationFinished {
@@ -1123,7 +1146,7 @@ impl Bots {
         cx.emit(TabOpened(id.into()));
         self.focus_active(window, cx);
         if let Some(view) = self.chats.get(id) {
-            let count = view.read(cx).bot_rows(cx).len();
+            let count = view.read(cx).bot_row_count(cx);
             if let Some(bot) = self.roster.get_mut(id) {
                 bot.seen_rows = count;
             }
@@ -1294,7 +1317,7 @@ impl Bots {
                         v.read(cx)
                             .bot_rows(cx)
                             .iter()
-                            .skip(bot.seen_rows)
+                            .skip(bot.seen_rows.saturating_sub(v.read(cx).bot_row_origin(cx)))
                             .filter(|r| {
                                 r.role == "assistant" && r.first && !r.text.trim().is_empty()
                             })

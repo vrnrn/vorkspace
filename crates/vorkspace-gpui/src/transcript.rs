@@ -79,6 +79,8 @@ pub(crate) enum BotResponseAction {
     Queue { id: String, remove: bool },
 }
 impl gpui::EventEmitter<BotResponseAction> for TranscriptView {}
+pub(crate) struct StorageHistoryStale;
+impl gpui::EventEmitter<StorageHistoryStale> for TranscriptView {}
 
 fn work_title(model: Option<&str>, elapsed_ms: Option<u64>, live: bool) -> String {
     let model = model.map(str::trim).filter(|model| !model.is_empty());
@@ -402,6 +404,7 @@ pub(crate) struct TranscriptView {
     history_loading: bool,
     history_requested: bool,
     history_search: Option<(usize, String)>,
+    storage_history: Option<history::StorageHistory>,
     prepared_parsers: HashMap<usize, MarkdownParser>,
     bot: bool,
     bot_groups: std::cell::RefCell<HashMap<usize, usize>>,
@@ -2086,6 +2089,7 @@ impl TranscriptView {
             history_loading: false,
             history_requested: false,
             history_search: None,
+            storage_history: None,
             prepared_parsers: HashMap::new(),
             bot: false,
             bot_groups: Default::default(),
@@ -2790,7 +2794,7 @@ impl TranscriptView {
             .map(|m| (m.start, m))
             .collect();
         self.rows.truncate(display_start);
-        if display_start == 0 && self.history_start > 0 {
+        if display_start == 0 && (self.history_start > 0 || self.storage_has_older()) {
             self.rows.push(UiRow {
                 key: (self.history_start, 8),
                 body: Body::OlderHistory,
@@ -4974,7 +4978,7 @@ impl Render for TranscriptView {
                 // Read the final scroll geometry in our trailing layout probe.
                 .set_scroll_handler(cx.listener(|this, _, _, cx| {
                     this.selection.clear();
-                    this.history_requested = this.history_start > 0;
+                    this.history_requested = this.history_start > 0 || this.storage_has_older();
                     cx.notify()
                 }));
         }

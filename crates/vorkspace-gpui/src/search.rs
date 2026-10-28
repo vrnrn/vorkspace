@@ -172,6 +172,16 @@ impl SearchView {
             self.refresh_live(cx);
         }
     }
+    pub(crate) fn remove_live_session(&mut self, id: i64, cx: &mut Context<Self>) {
+        if self.live.remove(&id).is_some() {
+            self.live_revision += 1;
+            self.local.retain(
+                |hit| !matches!(hit.target, Target::Message { session, .. } if session == id),
+            );
+            self.rank(cx);
+            self.refresh_live(cx);
+        }
+    }
     fn refresh_live(&mut self, cx: &mut Context<Self>) {
         if self.query.is_empty() || !self.scope.sessions() || self.live_task.is_some() {
             return;
@@ -207,10 +217,11 @@ impl SearchView {
                 return;
             }
             let _ = this.update(cx, |this, cx| {
-                this.local = hits;
                 this.live_task = None;
-                this.rank(cx);
-                if this.live_revision != revision {
+                if this.live_revision == revision {
+                    this.local = hits;
+                    this.rank(cx);
+                } else {
                     this.refresh_live(cx);
                 }
             });
@@ -693,6 +704,46 @@ mod tests {
     use gpui::TestAppContext;
     use std::sync::Mutex;
     use vorkspace_core::store::Store;
+
+    #[gpui::test]
+    fn removing_partial_live_source_keeps_saved_global_search_hits(cx: &mut TestAppContext) {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let session = store.create("codex", "/project").unwrap();
+        let view = cx.new(|cx| {
+            SearchView::new(
+                "/project".into(),
+                Arc::new(Mutex::new(store)),
+                Sources {
+                    summaries: vec![session.clone()],
+                    ..Default::default()
+                },
+                cx,
+            )
+        });
+        view.update(cx, |view, cx| {
+            view.query = "needle".into();
+            view.live.insert(session.id, Arc::new(vec![]));
+            view.local.push(
+                search::message_hit(&session, 0, "user", "needle live", "needle", true).unwrap(),
+            );
+            view.remote.push(
+                search::message_hit(&session, 50, "user", "needle saved", "needle", false).unwrap(),
+            );
+            view.remove_live_session(session.id, cx);
+            assert!(!view.live.contains_key(&session.id));
+            assert!(view.local.is_empty());
+            assert!(view.hits.iter().any(|hit| hit.target
+                == Target::Message {
+                    session: session.id,
+                    row: 50
+                }));
+            assert!(!view.hits.iter().any(|hit| hit.target
+                == Target::Message {
+                    session: session.id,
+                    row: 0
+                }));
+        });
+    }
 
     struct TempDir(std::path::PathBuf);
     impl TempDir {

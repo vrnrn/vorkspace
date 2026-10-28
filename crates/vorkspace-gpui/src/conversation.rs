@@ -166,6 +166,9 @@ pub(crate) struct Conversation {
     pub(crate) activity: Option<String>,
     loaded: bool,
     history_unloaded: bool,
+    history_partial: bool,
+    pub(crate) allow_storage_paging: bool,
+    _history_events: Subscription,
     loaded_history_revision: Option<i64>,
     history_actions: std::collections::VecDeque<history::HistoryAction>,
     pending_search: Option<(usize, String)>,
@@ -531,6 +534,14 @@ impl Conversation {
             view.set_review(review.clone().into());
             view
         });
+        let history_events = cx.subscribe(
+            &transcript,
+            |this, transcript, _: &crate::transcript::StorageHistoryStale, cx| {
+                this.pending_search = transcript.update(cx, |view, _| view.take_storage_search());
+                this.history_unloaded = true;
+                this.reload_history(cx);
+            },
+        );
         let account = crate::accounts::get(cx)
             .map(|center| {
                 center
@@ -604,6 +615,9 @@ impl Conversation {
             status: "Loading conversation…".into(),
             loaded: false,
             history_unloaded: false,
+            history_partial: false,
+            allow_storage_paging: false,
+            _history_events: history_events,
             loaded_history_revision: None,
             history_actions: Default::default(),
             pending_search: None,
@@ -673,8 +687,13 @@ impl Conversation {
             self.load(cx);
             return;
         }
-        self.transcript
-            .update(cx, |view, cx| view.reveal_search(row, &query, cx));
+        self.transcript.update(cx, |view, cx| {
+            if self.history_partial {
+                view.reveal_storage_search(row, &query, cx);
+            } else {
+                view.reveal_search(row, &query, cx);
+            }
+        });
     }
     pub(crate) fn load(&mut self, cx: &mut Context<Self>) {
         if self.is_remote() {
@@ -682,6 +701,17 @@ impl Conversation {
             return;
         }
         if self.history_unloaded {
+            self.reload_history(cx);
+            return;
+        }
+        if self.history_partial {
+            if let Some(search) = self
+                .transcript
+                .update(cx, |view, _| view.take_storage_search())
+            {
+                self.pending_search = Some(search);
+            }
+            self.history_unloaded = true;
             self.reload_history(cx);
             return;
         }
@@ -698,6 +728,7 @@ impl Conversation {
         let id = self.summary.id;
         let cwd = self.summary.cwd.clone();
         let bot = self.settings.bot.is_some();
+        let page_bot = bot && self.allow_storage_paging;
         let recovery_epoch = self.submission_recovery_epoch;
         let work = cx.background_executor().spawn(async move {
             let settings = locked(&store).and_then(|s| s.agent_settings(id));
@@ -713,8 +744,27 @@ impl Conversation {
                 .unwrap_or(0);
             (
                 locked(&store)
-                    .and_then(|s| s.load(id))
-                    .map(|history| crate::transcript::PreparedHistory::new(history.rows, bot)),
+                    .and_then(|s| {
+                        if page_bot
+                            && let Ok(Some(page)) = s.indexed_history_page(id, None, 10)
+                            && page.before.is_some()
+                        {
+                            return Ok(history::InitialRows::Window(Box::new(page)));
+                        }
+                        Ok(history::InitialRows::Complete(s.load(id)?.rows))
+                    })
+                    .map(|rows| match rows {
+                        history::InitialRows::Complete(rows) => history::InitialHistory::Complete(
+                            crate::transcript::PreparedHistory::new(rows, bot),
+                        ),
+                        history::InitialRows::Window(mut page) => {
+                            let prepared = crate::transcript::PreparedHistory::new(
+                                std::mem::take(&mut page.rows),
+                                false,
+                            );
+                            history::InitialHistory::Window(page, prepared)
+                        }
+                    }),
                 git,
                 settings,
                 locked(&store).and_then(|s| s.context_usage(id)),
@@ -792,8 +842,23 @@ impl Conversation {
                 }
                 match result {
                     Ok(history) => {
-                        this.transcript
-                            .update(cx, |v, cx| v.install_prepared_history(history, cx));
+                        match history {
+                            history::InitialHistory::Complete(history) => this
+                                .transcript
+                                .update(cx, |v, cx| v.install_prepared_history(history, cx)),
+                            history::InitialHistory::Window(page, prepared) => {
+                                this.history_partial = true;
+                                this.transcript.update(cx, |v, cx| {
+                                    v.install_storage_history(
+                                        *page,
+                                        prepared,
+                                        this.store.clone(),
+                                        id,
+                                        cx,
+                                    )
+                                });
+                            }
+                        }
                         this.status = "Ready".into();
                         this.loaded = true;
                         if let Some((row, query)) = this.pending_search.take() {
@@ -802,6 +867,12 @@ impl Conversation {
                         this.sync_review(cx);
                         this.run_history_actions(cx);
                         this.pump_follow_ups(cx);
+                        if this.history_partial
+                            && (!this.history_actions.is_empty()
+                                || !this.follow_ups.state.messages.is_empty())
+                        {
+                            this.load(cx);
+                        }
                     }
                     Err(e) => this.status = e,
                 }
@@ -817,6 +888,11 @@ impl Conversation {
             return;
         }
         if self.loading || self.busy || self.stopping {
+            return;
+        }
+        // A partial transcript is refreshed when a cursor or mutation guard
+        // detects a change; replacing it here would lose its reading anchor.
+        if self.history_partial {
             return;
         }
         if self.history_unloaded {
@@ -1728,6 +1804,11 @@ impl Conversation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.history_partial && !matches!(request, ResponseRequest::QuoteSelection { .. }) {
+            self.status = "Loading complete history; please retry the action".into();
+            self.load(cx);
+            return;
+        }
         match request {
             ResponseRequest::RemotePlan { id, text, build } => {
                 self.remote_plan_request(id, text, *build, cx)
@@ -2069,6 +2150,10 @@ impl Conversation {
         cx.notify();
     }
     fn save_settings(&mut self, cx: &mut Context<Self>) {
+        if self.history_partial {
+            self.defer_history_action(|this, cx| this.save_settings(cx), cx);
+            return;
+        }
         self.settings.revision = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

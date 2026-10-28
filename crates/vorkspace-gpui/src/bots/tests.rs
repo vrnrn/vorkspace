@@ -15,6 +15,174 @@ struct Setup {
     store: Database,
 }
 
+// Install a real indexed, partially loaded Bot conversation into the manager.
+fn paged_chat(s: &Setup, cx: &mut TestAppContext, card: bool) -> Database {
+    let path = PathBuf::from(&s.project).join(format!("paged-{}.sqlite", bot::new_id()));
+    let store = Store::open_vorkspace(&path).unwrap();
+    let summary = store.create("codex", &s.project).unwrap();
+    let original = store.persisted_session_id(summary.id).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(include_str!(
+        "../../../vorkspace-core/tests/fixtures/bot-schema.sql"
+    ))
+    .unwrap();
+    conn.execute("INSERT INTO bot_transcripts VALUES(?1)", [&original])
+        .unwrap();
+    for i in 0..50 {
+        let role = if i % 2 == 0 { "user" } else { "assistant" };
+        let mut block =
+            json!({"id":format!("block-{i}"),"role":role,"text":format!("message {i}")});
+        if card && i == 49 {
+            block["botCard"] = json!({"type":"habit","started":true});
+        }
+        conn.execute(
+            "INSERT INTO bot_blocks VALUES(?1,?2,?3,?4,'',?5,0)",
+            rusqlite::params![
+                original,
+                i + 1,
+                format!("block-{i}"),
+                block.to_string(),
+                i % 2 == 0
+            ],
+        )
+        .unwrap();
+        if i % 2 == 0 {
+            conn.execute(
+                "INSERT INTO bot_turns VALUES(?1,?2)",
+                rusqlite::params![original, i + 1],
+            )
+            .unwrap();
+        }
+    }
+    let store = Arc::new(Mutex::new(store));
+    let bot = s
+        .manager
+        .read_with(cx, |m, _| m.roster.get(&s.id).unwrap().clone());
+    let chat = cx.new(|cx| Conversation::new(summary, store.clone(), cx));
+    chat.update(cx, |v, cx| {
+        v.allow_storage_paging = true;
+        v.configure_bot(bot, s.root.clone(), Default::default(), cx);
+        v.load(cx);
+    });
+    cx.run_until_parked();
+    assert!(chat.read_with(cx, |v, cx| v.bot_row_origin(cx) > 0));
+    s.manager.update(cx, |m, _| {
+        m.chats.insert(s.id.clone(), chat);
+    });
+    store
+}
+
+#[gpui::test]
+fn paged_channel_delivery_restores_primary_and_creates_lane(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let store = paged_chat(&s, cx, false);
+    let channel = s.manager.update(cx, |m, cx| {
+        let mut next = m.channels.state.clone();
+        let id = next
+            .create("paged", "", vec![s.id.clone()], &m.roster)
+            .unwrap();
+        next.post(&id, None, "hello", "paged-delivery", 0, &[], &m.roster)
+            .unwrap();
+        m.commit_channels(next, cx).unwrap();
+        m.channel_tick(cx);
+        assert!(!m.channels.views.contains_key(&(id.clone(), s.id.clone())));
+        id
+    });
+    cx.run_until_parked();
+    s.manager.update(cx, |m, cx| {
+        assert_eq!(m.chats[&s.id].read(cx).bot_row_origin(cx), 0);
+        assert_eq!(m.chats[&s.id].read(cx).bot_rows(cx).len(), 50);
+        assert_eq!(
+            m.channels.state.get(&channel).unwrap().deliveries[0].state,
+            "queued"
+        );
+        // Exercise lane creation without launching a real provider process.
+        m.channels.state.get_mut(&channel).unwrap().deliveries[0].state = "running".into();
+        m.channels.inspecting = Some((channel.clone(), s.id.clone()));
+        m.channel_tick(cx);
+    });
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, _| {
+        assert!(m.channels.views.contains_key(&(channel, s.id.clone())))
+    });
+    assert_eq!(locked(&store).unwrap().sessions().unwrap().len(), 1);
+}
+
+#[gpui::test]
+fn paged_vox_actions_restore_and_keep_composer_draft(cx: &mut TestAppContext) {
+    for action in ["composer.read", "composer.write", "bots.read"] {
+        let s = setup(cx);
+        paged_chat(&s, cx, false);
+        s.manager.update(cx, |m, cx| {
+            m.chats[&s.id]
+                .read(cx)
+                .input
+                .clone()
+                .update(cx, |input, cx| input.set_text("draft".into(), cx));
+        });
+        let args = json!({"bot":s.id,"text":"addition","mode":"append"});
+        let args = if action == "composer.write" {
+            args
+        } else {
+            json!({"bot":s.id})
+        };
+        let first = s
+            .window
+            .update(cx, |shell, window, cx| {
+                shell.vox_action(action, &args, window, cx)
+            })
+            .unwrap();
+        assert!(first.unwrap_err().contains("loading"));
+        cx.run_until_parked();
+        let result = s
+            .window
+            .update(cx, |shell, window, cx| {
+                shell.vox_action(action, &args, window, cx)
+            })
+            .unwrap()
+            .unwrap();
+        match action {
+            "composer.read" => assert_eq!(result["text"], "draft"),
+            "composer.write" => assert_eq!(
+                s.manager.read_with(cx, |m, cx| m.chats[&s.id]
+                    .read(cx)
+                    .input
+                    .read(cx)
+                    .content
+                    .clone()),
+                "draft\naddition"
+            ),
+            _ => assert_eq!(
+                result["messages"].as_array().unwrap().last().unwrap()["text"],
+                "message 49"
+            ),
+        }
+    }
+}
+
+#[gpui::test]
+fn paged_visible_card_restores_then_refreshes_without_losing_history(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let store = paged_chat(&s, cx, true);
+    s.manager.update(cx, |m, cx| m.refresh_cards(cx));
+    cx.run_until_parked();
+    s.manager.update(cx, |m, cx| {
+        assert_eq!(m.chats[&s.id].read(cx).bot_row_origin(cx), 0);
+        m.refresh_cards(cx);
+    });
+    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+    cx.run_until_parked();
+    let db = locked(&store).unwrap();
+    let session = db.sessions().unwrap()[0].id;
+    let rows = db.load(session).unwrap().rows;
+    assert_eq!(rows[0].text, "message 0");
+    let card = rows.iter().find(|row| row.role == "bot-card").unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&card.text).unwrap()["started"],
+        false
+    );
+}
+
 #[gpui::test]
 fn channel_settings_are_anchored_and_keep_the_conversation_and_draft_visible(
     cx: &mut TestAppContext,

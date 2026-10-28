@@ -30,6 +30,10 @@ impl Conversation {
         self.accept_external_message(text, None, cx)
     }
     pub(crate) fn app_send(&mut self, text: String, cx: &mut Context<Self>) -> Result<(), String> {
+        if self.history_partial {
+            self.load(cx);
+            return Err("Session history is loading; retry the message when ready".into());
+        }
         if !self.ready_for_external(cx) {
             return Err(
                 "Session is busy, loading, or has an unsent draft; it was preserved".into(),
@@ -64,6 +68,10 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         self.execution_provider()?;
+        if self.history_partial {
+            self.load(cx);
+            return Err("Session history is loading; retry the message when ready".into());
+        }
         if !self.history_ready()
             || self.stopping
             || self.account_switching
@@ -137,6 +145,10 @@ impl Conversation {
         }
     }
     pub(super) fn save_follow_ups(&mut self, cx: &mut Context<Self>) {
+        if self.history_partial {
+            self.defer_history_action(|this, cx| this.save_follow_ups(cx), cx);
+            return;
+        }
         self.follow_ups.state.revision += 1;
         let mut snapshot = self.follow_ups.state.clone();
         let revision = snapshot.revision;

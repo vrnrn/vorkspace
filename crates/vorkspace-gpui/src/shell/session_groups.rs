@@ -96,6 +96,7 @@ pub(super) struct FolderDrag {
 pub(super) enum RenameTarget {
     Session(i64),
     Folder(String),
+    ProjectGroup(String),
 }
 pub(super) struct Renaming {
     pub(super) target: RenameTarget,
@@ -174,9 +175,55 @@ impl Shell {
     }
     pub(super) fn delete_sidebar_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let ids: Vec<_> = self.selected_sessions.iter().copied().collect();
-        for id in ids {
-            self.delete_session(id, window, cx);
+        self.request_delete_sessions(ids, window, cx);
+    }
+
+    /// Ask for consent to permanently delete the exact IDs supplied by the caller.
+    pub(super) fn request_delete_sessions(
+        &mut self,
+        mut ids: Vec<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        ids.sort_unstable();
+        ids.dedup();
+        ids.retain(|id| self.session_summaries.contains_key(id));
+        if ids.is_empty() {
+            return;
         }
+        let removal_epoch = self.session_removal_epoch;
+        let title = if ids.len() == 1 {
+            "Delete this conversation permanently?".to_owned()
+        } else {
+            format!("Delete {} conversations permanently?", ids.len())
+        };
+        let prompt = window.prompt(
+            gpui::PromptLevel::Warning,
+            &title,
+            Some("Messages and saved settings will be removed."),
+            &["Delete", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if prompt.await != Ok(0) {
+                return;
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                // Numeric IDs may be reused after removal; never apply old consent
+                // to a replacement, even if the selection now looks identical.
+                if this.session_removal_epoch != removal_epoch {
+                    this.error = Some(
+                        "The conversation list changed. Please confirm deletion again.".into(),
+                    );
+                    cx.notify();
+                    return;
+                }
+                for id in ids {
+                    this.delete_session(id, window, cx);
+                }
+            });
+        })
+        .detach();
     }
     pub(super) fn sidebar_drop_at(
         &self,
@@ -605,11 +652,7 @@ impl Shell {
                     }
                 }
             }
-            "delete" => {
-                for id in ids {
-                    self.delete_session(id, window, cx);
-                }
-            }
+            "delete" => self.request_delete_sessions(ids, window, cx),
             _ => {}
         }
     }
@@ -740,6 +783,17 @@ impl Shell {
         self.invalidate_chrome(cx);
     }
 
+    fn report_session_delete_error(&mut self, id: i64, reason: &str) {
+        let message = format!("Could not delete conversation {id}: {reason}");
+        match &mut self.error {
+            Some(error) if error.starts_with("Could not delete conversation ") => {
+                error.push('\n');
+                error.push_str(&message);
+            }
+            _ => self.error = Some(message),
+        }
+    }
+
     pub(super) fn delete_session(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace.review_owners.iter().any(|(pane, owner)| {
             *owner == id
@@ -749,7 +803,7 @@ impl Shell {
                         .get(pane)
                         .is_some_and(|r| r.read(cx).unsaved_files(cx)))
         }) {
-            self.error = Some("Close this session's detached file panes before deleting it".into());
+            self.report_session_delete_error(id, "close its detached file panes first");
             cx.notify();
             return;
         }
@@ -765,7 +819,7 @@ impl Shell {
         }
         if self.workspace.tab_of(id).is_some() {
             self.deleting.remove(&id);
-            self.error = Some("Could not delete a session that is still open".into());
+            self.report_session_delete_error(id, "it is still open");
             cx.notify();
             return;
         }
@@ -789,9 +843,7 @@ impl Shell {
                 this.deleting.remove(&id);
                 match result {
                     Ok(()) => this.forget_session(id, cx),
-                    Err(error) => {
-                        this.error = Some(format!("Could not delete the session: {error}"))
-                    }
+                    Err(error) => this.report_session_delete_error(id, &error),
                 }
                 this.invalidate_chrome(cx);
                 this.sync_settings(cx);
@@ -813,6 +865,7 @@ impl Shell {
             self.preview_close = None;
         }
         self.sessions.remove(&id);
+        self.session_removal_epoch = self.session_removal_epoch.wrapping_add(1);
         self.session_summaries.remove(&id);
         self.draft_sessions.remove(&id);
         self.history_recency.remove(&id);
@@ -853,10 +906,22 @@ impl Shell {
         self.persist(cx);
     }
 
-    fn start_rename(&mut self, target: RenameTarget, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn start_rename(
+        &mut self,
+        target: RenameTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.close_preview(cx);
         let text = match &target {
             RenameTarget::Session(id) => self.session_metadata(*id, cx).display_title(),
+            RenameTarget::ProjectGroup(id) => self
+                .workspace
+                .project_rail_state
+                .as_ref()
+                .and_then(|r| r.groups.iter().find(|g| &g.id == id))
+                .map(|g| g.name.clone())
+                .unwrap_or_default(),
             RenameTarget::Folder(folder) => self
                 .project_groups()
                 .folder(folder)
@@ -918,6 +983,18 @@ impl Shell {
                             });
                         }
                         self.store_write("rename the session", cx, move |s| s.title(id, &name));
+                    }
+                }
+                RenameTarget::ProjectGroup(id) => {
+                    if let Some(group) = self
+                        .workspace
+                        .project_rail_mut()
+                        .groups
+                        .iter_mut()
+                        .find(|g| g.id == id)
+                    {
+                        group.name = name;
+                        self.persist(cx);
                     }
                 }
                 RenameTarget::Folder(folder) => {
@@ -1518,6 +1595,159 @@ mod tests {
     }
 
     #[gpui::test]
+    fn delete_confirmation_cancels_and_uses_selection_snapshot(cx: &mut TestAppContext) {
+        let (window, a, b) = setup(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.selected_sessions.clear();
+                shell.selected_sessions.insert(a);
+                shell.delete_sidebar_selection(w, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, w, cx| {
+                assert!(shell.session_summaries.contains_key(&a));
+                shell.delete_sidebar_selection(w, cx);
+                shell.selected_sessions.clear();
+                shell.selected_sessions.insert(b);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_prompt_answer("Delete");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(!shell.session_summaries.contains_key(&a));
+                assert!(shell.session_summaries.contains_key(&b));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn delete_rechecks_detached_panes_after_confirmation(cx: &mut TestAppContext) {
+        let (window, a, b) = setup(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.request_delete_sessions(vec![a], w, cx);
+                // The pane becomes detached while the prompt is open.
+                assert!(shell.workspace.tab_of(b).is_some());
+                shell.workspace.review_owners.insert(b, a);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_prompt_answer("Delete");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.session_summaries.contains_key(&a));
+                assert!(
+                    shell
+                        .error
+                        .as_deref()
+                        .unwrap()
+                        .contains("detached file panes")
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn bulk_delete_keeps_guarded_session_and_deletes_the_other(cx: &mut TestAppContext) {
+        let (window, a, b) = setup(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.workspace.review_owners.insert(b, a);
+                shell.request_delete_sessions(vec![a, b], w, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_prompt_answer("Delete");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.session_summaries.contains_key(&a));
+                assert!(!shell.session_summaries.contains_key(&b));
+                assert!(
+                    shell
+                        .error
+                        .as_deref()
+                        .unwrap()
+                        .contains("detached file panes")
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn deleting_session_cannot_reopen(cx: &mut TestAppContext) {
+        let (window, a, _) = setup(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open(a, w, cx);
+                shell.delete_session(a, w, cx);
+                shell.open(a, w, cx);
+                assert_ne!(shell.workspace.active, Some(a));
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn stale_confirmation_does_not_delete_reused_id(cx: &mut TestAppContext) {
+        let (window, a, _) = setup(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.request_delete_sessions(vec![a], w, cx);
+                // Simulate removal and reuse while consent is pending.
+                let summary = shell.session_summaries[&a].clone();
+                shell.workspace.close(a);
+                shell.forget_session(a, cx);
+                shell.add(summary, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_prompt_answer("Delete");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.session_summaries.contains_key(&a));
+                assert!(
+                    shell
+                        .error
+                        .as_deref()
+                        .unwrap()
+                        .contains("confirm deletion again")
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn menu_delete_confirms_multiple_sessions(cx: &mut TestAppContext) {
+        let (window, a, b) = setup(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.selected_sessions.extend([a, b]);
+                shell.run_session_menu(a, "delete", w, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Delete");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(!shell.session_summaries.contains_key(&a));
+                assert!(!shell.session_summaries.contains_key(&b));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn expanded_folders_use_compact_connected_rows_and_keep_operator_children(
         cx: &mut TestAppContext,
     ) {
@@ -2022,14 +2252,11 @@ mod tests {
                 });
                 shell.open(a, w, cx);
                 shell.run_menu(MenuTarget::Session(a), "delete", None, w, cx);
-                shell.open(a, w, cx);
-                assert_ne!(
-                    shell.workspace.active,
-                    Some(a),
-                    "deleting sessions cannot reopen"
-                );
             })
             .unwrap();
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Delete");
         cx.run_until_parked();
         window
             .update(cx, |shell, _, _| {

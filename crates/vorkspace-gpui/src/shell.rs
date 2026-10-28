@@ -6,6 +6,7 @@ mod automation_runs;
 pub(crate) mod bots;
 mod classic_rail;
 mod classic_sidebar;
+mod external_editor;
 mod file_panes;
 mod idle_agents;
 #[cfg(test)]
@@ -15,6 +16,7 @@ mod live_agents;
 mod notifications;
 mod orchestration;
 mod picker_preferences;
+mod project_delete;
 mod project_settings;
 mod quick_composer;
 mod quick_open;
@@ -531,6 +533,7 @@ pub(crate) struct Shell {
     renaming: Option<session_groups::Renaming>,
     link_dialog: Option<session_groups::LinkDialog>,
     deleting: HashSet<i64>,
+    session_removal_epoch: u64,
     group_writes: Option<gpui::Task<()>>,
     selected_sessions: HashSet<i64>,
     selection_anchor: Option<i64>,
@@ -561,6 +564,9 @@ pub(crate) struct Shell {
     saved_search: Option<(String, vorkspace_core::search::Scope)>,
     order: Vec<i64>,
     pub(crate) workspace: Workspace,
+    external_editors: Option<Vec<vorkspace_core::external_editor::ExternalEditor>>,
+    external_editor_scan: u64,
+    deleting_projects: HashSet<String>,
     focus: FocusHandle,
     project_rail_toggle_focus: FocusHandle,
     sidebar_focus: FocusHandle,
@@ -594,6 +600,7 @@ pub(crate) struct Shell {
     /// focus a new session in a tab or project the user has already left.
     navigation_revision: u64,
     pending_project_blanks: HashSet<String>,
+    pending_project_creations: HashMap<String, usize>,
     new_tab_task: Option<gpui::Task<()>>,
     worktree_focus: HashMap<String, crate::worktree_switcher::WorktreeFocus>,
     session_worktrees: HashMap<i64, Option<String>>,
@@ -674,7 +681,7 @@ impl Shell {
             .collect::<Vec<_>>();
         let workspace = Workspace::restore(saved.as_deref(), &paths, &cwd);
         let mut projects = workspace.projects;
-        if !projects.contains(&workspace.project) {
+        if !workspace.project.is_empty() && !projects.contains(&workspace.project) {
             projects.push(workspace.project);
         }
         let metadata = locked(&store)
@@ -860,6 +867,7 @@ impl Shell {
             renaming: None,
             link_dialog: None,
             deleting: HashSet::new(),
+            session_removal_epoch: 0,
             group_writes: None,
             selected_sessions: HashSet::new(),
             selection_anchor: None,
@@ -889,6 +897,9 @@ impl Shell {
             saved_search: None,
             order: Vec::new(),
             workspace,
+            external_editors: None,
+            external_editor_scan: 0,
+            deleting_projects: HashSet::new(),
             focus: cx.focus_handle(),
             project_rail_toggle_focus: cx.focus_handle().tab_stop(true),
             sidebar_focus: cx.focus_handle(),
@@ -917,6 +928,7 @@ impl Shell {
             history: VisitHistory::default(),
             navigation_revision: 0,
             pending_project_blanks: HashSet::new(),
+            pending_project_creations: HashMap::new(),
             new_tab_task: None,
             worktree_focus,
             session_worktrees,
@@ -974,6 +986,7 @@ impl Shell {
             latest_state,
             render_passes: 0,
         };
+        this.scan_external_editors(cx);
         this.observe_accounts(cx);
         this.observe_picker_preferences(cx);
         let bot_owner = cx.weak_entity();
@@ -1143,7 +1156,7 @@ impl Shell {
         self.trim_session_histories(&shown, cx);
     }
     fn add(&mut self, summary: Session, cx: &mut Context<Self>) {
-        self.workspace.add_project(&summary.cwd);
+        self.workspace.restore_project(&summary.cwd);
         self.add_loaded(summary, cx);
     }
     /// Loading history must not turn every session directory into a rail project.
@@ -3945,6 +3958,14 @@ impl Shell {
     }
 
     fn select_project(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .deleting_projects
+            .contains(&vorkspace_core::files::path_key(&path))
+        {
+            self.error = Some("This project is being deleted.".into());
+            cx.notify();
+            return;
+        }
         self.selected_sessions.clear();
         self.selection_anchor = None;
         self.sidebar_target = None;
@@ -4063,7 +4084,7 @@ impl Shell {
                 if let Some(path) = paths.first() {
                     let path = path.to_string_lossy().into_owned();
                     let _ = this.update_in(cx, |this, window, cx| {
-                        this.workspace.add_project(&path);
+                        this.workspace.restore_project(&path);
                         this.select_project(path, window, cx);
                     });
                 }
@@ -4089,6 +4110,11 @@ impl Shell {
         if only_if_empty && !self.pending_project_blanks.insert(blank_key.clone()) {
             return;
         }
+        let creation_key = vorkspace_core::files::path_key(&cwd);
+        *self
+            .pending_project_creations
+            .entry(creation_key.clone())
+            .or_default() += 1;
         let model = self
             .workspace
             .preferences
@@ -4144,6 +4170,7 @@ impl Shell {
                 previous.await;
             }
             let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_project_creation(&creation_key);
                 if only_if_empty {
                     this.pending_project_blanks.remove(&blank_key);
                 }
@@ -4771,6 +4798,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if matches!(&target, MenuTarget::Project { .. }) {
+            self.scan_external_editors(cx);
+        }
         self.close_preview(cx);
         // Close the previous menu first, so the new one remembers the focus
         // that was there before either opened.
@@ -4919,10 +4949,7 @@ impl Shell {
                             },
                         )
                         .into(),
-                        MenuAction::new("delete", "Delete")
-                            .danger()
-                            .disabled(true)
-                            .into(),
+                        MenuAction::new("delete", "Delete").danger().into(),
                     ]);
                 }
                 (
@@ -5081,41 +5108,76 @@ impl Shell {
                         .into(),
                 ];
                 if *rail {
-                    items.extend([
+                    let rail = self
+                        .workspace
+                        .project_rail_state
+                        .clone()
+                        .unwrap_or_default();
+                    let key = vorkspace_core::files::path_key(path);
+                    let mut groups = vec![
+                        MenuAction::new("project-group:new", "New group…"),
+                        MenuAction::new("project-group:set:", "No group")
+                            .checked(!rail.assignments.contains_key(&key)),
+                    ];
+                    groups.extend(rail.groups.iter().map(|g| {
+                        MenuAction::new(format!("project-group:set:{}", g.id), g.name.clone())
+                            .checked(rail.assignments.get(&key) == Some(&g.id))
+                    }));
+                    let manage = rail
+                        .groups
+                        .iter()
+                        .flat_map(|g| {
+                            [
+                                MenuAction::new(
+                                    format!("group-rename:{}", g.id),
+                                    format!("Rename {}…", g.name),
+                                ),
+                                MenuAction::new(
+                                    format!("group-remove:{}", g.id),
+                                    format!("Remove {}", g.name),
+                                ),
+                            ]
+                        })
+                        .collect::<Vec<_>>();
+                    items.push(
                         MenuAction::new("project-group", "Move to group")
                             .icon("folder-tree")
-                            .disabled(true)
-                            .submenu(vec![MenuAction::new("project-group:new", "New group…")])
+                            .submenu(groups)
                             .into(),
-                        MenuAction::new("pin", "Pin project")
-                            .icon("pin")
-                            .disabled(true)
-                            .into(),
-                    ]);
+                    );
+                    if !manage.is_empty() {
+                        items.push(
+                            MenuAction::new("manage-groups", "Manage groups")
+                                .icon("folder-tree")
+                                .submenu(manage)
+                                .into(),
+                        );
+                    }
+                    items.push(
+                        MenuAction::new(
+                            "pin",
+                            if rail.pinned.contains(&key) {
+                                "Unpin project"
+                            } else {
+                                "Pin project"
+                            },
+                        )
+                        .icon("pin")
+                        .into(),
+                    );
                 }
                 items.extend([
                     MenuAction::new("reveal", REVEAL_LABEL)
                         .icon("folder-open")
                         .into(),
-                    MenuAction::new("external-editor", "Open in editor")
-                        .icon("app-window")
-                        .disabled(true)
-                        .submenu(vec![MenuAction::new(
-                            "external-editor:none",
-                            "No supported editors found",
-                        )])
-                        .into(),
+                    self.external_editor_menu(path).into(),
                     MenuItem::Separator,
                     self.project_notification_menu(path).into(),
                     MenuItem::Separator,
-                    MenuAction::new("archive", "Archive")
-                        .icon("archive")
-                        .disabled(true)
-                        .into(),
+                    MenuAction::new("archive", "Archive").icon("archive").into(),
                     MenuAction::new("delete", "Delete")
                         .icon("trash")
                         .danger()
-                        .disabled(true)
                         .into(),
                 ]);
                 (
@@ -5139,6 +5201,12 @@ impl Shell {
             && let MenuTarget::Tab(id) = target
         {
             self.toggle_archive(id, cx);
+            return;
+        }
+        if action == "delete"
+            && let MenuTarget::Tab(id) = target
+        {
+            self.request_delete_sessions(vec![id], window, cx);
             return;
         }
         match target {
@@ -5182,13 +5250,108 @@ impl Shell {
                 }
             }
             MenuTarget::Project { path, .. } => {
-                if action == "reveal" {
+                if (action == "pin"
+                    || action.starts_with("project-group:")
+                    || action.starts_with("group-rename:")
+                    || action.starts_with("group-remove:"))
+                    && let Err(error) = self.workspace.migrate_project_rail()
+                {
+                    self.error = Some(format!(
+                        "Cannot change project groups: {error}. Existing preferences were kept."
+                    ));
+                    cx.notify();
+                    return;
+                }
+                if action == "pin" {
+                    let key = vorkspace_core::files::path_key(&path);
+                    let rail = self.workspace.project_rail_mut();
+                    let value = if rail.pinned.remove(&key) {
+                        false
+                    } else {
+                        rail.pinned.insert(key.clone());
+                        true
+                    };
+                    if rail.awaiting_legacy_pins {
+                        rail.pin_overrides.insert(key, value);
+                    }
+                    self.persist(cx);
+                    self.invalidate_chrome(cx);
+                    cx.notify();
+                } else if action == "project-group:new" {
+                    let rail = self.workspace.project_rail_mut();
+                    let id = format!("native-group-{}", vorkspace_core::bot::new_id());
+                    rail.groups.push(crate::workspace::ProjectRailGroup {
+                        id: id.clone(),
+                        name: "New group".into(),
+                        collapsed: false,
+                    });
+                    let key = vorkspace_core::files::path_key(&path);
+                    rail.assignments.insert(key.clone(), id.clone());
+                    if rail.awaiting_legacy_assignments {
+                        rail.assignment_overrides
+                            .insert(key.clone(), Some(id.clone()));
+                    }
+                    rail.pinned.remove(&key);
+                    if rail.awaiting_legacy_pins {
+                        rail.pin_overrides.insert(key, false);
+                    }
+                    self.persist(cx);
+                    self.start_rename(session_groups::RenameTarget::ProjectGroup(id), window, cx);
+                } else if let Some(id) = action.strip_prefix("group-rename:") {
+                    self.start_rename(
+                        session_groups::RenameTarget::ProjectGroup(id.into()),
+                        window,
+                        cx,
+                    );
+                } else if let Some(id) = action.strip_prefix("group-remove:") {
+                    let rail = self.workspace.project_rail_mut();
+                    rail.groups.retain(|g| g.id != id);
+                    if rail.awaiting_legacy_assignments {
+                        let removed: Vec<_> = rail
+                            .assignments
+                            .iter()
+                            .filter(|(_, g)| g.as_str() == id)
+                            .map(|(p, _)| p.clone())
+                            .collect();
+                        for path in removed {
+                            rail.assignment_overrides.insert(path, None);
+                        }
+                    }
+                    rail.assignments.retain(|_, g| g != id);
+                    self.workspace.project_group_collapsed.remove(id);
+                    self.persist(cx);
+                    self.invalidate_chrome(cx);
+                    cx.notify();
+                } else if let Some(id) = action.strip_prefix("project-group:set:") {
+                    let rail = self.workspace.project_rail_mut();
+                    let key = vorkspace_core::files::path_key(&path);
+                    if id.is_empty() {
+                        rail.assignments.remove(&key);
+                        if rail.awaiting_legacy_assignments {
+                            rail.assignment_overrides.insert(key, None);
+                        }
+                    } else if rail.groups.iter().any(|g| g.id == id) {
+                        rail.assignments.insert(key.clone(), id.into());
+                        if rail.awaiting_legacy_assignments {
+                            rail.assignment_overrides.insert(key, Some(id.into()));
+                        }
+                    }
+                    self.persist(cx);
+                    self.invalidate_chrome(cx);
+                    cx.notify();
+                } else if action == "archive" {
+                    self.archive_project(&path, cx);
+                } else if action == "delete" {
+                    self.confirm_delete_project(path, window, cx);
+                } else if action == "reveal" {
                     if path.starts_with("remote://") {
                         self.error = Some("Remote folders stay on their host machine.".into());
                         cx.notify();
                     } else {
                         cx.reveal_path(std::path::Path::new(&path));
                     }
+                } else if let Some(editor) = action.strip_prefix("external-editor:") {
+                    self.open_in_external_editor(editor, &path, cx);
                 } else if action == "background" {
                     self.open_background_dialog(path, window, cx);
                 } else if action.starts_with("mute:") {
@@ -5196,6 +5359,71 @@ impl Shell {
                 }
             }
         }
+    }
+    // Archive only after the workspace has been durably saved. Existing tabs and
+    // processes remain owned by their current lifecycle and are never closed here.
+    fn commit_project_archive(&mut self, next: Workspace, cx: &mut Context<Self>) {
+        let state = serde_json::to_string(&next).expect("serialize workspace");
+        // Cancel queued older snapshots before acquiring the store lock.
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        let result = locked(&self.store).and_then(|store| store.save_ui_state(&state));
+        if let Err(error) = result {
+            self.error = Some(format!("Could not save project archive: {error}"));
+        } else {
+            *self.latest_state.lock().unwrap_or_else(|e| e.into_inner()) = state;
+            self.workspace = next;
+            self.invalidate_chrome(cx);
+        }
+        cx.notify();
+    }
+    fn archive_project(&mut self, path: &str, cx: &mut Context<Self>) {
+        let key = vorkspace_core::files::path_key(path);
+        let same = |p: &str| vorkspace_core::files::path_key(p) == key;
+        let current = vorkspace_core::files::path_key(&self.workspace.project);
+        let open = self.workspace.open_sessions().iter().any(|id| {
+            let id = self.workspace.session_for_pane(*id);
+            // Tabs without a verified current-project owner may belong to a
+            // worktree or an unsaved pane in the project being archived.
+            let owner = self
+                .workspace
+                .tab_workspaces
+                .get(&id)
+                .map(String::as_str)
+                .or_else(|| self.session_summaries.get(&id).map(|s| s.cwd.as_str()));
+            owner.is_none_or(|p| vorkspace_core::files::path_key(p) != current)
+        });
+        let busy = self
+            .order
+            .iter()
+            .any(|id| self.session_metadata(*id, cx).busy);
+        // Terminal title tabs and Bots can have independent worktree scopes.
+        // Refuse conservatively until those owners have released their work.
+        let terminals = !self.terminal_tabs.is_empty()
+            || self.terminals.values().any(|v| !v.is_empty())
+            || self
+                .workspace
+                .docks
+                .values()
+                .any(|dock| !dock.terminals.is_empty())
+            || self
+                .workspace
+                .title_order
+                .iter()
+                .any(|tab| matches!(tab, TitleTab::Terminal { .. }));
+        let bots = self
+            .workspace
+            .title_order
+            .iter()
+            .any(|t| matches!(t, TitleTab::Bot { .. }));
+        if same(&self.workspace.project) || open || busy || terminals || bots {
+            self.error = Some("To archive this project, switch to another project and close other projects’ open panes and finish running conversations. Close terminal and Bot tabs first.".into());
+            cx.notify();
+            return;
+        }
+        let mut next = self.workspace.clone();
+        next.projects.retain(|p| !same(p));
+        next.project_archive.insert(key, true);
+        self.commit_project_archive(next, cx);
     }
     fn close_preview(&mut self, cx: &mut Context<Self>) {
         self.preview_open = None;
@@ -10337,6 +10565,47 @@ mod tests {
         cx.refresh().unwrap();
         cx.run_until_parked();
         (window, ids.0, ids.1)
+    }
+    #[gpui::test]
+    fn tab_delete_confirms_and_targets_the_original_session(cx: &mut TestAppContext) {
+        let (window, a, b) = window(cx);
+        window.update(cx, |shell, w, cx| {
+            shell.open(a, w, cx);
+            let (_, items, _, _) = shell.menu_items(&MenuTarget::Tab(a), &mut Vec::new(), w, cx);
+            assert!(items.iter().any(|item| matches!(item, MenuItem::Action(action) if action.id == "delete" && !action.disabled && action.danger)));
+            shell.run_menu(MenuTarget::Tab(a), "delete", None, w, cx);
+            shell.open(b, w, cx);
+        }).unwrap();
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, w, cx| {
+                assert!(shell.session_summaries.contains_key(&a));
+                shell.open(a, w, cx);
+                shell.run_menu(MenuTarget::Tab(a), "delete", None, w, cx);
+                shell.open(b, w, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Delete");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(!shell.session_summaries.contains_key(&a));
+                assert!(shell.session_summaries.contains_key(&b));
+                assert!(
+                    !locked(&shell.store)
+                        .unwrap()
+                        .sessions()
+                        .unwrap()
+                        .iter()
+                        .any(|s| s.id == a)
+                );
+            })
+            .unwrap();
     }
     #[gpui::test]
     fn pane_surfaces_follow_the_edge_at_a_constant_width(cx: &mut TestAppContext) {

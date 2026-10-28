@@ -89,6 +89,16 @@ impl Shell {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let key = vorkspace_core::files::path_key(&launch.cwd);
+        if self.deleting_projects.contains(&key) {
+            self.error = Some("This project is being deleted.".into());
+            cx.notify();
+            return;
+        }
+        *self
+            .pending_project_creations
+            .entry(key.clone())
+            .or_default() += 1;
         let store = self.store.clone();
         let choice = launch.clone();
         crate::conversation::remember_access(choice.access, cx);
@@ -111,30 +121,30 @@ impl Shell {
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
-            let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok((summary, settings)) => {
-                    let id = summary.id;
-                    if !this.workspace.projects.contains(&launch.cwd) {
-                        this.workspace.projects.push(launch.cwd.clone());
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_project_creation(&key);
+                match result {
+                    Ok((summary, settings)) => {
+                        let id = summary.id;
+                        this.add(summary, cx);
+                        this.sessions[&id]
+                            .update(cx, |v, cx| v.quick_submit(launch.prompt, settings, cx));
+                        this.order.retain(|i| *i != id);
+                        this.order.insert(0, id);
+                        if launch.foreground {
+                            this.workspace.project = launch.cwd;
+                            this.close_settings(window, cx);
+                            this.activate_session(id, window, cx);
+                            window.activate_window();
+                        }
+                        this.invalidate_chrome(cx);
+                        this.persist(cx);
+                        cx.notify();
                     }
-                    this.add(summary, cx);
-                    this.sessions[&id]
-                        .update(cx, |v, cx| v.quick_submit(launch.prompt, settings, cx));
-                    this.order.retain(|i| *i != id);
-                    this.order.insert(0, id);
-                    if launch.foreground {
-                        this.workspace.project = launch.cwd;
-                        this.close_settings(window, cx);
-                        this.activate_session(id, window, cx);
-                        window.activate_window();
+                    Err(e) => {
+                        this.error = Some(e);
+                        cx.notify();
                     }
-                    this.invalidate_chrome(cx);
-                    this.persist(cx);
-                    cx.notify();
-                }
-                Err(e) => {
-                    this.error = Some(e);
-                    cx.notify();
                 }
             });
         })

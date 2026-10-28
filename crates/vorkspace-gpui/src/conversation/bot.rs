@@ -296,6 +296,13 @@ impl Conversation {
     pub(crate) fn bot_rows<'a>(&self, cx: &'a App) -> &'a [vorkspace_core::transcript::Row] {
         self.transcript.read(cx).source_rows()
     }
+    pub(crate) fn bot_row_origin(&self, cx: &App) -> usize {
+        self.transcript.read(cx).storage_origin().unwrap_or(0)
+    }
+    pub(crate) fn bot_row_count(&self, cx: &App) -> usize {
+        self.bot_row_origin(cx)
+            .saturating_add(self.bot_rows(cx).len())
+    }
     pub(crate) fn bot_patch_card(
         &mut self,
         index: usize,
