@@ -256,7 +256,11 @@ fn providers_without_an_open_conversation_list_their_loaded_models(cx: &mut Test
         .update(cx, |view, _, cx| {
             view.discovery.binaries = vec![(Kind::Codex, Some("/bin/codex".into()))];
             view.discovered_catalogs.insert(
-                (Kind::Codex, Default::default()),
+                (
+                    Kind::Codex,
+                    Default::default(),
+                    vorkspace_core::catalog::generation(Kind::Codex, &Default::default()),
+                ),
                 vec![("a".into(), "Alpha".into())],
             );
             cx.notify();
@@ -300,16 +304,34 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                 .selected(Kind::Codex, &view.selected_project);
             let work = center.read(cx).profile(&account.id);
             view.discovered_catalogs.insert(
-                (Kind::Codex, default),
+                (
+                    Kind::Codex,
+                    default.clone(),
+                    vorkspace_core::catalog::generation(Kind::Codex, &default),
+                ),
                 vec![("default-model".into(), "Default model".into())],
             );
             view.discovered_catalogs.insert(
-                (Kind::Codex, work),
+                (
+                    Kind::Codex,
+                    work.clone(),
+                    vorkspace_core::catalog::generation(Kind::Codex, &work),
+                ),
                 vec![("work-model".into(), "Work model".into())],
             );
             assert_eq!(
                 view.discovered_models(Kind::Codex, cx).unwrap()[0].0,
                 "default-model"
+            );
+            vorkspace_core::catalog::invalidate(Kind::Codex, &default);
+            assert!(view.discovered_models(Kind::Codex, cx).is_none());
+            view.discovered_catalogs.insert(
+                (
+                    Kind::Codex,
+                    default.clone(),
+                    vorkspace_core::catalog::generation(Kind::Codex, &default),
+                ),
+                vec![("new-default-model".into(), "New default model".into())],
             );
             center.update(cx, |center, cx| {
                 center
@@ -331,7 +353,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
             });
             assert_eq!(
                 view.discovered_models(Kind::Codex, cx).unwrap()[0].0,
-                "default-model"
+                "new-default-model"
             );
         })
         .unwrap();

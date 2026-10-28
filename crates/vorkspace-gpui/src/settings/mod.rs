@@ -238,12 +238,14 @@ pub(crate) struct SettingsView {
         (
             vorkspace_core::provider::Kind,
             vorkspace_core::accounts::Profile,
+            u64,
         ),
         Vec<(String, String)>,
     >,
     catalogs_loading: Vec<(
         vorkspace_core::provider::Kind,
         vorkspace_core::accounts::Profile,
+        u64,
     )>,
     models_open: Option<vorkspace_core::provider::Kind>,
     model_menu_anchors: RefCell<HashMap<vorkspace_core::provider::Kind, AnchorSlot>>,
@@ -513,20 +515,24 @@ impl SettingsView {
         kind: vorkspace_core::provider::Kind,
         cx: &App,
     ) -> Option<&Vec<(String, String)>> {
-        self.discovered_catalogs
-            .get(&(kind, self.catalog_profile(kind, cx)))
+        let profile = self.catalog_profile(kind, cx);
+        let generation = vorkspace_core::catalog::generation(kind, &profile);
+        self.discovered_catalogs.get(&(kind, profile, generation))
     }
     /// Load every installed provider's model list off the render path.
     fn load_catalogs(&mut self, force: bool, cx: &mut Context<Self>) {
         for (kind, path) in self.discovery.binaries.clone() {
             let profile = self.catalog_profile(kind, cx);
-            let key = (kind, profile.clone());
+            let generation = vorkspace_core::catalog::generation(kind, &profile);
+            let key = (kind, profile.clone(), generation);
             if path.is_none()
                 || self.catalogs_loading.contains(&key)
                 || (!force && self.discovered_catalogs.contains_key(&key))
             {
                 continue;
             }
+            self.discovered_catalogs
+                .retain(|(k, p, g), _| *k != kind || *p != profile || *g == generation);
             self.catalogs_loading.push(key.clone());
             let work = cx
                 .background_executor()
@@ -535,7 +541,9 @@ impl SettingsView {
                 let result = work.await;
                 let _ = this.update(cx, |this, cx| {
                     this.catalogs_loading.retain(|loading| *loading != key);
-                    if let Ok(models) = result {
+                    if let Ok(models) = result
+                        && vorkspace_core::catalog::generation(key.0, &key.1) == key.2
+                    {
                         this.discovered_catalogs.insert(
                             key,
                             models
