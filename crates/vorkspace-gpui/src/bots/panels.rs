@@ -1665,6 +1665,14 @@ impl Bots {
                         )),
                     )
                     .ignore(self.notice_region.clone())
+                    .when_some(self.picker.as_ref(), |popover, picker| {
+                        // Pickers are deferred above the dialog and can extend past
+                        // its bounds. Their surfaces still belong to this setup.
+                        let menu = picker.menu.read(cx);
+                        popover
+                            .ignore(menu.surface_region())
+                            .ignore(menu.submenu_region())
+                    })
                     .modal_surface(true)
                     .without_animation()
                     .priority(70)

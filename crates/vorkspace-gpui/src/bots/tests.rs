@@ -1905,6 +1905,229 @@ fn settings_match_react_dialog_and_left_navigation_geometry(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn settings_picker_model_overflow_preserves_bot_setup(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    crate::clock::use_test_clock(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.simulate_resize(gpui::size(px(1400.), px(1000.)));
+    for creating in [false, true] {
+        s.window
+            .update(visual, |_, window, cx| {
+                cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+                    prefs.model_picker_tab = Some("codex".into());
+                    prefs.recent_models = vec![crate::settings::ModelChoice {
+                        provider: "codex".into(),
+                        model: Some("overflow-test-model".into()),
+                    }];
+                });
+                s.manager.update(cx, |manager, cx| {
+                    if creating {
+                        manager.create(Vec::new(), window, cx);
+                        manager.creation.as_mut().unwrap().provider = Kind::Codex;
+                        manager.creation.as_mut().unwrap().soul = "Keep this draft".into();
+                    }
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let anchor = s
+            .manager
+            .read_with(visual, |m, _| m.model_anchor.get().unwrap());
+        visual.simulate_click(anchor.center(), Default::default());
+        visual.run_until_parked();
+        let dialog = visual.debug_bounds("bot-settings-dialog").unwrap();
+        let row = visual.debug_bounds("model-option-1").unwrap();
+        // The same row works over the dialog; its right-hand overflow must work too.
+        let click = gpui::point(row.right() - px(12.), row.center().y);
+        assert!(click.x > dialog.right());
+        assert!(row.contains(&click));
+        visual.simulate_click(click, Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("bot-settings-dialog").is_some());
+        s.manager.read_with(visual, |manager, cx| {
+            assert!(manager.picker.is_none());
+            if creating {
+                let draft = manager.creation.as_ref().expect("the draft must survive");
+                assert_eq!(draft.settings.model.as_deref(), Some("overflow-test-model"));
+                assert_eq!(draft.soul, "Keep this draft");
+            } else {
+                assert_eq!(
+                    manager.chat().unwrap().read(cx).bot_model().as_deref(),
+                    Some("overflow-test-model")
+                );
+            }
+        });
+        // A closed picker must not leave an invisible exclusion behind.
+        visual.simulate_click(click, Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("bot-settings-dialog").is_none());
+        s.manager.read_with(visual, |manager, _| {
+            assert!(manager.creation.is_none());
+            assert!(manager.settings.is_none());
+        });
+    }
+}
+
+#[gpui::test]
+fn settings_picker_submenu_overflow_preserves_bot_setup(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    crate::clock::use_test_clock(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.simulate_resize(gpui::size(px(2200.), px(1100.)));
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager
+                .update(cx, |manager, cx| manager.create(Vec::new(), window, cx));
+        })
+        .unwrap();
+    visual.run_until_parked();
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager.update(cx, |manager, cx| {
+                let menu = cx.new(|cx| {
+                    Menu::new(
+                        "Model options",
+                        vec![
+                            crate::popover::MenuAction::new("reasoning", "Reasoning")
+                                .submenu(vec![crate::popover::MenuAction::new(
+                                    "effort:high",
+                                    "High",
+                                )])
+                                .into(),
+                        ],
+                        window,
+                        cx,
+                    )
+                });
+                let picked = cx.subscribe(&menu, |manager, _, event: &MenuEvent, cx| {
+                    if let MenuEvent::Picked(id, _) = event {
+                        manager.choose_creation_option(id, cx);
+                    }
+                    manager.picker = None;
+                    cx.notify();
+                });
+                manager.picker = Some(OpenPicker {
+                    menu,
+                    anchor: Anchor::Slot(manager.model_anchor.clone()),
+                    width: 228.,
+                    align: crate::popover::Align::Start,
+                    _events: vec![picked],
+                });
+                cx.notify();
+            });
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let row = visual.debug_bounds("menu-action-reasoning").unwrap();
+    visual.simulate_click(row.center(), Default::default());
+    visual.run_until_parked();
+    crate::clock::settle_animations(s.window, visual);
+    let dialog = visual.debug_bounds("bot-settings-dialog").unwrap();
+    let choice = visual.debug_bounds("menu-action-effort:high").unwrap();
+    assert!(!dialog.contains(&choice.center()));
+    visual.simulate_click(choice.center(), Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-settings-dialog").is_some());
+    s.manager.read_with(visual, |manager, _| {
+        assert!(manager.picker.is_none());
+        assert_eq!(
+            manager
+                .creation
+                .as_ref()
+                .unwrap()
+                .settings
+                .effort
+                .as_deref(),
+            Some("high")
+        );
+    });
+
+    // Clicking the dialog outside its picker dismisses only the picker.
+    let anchor = s
+        .manager
+        .read_with(visual, |m, _| m.model_anchor.get().unwrap());
+    visual.simulate_click(anchor.center(), Default::default());
+    visual.run_until_parked();
+    let navigation = visual.debug_bounds("bot-settings-navigation").unwrap();
+    visual.simulate_click(navigation.center(), Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-settings-dialog").is_some());
+    s.manager.read_with(visual, |manager, _| {
+        assert!(manager.picker.is_none());
+        assert!(manager.creation.is_some());
+    });
+}
+
+#[gpui::test]
+fn settings_picker_project_overflow_preserves_bot_setup(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    crate::clock::use_test_clock(cx);
+    let projects: Vec<_> = (0..16)
+        .map(|i| format!("{}/project-{i}", s.project))
+        .collect();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.simulate_resize(gpui::size(px(1400.), px(2400.)));
+    s.window
+        .update(visual, |shell, _, cx| {
+            shell.workspace.projects = projects.clone();
+            cx.notify();
+        })
+        .unwrap();
+    for creating in [false, true] {
+        if creating {
+            s.window
+                .update(visual, |_, window, cx| {
+                    s.manager
+                        .update(cx, |manager, cx| manager.create(Vec::new(), window, cx));
+                })
+                .unwrap();
+        }
+        visual.run_until_parked();
+        let anchor = s
+            .manager
+            .read_with(visual, |m, _| m.projects_anchor.get().unwrap());
+        visual.simulate_click(anchor.center(), Default::default());
+        visual.run_until_parked();
+        let dialog = visual.debug_bounds("bot-settings-dialog").unwrap();
+        let surface = s.manager.read_with(visual, |m, cx| {
+            m.picker
+                .as_ref()
+                .unwrap()
+                .menu
+                .read(cx)
+                .surface_region()
+                .get()
+                .unwrap()
+        });
+        let (index, click) = (0..projects.len())
+            .find_map(|i| {
+                let selector = Box::leak(format!("menu-action-project:{i}").into_boxed_str());
+                let row = visual.debug_bounds(selector)?;
+                let click = row.center();
+                (click.y > dialog.bottom() && surface.contains(&click)).then_some((i, click))
+            })
+            .expect("a long project list must extend below the settings dialog");
+        visual.simulate_click(click, Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("bot-settings-dialog").is_some());
+        s.manager.read_with(visual, |manager, _| {
+            assert!(manager.picker.is_none());
+            let bot = if creating {
+                &manager
+                    .creation
+                    .as_ref()
+                    .expect("the draft must survive")
+                    .bot
+            } else {
+                manager.roster.get(&s.id).unwrap()
+            };
+            assert!(bot.projects.contains(&projects[index]));
+        });
+    }
+}
+
+#[gpui::test]
 fn settings_sidebar_delete_confirms_and_preserves_sessions(cx: &mut TestAppContext) {
     let s = setup(cx);
     let sessions = locked(&s.store)
