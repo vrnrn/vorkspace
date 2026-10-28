@@ -1978,6 +1978,25 @@ impl Render for Changes {
 mod tests {
     use super::*;
     #[gpui::test]
+    fn stale_text_layout_ranges_do_not_abort_a_changes_panel_frame(cx: &mut gpui::TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                let git = cx.new(|cx| ProjectGit::new("~".into(), cx));
+                cx.new(|cx| Changes::new(git, window, cx))
+            })
+            .unwrap()
+        });
+        cx.refresh().unwrap();
+        window
+            .update(cx, |_, window, cx| {
+                window.text_system().test_stale_layout_ranges();
+                cx.notify();
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+    }
+
+    #[gpui::test]
     fn enabling_an_enabled_changes_panel_does_not_reload(cx: &mut gpui::TestAppContext) {
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |window, cx| {

@@ -625,6 +625,12 @@ impl WindowTextSystem {
         self.line_layout_cache.reuse_layouts(index)
     }
 
+    /// Exercise stale layout ranges in the frame cache for regression tests.
+    #[cfg(feature = "test-support")]
+    pub fn test_stale_layout_ranges(&self) {
+        self.line_layout_cache.exercise_stale_layout_ranges();
+    }
+
     pub(crate) fn truncate_layouts(&self, index: LineLayoutIndex) {
         self.line_layout_cache.truncate_layouts(index)
     }
