@@ -161,3 +161,141 @@ fn bot_mascot_is_beside_name_and_sidebar_switch_stays_visible(cx: &mut TestAppCo
     assert_eq!(switch.size, size(px(36.), px(20.)));
     assert!(switch.right() <= px(700.));
 }
+
+#[gpui::test]
+fn models_menu_hides_and_restores_individual_models(cx: &mut TestAppContext) {
+    use vorkspace_core::provider::Kind;
+    let window = window(Section::Providers, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.discovery.binaries = vec![(Kind::Claude, Some("/bin/claude".into()))];
+            view.ctx.catalogs.insert(
+                "claude".into(),
+                vec![("a".into(), "Alpha".into()), ("b".into(), "Beta".into())],
+            );
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let at = visual.debug_bounds("models-claude").unwrap().center();
+    visual.simulate_click(at, Default::default());
+    visual.run_until_parked();
+    let row = |visual: &mut VisualTestContext, ix: usize| {
+        let selector = ["model-visible-claude-0", "model-visible-claude-1"][ix];
+        visual.debug_bounds(selector).unwrap().center()
+    };
+    let at = row(visual, 1);
+    visual.simulate_click(at, Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            assert_eq!(view.prefs.hidden_models, ["claude:b"]);
+            assert!(view.prefs.model_hidden("claude", "b"));
+            assert!(!view.prefs.model_hidden("claude", "a"));
+            assert!(!view.prefs.model_hidden("codex", "b"));
+        })
+        .unwrap();
+    // A hidden model stays in the list so it can be restored.
+    let at = row(visual, 1);
+    visual.simulate_click(at, Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            assert!(view.prefs.hidden_models.is_empty())
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn models_menu_scrolls_to_lower_rows(cx: &mut TestAppContext) {
+    use vorkspace_core::provider::Kind;
+    let window = window(Section::Providers, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.discovery.binaries = vec![(Kind::Claude, Some("/bin/claude".into()))];
+            view.ctx.catalogs.insert(
+                "claude".into(),
+                (0..30)
+                    .map(|n| (format!("model-{n}"), format!("Model {n}")))
+                    .collect(),
+            );
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let at = visual.debug_bounds("models-claude").unwrap().center();
+    visual.simulate_click(at, Default::default());
+    visual.run_until_parked();
+    let scroll = visual.debug_bounds("models-scroll-claude").unwrap();
+    assert!(scroll.size.height <= px(320.));
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: scroll.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-1200.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    visual.run_until_parked();
+    let last = visual.debug_bounds("model-visible-claude-29").unwrap();
+    assert!(last.center().y >= scroll.top() && last.center().y < scroll.bottom());
+    visual.simulate_click(last.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            assert!(view.prefs.model_hidden("claude", "model-29"))
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn providers_without_an_open_conversation_list_their_loaded_models(cx: &mut TestAppContext) {
+    use vorkspace_core::provider::Kind;
+    let window = window(Section::Providers, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.discovery.binaries = vec![(Kind::Codex, Some("/bin/codex".into()))];
+            view.discovered_catalogs
+                .insert("codex".into(), vec![("a".into(), "Alpha".into())]);
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("models-codex").is_some());
+    assert!(visual.debug_bounds("settings-select-codex").is_some());
+    // Provider defaults are global; there is no project scope selector.
+    assert!(
+        visual
+            .debug_bounds("settings-select-provider-scope")
+            .is_none()
+    );
+}
+
+#[gpui::test]
+fn cost_monitoring_link_setting_appears_only_for_aws_bedrock(cx: &mut TestAppContext) {
+    use crate::accounts::Key;
+    use vorkspace_core::{provider::Kind, usage::Snapshot};
+    let directory = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(std::sync::Mutex::new(
+        vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
+    ));
+    cx.update(|cx| crate::accounts::install(store, cx));
+    let window = window(Section::Providers, cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bedrock-cost-link").is_none());
+    visual.update(|_, cx| {
+        crate::accounts::get(cx).unwrap().update(cx, |center, cx| {
+            let key = Key::new(Kind::Claude, center.profile("default"), None);
+            center.usage.entry(key).or_default().complete(Ok(Snapshot {
+                external_billing: Some("AWS Bedrock".into()),
+                updated_at: vorkspace_core::usage::now_ms(),
+                ..Default::default()
+            }));
+            cx.notify();
+        });
+    });
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bedrock-cost-link").is_some());
+}

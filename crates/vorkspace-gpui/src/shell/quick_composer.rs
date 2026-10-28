@@ -26,12 +26,7 @@ impl Shell {
         let initial = crate::quick_composer::Launch {
             cwd: cwd.clone(),
             kind,
-            model: p
-                .project_providers
-                .get(&cwd)
-                .and_then(|p| p.models.get(kind.id()))
-                .or(p.default_models.get(kind.id()))
-                .cloned(),
+            model: p.default_models.get(kind.id()).cloned(),
             access: p
                 .default_access
                 .as_deref()

@@ -21,7 +21,7 @@ When Vorkspace starts up, it looks to see which of these tools are installed on 
 
 ## 2. Choosing Which Models You See
 
-Some AI tools list dozens of different models. In **Settings → Providers**, you can click **Models** next to any agent and uncheck the models you never use so your model picker stays clean and uncluttered.
+Some AI tools list dozens of different models. In **Settings → Providers**, you can click **Models** next to any agent and uncheck the models you never use so your model picker stays clean and uncluttered. This choice applies across Vorkspace, including favorites and recent models, and is saved for next time. Hidden models stay in that list so you can check them again, or choose **Show all**. A conversation keeps its current model and still shows it in its own picker even if you hide it.
 
 ---
 
@@ -41,5 +41,6 @@ If you have a GitHub Copilot subscription, you have set `COPILOT_GITHUB_TOKEN` y
 - It starts a small, private Rust translator on your computer that lets Claude Code use Copilot's GPT models (any GPT-6 or newer, like **GPT-6.1 Sol (1M)** and **GPT-6 Luna (1M)**) through your Copilot account!
 - That translator stays with the running Claude process, including pauses between turns, and never alters your normal Claude settings.
 - And if your company uses **AWS Bedrock** for Claude Code, Vorkspace uses that setup and shows **AWS Bedrock** in the sidebar's Subscriptions section. It won't ask you to sign into a Claude subscription or show made-up subscription percentages. Set up AWS access in Claude Code first, then restart Vorkspace.
+- If you use Bedrock, Settings → Providers has a **Cost monitoring link** box. Paste the web address of your AWS cost page there, and clicking **AWS Bedrock** in the sidebar jumps straight to it.
 
 On a remote machine, the host supplies its own JavaScript translator and uses that machine’s GitHub login.

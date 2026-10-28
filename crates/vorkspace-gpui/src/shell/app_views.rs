@@ -606,10 +606,8 @@ impl Shell {
             model: self
                 .workspace
                 .preferences
-                .project_providers
-                .get(&cwd)
-                .and_then(|preferences| preferences.models.get(kind.id()))
-                .or(self.workspace.preferences.default_models.get(kind.id()))
+                .default_models
+                .get(kind.id())
                 .cloned(),
             effort: crate::conversation::preferred_effort(kind.id(), cx),
             access: self

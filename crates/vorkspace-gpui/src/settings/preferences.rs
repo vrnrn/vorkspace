@@ -60,6 +60,8 @@ pub(crate) struct Preferences {
     // Providers
     pub show_remaining_usage: bool,
     pub mask_emails: bool,
+    /// Where clicking AWS Bedrock in Subscriptions goes (empty when unset).
+    pub bedrock_cost_url: String,
     pub idle_agents: u32,
     pub claude_hooks: bool,
     pub binary_paths: HashMap<String, String>,
@@ -68,7 +70,8 @@ pub(crate) struct Preferences {
     pub default_provider: Option<String>,
     pub default_models: HashMap<String, String>,
     pub hidden_providers: Vec<String>,
-    pub project_providers: HashMap<String, ProviderDefaults>,
+    /// Models left out of the picker, as `provider:model` (see `model_key`).
+    pub hidden_models: Vec<String>,
     pub favorite_models: Vec<ModelChoice>,
     pub recent_models: Vec<ModelChoice>,
     pub model_picker_tab: Option<String>,
@@ -158,6 +161,7 @@ impl Default for Preferences {
             diff_view: "unified".into(),
             show_remaining_usage: false,
             mask_emails: true,
+            bedrock_cost_url: String::new(),
             idle_agents: 3,
             claude_hooks: true,
             binary_paths: HashMap::new(),
@@ -166,7 +170,7 @@ impl Default for Preferences {
             default_provider: None,
             default_models: HashMap::new(),
             hidden_providers: Vec::new(),
-            project_providers: HashMap::new(),
+            hidden_models: Vec::new(),
             favorite_models: Vec::new(),
             recent_models: Vec::new(),
             model_picker_tab: None,
@@ -182,6 +186,18 @@ impl Default for Preferences {
 }
 
 impl Preferences {
+    /// The saved cost monitoring link, only when it is a plain web link.
+    pub(crate) fn cost_link(&self) -> Option<&str> {
+        let url = self.bedrock_cost_url.trim();
+        let host = url
+            .strip_prefix("https://")
+            .or_else(|| url.strip_prefix("http://"))?;
+        (!host.is_empty()
+            && !host.starts_with('/')
+            && url.len() <= 2048
+            && !url.chars().any(|c| c.is_whitespace() || c.is_control()))
+        .then_some(url)
+    }
     pub(crate) const MIN_UI_SCALE_PERCENT: u32 = 60;
     pub(crate) const MAX_UI_SCALE_PERCENT: u32 = 160;
 
@@ -251,29 +267,20 @@ impl Preferences {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub(crate) struct ProviderDefaults {
-    pub provider: Option<String>,
-    pub models: HashMap<String, String>,
-    pub hidden: Vec<String>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ModelChoice {
     pub provider: String,
     pub model: Option<String>,
 }
 
+/// Picker-visibility key; model ids alone can repeat across providers.
+pub(crate) fn model_key(provider: &str, model: &str) -> String {
+    format!("{provider}:{model}")
+}
+
 impl gpui::Global for Preferences {}
 impl Preferences {
-    pub(crate) fn hidden_for(&self, project: &str) -> Vec<String> {
-        let mut hidden = self.hidden_providers.clone();
-        if let Some(settings) = self.project_providers.get(project) {
-            hidden.extend(settings.hidden.clone());
-        }
-        hidden.sort();
-        hidden.dedup();
-        hidden
+    pub(crate) fn model_hidden(&self, provider: &str, model: &str) -> bool {
+        self.hidden_models.contains(&model_key(provider, model))
     }
 }

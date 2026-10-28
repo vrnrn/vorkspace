@@ -258,47 +258,6 @@ impl DesktopPreferences {
                 json!(provider),
             );
         }
-        // Convert desktop model IDs before they reach native launch controls.
-        let projects = self.json("vorkspace.projectProviderSettings.v1");
-        if projects.is_some() || baseline.get("project_providers").is_some() {
-            let empty = Map::new();
-            let projects = projects
-                .as_ref()
-                .and_then(Value::as_object)
-                .unwrap_or(&empty);
-            let providers: Map<String, Value> = projects
-                .iter()
-                .map(|(path, settings)| {
-                    let provider = settings["defaultHarness"]
-                        .as_str()
-                        .filter(|id| crate::provider::Kind::parse(id).is_some());
-                    let mut models = workspace_preferences::native_models(&settings["models"]);
-                    if let Some(provider) = provider {
-                        if let Some(model) = settings["defaultModel"]
-                            .as_str()
-                            .and_then(|model| crate::store::native_model(model, provider))
-                        {
-                            models.entry(provider.to_owned()).or_insert(json!(model));
-                        }
-                    }
-                    (
-                        crate::files::path_key(path),
-                        json!({
-                            "provider":provider,
-                            "models":models,
-                            "hidden":workspace_preferences::providers(&settings["hidden"]),
-                        }),
-                    )
-                })
-                .collect();
-            reconcile_preference(
-                preferences,
-                &baseline,
-                &mut next,
-                "project_providers",
-                Value::Object(providers),
-            );
-        }
         self.apply_preferences(preferences, &baseline, &mut next);
         self.apply_view_preferences(object, &baseline, &mut next);
         if !next.is_empty() {
@@ -965,17 +924,12 @@ mod tests {
         let mut workspace = json!({});
         source.apply_workspace(&mut workspace);
         assert_eq!(workspace["preferences"]["default_provider"], "claude");
-        assert_eq!(
-            workspace["preferences"]["project_providers"]["/project"]["provider"],
-            "codex"
-        );
         workspace["preferences"]["default_provider"] = json!("codex");
         source.apply_workspace(&mut workspace);
         assert_eq!(workspace["preferences"]["default_provider"], "codex");
         // Removing a desktop override clears its old source-backed value.
         prefs(&[]).apply_workspace(&mut workspace);
         assert!(workspace["preferences"]["default_provider"].is_null());
-        assert_eq!(workspace["preferences"]["project_providers"], json!({}));
     }
 
     #[test]

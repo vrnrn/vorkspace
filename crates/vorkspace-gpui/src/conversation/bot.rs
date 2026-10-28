@@ -729,7 +729,7 @@ impl Conversation {
         let list = cx.new(|cx| {
             let hidden = cx
                 .try_global::<crate::settings::Preferences>()
-                .map(|p| p.hidden_for(&self.summary.cwd))
+                .map(|p| p.hidden_providers.clone())
                 .unwrap_or_default();
             ModelList::new_for(
                 provider,

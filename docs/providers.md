@@ -14,7 +14,7 @@ One provider is enough. vorkspace probes for each CLI at startup and disables th
 
 Once a provider is installed and signed in, open a project folder in vorkspace, choose that agent, and send a message. For sessions on another machine, install and authenticate the providers on the host as described in [remote access](remote-access.md).
 
-In **Settings → Providers**, use **Models** beside an agent to choose which models appear in pickers, favorites, and recent choices. Search for a model and uncheck it to hide it; **Show all** restores the list. The Global/project scope applies to model visibility too, and a model hidden globally stays hidden in every project. Existing conversations keep their selected model.
+In **Settings → Providers**, use **Models** beside an agent to choose which models appear in pickers, favorites, and recent choices. Search for a model and uncheck it to hide it; **Show all** restores the list. Model visibility is global, saved with your preferences, and a hidden model stays in the **Models** list so you can restore it. The model a conversation is using stays visible in its own picker. Existing conversations keep their selected model.
 
 ## Multiple accounts & usage-limit continuation
 
@@ -60,4 +60,4 @@ Remote hosts use their JavaScript adapter and their own credentials.
 Anthropic does not officially support non-Claude models in Claude Code.
 The adapter supports text, images, streamed tool calls, and tool results.
 
-When Claude Code reports Amazon Bedrock as its configured API provider, its row in **Subscriptions** displays **AWS Bedrock**. Subscription percentages and Claude sign-in prompts do not apply to that connection. Configure AWS credentials, region, and model access through [Claude Code's Bedrock setup](https://code.claude.com/docs/en/amazon-bedrock); vorkspace retains the CLI's settings and forwards the Bedrock environment from your login shell when needed.
+When Claude Code reports Amazon Bedrock as its configured API provider, its row in **Subscriptions** displays **AWS Bedrock**. Subscription percentages and Claude sign-in prompts do not apply to that connection. Configure AWS credentials, region, and model access through [Claude Code's Bedrock setup](https://code.claude.com/docs/en/amazon-bedrock); vorkspace retains the CLI's settings and forwards the Bedrock environment from your login shell when needed. While Bedrock is in use, **Settings → Providers → Usage and privacy** shows a **Cost monitoring link** field. Enter a full `https://` (or `http://`) link, such as your AWS Cost Explorer or Budgets page; clicking **AWS Bedrock** in **Subscriptions** then opens it in your browser. Without a link, the row opens its details as before. The field is hidden when Bedrock is not in use, and other values are ignored.
