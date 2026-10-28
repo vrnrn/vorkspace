@@ -3241,7 +3241,12 @@ impl Conversation {
                 .into_any_element()
         };
         let branch = if new {
-            self.settings.worktree_base.clone().or(self.branch.clone())
+            self.settings
+                .worktree_base
+                .as_deref()
+                .map(crate::git_picker::base_label)
+                .map(str::to_owned)
+                .or(self.branch.clone())
         } else {
             self.branch.clone()
         };

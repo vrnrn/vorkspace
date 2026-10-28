@@ -15,6 +15,36 @@ const cleanups = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
+it("creates a worktree from the exact selected remote ref when names collide", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "vorkspace-host-base-"));
+  const git = (...args) => execFileSync("git", args, { cwd }).toString().trim();
+  git("init", "-b", "main");
+  writeFileSync(join(cwd, "file"), "remote version");
+  git("add", "file");
+  git(
+    "-c", "user.name=Test", "-c", "user.email=test@example.com",
+    "-c", "commit.gpgsign=false", "commit", "-m", "initial",
+  );
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
+  const remoteCommit = git("rev-parse", "HEAD");
+  writeFileSync(join(cwd, "file"), "local version");
+  git("add", "file");
+  git(
+    "-c", "user.name=Test", "-c", "user.email=test@example.com",
+    "-c", "commit.gpgsign=false", "commit", "-m", "local",
+  );
+  git("branch", "origin/main");
+  const root = (await hostWorktrees(cwd)).defaultRoot;
+  cleanups.push(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  });
+  const tree = await createHostWorktree(
+    cwd, "mc/exact-base", "refs/remotes/origin/main", false,
+  );
+  expect(git("-C", tree.path, "rev-parse", "HEAD")).toBe(remoteCommit);
+  expect(tree.branch).toBe("mc/exact-base");
+});
 it.each([false, true])(
   "applies generated worktree names only to retained sessions (deleted: %s)",
   async (deleted) => {
