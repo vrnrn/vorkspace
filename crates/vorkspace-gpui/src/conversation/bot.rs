@@ -252,6 +252,8 @@ impl Conversation {
     ) {
         self.input
             .update(cx, |input, cx| input.bot_composer(&bot.label(), cx));
+        self.completion
+            .update(cx, |completion, cx| completion.set_bot_chat(cx));
         let name = bot.label();
         let look = crate::bots::avatar::BotLookConfig::from_bot(&bot);
         self.transcript

@@ -2991,6 +2991,10 @@ impl Conversation {
                             ),
                     ]
                     .into_iter()
+                    .filter(|action| {
+                        self.settings.bot.is_none()
+                            || !matches!(action.id.as_ref(), "plan" | "operator" | "orchestrator")
+                    })
                     .map(|action| {
                         let checked = match action.id.as_ref() {
                             "plan" => self.settings.plan,

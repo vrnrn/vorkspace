@@ -131,15 +131,22 @@ fn bot_plus_menu_and_saved_draft_card_share_session_actions(cx: &mut TestAppCont
     visual.run_until_parked();
     for selector in [
         "menu-action-upload",
-        "menu-action-plan",
-        "menu-action-operator",
-        "menu-action-orchestrator",
         "menu-action-draft",
         "menu-action-queue",
     ] {
         assert!(
             visual.debug_bounds(selector).is_some(),
             "missing {selector}"
+        );
+    }
+    for selector in [
+        "menu-action-plan",
+        "menu-action-operator",
+        "menu-action-orchestrator",
+    ] {
+        assert!(
+            visual.debug_bounds(selector).is_none(),
+            "unexpected {selector}"
         );
     }
     let draft = visual.debug_bounds("menu-action-draft").unwrap();
