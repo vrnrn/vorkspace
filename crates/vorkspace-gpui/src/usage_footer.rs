@@ -235,6 +235,24 @@ impl UsageFooter {
             .unwrap_or_default();
     }
     fn open_subscription(&mut self, key: Key, window: &mut Window, cx: &mut Context<Self>) {
+        // Bedrock bills outside the provider, so there is no usage to show:
+        // go to the user's own cost monitoring page when they set one.
+        let bedrock = crate::accounts::get(cx).is_some_and(|center| {
+            center
+                .read(cx)
+                .usage
+                .get(&key)
+                .and_then(|cached| cached.snapshot.as_ref())
+                .is_some_and(|s| s.external_billing.as_deref() == Some("AWS Bedrock"))
+        });
+        if bedrock
+            && let Some(url) = cx
+                .try_global::<crate::settings::Preferences>()
+                .and_then(|p| p.cost_link().map(str::to_owned))
+        {
+            cx.open_url(&url);
+            return;
+        }
         if self.key != key {
             if self.open {
                 self.dismiss(window, cx);
@@ -1365,6 +1383,60 @@ mod tests {
                 assert!(snapshot.unwrap().windows.is_empty());
             })
             .unwrap();
+        // Without a cost monitoring link the row keeps opening its details.
+        window
+            .update(cx, |usage, w, cx| {
+                let bedrock = Key::new(Kind::Claude, Default::default(), None);
+                usage.open_subscription(bedrock, w, cx);
+                assert!(usage.open);
+                usage.hide(cx);
+            })
+            .unwrap();
+        assert_eq!(cx.opened_url(), None);
+        cx.update(|cx| {
+            cx.set_global(crate::settings::Preferences {
+                bedrock_cost_url: " https://console.aws.amazon.com/costmanagement/ ".into(),
+                ..Default::default()
+            })
+        });
+        window
+            .update(cx, |usage, w, cx| {
+                let bedrock = Key::new(Kind::Claude, Default::default(), None);
+                usage.open_subscription(bedrock, w, cx);
+                assert!(!usage.open, "the link replaces the details popover");
+            })
+            .unwrap();
+        assert_eq!(
+            cx.opened_url().as_deref(),
+            Some("https://console.aws.amazon.com/costmanagement/")
+        );
+    }
+    #[test]
+    fn cost_link_accepts_only_plain_web_links() {
+        let link = |url: &str| {
+            crate::settings::Preferences {
+                bedrock_cost_url: url.into(),
+                ..Default::default()
+            }
+            .cost_link()
+            .map(str::to_owned)
+        };
+        assert_eq!(
+            link(" http://a.example/x ").as_deref(),
+            Some("http://a.example/x")
+        );
+        for bad in [
+            "",
+            "console.aws.amazon.com",
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "https://",
+            "https:///x",
+            "https://a b.example",
+            "ftp://a.example",
+        ] {
+            assert_eq!(link(bad), None, "{bad}");
+        }
     }
     #[gpui::test]
     fn details_open_with_keyboard_escape_restores_focus_and_provider_caches_stay_separate(
