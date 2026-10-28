@@ -6,6 +6,7 @@ pub(super) struct DraftEdit {
     id: String,
     edit_id: String,
     original: String,
+    original_prepared_prompt: Option<String>,
     input: Entity<crate::input::Input>,
     _submit: Subscription,
     _observe: Subscription,
@@ -44,6 +45,16 @@ impl TranscriptView {
             .as_ref()
             .is_some_and(|edit| edit.input.read(cx).content == text)
     }
+    pub(crate) fn saved_draft_edit_original(
+        &self,
+        id: &str,
+        edit_id: &str,
+    ) -> Option<(String, Option<String>)> {
+        self.draft_edit
+            .as_ref()
+            .filter(|edit| edit.id == id && edit.edit_id == edit_id)
+            .map(|edit| (edit.original.clone(), edit.original_prepared_prompt.clone()))
+    }
     fn begin_saved_draft_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(draft) = self.saved_draft.as_ref() else {
             return;
@@ -51,6 +62,7 @@ impl TranscriptView {
         let id = draft.id.clone();
         let text = draft.text.clone();
         let original = text.clone();
+        let original_prepared_prompt = draft.prepared_prompt.clone();
         let input = cx.new(|cx| {
             let mut input = crate::input::Input::queued_message(cx);
             input.set_text(text, cx);
@@ -71,6 +83,7 @@ impl TranscriptView {
             id,
             edit_id: vorkspace_core::bot::new_id(),
             original,
+            original_prepared_prompt,
             input,
             _submit: submit,
             _observe: observe,

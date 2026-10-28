@@ -63,6 +63,64 @@ fn chat(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
 }
 
 #[gpui::test]
+fn canceling_draft_edit_restores_saved_mcp_context(cx: &mut TestAppContext) {
+    let window = chat(cx);
+    let original = "Use @mcp/docs";
+    let prepared = "MCP context: docs\n\nUse @mcp/docs";
+    window
+        .update(cx, |view, _, cx| {
+            let mut state = view.follow_ups.state.clone();
+            state.revision += 1;
+            state.draft = Some(vorkspace_core::follow_up::Message {
+                id: "saved-context".into(),
+                text: original.into(),
+                prepared_prompt: Some(prepared.into()),
+                ..Default::default()
+            });
+            locked(&view.store)
+                .unwrap()
+                .accept_follow_ups(view.summary.id, &state)
+                .unwrap();
+            view.follow_ups.persisted = state.revision;
+            view.follow_ups.state = state;
+            let draft = view.follow_ups.state.draft.clone();
+            view.transcript
+                .update(cx, |transcript, cx| transcript.set_saved_draft(draft, cx));
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(size(px(900.), px(680.)));
+    visual.run_until_parked();
+    let edit = visual.debug_bounds("edit-message-draft").unwrap().center();
+    visual.simulate_click(edit, Default::default());
+    visual.simulate_keystrokes("cmd-a");
+    visual.simulate_input("No token");
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            let edited = view.follow_ups.state.draft.as_ref().unwrap();
+            assert_eq!(edited.text, "No token");
+            assert!(edited.prepared_prompt.is_none());
+        })
+        .unwrap();
+    let cancel = visual.debug_bounds("cancel-draft-edit").unwrap().center();
+    visual.simulate_click(cancel, Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            let saved = locked(&view.store)
+                .unwrap()
+                .follow_ups(view.summary.id)
+                .unwrap()
+                .draft
+                .unwrap();
+            assert_eq!(saved.text, original);
+            assert_eq!(saved.prepared_prompt.as_deref(), Some(prepared));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn bot_plus_menu_and_saved_draft_card_share_session_actions(cx: &mut TestAppContext) {
     let window = chat(cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);

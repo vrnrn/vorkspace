@@ -221,8 +221,7 @@ impl Conversation {
             self.defer_history_action(|this, cx| this.save_message_draft(cx), cx);
             return;
         }
-        if self.busy
-            || self.follow_ups.state.draft.is_some()
+        if self.follow_ups.state.draft.is_some()
             || !self.loaded
             || self.attaching
             || self.input.read(cx).is_composing()
@@ -443,6 +442,21 @@ impl Conversation {
         if !cancel && !self.transcript.read(cx).saved_draft_edit_matches(text, cx) {
             return;
         }
+        let original = if cancel {
+            let Some((original, prepared)) = self
+                .transcript
+                .read(cx)
+                .saved_draft_edit_original(id, edit_id)
+            else {
+                return;
+            };
+            if original != text {
+                return;
+            }
+            Some(prepared)
+        } else {
+            None
+        };
         if self.bot_ui.draft_sending.is_some()
             || self.follow_ups.persisted < self.follow_ups.state.revision
         {
@@ -457,7 +471,11 @@ impl Conversation {
         if text.trim().is_empty() && draft.attachments.is_empty() {
             return;
         }
-        if draft.text == text {
+        if draft.text == text
+            && original
+                .as_ref()
+                .is_none_or(|prepared| draft.prepared_prompt.as_ref() == prepared.as_ref())
+        {
             if finish {
                 let draft = next.draft.clone();
                 self.transcript
@@ -465,8 +483,13 @@ impl Conversation {
             }
             return;
         }
-        let prepared = self.completion.read(cx).prepare_prompt(text);
-        draft.replace_text(text.to_owned(), prepared);
+        if let Some(prepared) = original {
+            draft.text = text.to_owned();
+            draft.prepared_prompt = prepared;
+        } else {
+            let prepared = self.completion.read(cx).prepare_prompt(text);
+            draft.replace_text(text.to_owned(), prepared);
+        }
         // An edited version must never share a delivery receipt with a
         // previous version that another window has already queued.
         if draft.id != edit_id {
@@ -886,7 +909,7 @@ fn queue_button(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{TestAppContext, WindowHandle};
+    use gpui::{TestAppContext, VisualTestContext, WindowHandle};
     use std::sync::Mutex;
     use vorkspace_core::store::Store;
 
@@ -1213,6 +1236,84 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn working_sessions_and_bots_can_save_a_draft_without_sending_it(cx: &mut TestAppContext) {
+        for bot in [false, true] {
+            let window = conversation(cx);
+            let (controls, received) = std::sync::mpsc::channel();
+            window
+                .update(cx, |view, _, cx| {
+                    if bot {
+                        view.configure_bot(
+                            vorkspace_core::bot::Bot::default(),
+                            "/tmp".into(),
+                            Default::default(),
+                            cx,
+                        );
+                    }
+                    view.busy = true;
+                    view.summary.has_messages = true;
+                    view.follow_ups.ready = true;
+                    view.controls = Some(controls);
+                    cx.notify();
+                })
+                .unwrap();
+            let visual = &mut VisualTestContext::from_window(window.into(), cx);
+            visual.run_until_parked();
+            let add = visual.debug_bounds("composer-add").unwrap().center();
+            visual.simulate_click(add, Default::default());
+            visual.run_until_parked();
+            let draft = visual.debug_bounds("menu-action-draft").unwrap().center();
+            visual.simulate_click(draft, Default::default());
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, cx| {
+                    assert!(
+                        view.follow_ups.draft_selected,
+                        "Draft is selectable while working"
+                    );
+                    view.input.update(cx, |input, cx| {
+                        input.set_text("/draft Save this for later".into(), cx)
+                    });
+                    cx.notify();
+                })
+                .unwrap();
+            visual.run_until_parked();
+            let save = visual.debug_bounds("send-or-stop").unwrap().center();
+            visual.simulate_click(save, Default::default());
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, cx| {
+                    assert!(view.busy, "saving must not stop the running agent");
+                    assert_eq!(
+                        view.follow_ups.state.draft.as_ref().unwrap().text,
+                        "Save this for later"
+                    );
+                    assert!(view.follow_ups.state.messages.is_empty());
+                    assert!(view.input.read(cx).content.is_empty());
+                })
+                .unwrap();
+            assert!(
+                received.try_recv().is_err(),
+                "saving must not send or steer"
+            );
+            window
+                .update(visual, |view, _, _| {
+                    assert_eq!(
+                        locked(&view.store)
+                            .unwrap()
+                            .follow_ups(view.summary.id)
+                            .unwrap()
+                            .draft
+                            .unwrap()
+                            .text,
+                        "Save this for later"
+                    );
+                })
+                .unwrap();
+        }
     }
 
     #[gpui::test]

@@ -2985,7 +2985,10 @@ impl Conversation {
                         MenuAction::new("draft", "Draft")
                             .icon("circle-dashed-hi")
                             .description("Save this message without starting the agent")
-                            .disabled(self.busy || self.follow_ups.state.draft.is_some()),
+                            .disabled(
+                                self.follow_ups.state.draft.is_some()
+                                    || (self.is_remote() && (self.busy || self.stopping)),
+                            ),
                     ]
                     .into_iter()
                     .map(|action| {
@@ -3865,7 +3868,10 @@ impl Conversation {
             || (!self.attaching
                 && (!self.preparing_worktree || self.busy || self.stopping)
                 && (busy || (has_value && self.loaded))
-                && (busy || !draft || (!self.busy && self.follow_ups.state.draft.is_none())));
+                && (busy
+                    || !draft
+                    || (self.follow_ups.state.draft.is_none()
+                        && (!self.is_remote() || (!self.busy && !self.stopping)))));
         let accent = primary_action(enabled);
         div()
             .id("send-or-stop")
