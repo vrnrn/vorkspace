@@ -1034,6 +1034,11 @@ impl Bots {
             return;
         };
         if !primary.read(cx).bot_configuration_ready() {
+            primary.update(cx, |view, cx| {
+                if view.needs_history_restore() {
+                    view.load(cx);
+                }
+            });
             self.channels.loading.remove(&key);
             return;
         }

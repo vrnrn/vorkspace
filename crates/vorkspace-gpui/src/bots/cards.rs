@@ -361,6 +361,17 @@ impl Bots {
         let transcript = chat.read(cx).transcript.clone();
         transcript.update(cx, |t, cx| t.set_launches(launches, cx));
         if chat.read(cx).needs_history_restore() {
+            // Card writes require the complete history and their durable CAS.
+            // Restore only when this window actually contains cards to refresh;
+            // the next scheduler tick will retry after restoration.
+            if chat
+                .read(cx)
+                .bot_rows(cx)
+                .iter()
+                .any(|row| row.role == "bot-card")
+            {
+                chat.update(cx, |view, cx| view.load(cx));
+            }
             return;
         }
         // Only mutable cards need a snapshot; never clone the conversation's
