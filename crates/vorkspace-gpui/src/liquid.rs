@@ -238,6 +238,17 @@ impl Liquid {
         .inset_0()
     }
 
+    #[cfg(test)]
+    pub(crate) fn pills(&self) -> Vec<(SharedString, bool)> {
+        self.0
+            .borrow()
+            .notches
+            .iter()
+            .filter(|notch| notch.out.to > 0.)
+            .map(|notch| (notch.key.clone(), notch.lit.to == 1.))
+            .collect()
+    }
+
     /// The row the selected pill belongs to.
     #[cfg(test)]
     pub(crate) fn selected(&self) -> Option<SharedString> {

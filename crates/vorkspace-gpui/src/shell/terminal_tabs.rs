@@ -158,6 +158,55 @@ mod tests {
     }
 
     #[gpui::test]
+    fn identical_cwd_terminal_pills_keep_hover_and_selection_independent(cx: &mut TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, _) = super::super::tests::window(cx);
+        let (first, second) = window
+            .update(cx, |shell, w, cx| {
+                w.activate_window();
+                shell.open_terminal_tab(w, cx);
+                let first = shell.active_title_tab(cx).unwrap();
+                shell.open_terminal_tab(w, cx);
+                (first, shell.active_title_tab(cx).unwrap())
+            })
+            .unwrap();
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
+        let first_bounds = visual.debug_bounds(title_selector(&first)).unwrap();
+        visual.simulate_mouse_move(first_bounds.center(), None, Default::default());
+        visual.run_until_parked();
+        let key = |tab: &TitleTab| format!("tool:terminal-title-tab-{}", terminal_id(tab));
+        window
+            .update(visual, |shell, _, _| {
+                assert_eq!(
+                    shell.tab_liquid.selected().as_deref(),
+                    Some(key(&second).as_str())
+                );
+                let pills = shell.tab_liquid.pills();
+                assert!(pills.contains(&(key(&first).into(), false)), "{pills:?}");
+                assert!(pills.contains(&(key(&second).into(), true)));
+            })
+            .unwrap();
+        visual.simulate_click(first_bounds.center(), Default::default());
+        visual.run_until_parked();
+        let second_bounds = visual.debug_bounds(title_selector(&second)).unwrap();
+        visual.simulate_mouse_move(second_bounds.center(), None, Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                assert_eq!(
+                    shell.tab_liquid.selected().as_deref(),
+                    Some(key(&first).as_str())
+                );
+                let pills = shell.tab_liquid.pills();
+                assert!(pills.contains(&(key(&first).into(), true)));
+                assert!(pills.contains(&(key(&second).into(), false)));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn terminal_is_not_a_sidebar_item_and_a_plain_new_tab_click_opens_a_session(
         cx: &mut TestAppContext,
     ) {

@@ -52,6 +52,11 @@ impl Shell {
         let tab_bar = (!bare).then(|| self.titlebar(window, cx));
         let navigation = self.navigation(window, cx);
         let rail_width = self.classic_rail_width();
+        // At zero width the cached rail is not rendered, so it cannot stop
+        // presentation tasks itself.
+        if rail_width <= 0. {
+            self.hide_project_marks(cx);
+        }
         let corner = (self.settings.is_none() && !app_view).then(|| self.panel_toggle(window, cx));
         let header = self.classic_workspace_header(cx);
         // Sessions, Explorer and Changes sit beside the rail or at the right edge.

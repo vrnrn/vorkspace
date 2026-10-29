@@ -50,7 +50,7 @@ impl Shell {
             TitleTab::Terminal { cwd, .. } => cwd.clone(),
             _ => label.to_owned(),
         };
-        let pill = format!("tool:{label}:{description}");
+        let pill = format!("tool:{identity}");
         let display_label = match &tab {
             TitleTab::Terminal { cwd, .. } => format!("Terminal · {}", project_name(cwd)),
             _ => label.to_owned(),
@@ -184,6 +184,7 @@ impl Shell {
         self.invalidate_chrome(cx);
     }
     pub(super) fn close_app_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigation_revision += 1;
         self.leave_app_views(cx);
         if self.workspace.active.is_none() {
             let previous = self

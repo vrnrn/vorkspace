@@ -225,7 +225,13 @@ impl Shell {
     }
 
     pub(crate) fn close_bot_tab(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_title_tabs(&[self.bot_tab(id.into())], None, window, cx);
+        if self
+            .bots
+            .as_ref()
+            .is_some_and(|bots| bots.read(cx).active.as_deref() == Some(id))
+        {
+            self.close_bot_page(window, cx);
+        }
     }
 
     pub(super) fn run_title_tab_menu(
@@ -394,7 +400,7 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shell::tests::window;
+    use crate::{shell::tests::window, workspace::AppView};
     use gpui::TestAppContext;
 
     #[test]
@@ -471,6 +477,215 @@ mod tests {
             .save(output.join("connectors-settings.png"))
             .unwrap();
     }
+    #[gpui::test]
+    fn command_w_closes_tabless_pages_and_restores_conversation(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            bind_keys(cx);
+            crate::input::bind(cx);
+            crate::clock::use_test_clock(cx);
+        });
+        let (window, _, session) = window(cx);
+        let chat = window
+            .update(cx, |shell, w, cx| {
+                shell.open(session, w, cx);
+                let chat = shell.sessions[&session].clone();
+                chat.update(cx, |chat, cx| {
+                    chat.busy = true;
+                    chat.input.update(cx, |input, cx| {
+                        input.set_text("unsent conversation draft".into(), cx)
+                    });
+                });
+                shell.focus_active(w, cx);
+                chat
+            })
+            .unwrap();
+        for page in [
+            TitleTab::Search,
+            TitleTab::App(AppView::Connector(Connector::Github)),
+            TitleTab::App(AppView::Connector(Connector::Gitlab)),
+            TitleTab::App(AppView::Connector(Connector::Jira)),
+            TitleTab::App(AppView::Notes),
+            TitleTab::App(AppView::Automations),
+        ] {
+            let strip = window
+                .update(cx, |shell, w, cx| {
+                    let strip = shell.workspace.title_order.clone();
+                    shell.open_title_tab(&page, w, cx);
+                    if let Some(search) = &shell.app_search {
+                        search
+                            .view
+                            .read(cx)
+                            .input
+                            .clone()
+                            .update(cx, |input, cx| input.set_text("saved search".into(), cx));
+                    }
+                    strip
+                })
+                .unwrap();
+            cx.run_until_parked();
+            window
+                .update(cx, |shell, _, cx| {
+                    assert!(shell.tabless_page(cx), "{page:?}");
+                    assert!(!shell.workspace.title_order.contains(&page));
+                })
+                .unwrap();
+            cx.simulate_keystrokes(window.into(), "cmd-w");
+            cx.run_until_parked();
+            window
+                .update(cx, |shell, w, cx| {
+                    assert!(!shell.tabless_page(cx), "{page:?} must close");
+                    assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(session)));
+                    assert_eq!(shell.workspace.title_order, strip);
+                    assert_eq!(shell.sessions[&session], chat);
+                    let chat = chat.read(cx);
+                    assert!(chat.busy, "page close must not cancel parked work");
+                    assert_eq!(chat.input.read(cx).content, "unsent conversation draft");
+                    assert!(chat.input.focus_handle(cx).is_focused(w), "{page:?}");
+                    if page == TitleTab::Search {
+                        assert_eq!(shell.saved_search.as_ref().unwrap().0, "saved search");
+                    }
+                })
+                .unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn search_opened_from_a_connector_restores_visible_conversation_focus(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            bind_keys(cx);
+            crate::input::bind(cx);
+        });
+        let (window, _, session) = window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open_connector(Connector::Github, w, cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, w, cx| shell.open_app_search(w, cx))
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "cmd-w");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, w, cx| {
+                assert!(!shell.tabless_page(cx));
+                assert_eq!(shell.workspace.active, Some(session));
+                assert!(
+                    shell.sessions[&session]
+                        .read(cx)
+                        .input
+                        .focus_handle(cx)
+                        .is_focused(w)
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn command_w_closes_channels_without_closing_parked_session(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            bind_keys(cx);
+            crate::input::bind(cx);
+        });
+        let (window, _, session) = window(cx);
+        let strip = window
+            .update(cx, |shell, _, cx| {
+                shell.workspace.preferences.channels = true;
+                shell.apply_preferences(cx);
+                shell.invalidate_chrome(cx);
+                cx.notify();
+                shell.workspace.title_order.clone()
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let add = visual.debug_bounds("classic-add-channel").unwrap();
+        visual.simulate_click(add.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                assert!(shell.bot_manager().read(cx).classic_channels_open())
+            })
+            .unwrap();
+        visual.simulate_keystrokes("cmd-w");
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, w, cx| {
+                assert!(!shell.bot_active(cx));
+                assert_eq!(shell.workspace.title_order, strip);
+                assert_eq!(shell.workspace.active, Some(session));
+                assert!(
+                    shell.sessions[&session]
+                        .read(cx)
+                        .input
+                        .focus_handle(cx)
+                        .is_focused(w)
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            bind_keys(cx);
+            crate::input::bind(cx);
+            crate::clock::use_test_clock(cx);
+        });
+        let (window, _, session) = window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.bot_manager().update(cx, |bots, cx| {
+                    bots.create_named(vec!["/work/vorkspace".into()], w, cx)
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let (bot, chat) = window
+            .update(cx, |shell, _, cx| {
+                let manager = shell.bot_manager();
+                let bots = manager.read(cx);
+                let id = bots.active.clone().unwrap();
+                let chat = bots.chat().unwrap();
+                chat.update(cx, |chat, cx| {
+                    chat.busy = true;
+                    chat.input.update(cx, |input, cx| {
+                        input.set_text("unsent bot draft".into(), cx)
+                    });
+                });
+                (id, chat)
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "cmd-w");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, w, cx| {
+                assert!(!shell.bot_active(cx));
+                assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(session)));
+                assert!(
+                    shell.sessions[&session]
+                        .read(cx)
+                        .input
+                        .focus_handle(cx)
+                        .is_focused(w)
+                );
+                assert!(chat.read(cx).busy);
+                assert_eq!(chat.read(cx).input.read(cx).content, "unsent bot draft");
+                shell.open_title_tab(&shell.bot_tab(bot), w, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(shell.bot_manager().read(cx).chat(), Some(chat.clone()));
+                assert!(chat.read(cx).busy);
+                assert_eq!(chat.read(cx).input.read(cx).content, "unsent bot draft");
+            })
+            .unwrap();
+    }
+
     #[gpui::test]
     fn rapid_new_tabs_follow_request_order(cx: &mut TestAppContext) {
         let (window, _, first) = window(cx);

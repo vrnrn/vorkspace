@@ -8081,16 +8081,16 @@ impl Render for Shell {
                     this.close_title_tabs(&[tab], None, window, cx);
                     return;
                 }
-                if let Some(view) = this.active_app_view.filter(|_| this.settings.is_none()) {
-                    this.close_title_tabs(&[TitleTab::App(view)], None, window, cx);
+                if this.active_app_view.is_some() && this.settings.is_none() {
+                    this.close_app_view(window, cx);
                     return;
                 }
                 if this.app_search.is_some() {
                     this.close_search_tab(window, cx);
                     return;
                 }
-                if let Some(TitleTab::Bot { id, .. }) = this.active_title_tab(cx) {
-                    this.close_bot_tab(&id, window, cx);
+                if this.bot_active(cx) {
+                    this.close_bot_page(window, cx);
                     return;
                 }
                 // ⌘W in the focused dock closes its terminal.

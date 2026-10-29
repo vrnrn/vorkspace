@@ -70,6 +70,15 @@ impl ProjectMark {
             animation: None,
         }
     }
+    /// A removed row may still be retained by a cached element or a caller.
+    /// Cancel its presentation task explicitly before releasing the rail owner.
+    pub(crate) fn hide(&mut self) {
+        self.animation = None;
+    }
+    #[cfg(test)]
+    pub(crate) fn animation_state(&self) -> (usize, bool) {
+        (self.frame, self.animation.is_some())
+    }
     pub(crate) fn set(&mut self, color: u32, working: bool, cx: &mut Context<Self>) {
         if self.color != color {
             self.color = color;

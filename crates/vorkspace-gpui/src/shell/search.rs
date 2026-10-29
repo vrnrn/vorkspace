@@ -15,7 +15,7 @@ impl Shell {
         }
     }
     pub(super) fn close_search_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_title_tabs(&[TitleTab::Search], None, window, cx);
+        self.close_app_search(window, cx);
     }
     pub(super) fn search_title_tab(
         &self,
@@ -116,6 +116,7 @@ impl Shell {
     }
     pub(super) fn close_app_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search) = self.app_search.take() {
+            self.navigation_revision += 1;
             self.saved_search = Some(search.view.read(cx).draft(cx));
             self.update_chat_visibility(cx);
             if let Some(restore) = search.restore {
@@ -136,6 +137,10 @@ impl Shell {
             window.focus(&search.view.focus_handle(cx), cx);
             return;
         }
+        // Only restore focus captured from the conversation surface. Leaving a
+        // sidebar page parks its focused input, so that handle is no longer visible.
+        let restore_conversation_focus =
+            !self.app_view_open() && !self.bot_active(cx) && self.settings.is_none();
         self.close_menu(cx);
         self.close_preview(cx);
         self.leave_app_views(cx);
@@ -146,7 +151,9 @@ impl Shell {
             self.close_settings(window, cx);
         }
         self.navigation_revision += 1;
-        let restore = window.focused(cx);
+        let restore = restore_conversation_focus
+            .then(|| window.focused(cx))
+            .flatten();
         let conversations = self
             .sessions
             .values()

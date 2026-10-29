@@ -64,12 +64,34 @@ impl Shell {
         cx.notify();
     }
 
+    pub(super) fn hide_project_marks(&mut self, cx: &mut Context<Self>) {
+        self.retain_project_marks(|_| false, cx);
+    }
+
+    fn retain_project_marks(
+        &mut self,
+        mut visible: impl FnMut(&str) -> bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.project_marks.retain(|path, mark| {
+            if visible(path) {
+                true
+            } else {
+                mark.update(cx, |mark, _| mark.hide());
+                false
+            }
+        });
+    }
+
     pub(super) fn classic_project_rail(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let width = self.classic_rail_width();
+        if width <= 0. || self.settings.is_some() || !self.workspace.project_rail_open {
+            self.hide_project_marks(cx);
+        }
         // Early-return layouts must stop the card's presentation clock too.
         if width <= 0. || self.settings.is_some() {
             self.live_agents.update(cx, |activity, _| activity.hide());
@@ -143,7 +165,6 @@ impl Shell {
         self.live_agents.update(cx, |activity, _| activity.hide());
 
         let projects = self.workspace.projects.clone();
-        self.project_marks.retain(|path, _| projects.contains(path));
         let _ = self.workspace.migrate_project_rail();
         let rail_state = self
             .workspace
@@ -161,6 +182,7 @@ impl Shell {
             .collect();
         let mut group_rows = Vec::new();
         let mut grouped_paths = HashSet::new();
+        let mut hidden_projects = HashSet::new();
         {
             for group in groups {
                 let id = group.id.as_str();
@@ -227,7 +249,9 @@ impl Shell {
                     .rounded_md()
                     .when(!collapsed, |d| d.bg(content(0.05)))
                     .child(rename.unwrap_or_else(|| row.into_any_element()));
-                if !collapsed {
+                if collapsed {
+                    hidden_projects.extend(members.into_iter().map(|(_, path)| path));
+                } else {
                     section = section.child(
                         div().p_1().flex().flex_col().gap_px().children(
                             members
@@ -240,6 +264,14 @@ impl Shell {
             }
         }
 
+        // Keep only rendered project rows. Session activity remains authoritative
+        // in project_sessions; revealing a row samples its current state anew.
+        self.retain_project_marks(
+            |path| {
+                projects.iter().any(|project| project == path) && !hidden_projects.contains(path)
+            },
+            cx,
+        );
         let liquid = self.liquid.clone();
         let bots = self.bots.clone().map(|bots| {
             bots.update(cx, |bots, cx| {
@@ -935,6 +967,132 @@ mod tests {
     use gpui::{TestAppContext, VisualTestContext};
     use serde_json::json;
     use vorkspace_core::store::Store;
+
+    #[gpui::test]
+    fn hidden_project_rows_stop_ticks_and_resample_work_on_reveal(cx: &mut TestAppContext) {
+        use std::time::Duration;
+        crate::clock::use_test_clock(cx);
+        let (window, _, session) = crate::shell::tests::window(cx);
+        let path = "/work/vorkspace";
+        window
+            .update(cx, |shell, _, cx| {
+                let rail = shell.workspace.project_rail_mut();
+                rail.groups.push(crate::workspace::ProjectRailGroup {
+                    id: "work".into(),
+                    name: "Work".into(),
+                    collapsed: false,
+                });
+                rail.assignments
+                    .insert(vorkspace_core::files::path_key(path), "work".into());
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            })
+            .unwrap();
+        for mode in ["compact", "hidden", "settings", "group"] {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.sessions[&session].update(cx, |view, cx| {
+                        view.busy = true;
+                        cx.emit(SessionChanged);
+                        cx.notify();
+                    });
+                })
+                .unwrap();
+            cx.run_until_parked();
+            let mark = window
+                .update(cx, |shell, _, cx| {
+                    assert_eq!(
+                        shell.sidebar_status(session, cx),
+                        Some(live_agents::Status::Working)
+                    );
+                    shell.project_marks[path].clone()
+                })
+                .unwrap();
+            cx.executor().advance_clock(Duration::from_millis(33));
+            cx.run_until_parked();
+            assert!(mark.read_with(cx, |mark, _| mark.animation_state().0) > 0);
+            // Hide and reveal while still working, then hide again and finish.
+            for finish_hidden in [false, true] {
+                let mark = window
+                    .update(cx, |shell, _, _| shell.project_marks[path].clone())
+                    .unwrap();
+                window
+                    .update(cx, |shell, w, cx| {
+                        match mode {
+                            "compact" | "hidden" => {
+                                shell.workspace.preferences.collapsed_project_rail = mode.into();
+                                shell.workspace.project_rail_open = false;
+                            }
+                            "settings" => {
+                                shell.open_settings(crate::settings::Section::General, w, cx)
+                            }
+                            "group" => {
+                                shell
+                                    .workspace
+                                    .project_group_collapsed
+                                    .insert("work".into(), true);
+                            }
+                            _ => unreachable!(),
+                        }
+                        shell.invalidate_chrome(cx);
+                        cx.notify();
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                let stopped = mark.read_with(cx, |mark, _| mark.animation_state());
+                assert!(!stopped.1, "{mode} must cancel the retained mark's task");
+                window
+                    .update(cx, |shell, _, cx| {
+                        assert!(!shell.project_marks.contains_key(path), "{mode}");
+                        assert_eq!(
+                            shell.sidebar_status(session, cx),
+                            Some(live_agents::Status::Working)
+                        );
+                        if finish_hidden {
+                            shell.sessions[&session].update(cx, |view, cx| {
+                                view.busy = false;
+                                cx.emit(SessionChanged);
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                cx.executor().advance_clock(Duration::from_millis(330));
+                cx.run_until_parked();
+                assert_eq!(
+                    mark.read_with(cx, |mark, _| mark.animation_state()),
+                    stopped,
+                    "{mode}: hidden timer must never advance"
+                );
+                window
+                    .update(cx, |shell, w, cx| {
+                        if shell.settings.is_some() {
+                            shell.close_settings(w, cx);
+                        }
+                        shell.workspace.project_rail_open = true;
+                        shell
+                            .workspace
+                            .project_group_collapsed
+                            .insert("work".into(), false);
+                        shell.invalidate_chrome(cx);
+                        cx.notify();
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                window
+                    .update(cx, |shell, _, cx| {
+                        assert_eq!(
+                            shell.project_marks[path].read(cx).animation_state().1,
+                            !finish_hidden,
+                            "{mode}: reveal must use live work state"
+                        );
+                        assert_eq!(shell.sessions[&session].read(cx).busy, !finish_hidden);
+                    })
+                    .unwrap();
+            }
+        }
+    }
 
     #[gpui::test]
     fn native_group_creation_rename_assignment_and_pin_render_and_persist(
