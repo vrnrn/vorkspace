@@ -1,4 +1,4 @@
-//! Bot workspaces: one runtime per identity, shared by the rail, title tabs,
+//! Bot workspaces: one runtime per identity, shared by the rail, pages,
 //! overview and settings.
 pub(crate) mod avatar;
 pub(crate) mod cards;
@@ -1638,102 +1638,6 @@ impl Bots {
                 d.children(self.options_surface(cx))
             })
             .into_any_element()
-    }
-    pub(crate) fn title_tab(&self, id: &str, width: f32, cx: &Context<Self>) -> Option<AnyElement> {
-        self.roster.get(id).map(|bot| {
-            let id = bot.id.clone();
-            let close = id.clone();
-            let active = self.active.as_deref() == Some(&id);
-            let selector = format!("bot-title-tab-{id}");
-            let group: SharedString = selector.clone().into();
-            div()
-                .id(SharedString::from(format!("bot-title-{id}")))
-                .debug_selector(move || selector.clone())
-                .role(Role::Tab)
-                .aria_label(bot.label())
-                .aria_selected(active)
-                .h(px(TITLE_BAR_HEIGHT))
-                .w(px(width))
-                .flex_shrink_0()
-                .relative()
-                .flex()
-                .items_center()
-                .group(group.clone())
-                .child(
-                    title_tab_plate(active, false)
-                        .w_full()
-                        .min_w_0()
-                        .pr_7()
-                        .gap(px(6.))
-                        .group_hover(group.clone(), move |s| {
-                            s.opacity(1.).bg(title_tab_fill(active, true))
-                        })
-                        .child(avatar::bot_avatar(bot, "idle", 16., true))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .h(px(20.))
-                                .text_size(px(TITLE_TAB_TEXT_SIZE))
-                                .text_color(content(if active { 1. } else { 0.5 }))
-                                .group_hover(group.clone(), |s| s.text_color(content(1.)))
-                                .child(crate::tab_label::tab_label(bot.label())),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("close-bot-tab")
-                        .debug_selector(|| "close-bot-tab-button".into())
-                        .role(Role::Button)
-                        .aria_label("Close Bot tab")
-                        .absolute()
-                        .right_1()
-                        .top(px(10.))
-                        .size(px(20.))
-                        .rounded_sm()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .opacity(0.)
-                        .group_hover(group, |s| s.opacity(1.))
-                        .hover(|s| s.bg(content(0.1)))
-                        .child(icon("close", 12.))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            let owner = this.owner.clone();
-                            let close = close.clone();
-                            window.defer(cx, move |window, cx| {
-                                let _ = owner.update(cx, |shell, cx| {
-                                    shell.close_bot_tab(&close, window, cx)
-                                });
-                            });
-                        })),
-                )
-                .on_mouse_up(
-                    MouseButton::Middle,
-                    cx.listener({
-                        let id = id.clone();
-                        move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            let owner = this.owner.clone();
-                            let id = id.clone();
-                            window.defer(cx, move |window, cx| {
-                                let _ = owner
-                                    .update(cx, |shell, cx| shell.close_bot_tab(&id, window, cx));
-                            });
-                        }
-                    }),
-                )
-                .on_click(cx.listener(move |this, _, w, cx| {
-                    let owner = this.owner.clone();
-                    let id = id.clone();
-                    w.defer(cx, move |w, cx| {
-                        let _ = owner.update(cx, |shell, cx| shell.click_bot_tab(&id, w, cx));
-                    });
-                }))
-                .into_any_element()
-        })
     }
 }
 impl gpui::Render for Bots {

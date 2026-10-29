@@ -60,16 +60,7 @@ impl Shell {
             .title_order
             .iter()
             .filter(|tab| match tab {
-                TitleTab::Search => true,
                 TitleTab::Terminal { .. } => true,
-                TitleTab::App(view) => match view {
-                    app_views::AppView::Inbox => false,
-                    app_views::AppView::Connector(provider) => {
-                        self.enabled_connectors(cx).contains(provider)
-                    }
-                    app_views::AppView::Notes => self.workspace.preferences.notes,
-                    _ => true,
-                },
                 TitleTab::Session(tab) => {
                     self.workspace.tabs.contains(tab) && {
                         let id = self.workspace.tab_focus(*tab);
@@ -83,19 +74,7 @@ impl Shell {
                             && self.in_worktree_scope(id, cx)
                     }
                 }
-                TitleTab::Bot {
-                    id,
-                    project,
-                    worktree,
-                } => {
-                    *project == self.workspace.project
-                        && path_key(worktree) == path_key(self.working_copy())
-                        && self.workspace.preferences.bots
-                        && self
-                            .bots
-                            .as_ref()
-                            .is_some_and(|m| m.read(cx).roster.get(id).is_some())
-                }
+                TitleTab::Search | TitleTab::App(_) | TitleTab::Bot { .. } => false,
             })
             .cloned()
             .collect()
@@ -222,16 +201,6 @@ impl Shell {
             return true;
         }
         false
-    }
-
-    pub(crate) fn close_bot_tab(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .bots
-            .as_ref()
-            .is_some_and(|bots| bots.read(cx).active.as_deref() == Some(id))
-        {
-            self.close_bot_page(window, cx);
-        }
     }
 
     pub(super) fn run_title_tab_menu(

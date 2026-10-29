@@ -4,6 +4,125 @@ use super::*;
 use vorkspace_core::files::path_key;
 
 impl Shell {
+    pub(super) fn terminal_title_tab(
+        &self,
+        id: u64,
+        cwd: &str,
+        width: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let tab = TitleTab::Terminal {
+            id,
+            cwd: cwd.into(),
+        };
+        let active = self.active_title_tab(cx).as_ref() == Some(&tab);
+        let identity = format!("terminal-title-tab-{id}");
+        let close_identity = format!("close-terminal-title-tab-{id}");
+        let pill = format!("tool:{identity}");
+        let display_label = format!("Terminal · {}", project_name(cwd));
+        let close_tab = tab.clone();
+        let drag_tab = tab.clone();
+        let menu_tab = tab.clone();
+        let middle_tab = tab.clone();
+        let close = active || width >= TAB_CLOSE_MIN_WIDTH;
+        div()
+            .id(SharedString::from(identity.clone()))
+            .debug_selector(move || identity.clone())
+            .group("terminal-title-tab")
+            .role(Role::Tab)
+            .aria_label("Terminal")
+            .aria_description(cwd.to_owned())
+            .aria_selected(active)
+            .cursor(CursorStyle::Arrow)
+            .w(px(width))
+            .h(px(TITLE_BAR_HEIGHT))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .relative()
+            .child(
+                title_tab_plate(active, false)
+                    .relative()
+                    .child(self.tab_liquid.row(pill, active))
+                    .text_color(content(if active { 1. } else { 0.5 }))
+                    .w_full()
+                    .min_w_0()
+                    .when(close && width >= TAB_CLOSE_MIN_WIDTH, |d| d.pr_7())
+                    .when(width < 30., |d| d.px(px(((width - 14.) / 2.).max(0.))))
+                    .gap(px(6.))
+                    .group_hover("terminal-title-tab", |s| s.text_color(content(1.)))
+                    .child(icon("terminal", 14.))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .text_size(px(TITLE_TAB_TEXT_SIZE))
+                            .child(display_label),
+                    ),
+            )
+            .when(close, |d| {
+                d.child(
+                    div()
+                        .id(SharedString::from(close_identity.clone()))
+                        .debug_selector(move || close_identity.clone())
+                        .role(Role::Button)
+                        .aria_label("Close Terminal")
+                        .absolute()
+                        .right_1()
+                        .top(px(10. + TAB_LABEL_DROP))
+                        .size(px(20.))
+                        .rounded_sm()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .opacity(0.)
+                        .group_hover("terminal-title-tab", |s| s.opacity(1.))
+                        .hover(|s| s.bg(content(0.1)))
+                        .child(icon("close", 12.))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.close_title_tabs(
+                                std::slice::from_ref(&close_tab),
+                                None,
+                                window,
+                                cx,
+                            );
+                        })),
+                )
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event, _, cx| {
+                    this.start_tab_drag(drag_tab.clone(), event, cx)
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.open_menu(
+                        MenuTarget::TerminalTitleTab(menu_tab.clone()),
+                        Anchor::Point(event.position),
+                        window,
+                        cx,
+                    )
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.close_title_tabs(std::slice::from_ref(&middle_tab), None, window, cx);
+                }),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if std::mem::take(&mut this.skip_tab_click) {
+                    return;
+                }
+                this.open_title_tab(&tab, window, cx);
+            }))
+    }
     /// Every sidebar admission creates a fresh identity. Existing title-tab
     /// selection goes directly to `show_terminal_tab` with that tab's identity.
     pub(super) fn open_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {

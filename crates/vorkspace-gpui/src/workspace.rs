@@ -58,14 +58,6 @@ impl AppView {
             Self::Automations => "Automations",
         }
     }
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::Inbox => "globe",
-            Self::Connector(provider) => provider.icon(),
-            Self::Notes => "note",
-            Self::Automations => "zap",
-        }
-    }
 }
 
 /// Customizable shortcuts, independent of title tabs and the sidebar's project tools.
@@ -123,7 +115,8 @@ impl SidebarNavigation {
     }
 }
 
-/// The title strip has one order, including conversations, app views and Bots.
+/// Navigation destinations, including sidebar pages and legacy saved entries.
+/// Only sessions and terminals participate in the title strip.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum TitleTab {
     Session(i64),
