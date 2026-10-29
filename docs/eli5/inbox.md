@@ -5,16 +5,15 @@ Connectors bring GitHub, GitLab, and Jira Cloud work into Vorkspace. In
 Connectors, Archive and Worktrees are all in the App group in Settings.
 
 Open the sidebar's options menu to hide shortcuts or drag their handles into a
-different order. This includes enabled connectors, Notes, Automations and Terminal.
+different order. This includes enabled connectors, Notes and Automations.
 The order is remembered and also works when the sidebar is collapsed. Hiding a
-shortcut keeps its tabs and connection running. Activity appears inside chats,
+shortcut keeps its connection running. Activity appears inside chats,
 so there is no separate Activity section or Compact view switch.
 
 Each enabled service has its own sidebar button. Click GitHub, GitLab or Jira to
-open its tab; clicking again returns to the same tab. You can keep several open,
-reorder them and close them like session tabs. Tabs return when Vorkspace restarts.
-Switching tabs keeps your search, selected item, scroll and unfinished reply in
-place during this run. A disconnected service shows its own setup instructions.
+open its page in the main area; the tab bar hides while it is open, and choosing a
+project brings that project's tabs back. Switching away keeps your search, selected
+item, scroll and unfinished reply in place during this run. A disconnected service shows its own setup instructions.
 
 Turning a service off hides it and stops checking it. Your saved login details
 and choices stay on your computer, so you can turn it back on later.

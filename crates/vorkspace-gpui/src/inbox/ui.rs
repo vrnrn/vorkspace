@@ -325,28 +325,6 @@ impl Inbox {
             .get(&self.state.source)
             .is_some_and(|status| status.connected);
         let items = self.visible_items(cx);
-        let sources = div()
-            .h(px(36.))
-            .px(px(8.))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .border_b_1()
-            .border_color(content(0.07))
-            .child(provider_mark(&self.state.source))
-            .child(div().flex_1().text_size(px(12.)).child(provider))
-            .when(!connected, |d| {
-                d.child(
-                    icon_button("connector-refresh", "Refresh", "refresh-cw")
-                        .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-                )
-            })
-            .child(
-                icon_button("connector-settings", "Settings → Connectors", "settings")
-                    .debug_selector(|| "connector-settings".into())
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Settings))),
-            );
         let tools = div()
             .h(px(36.))
             .px(px(8.))
@@ -368,32 +346,36 @@ impl Inbox {
                     .child(icon("search", 12.))
                     .child(self.search.clone()),
             )
-            .child(
-                icon_button("inbox-filter", "Filter items", "filter")
-                    .relative()
-                    .child(self.filter_anchor.probe())
-                    .when(self.filters_open || self.filters_active(), |d| {
-                        d.bg(content(0.1))
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.filters_open = !this.filters_open;
-                        this.connections_open = false;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                icon_button("inbox-read-all", "Mark all as read", "check-2").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        for item in &this.snapshot.items {
-                            if item.provider == this.state.source {
-                                this.state.seen.mark(item);
+            .when(connected, |d| {
+                d.child(
+                    icon_button("inbox-filter", "Filter items", "filter")
+                        .relative()
+                        .child(self.filter_anchor.probe())
+                        .when(self.filters_open || self.filters_active(), |d| {
+                            d.bg(content(0.1))
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.filters_open = !this.filters_open;
+                            this.connections_open = false;
+                            cx.notify();
+                        })),
+                )
+            })
+            .when(connected, |d| {
+                d.child(
+                    icon_button("inbox-read-all", "Mark all as read", "check-2").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            for item in &this.snapshot.items {
+                                if item.provider == this.state.source {
+                                    this.state.seen.mark(item);
+                                }
                             }
-                        }
-                        this.save(cx);
-                        cx.notify();
-                    },
-                )),
-            )
+                            this.save(cx);
+                            cx.notify();
+                        }),
+                    ),
+                )
+            })
             .child(
                 icon_button(
                     "inbox-refresh",
@@ -556,8 +538,7 @@ impl Inbox {
             .border_color(content(0.07))
             .flex()
             .flex_col()
-            .child(sources)
-            .when(connected, |d| d.child(tools))
+            .child(tools)
             .child(
                 div()
                     .id("inbox-list-scroll")

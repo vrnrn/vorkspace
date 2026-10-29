@@ -1,10 +1,14 @@
 # Bot Channels, in plain English
 
+Channels are an experiment, so they start hidden. Turn on **Settings → Bots →
+Channels** to show them; turning it off hides them again. A channel fills the
+main area on its own, with no tab bar.
+
 Channels let several Bots discuss one subject. Choose Channels in the main
 sidebar, or press its plus button to name a channel and choose members. Use
 the gear in the header to change its name, topic or members in a small menu.
 Type `@` to pick a Bot by name. Channel names start
-with `#`, highlight in the sidebar with their chosen color and texture when selected, and can be right-clicked in the sidebar to edit their name, texture toggle, seed, grid scale, and colors. A dot means there are unread messages; opening the conversation
+with `#`, show a small dot grid in their chosen color in the sidebar, and can be right-clicked in the sidebar to edit their name, texture toggle, seed, grid scale, and colors. A dot means there are unread messages; opening the conversation
 clears it. The app remembers what you have read after restart.
 Mention a Bot to address it directly. Each Bot
 keeps its own conversation, model and permissions. Stop and approval controls
@@ -17,10 +21,11 @@ message until it can respond, then sends its final answer back. Your own
 messages are different: they join the Bot's current work right away, unless
 you chose to queue follow-ups or the Bot is answering another Bot. It keeps its
 own account and permissions. Reply chains stop after four steps, even when
-Bots switch between direct messages and channels. Direct messages show a
-**Bot-to-bot** label and who is talking to whom, so you can distinguish them
-from your own messages. Replies identify the Bot they answer, including after
-you reopen the conversation. Queued messages keep the same sender label.
+Bots switch between direct messages and channels. Direct messages look like
+chat messages: the sender's name chip, a small "→ recipient", and the text in a
+soft bubble, so you can tell them from your own messages. A reply says
+"replying to" and the Bot it answers, including after you reopen the
+conversation. Queued messages keep the same sender label.
 Failed messages stay visible
 for inspection, retry or discard; very large messages are rejected.
 Recovering from a usage limit does not silently resend a Bot message whose

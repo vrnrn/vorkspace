@@ -132,7 +132,7 @@ From back to front:
 | Layer | Fill | Radius | Border | Shadow |
 |---|---|---|---|---|
 | Window / sidebar | `shell_fill()` | none | none | none |
-| Main pane | `pane_fill()` | none | 1px divider | none |
+| Main pane | `pane_fill()` | 12 on its left corners | none | none |
 | Card / settings group | `content(0.03)` | `rounded_xl` | `content(0.1)` | none |
 | Composer | `composer_fill()`, `composer_blur()` | 8 | `composer_border(focused)` | none |
 | Popover / menu | `popover()` glass, or `floating_fill()` | 12 | `content(0.1)` | popover pair |
@@ -142,12 +142,25 @@ From back to front:
 - **Glass** is dark-only (`window_glass`). Light themes paint opaque surfaces. Never stack a second tint on glass.
 - **Floating UI** goes through `popover::popover` (placement, flipping,
   outside-press dismissal, glass and shadow). Don't hand-build floating frames.
+- A card that opens out of a sidebar row, such as usage details, aligns with
+  the row's left edge and takes its 6px radius instead of 12.
 - **Dividers** are 1px: `content(0.1)` for chrome rules, `content(0.04)–0.05`
   for faint panel edges and row separators.
 - **Radii:** 4 for small chips and 20px icon actions; 6 (`rounded_md`) for
   buttons, icon buttons, inputs and tab plates; 8 for menu rows and the
   composer box; 12 for floating surfaces; 16 for modals; `rounded_full` for pills,
   avatars, switches and dots.
+- **Rail rows** join the main pane as one surface (`liquid.rs`): the hovered and
+  selected rows' pills use the selection fill `content(0.1)` (hover at 70% of
+  it) with 6px ends and concave joins, and the rail's `content(0.08)` divider
+  runs around them, so rail rows have no hover background. Projects and
+  Channels use the 3×3 dot grid in their colour as their mark. Title-bar tabs
+  use the same pills, rising from the strip's divider, so tab plates have no fill.
+- **Liquid is for the pane only.** A pill pours into the main pane (or rises
+  from the tab strip's line) only for items that open something there: pages,
+  Bots, channels, projects, sessions, tabs and the buttons that create them.
+  Controls that open menus or popovers, such as Sidebar options, use an
+  ordinary hover background instead.
 - **Shadows** belong to floating layers only; flat panes and cards have none.
   Popovers and their modal variant share the layered pair in `popover.rs`.
   Toasts, tooltips, image previews and dragged content can have different

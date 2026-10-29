@@ -18,6 +18,7 @@ mod measurements;
 mod metrics_tests;
 mod outline;
 mod peers;
+pub(crate) use peers::peer_looks;
 pub(crate) mod phases;
 mod remote_plans;
 pub(crate) mod selection;
@@ -410,6 +411,8 @@ pub(crate) struct TranscriptView {
     bot_groups: std::cell::RefCell<HashMap<usize, usize>>,
     /// The Bot's look configuration and name, which sign its turns.
     bot_look: Option<(crate::bots::avatar::BotLookConfig, SharedString)>,
+    /// Roster looks by unique Bot name, for avatars on peer-message senders.
+    peer_looks: HashMap<String, crate::bots::avatar::BotLookConfig>,
     /// The turn whose actions show, and since when, as `.turn-actions-hover`.
     hovered_turn: Option<(usize, Instant)>,
     /// The prompt message whose copy action shows.
@@ -1588,6 +1591,12 @@ impl TranscriptView {
                     .when(peer_pending, |d| d.items_start())
                     .text_size(px(14.))
                     .line_height(px(20.))
+                    .children(
+                        message
+                            .peer
+                            .as_ref()
+                            .map(|peer| self.peer_message_label(peer, message.error.is_none())),
+                    )
                     .child(
                         div()
                             .relative()
@@ -1597,36 +1606,27 @@ impl TranscriptView {
                             .flex_col()
                             .px_3()
                             .py_2()
-                            .when(peer_pending, |d| {
-                                d.border_l_2().border_color(content(0.2)).bg(content(0.04))
-                            })
-                            .children(
-                                message.peer.as_ref().map(|peer| {
-                                    self.peer_message_label(peer, message.error.is_none())
-                                }),
-                            )
-                            .when(!peer_pending, |d| {
-                                d.child(
-                                    canvas(
-                                        |_, _, _| {},
-                                        move |bounds, _, window, _| {
-                                            let radius = if bounds.size.height <= px(37.) {
+                            .child(
+                                canvas(
+                                    |_, _, _| {},
+                                    move |bounds, _, window, _| {
+                                        let radius =
+                                            if !peer_pending && bounds.size.height <= px(37.) {
                                                 f32::from(bounds.size.height) * 0.5
                                             } else {
                                                 12.
                                             };
-                                            window.paint_quad(
-                                                gpui::fill(bounds, user_bubble_fill())
-                                                    .corner_radii(px(radius)),
-                                            );
-                                        },
-                                    )
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .size_full(),
+                                        window.paint_quad(
+                                            gpui::fill(bounds, user_bubble_fill())
+                                                .corner_radii(px(radius)),
+                                        );
+                                    },
                                 )
-                            })
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full(),
+                            )
                             .children(attachment_body.map(|body| {
                                 div()
                                     .when(!message.text.is_empty(), |d| d.mb_2())
@@ -2097,6 +2097,7 @@ impl TranscriptView {
             bot: false,
             bot_groups: Default::default(),
             bot_look: None,
+            peer_looks: HashMap::new(),
             hovered_turn: None,
             hovered_prompt: None,
             hovered_prompt_actions: None,

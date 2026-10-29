@@ -213,8 +213,9 @@ impl AnchorSlot {
     pub(crate) fn probe(&self) -> impl IntoElement {
         let slot = self.clone();
         canvas(move |bounds, _, _| slot.set(Some(bounds)), |_, _, _, _| {})
+            // Inset, not sized: a padded anchor's padding must not shift it.
             .absolute()
-            .size_full()
+            .inset_0()
     }
     /// A probe for sizes the next render lays out from: a change of size
     /// asks for another frame, so nothing waits on unrelated input to catch up.
@@ -310,6 +311,8 @@ pub(crate) struct Popover {
     animate: bool,
     /// Without a fixed width, the card hugs its content between these.
     fit: (Option<f32>, Option<f32>),
+    /// Overrides the card's corner radius.
+    radius: Option<f32>,
     children: Vec<AnyElement>,
 }
 pub(crate) fn popover(id: impl Into<ElementId>, anchor: Anchor) -> Popover {
@@ -326,6 +329,7 @@ pub(crate) fn popover(id: impl Into<ElementId>, anchor: Anchor) -> Popover {
         modal_classic: None,
         animate: true,
         fit: (None, None),
+        radius: None,
         children: Vec::new(),
     }
 }
@@ -343,6 +347,11 @@ impl Popover {
     /// Modal.tsx: 16px corners, a 7% rule and the shared dialog tint.
     pub(crate) fn modal_surface(mut self, classic: bool) -> Self {
         self.modal_classic = Some(classic);
+        self
+    }
+    /// A card that opens out of a control can match the control's corners.
+    pub(crate) fn radius(mut self, radius: f32) -> Self {
+        self.radius = Some(radius);
         self
     }
     pub(crate) fn align(mut self, align: Align) -> Self {
@@ -433,7 +442,7 @@ impl Popover {
         let radius = if self.modal_classic.is_some() {
             16.
         } else {
-            RADIUS
+            self.radius.unwrap_or(RADIUS)
         };
         let border = if self.modal_classic.is_some() {
             0.07
@@ -1863,6 +1872,31 @@ pub(crate) fn menu_popover(menu: &Entity<Menu>, anchor: Anchor, cx: &App) -> Pop
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn a_padded_anchor_records_its_outer_edge(cx: &mut gpui::TestAppContext) {
+        struct Row(AnchorSlot);
+        impl gpui::Render for Row {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                div().size_full().child(
+                    div()
+                        .debug_selector(|| "row".into())
+                        .relative()
+                        .w(px(200.))
+                        .h(px(40.))
+                        .px_2()
+                        .py_1p5()
+                        .child(self.0.probe()),
+                )
+            }
+        }
+        let slot = AnchorSlot::default();
+        let window = cx.add_window(|_, _| Row(slot.clone()));
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        // A popover aligned to it starts where the row does, not its padding.
+        assert_eq!(slot.get(), visual.debug_bounds("row"));
+    }
 
     #[test]
     fn danger_rows_keep_readable_ink_when_highlighted_or_hovered() {

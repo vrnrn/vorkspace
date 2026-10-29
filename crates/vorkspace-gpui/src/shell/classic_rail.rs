@@ -1,5 +1,6 @@
 //! The original project rail is independent of the project's session/file pane.
 use super::*;
+use crate::{session_mark::ProjectMark, theme::StatusColor};
 
 const COMPACT_WIDTH: f32 = 48.;
 
@@ -91,21 +92,17 @@ impl Shell {
             .flex_shrink_0()
             .flex()
             .flex_col()
-            // Retain the separator's column in content layout, without painting
-            // a full-height border through the native titlebar controls.
-            .pr_px()
-            // The titlebar belongs to native controls and window navigation.
-            // A narrow rail's separator must never cut through that cluster.
-            .child(
-                div()
-                    .debug_selector(|| "classic-project-rail-divider".into())
-                    .absolute()
-                    .right_0()
-                    .top(px(TITLE_BAR_HEIGHT))
-                    .bottom_0()
-                    .w_px()
-                    .bg(content(0.08)),
-            )
+            // The divider, and the hovered and selected rows' pills running
+            // into the pane (crate::liquid), below the native titlebar controls.
+            .child({
+                // Around its neighbour's rounded corners (the pane, or a left
+                // sidebar); the top one not beside the icon rail, whose
+                // navigation overhangs it.
+                self.liquid.surface(
+                    self.workspace.project_rail_open || self.settings.is_some(),
+                    true,
+                )
+            })
             .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0())
             .child(crate::bots::avatar::sidebar_cursor_tracker());
 
@@ -129,6 +126,7 @@ impl Shell {
                     move |window, cx| {
                         let _ = back.update(cx, |this, cx| this.close_settings(window, cx));
                     },
+                    &self.liquid,
                 ))
                 .child(div().mx_2().child(self.resources.clone()))
                 .into_any_element();
@@ -141,16 +139,11 @@ impl Shell {
         if !self.workspace.project_rail_open {
             return self.compact_project_rail(rail, cx);
         }
+        // Expanded, sessions hang under their projects instead of the Working card.
+        self.live_agents.update(cx, |activity, _| activity.hide());
 
         let projects = self.workspace.projects.clone();
-        let busy: HashSet<_> = self
-            .sessions
-            .values()
-            .filter_map(|view| {
-                let session = view.read(cx);
-                session.responding().then(|| session.summary.cwd.clone())
-            })
-            .collect();
+        self.project_marks.retain(|path, _| projects.contains(path));
         let _ = self.workspace.migrate_project_rail();
         let rail_state = self
             .workspace
@@ -164,7 +157,7 @@ impl Shell {
             .iter()
             .enumerate()
             .filter(|(_, path)| pinned.contains(&vorkspace_core::files::path_key(path)))
-            .map(|(ix, path)| self.classic_project_row(ix, path.clone(), busy.contains(path), cx))
+            .map(|(ix, path)| self.classic_project_row(ix, path.clone(), cx))
             .collect();
         let mut group_rows = Vec::new();
         let mut grouped_paths = HashSet::new();
@@ -193,6 +186,7 @@ impl Shell {
                     .collect();
                 let id = id.to_owned();
                 let toggle = id.clone();
+                let pill = format!("group:{id}");
                 let rename =
                     self.rename_row(&session_groups::RenameTarget::ProjectGroup(id.clone()), cx);
                 let row = div()
@@ -211,8 +205,9 @@ impl Shell {
                     .rounded_md()
                     .text_size(px(14.))
                     .text_color(content(0.65))
-                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                    .focus(|s| s.bg(content(0.08)))
+                    .relative()
+                    .child(self.liquid.row(pill, false))
+                    .hover(|s| s.text_color(content(1.)))
                     .child(icon(
                         if collapsed {
                             "chevron-right"
@@ -233,21 +228,24 @@ impl Shell {
                     .when(!collapsed, |d| d.bg(content(0.05)))
                     .child(rename.unwrap_or_else(|| row.into_any_element()));
                 if !collapsed {
-                    section = section.child(div().p_1().flex().flex_col().gap_px().children(
-                        members.into_iter().map(|(ix, path)| {
-                            self.classic_project_row(ix, path.clone(), busy.contains(&path), cx)
-                        }),
-                    ));
+                    section = section.child(
+                        div().p_1().flex().flex_col().gap_px().children(
+                            members
+                                .into_iter()
+                                .map(|(ix, path)| self.classic_project_row(ix, path.clone(), cx)),
+                        ),
+                    );
                 }
                 group_rows.push(section.into_any_element());
             }
         }
 
+        let liquid = self.liquid.clone();
         let bots = self.bots.clone().map(|bots| {
             bots.update(cx, |bots, cx| {
                 div()
-                    .child(bots.rail(None, cx))
-                    .child(bots.classic_channels_rail(cx))
+                    .child(bots.rail(None, &liquid, cx))
+                    .child(bots.classic_channels_rail(&liquid, cx))
                     .into_any_element()
             })
         });
@@ -281,11 +279,13 @@ impl Shell {
                     })
                     .child(
                         section_label("Projects").mx_2().child(
-                            icon_button("classic-open-project", "Open project", "plus")
+                            icon_button_hover("classic-open-project", "Open project", "plus", 0.)
                                 .debug_selector(|| "classic-open-project".into())
                                 .focusable()
                                 .tab_stop(true)
                                 .size(px(20.))
+                                .relative()
+                                .child(liquid.row("add:project", false))
                                 .on_click(cx.listener(|this, _, _, cx| this.open_project(cx))),
                         ),
                     )
@@ -298,18 +298,10 @@ impl Shell {
                                     !grouped_paths.contains(path)
                                         && !pinned.contains(&vorkspace_core::files::path_key(path))
                                 })
-                                .map(|(ix, path)| {
-                                    self.classic_project_row(
-                                        ix,
-                                        path.clone(),
-                                        busy.contains(&path),
-                                        cx,
-                                    )
-                                }),
+                                .map(|(ix, path)| self.classic_project_row(ix, path.clone(), cx)),
                         ),
                     ),
             )
-            .children(self.live_agents_preview(false, cx))
             .when(
                 self.notification_state.installed.read(cx).is_visible(),
                 |d| {
@@ -373,27 +365,41 @@ impl Shell {
     }
 
     fn classic_project_row(
-        &self,
+        &mut self,
         ix: usize,
         path: String,
-        busy: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // A project's terminal tabs belong to it, so they keep it selected.
         let selected = self.workspace.project == path
             && self.app_search.is_none()
-            && !self.app_view_open()
+            && self.active_app_view.is_none()
             && !self.bot_active(cx);
-        let appearance = self.appearance(&path);
+        let color = self.appearance(&path).color(&path);
         let menu = path.clone();
         let options = path.clone();
-        div()
+        let sessions = self.project_sessions(&path, cx);
+        let working = sessions
+            .iter()
+            .filter(|(_, status)| *status == live_agents::Status::Working)
+            .count();
+        // The project's mark is the working grid in its colour, waving while
+        // any of its sessions works.
+        let mark = self
+            .project_marks
+            .entry(path.clone())
+            .or_insert_with(|| cx.new(|_| ProjectMark::new(color)))
+            .clone();
+        mark.update(cx, |mark, cx| mark.set(color, working > 0, cx));
+        let tree = self.project_tree(&sessions, cx);
+        let row = div()
             .id(("classic-project", ix))
             .debug_selector(move || format!("classic-project-{ix}"))
             .role(Role::Button)
             .aria_label(format!(
                 "Project {}{}",
                 self.project_label(&path),
-                if busy { ", working" } else { "" }
+                if working > 0 { ", working" } else { "" }
             ))
             .aria_description(path.clone())
             .aria_selected(selected)
@@ -411,17 +417,18 @@ impl Shell {
             .items_center()
             .gap_2()
             .opacity(if selected { 1. } else { 0.65 })
-            .when(selected, |d| {
-                d.child(crate::bots::avatar::sidebar_selection_pill(
-                    appearance.seed(&path),
-                    appearance.grid(),
-                    appearance.textured,
-                    appearance.color(&path),
-                    appearance.fg_color(&path),
-                ))
-            })
-            .hover(|s| s.bg(content(0.08)).opacity(1.))
-            .focus(|s| s.bg(content(0.1)).opacity(1.))
+            .child(self.liquid.row(format!("project:{path}"), selected))
+            .child(
+                div()
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(mark),
+            )
+            .hover(|s| s.opacity(1.))
+            .focus(|s| s.opacity(1.))
             .child(
                 div()
                     .flex_1()
@@ -430,22 +437,19 @@ impl Shell {
                     .text_size(px(14.))
                     .font_weight(FontWeight::MEDIUM)
                     .debug_selector(move || format!("classic-project-label-{ix}"))
+                    .group_hover("classic-project-row", |s| s.pr(px(24.)))
                     .child(self.project_label(&path)),
             )
-            .when(busy, |d| {
-                d.child(div().size(px(5.)).rounded_full().bg(accent_color()))
+            // How many of its sessions are working.
+            .when(working > 0, |d| {
+                d.child(
+                    div()
+                        .debug_selector(move || format!("classic-project-working-{ix}"))
+                        .text_size(px(12.))
+                        .text_color(content(0.5))
+                        .child(working.to_string()),
+                )
             })
-            .child(
-                div()
-                    .size(px(20.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .opacity(1.)
-                    .group_hover("classic-project-row", |s| s.invisible())
-                    .child(self.project_mark(&path, 16.)),
-            )
             .child(
                 icon_button(
                     "classic-project-options",
@@ -491,22 +495,158 @@ impl Shell {
                     );
                 }),
             )
-            .on_click(
-                cx.listener(move |this, _, window, cx| {
-                    this.select_project(path.clone(), window, cx)
-                }),
-            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.select_project(path.clone(), window, cx)
+            }));
+        div()
+            .flex()
+            .flex_col()
+            .gap_px()
+            .child(row)
+            .children(tree)
             .into_any_element()
+    }
+
+    /// The project's running, approval-blocked and unseen finished sessions.
+    fn project_sessions(&self, path: &str, cx: &App) -> Vec<(i64, live_agents::Status)> {
+        let ids: HashSet<_> = self
+            .sessions
+            .keys()
+            .chain(self.remote_marks.keys())
+            .chain(self.unseen_finished.iter())
+            .copied()
+            .filter(|id| self.session_summaries.contains_key(id))
+            .collect();
+        let mut sessions: Vec<_> = ids
+            .into_iter()
+            .filter(|&id| self.session_metadata(id, cx).summary.cwd == path)
+            .filter_map(|id| Some((id, self.sidebar_status(id, cx)?)))
+            .collect();
+        sessions.sort_by_key(|(id, _)| *id);
+        sessions
+    }
+
+    /// A project's sessions hang under it like a Git tree.
+    fn project_tree(
+        &self,
+        sessions: &[(i64, live_agents::Status)],
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        if !self.workspace.sidebar_activity_visible || !self.workspace.preferences.working_agents {
+            return Vec::new();
+        }
+        let line = content(0.15);
+        sessions
+            .iter()
+            .enumerate()
+            .map(|(ix, &(id, status))| {
+                let last = ix + 1 == sessions.len();
+                let open = self.workspace.active == Some(id)
+                    && self.active_app_view.is_none()
+                    && self.app_search.is_none()
+                    && !self.bot_active(cx);
+                let ink = match status {
+                    live_agents::Status::Approval => crate::theme::status(StatusColor::Warning, 1.),
+                    live_agents::Status::Done => crate::theme::status(StatusColor::Success, 1.),
+                    live_agents::Status::Working => content(0.5),
+                };
+                div()
+                    .id(("project-session", id as usize))
+                    .debug_selector(move || format!("project-session-{id}"))
+                    .role(Role::Button)
+                    .aria_label(self.session_metadata(id, cx).display_title())
+                    .relative()
+                    .h(px(28.))
+                    .pl(px(30.))
+                    .pr_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    // Indented past the tree lines, as a child of the project.
+                    .child(
+                        self.liquid
+                            .row(format!("session:{id}"), false)
+                            .left(px(24.)),
+                    )
+                    // The tree: a rail down from the project's mark, and a stub.
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(15.))
+                            .top_0()
+                            .w_px()
+                            .map(|d| if last { d.h(px(14.)) } else { d.bottom_0() })
+                            .bg(line),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(15.))
+                            .top(px(14.))
+                            .w(px(8.))
+                            .h_px()
+                            .bg(line),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(13.))
+                            .text_color(content(if open { 1. } else { 0.6 }))
+                            .hover(|s| s.text_color(content(1.)))
+                            .child(self.session_metadata(id, cx).display_title()),
+                    )
+                    .when(status != live_agents::Status::Working, |d| {
+                        d.child(icon(status.glyph(), 12.).text_color(ink))
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.selected_sessions.clear();
+                        this.selection_anchor = Some(id);
+                        this.open(id, window, cx);
+                    }))
+                    .into_any_element()
+            })
+            .collect()
     }
 
     fn classic_rail_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
-            .h(px(40.))
             .flex_shrink_0()
+            // Settings' Back row keeps the same bottom padding.
             .px_2()
+            .pb_2()
             .flex()
-            .items_center()
-            .gap_1()
+            .flex_col()
+            // Sidebar options: a thin row above Settings; its menu opens upward.
+            // It opens nothing in the pane, so it has a plain hover, not a pill.
+            .child(
+                div()
+                    .id("classic-sidebar-options")
+                    .debug_selector(|| "sidebar-options".into())
+                    .role(Role::Button)
+                    .aria_label("Sidebar options")
+                    .focusable()
+                    .tab_stop(true)
+                    .relative()
+                    .h(px(20.))
+                    .rounded_md()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(content(0.5))
+                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                    .child(self.sidebar_options_anchor.probe())
+                    .child(icon("more-horizontal", 14.))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_menu(
+                            MenuTarget::SidebarOptions,
+                            Anchor::Slot(this.sidebar_options_anchor.clone()),
+                            window,
+                            cx,
+                        );
+                    })),
+            )
             .child(
                 div()
                     .id("classic-rail-settings")
@@ -515,7 +655,6 @@ impl Shell {
                     .aria_label("Settings")
                     .focusable()
                     .tab_stop(true)
-                    .flex_1()
                     .h(px(32.))
                     .px_2()
                     .rounded_md()
@@ -524,36 +663,14 @@ impl Shell {
                     .gap_2()
                     .text_size(px(14.))
                     .text_color(content(0.5))
-                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                    .focus(|s| s.bg(content(0.08)))
+                    .relative()
+                    .child(self.liquid.row("settings-footer", false))
+                    .hover(|s| s.text_color(content(1.)))
                     .child(icon("settings", 16.))
                     .child(div().flex_1().child("Settings"))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(content(0.4))
-                            .child("⌘,"),
-                    )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_settings(crate::settings::Section::General, window, cx)
                     })),
-            )
-            .child(
-                icon_button(
-                    "classic-sidebar-options",
-                    "Sidebar options",
-                    "more-horizontal",
-                )
-                .debug_selector(|| "sidebar-options".into())
-                .child(self.sidebar_options_anchor.probe())
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.open_menu(
-                        MenuTarget::SidebarOptions,
-                        Anchor::Slot(this.sidebar_options_anchor.clone()),
-                        window,
-                        cx,
-                    );
-                })),
             )
             .into_any_element()
     }
@@ -788,7 +905,6 @@ impl Shell {
                                     "Jira" => this.open_connector(Connector::Jira, window, cx),
                                     "Notes" => this.open_notes(window, cx),
                                     "Automations" => this.open_automations(window, cx),
-                                    "Terminal" => this.open_terminal_tab(window, cx),
                                     _ => (),
                                 },
                             ))

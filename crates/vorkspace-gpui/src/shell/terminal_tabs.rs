@@ -158,106 +158,45 @@ mod tests {
     }
 
     #[gpui::test]
-    fn terminal_shortcut_reorders_and_hides_without_closing_its_tab(cx: &mut TestAppContext) {
+    fn terminal_is_not_a_sidebar_item_and_a_plain_new_tab_click_opens_a_session(
+        cx: &mut TestAppContext,
+    ) {
         let (window, _, _) = super::super::tests::window(cx);
         cx.update(|cx| {
             bind_keys(cx);
             crate::clock::use_test_clock(cx);
         });
-        let (tab, terminal) = window
-            .update(cx, |shell, w, cx| {
-                shell.open_terminal_tab(w, cx);
-                active_terminal(shell, cx)
-            })
-            .unwrap();
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
+        assert!(visual.debug_bounds("sidebar-navigation-Terminal").is_none());
         let options = visual.debug_bounds("sidebar-options").unwrap();
         visual.simulate_click(options.center(), Default::default());
         visual.run_until_parked();
-        let grip = visual
-            .debug_bounds("menu-grip-sidebar-terminal")
-            .unwrap()
-            .center();
-        let target = visual.debug_bounds("menu-action-sidebar-github").unwrap();
-        let end = gpui::point(target.center().x, target.top() + px(3.));
-        visual.simulate_mouse_down(grip, MouseButton::Left, Default::default());
-        visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
-        visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
-        visual.run_until_parked();
-        window
-            .update(visual, |shell, _, cx| {
-                assert_eq!(shell.workspace.sidebar_navigation_order[0], "terminal");
-                assert!(shell.workspace.sidebar_terminal_visible);
-                assert_eq!(shell.terminal_tabs[&terminal_id(&tab)], terminal);
-                let saved = shell.latest_state.lock().unwrap().clone();
-                let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
-                assert_eq!(restored.sidebar_navigation_order[0], "terminal");
-                assert!(
-                    shell
-                        .menu
-                        .as_ref()
-                        .unwrap()
-                        .menu
-                        .read(cx)
-                        .toggle_state("sidebar-terminal")
-                        .unwrap()
-                );
-            })
-            .unwrap();
-        let row = visual.debug_bounds("menu-action-sidebar-terminal").unwrap();
-        visual.simulate_click(row.center(), Default::default());
-        visual.run_until_parked();
-        assert!(visual.debug_bounds("sidebar-navigation-Terminal").is_none());
-        assert!(visual.debug_bounds("terminal-tab-body").is_some());
-        window
-            .update(visual, |shell, _, _| {
-                assert_eq!(shell.terminal_tabs[&terminal_id(&tab)], terminal);
-                assert_eq!(shell.active_terminal_tab, Some(terminal_id(&tab)));
-                let saved = shell.latest_state.lock().unwrap().clone();
-                assert!(
-                    !Workspace::restore(Some(&saved), &[], "/work/vorkspace")
-                        .sidebar_terminal_visible
-                );
-            })
-            .unwrap();
-        let row = visual.debug_bounds("menu-action-sidebar-terminal").unwrap();
-        visual.simulate_click(row.center(), Default::default());
+        assert!(visual.debug_bounds("menu-action-sidebar-github").is_some());
+        assert!(
+            visual
+                .debug_bounds("menu-action-sidebar-terminal")
+                .is_none()
+        );
         visual.simulate_keystrokes("escape");
         visual.run_until_parked();
-        for expanded in [true, false] {
-            window
-                .update(visual, |shell, _, cx| {
-                    shell.workspace.project_rail_open = expanded;
-                    shell.invalidate_chrome(cx);
-                    cx.notify();
-                })
-                .unwrap();
-            visual.run_until_parked();
-            let terminal_bounds = visual.debug_bounds("sidebar-navigation-Terminal").unwrap();
-            let github_bounds = visual.debug_bounds("sidebar-navigation-GitHub").unwrap();
-            assert!(terminal_bounds.bottom() <= github_bounds.top());
-        }
-        window
-            .update(visual, |shell, w, cx| {
-                shell.open_connector(Connector::Github, w, cx);
-            })
+        let tabs = window
+            .update(visual, |shell, _, _| shell.workspace.tabs.len())
             .unwrap();
-        visual.run_until_parked();
-        visual.simulate_keystrokes("cmd-w");
+        let plus = visual.debug_bounds("new-tab").unwrap();
+        visual.simulate_click(plus.center(), Default::default());
         visual.run_until_parked();
         window
             .update(visual, |shell, _, _| {
-                assert!(!shell.workspace.title_order.contains(&TitleTab::App(
-                    app_views::AppView::Connector(Connector::Github)
-                )));
-                assert_eq!(shell.terminal_tabs[&terminal_id(&tab)], terminal);
+                assert_eq!(shell.workspace.tabs.len(), tabs + 1);
+                assert!(shell.terminal_tabs.is_empty());
+                assert_eq!(shell.active_terminal_tab, None);
             })
             .unwrap();
     }
 
     #[gpui::test]
-    fn terminal_sidebar_every_click_opens_and_focuses_an_independent_top_tab(
+    fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(
         cx: &mut TestAppContext,
     ) {
         let (window, _, session) = super::super::tests::window(cx);
@@ -280,8 +219,9 @@ mod tests {
             visual.run_until_parked();
             // Exercise the real button repeatedly, including while Terminal is active.
             for _ in 0..2 {
-                let button = visual.debug_bounds("sidebar-navigation-Terminal").unwrap();
-                visual.simulate_click(button.center(), Default::default());
+                // Command-click on the strip's + opens a terminal tab.
+                let button = visual.debug_bounds("new-tab").unwrap();
+                visual.simulate_click(button.center(), gpui::Modifiers::command());
                 visual.run_until_parked();
                 assert!(visual.debug_bounds("terminal-tab-body").is_some());
                 assert!(visual.debug_bounds("terminal-dock").is_none());
@@ -614,7 +554,8 @@ mod tests {
                         .filter(|tab| **tab
                             == TitleTab::App(app_views::AppView::Connector(Connector::Github)))
                         .count(),
-                    1
+                    0,
+                    "connector pages are never tabs"
                 );
                 shell.open_terminal_tab(w, cx);
                 let first = shell.active_title_tab(cx).unwrap();
@@ -693,7 +634,7 @@ mod tests {
                 let newest = shell.active_title_tab(cx).unwrap();
                 assert_ne!(newest, first);
                 assert_ne!(newest, second);
-                assert!(shell.workspace.title_order.contains(&TitleTab::App(
+                assert!(!shell.workspace.title_order.contains(&TitleTab::App(
                     app_views::AppView::Connector(Connector::Github)
                 )));
             })

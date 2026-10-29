@@ -9,7 +9,8 @@ impl SettingsView {
         let p = self.prefs.clone();
         let rows=vec![
             self.row(Some("bots-enabled"),true,"Show bots",Some("Agents of your own on the project rail. Each works on the projects you give it, remembers what matters and picks up habits it runs on its own. Turn this off to hide them.".into()),vec![self.toggle("bots-enabled","Show bots",p.bots,false,cx,|this,on,cx|this.update(cx,|p|p.bots=on))]),
-            self.row(Some("rail-bots-pinned"),false,"Pin bots to the icon rail",Some("When the project rail is collapsed to icons, show each Bot at the top of the rail, above a divider, instead of inside the project picker.".into()),vec![self.toggle("rail-bots-pinned","Pin bots to the icon rail",p.rail_bots_pinned,!p.bots,cx,|this,on,cx|this.update(cx,|p|p.rail_bots_pinned=on))])];
+            self.row(Some("rail-bots-pinned"),false,"Pin bots to the icon rail",Some("When the project rail is collapsed to icons, show each Bot at the top of the rail, above a divider, instead of inside the project picker.".into()),vec![self.toggle("rail-bots-pinned","Pin bots to the icon rail",p.rail_bots_pinned,!p.bots,cx,|this,on,cx|this.update(cx,|p|p.rail_bots_pinned=on))]),
+            self.row(Some("bot-channels"),false,div().flex().items_center().gap_2().child("Channels").child(div().px_1p5().rounded_sm().border_1().border_color(content(0.1)).text_size(px(11.)).text_color(content(0.5)).child("Experimental")),Some("Rooms where you and your bots talk together. Each opens on its own, without tabs.".into()),vec![self.toggle("bot-channels","Channels",p.channels,!p.bots,cx,|this,on,cx|this.update(cx,|p|p.channels=on))])];
         let mut roster = Vec::new();
         for (ix, bot) in self.ctx.bots.clone().into_iter().enumerate() {
             let show_id = bot.id.clone();

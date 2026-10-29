@@ -1603,6 +1603,8 @@ fn setup(cx: &mut TestAppContext) -> Setup {
     let manager = window
         .update(cx, |shell, _, cx| {
             shell.workspace.right_panel_open = true;
+            // These tests were written for the sidebar at the right edge.
+            shell.workspace.preferences.sidebar_right = true;
             cx.notify();
             shell.bot_manager()
         })
@@ -2910,17 +2912,22 @@ fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
     let panel = visual.debug_bounds("right-panel-frame").unwrap();
     let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
     let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-    let title_tabs = visual.debug_bounds("title-tab-strip").unwrap();
-    assert!((tabs.top() - title_tabs.top()).abs() <= px(0.5));
+    assert!(
+        visual.debug_bounds("title-tab-strip").is_none(),
+        "a Bot is a sidebar page, without session tabs"
+    );
+    assert_eq!(tabs.top(), panel.top());
     assert_eq!(tabs.size.height, px(TITLE_BAR_HEIGHT));
     assert_eq!(tabs.left(), panel.left() + px(6.));
     assert!(
         visual.debug_bounds("bot-activity").is_none(),
         "work is disclosed in chat"
     );
-    let search = visual.debug_bounds("titlebar-file-search").unwrap();
-    assert_eq!(search.left() - tabs.right(), px(6.));
-    assert_eq!(toggle.left() - search.right(), px(4.));
+    assert!(
+        visual.debug_bounds("titlebar-file-search").is_none(),
+        "a Bot has no project files to search"
+    );
+    assert!(toggle.left() >= tabs.right());
     assert!(tabs.bottom() <= panel.top() + px(TITLE_BAR_HEIGHT));
     assert_eq!(
         visual.debug_bounds("bot-session-list").unwrap().top(),
@@ -2934,10 +2941,9 @@ fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
         visual.debug_bounds("sidebar-frame").is_none(),
         "a Bot owns the main surface beside the project rail"
     );
-    assert!(title_tabs.right() <= tabs.left());
-    let selector = Box::leak(format!("title-tab-{session}").into_boxed_str());
-    let tab = visual.debug_bounds(selector).unwrap();
-    visual.simulate_click(tab.center(), Default::default());
+    // The project row returns to its tabs.
+    let project = visual.debug_bounds("classic-project-0").unwrap();
+    visual.simulate_click(project.center(), Default::default());
     visual.run_until_parked();
     let rail = visual.debug_bounds("classic-project-rail").unwrap();
     let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
@@ -3056,10 +3062,9 @@ fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut T
         assert!((divider.center().x - panel.left() - px(0.5)).abs() <= px(0.5));
         assert_eq!(panel.size.width, px(width));
         let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
-        let search = visual.debug_bounds("titlebar-file-search").unwrap();
         let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
         assert!(
-            tabs.right() <= search.left() && search.right() < toggle.left(),
+            tabs.right() < toggle.left(),
             "Bot header actions stay available at the minimum details width"
         );
     }
@@ -3154,9 +3159,9 @@ fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original
         visual,
         |manager, _| matches!(manager.route,Some(Route::Session(id)) if id==session)
     ));
-    let selector = Box::leak(format!("title-tab-{session}").into_boxed_str());
-    let open = visual.debug_bounds(selector).unwrap();
-    visual.simulate_click(open.center(), Default::default());
+    // The project row returns to its tabs.
+    let project = visual.debug_bounds("classic-project-0").unwrap();
+    visual.simulate_click(project.center(), Default::default());
     visual.run_until_parked();
     crate::clock::settle_animations(s.window, visual);
     let rail = visual.debug_bounds("classic-project-rail").unwrap();

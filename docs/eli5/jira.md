@@ -1,6 +1,6 @@
 # Jira Cloud connector (ELI5)
 
-Instead of constantly switching between your web browser and your code editor to read Jira tickets, Vorkspace can bring your **Jira Cloud** tickets right into its **Jira tab**.
+Instead of constantly switching between your web browser and your code editor to read Jira tickets, Vorkspace can bring your **Jira Cloud** tickets right into its **Jira page**.
 
 For the full setup guide, see [Jira Cloud connector](../jira.md).
 

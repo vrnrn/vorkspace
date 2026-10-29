@@ -34,6 +34,7 @@ mod history;
 mod image_lightbox;
 mod inbox;
 mod input;
+mod liquid;
 mod markdown;
 mod markdown_model;
 #[cfg(test)]

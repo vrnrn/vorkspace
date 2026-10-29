@@ -137,19 +137,7 @@ impl UsageFooter {
                     .font_weight(FontWeight::MEDIUM)
                     .child(row.title.clone()),
             )
-            .children(
-                row.credit
-                    .as_ref()
-                    .and_then(|c| c.description.as_ref())
-                    .map(|description| {
-                        div()
-                            .mt(px(2.))
-                            .text_size(px(10.))
-                            .line_height(px(16.))
-                            .text_color(content(0.45))
-                            .child(description.clone())
-                    }),
-            )
+            // The provider's promotional description is left out.
             .child(
                 div()
                     .mt(px(6.))

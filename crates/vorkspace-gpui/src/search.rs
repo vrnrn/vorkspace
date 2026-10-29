@@ -34,7 +34,6 @@ pub(crate) struct Sources {
     pub projects: Vec<String>,
     pub recent: Vec<String>,
     pub logos: HashMap<String, String>,
-    pub classic: bool,
 }
 pub(crate) struct SearchView {
     pub(crate) input: Entity<Input>,
@@ -45,7 +44,6 @@ pub(crate) struct SearchView {
     projects: Vec<String>,
     recent: Vec<String>,
     logos: HashMap<String, String>,
-    classic: bool,
     files: Vec<vorkspace_core::files::ProjectFile>,
     scope: Scope,
     query: String,
@@ -117,7 +115,6 @@ impl SearchView {
             projects: sources.projects,
             recent: sources.recent,
             logos: sources.logos,
-            classic: sources.classic,
             files: vec![],
             scope: Scope::All,
             query: String::new(),
@@ -569,7 +566,7 @@ impl Render for SearchView {
             })
             .collect();
         let loading = self.sessions_loading || self.files_loading;
-        let stroke = content(if self.classic { 0.07 } else { 0.04 });
+        let stroke = content(0.07);
         let selection = if content(1.).l < 0.5 { 0.06 } else { 0.10 };
         div()
             .id("app-search")
@@ -604,16 +601,26 @@ impl Render for SearchView {
                 div()
                     .id("app-search-header")
                     .debug_selector(|| "app-search-header".into())
-                    .h(px(40.))
+                    .h(px(36.))
+                    .px(px(8.))
                     .flex_shrink_0()
-                    .border_b_1()
-                    .border_color(stroke)
-                    .px_3()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .child(icon("search", 14.).text_color(content(0.5)))
-                    .child(div().flex_1().min_w_0().child(self.input.clone()))
+                    .gap(px(1.))
+                    .border_b_1()
+                    .border_color(stroke)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(28.))
+                            .px(px(6.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(icon("search", 12.).text_color(content(0.5)))
+                            .child(div().flex_1().min_w_0().child(self.input.clone())),
+                    )
                     .when(loading, |d| {
                         d.child(crate::right_panel::spinner(
                             "app-search-loading",
@@ -631,7 +638,7 @@ impl Render for SearchView {
                     .flex()
                     .items_center()
                     .gap(px(1.))
-                    .px_3()
+                    .px(px(8.))
                     .border_b_1()
                     .border_color(stroke)
                     .children(
@@ -669,7 +676,7 @@ impl Render for SearchView {
                     .aria_label("Search results")
                     .flex_1()
                     .min_h_0()
-                    .p_1p5()
+                    .p(px(6.))
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .when(self.truncated.0 || self.truncated.1, |d| {
@@ -686,9 +693,9 @@ impl Render for SearchView {
                     .when(self.hits.is_empty() && !loading, |d| {
                         d.child(
                             div()
-                                .px_2()
-                                .py_1p5()
+                                .p(px(12.))
                                 .text_size(px(12.))
+                                .line_height(px(19.))
                                 .text_color(content(0.5))
                                 .child(self.error.clone().unwrap_or_else(|| "No results".into())),
                         )
@@ -824,7 +831,7 @@ mod tests {
                     .unwrap()
                     .size
                     .height,
-                px(40.)
+                px(36.)
             );
             assert_eq!(
                 visual

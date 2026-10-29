@@ -25,6 +25,7 @@ mod search;
 #[cfg(test)]
 mod tests;
 mod work;
+
 use crate::{
     conversation::{BotSubmitted, Conversation, SessionChanged},
     input::{self, Input},
@@ -501,6 +502,9 @@ impl Bots {
             self.creation = None;
             self.picker = None;
         }
+        if !self.prefs.channels {
+            self.close_classic_channels(cx);
+        }
         cx.notify();
     }
     pub(crate) fn overview_chrome(&self) -> OverviewChrome {
@@ -584,7 +588,16 @@ impl Bots {
             }
         }
     }
+    /// Peer senders resolve to avatars by name against the current roster.
+    fn sync_peer_looks(&self, cx: &mut Context<Self>) {
+        let looks = crate::transcript::peer_looks(&self.roster.bots);
+        for view in self.chats.values() {
+            let transcript = view.read(cx).transcript.clone();
+            transcript.update(cx, |t, cx| t.set_peer_looks(looks.clone(), cx));
+        }
+    }
     fn changed(&mut self, cx: &mut Context<Self>) {
+        self.sync_peer_looks(cx);
         cx.emit(Changed);
         cx.notify();
     }
@@ -888,6 +901,7 @@ impl Bots {
                     },
                 ));
                 this.chats.insert(id.clone(), view);
+                this.sync_peer_looks(cx);
                 if let Some(handle) = this.parent_window {
                     let owner = cx.weak_entity();
                     let id = id.clone();
@@ -1418,7 +1432,12 @@ impl Bots {
         })
         .detach();
     }
-    pub(crate) fn rail(&mut self, project: Option<String>, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn rail(
+        &mut self,
+        project: Option<String>,
+        liquid: &crate::liquid::Liquid,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         if !self.prefs.bots {
             return div().into_any_element();
         }
@@ -1437,9 +1456,11 @@ impl Bots {
         let add_project = project.clone();
         let heading = section_label("Bots").when(has, |d| {
             d.child(
-                icon_button("new-bot", "New bot", "plus")
+                icon_button_hover("new-bot", "New bot", "plus", 0.)
                     .debug_selector(|| "sidebar-bot-button".into())
                     .size(px(20.))
+                    .relative()
+                    .child(liquid.row("add:bot", false))
                     .mr(px(-2.))
                     .on_click(cx.listener(move |this, _, w, cx| {
                         this.create(add_project.clone().into_iter().collect(), w, cx)
@@ -1465,7 +1486,9 @@ impl Bots {
                         .gap_2()
                         .text_size(px(14.))
                         .text_color(content(0.5))
-                        .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                        .relative()
+                        .child(liquid.row("new-bot", false))
+                        .hover(|s| s.text_color(content(1.)))
                         .child(icon("plus", 16.))
                         .child("New bot")
                         .on_click(cx.listener(move |this, _, w, cx| {
@@ -1529,8 +1552,8 @@ impl Bots {
                     .items_center()
                     .gap_2()
                     .opacity(if active { 1. } else { 0.65 })
-                    .when(active, |d| d.bg(content(0.1)))
-                    .hover(|s| s.bg(content(0.08)).opacity(1.))
+                    .child(liquid.row(format!("bot:{id}"), active))
+                    .hover(|s| s.opacity(1.))
                     .child(avatar::bot_avatar(&bot, state, 16., false))
                     .child(
                         div()

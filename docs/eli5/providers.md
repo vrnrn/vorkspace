@@ -27,7 +27,7 @@ Some AI tools list dozens of different models. In **Settings → Providers**, yo
 
 ## 3. Switching Accounts When You Hit a Usage Limit
 
-Your connected accounts’ usage appears together just above Settings in the sidebar. Click an account to see its limits and refresh them. The number on each row shows the limit closest to running out. The sidebar’s three-dot menu has a **Subscriptions** switch to hide or show this section; hiding it keeps your accounts and chats connected.
+Your connected accounts’ usage appears together just above Settings in the sidebar. Each account shows its name and the limit closest to running out. Click one to refresh it and see its limits. The sidebar’s three-dot menu has a **Subscriptions** switch to hide or show this section; hiding it keeps your accounts and chats connected.
 
 If you have more than one **Claude Code** or **Codex** account (for example, a personal account and a work account), you can add both in **Settings → Providers**:
 - If one account runs out of messages in the middle of a task, a **Switch account** / **Choose another account** button appears right in the chat banner.

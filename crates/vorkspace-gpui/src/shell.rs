@@ -595,6 +595,12 @@ pub(crate) struct Shell {
     background_dialog: Option<project_settings::OpenBackground>,
     backgrounds: HashMap<i64, Entity<crate::project_background::ProjectBackground>>,
     background_card: AnchorSlot,
+    liquid: crate::liquid::Liquid,
+    /// The title bar's tabs, rising from the line beneath them.
+    tab_liquid: crate::liquid::Liquid,
+    /// Each project's working grid in the rail, by project path.
+    project_marks: HashMap<String, Entity<crate::session_mark::ProjectMark>>,
+
     project_anchor: AnchorSlot,
     sidebar_options_anchor: AnchorSlot,
     history: VisitHistory,
@@ -733,10 +739,7 @@ impl Shell {
             }
         });
         let metadata: Vec<_> = summaries.iter().map(|s| (s.id, s.cwd.clone())).collect();
-        let mut workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
-        if let Ok(store) = locked(&store) {
-            workspace.normalize_connector_tabs(&vorkspace_core::inbox::ViewState::load(&store));
-        }
+        let workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
         vorkspace_core::cli::initialize(&workspace.preferences.binary_paths);
         let latest_state = Arc::new(Mutex::new(serde_json::to_string(&workspace).unwrap()));
         let quit_state = latest_state.clone();
@@ -928,6 +931,10 @@ impl Shell {
             background_dialog: None,
             backgrounds: HashMap::new(),
             background_card: AnchorSlot::default(),
+            liquid: Default::default(),
+            tab_liquid: crate::liquid::Liquid::below(crate::right_panel::stroke()),
+            project_marks: HashMap::new(),
+
             project_anchor: AnchorSlot::default(),
             sidebar_options_anchor: AnchorSlot::default(),
             history: VisitHistory::default(),
@@ -1313,11 +1320,20 @@ impl Shell {
             state
         };
         let provider = session.summary.provider.clone();
+        let cwd = session.summary.cwd.clone();
+        // A working session's grid takes its project's colour.
+        let color = self.appearance(&cwd).color(&cwd);
         self.live_agents.update(cx, |activity, _| {
             activity.record(id, busy, self.unseen_finished.contains(&id));
         });
-        self.session_marks[&id].update(cx, |mark, cx| mark.set(&provider, state, cx));
-        self.tab_marks[&id].update(cx, |mark, cx| mark.set(&provider, tab_state, cx));
+        self.session_marks[&id].update(cx, |mark, cx| {
+            mark.set_color(color, cx);
+            mark.set(&provider, state, cx)
+        });
+        self.tab_marks[&id].update(cx, |mark, cx| {
+            mark.set_color(color, cx);
+            mark.set(&provider, tab_state, cx)
+        });
     }
     fn toggle_archive(&mut self, id: i64, cx: &mut Context<Self>) {
         if !self.archiving.insert(id) {
@@ -4859,26 +4875,19 @@ impl Shell {
                     self.navigation(window, cx).into_any_element()
                 })
                 .child(header)
-                .children(self.vox.clone())
                 .into_any_element();
         }
-        let tabs_width = px((self.tabs_width(window, cx)
-            - if self.workspace.preferences.vox_enabled {
-                48.
-            } else {
-                0.
-            })
-        .max(0.));
+        // Vox has no title bar control for now.
+        let tabs_width = px(self.tabs_width(window, cx).max(0.));
         let classic = self.workspace.classic_layout;
         div()
             .h(px(TITLE_BAR_HEIGHT))
             .flex_shrink_0()
             .flex()
             .items_center()
-            // Classic: the strip heads the workspace column, above a rule.
-            .when(classic, |d| {
-                d.border_b_1().border_color(crate::right_panel::stroke())
-            })
+            // Classic: the strip heads the workspace column, above a rule. The tab
+            // strip draws its own stretch of the rule, around the active tab's
+            // pill (crate::liquid); the lead and trail draw theirs.
             .child(if classic {
                 // Reserve the navigation's overhang without a second drag
                 // handler underneath its buttons (classic_body owns gestures).
@@ -4886,28 +4895,44 @@ impl Shell {
                     .h_full()
                     .w(px(self.strip_lead(window)))
                     .flex_shrink_0()
+                    .border_b_1()
+                    .border_color(crate::right_panel::stroke())
                     .into_any_element()
             } else {
                 self.navigation(window, cx).into_any_element()
             })
-            .child(
-                self.tabs_frame.clone().cached(
-                    StyleRefinement::default()
-                        .w(tabs_width)
-                        .h(px(TITLE_BAR_HEIGHT)),
-                ),
-            )
+            .child(if self.tabless_page(cx) {
+                titlebar_drag_area()
+                    .w(tabs_width)
+                    .h_full()
+                    .flex_shrink_0()
+                    .when(classic, |d| {
+                        d.border_b_1().border_color(crate::right_panel::stroke())
+                    })
+                    .into_any_element()
+            } else {
+                self.tabs_frame
+                    .clone()
+                    .cached(
+                        StyleRefinement::default()
+                            .w(tabs_width)
+                            .h(px(TITLE_BAR_HEIGHT)),
+                    )
+                    .into_any_element()
+            })
             .child(if classic {
                 // The toggle holds the window's corner (classic_body); the
                 // strip keeps only the part an open panel leaves uncovered.
                 titlebar_drag_area()
                     .w(px(self.strip_trail(cx)))
+                    .h_full()
                     .flex_shrink_0()
+                    .border_b_1()
+                    .border_color(crate::right_panel::stroke())
                     .into_any_element()
             } else {
                 self.panel_toggle(window, cx)
             })
-            .children(self.vox.clone())
             .into_any()
     }
 
@@ -4981,7 +5006,14 @@ impl Shell {
                                 .when(!bot, |d| d.child(titlebar_drag_area().flex_1().min_w_0()))
                         })
                         .children(self.project_diff_stat(cx))
-                        .child(self.file_search_button(cx).mx(px(CORNER_CONTROL_GAP)))
+                        // A Bot has no project files to search; its toggle keeps the corner.
+                        .map(|d| {
+                            if bot {
+                                d.child(div().flex_1())
+                            } else {
+                                d.child(self.file_search_button(cx).mx(px(CORNER_CONTROL_GAP)))
+                            }
+                        })
                         .child(
                             div()
                                 .id("toggle-right-panel")
@@ -5724,7 +5756,7 @@ impl Shell {
                     self.invalidate_chrome(cx);
                     cx.notify();
                 } else if action == "archive" {
-                    self.archive_project(&path, cx);
+                    self.archive_project(&path, window, cx);
                 } else if action == "delete" {
                     self.confirm_delete_project(path, window, cx);
                 } else if action == "reveal" {
@@ -5759,55 +5791,6 @@ impl Shell {
             self.invalidate_chrome(cx);
         }
         cx.notify();
-    }
-    fn archive_project(&mut self, path: &str, cx: &mut Context<Self>) {
-        let key = vorkspace_core::files::path_key(path);
-        let same = |p: &str| vorkspace_core::files::path_key(p) == key;
-        let current = vorkspace_core::files::path_key(&self.workspace.project);
-        let open = self.workspace.open_sessions().iter().any(|id| {
-            let id = self.workspace.session_for_pane(*id);
-            // Tabs without a verified current-project owner may belong to a
-            // worktree or an unsaved pane in the project being archived.
-            let owner = self
-                .workspace
-                .tab_workspaces
-                .get(&id)
-                .map(String::as_str)
-                .or_else(|| self.session_summaries.get(&id).map(|s| s.cwd.as_str()));
-            owner.is_none_or(|p| vorkspace_core::files::path_key(p) != current)
-        });
-        let busy = self
-            .order
-            .iter()
-            .any(|id| self.session_metadata(*id, cx).busy);
-        // Terminal title tabs and Bots can have independent worktree scopes.
-        // Refuse conservatively until those owners have released their work.
-        let terminals = !self.terminal_tabs.is_empty()
-            || self.terminals.values().any(|v| !v.is_empty())
-            || self
-                .workspace
-                .docks
-                .values()
-                .any(|dock| !dock.terminals.is_empty())
-            || self
-                .workspace
-                .title_order
-                .iter()
-                .any(|tab| matches!(tab, TitleTab::Terminal { .. }));
-        let bots = self
-            .workspace
-            .title_order
-            .iter()
-            .any(|t| matches!(t, TitleTab::Bot { .. }));
-        if same(&self.workspace.project) || open || busy || terminals || bots {
-            self.error = Some("To archive this project, switch to another project and close other projects’ open panes and finish running conversations. Close terminal and Bot tabs first.".into());
-            cx.notify();
-            return;
-        }
-        let mut next = self.workspace.clone();
-        next.projects.retain(|p| !same(p));
-        next.project_archive.insert(key, true);
-        self.commit_project_archive(next, cx);
     }
     fn close_preview(&mut self, cx: &mut Context<Self>) {
         self.preview_open = None;
@@ -7073,17 +7056,17 @@ impl Shell {
     /// The tab strip's width: between the navigation and TitleBar.tsx's right
     /// panel toggle, `pl-1.5 pr-3` clear of the edge.
     fn tabs_width(&self, window: &Window, cx: &App) -> f32 {
+        let sidebar = self.workspace.right_panel_width * self.sidebar_fraction;
+        let left = !self.workspace.preferences.sidebar_right;
         let trailing = if self.workspace.classic_layout {
-            self.workspace.right_panel_width * self.sidebar_fraction
-                + self.right_drawn
-                + self.strip_trail(cx)
+            (if left { 0. } else { sidebar }) + self.right_drawn + self.strip_trail(cx)
         } else {
             self.toggle_room(cx)
         };
         // Tabs start beside the project rail; both right-hand sidebars consume
         // trailing space without moving the tab strip's leading edge.
         let lead = if self.workspace.classic_layout {
-            self.classic_rail_width() + self.strip_lead(window)
+            self.classic_rail_width() + if left { sidebar } else { 0. } + self.strip_lead(window)
         } else {
             self.navigation_width(window)
         };
@@ -7297,6 +7280,8 @@ impl Shell {
                     .child(
                         title_tab_plate(active, hovered)
                             .id(("tab-plate", id as usize))
+                            .relative()
+                            .child(self.tab_liquid.row(format!("tab:{id}"), active))
                             .w_full()
                             .min_w_0()
                             // A narrow tab keeps its mark; the close button
@@ -7310,7 +7295,6 @@ impl Shell {
                                 d.px(px(((tab_width(&TitleTab::Session(id)) - 14.) / 2.).max(0.)))
                             })
                             .gap(px(6.))
-                            .group_hover("title-tab", |s| s.bg(title_tab_fill(active, true)))
                             .child(self.pane_headline(
                                 &copy,
                                 (leaving, dir, progress),
@@ -7328,7 +7312,7 @@ impl Shell {
                                 .aria_label(format!("Close tab {}", copy.headline))
                                 .absolute()
                                 .right_1()
-                                .top(px(10.))
+                                .top(px(10. + TAB_LABEL_DROP))
                                 .size(px(20.))
                                 .rounded_sm()
                                 .flex()
@@ -7576,6 +7560,8 @@ impl Shell {
             .flex()
             .items_center()
             .overflow_hidden()
+            // The line beneath the tabs, and their pills rising out of it.
+            .child(self.tab_liquid.surface(false, false))
             .child(
                 div()
                     .id("session-tabs")
@@ -7596,25 +7582,30 @@ impl Shell {
                             .debug_selector(|| "new-tab".into())
                             .group("new-tab")
                             .role(Role::Button)
-                            .aria_label("New session tab")
+                            .aria_label("New session tab; Command-click for a terminal")
                             .cursor(CursorStyle::Arrow)
                             .size(px(TAB_PLATE_HEIGHT))
                             .flex_shrink_0()
                             .ml(px(new_tab_lead))
                             .rounded_md()
-                            .bg(content(0.04))
+                            .relative()
+                            .child(self.tab_liquid.row("new-tab", false))
                             .opacity(0.65)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .hover(|s| s.opacity(1.).bg(content(0.07)))
+                            .hover(|s| s.opacity(1.))
                             .child(
                                 icon("plus", 14.)
                                     .group_hover("new-tab", |s| s.text_color(content(1.))),
                             )
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.create(this.default_kind(), cx)),
-                            ),
+                            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                                if event.modifiers().platform {
+                                    this.open_terminal_tab(window, cx);
+                                } else {
+                                    this.create(this.default_kind(), cx);
+                                }
+                            })),
                     )
                     .child(titlebar_drag_area().flex_1().min_w_0()),
             )
@@ -8321,7 +8312,13 @@ impl Render for Shell {
                 }
                 if let Some((start, width)) = this.resize {
                     if event.pressed_button == Some(MouseButton::Left) {
-                        let width = width - (event.position.x - start).as_f32();
+                        let delta = (event.position.x - start).as_f32();
+                        // Its separator faces the pane, on either side.
+                        let width = if !this.workspace.preferences.sidebar_right {
+                            width + delta
+                        } else {
+                            width - delta
+                        };
                         this.drag_resize(ResizeTarget::Sidebar, width, cx);
                     } else {
                         this.release_resizes(cx);
@@ -9809,40 +9806,6 @@ mod tests {
         }
     }
     #[gpui::test]
-    fn bots_and_session_title_tabs_share_width_spacing_and_scroll_slots(cx: &mut TestAppContext) {
-        let (window, a, b) = same_project_window(cx);
-        crate::clock::use_test_clock(cx);
-        let bot = window
-            .update(cx, |shell, w, cx| {
-                let manager = shell.bot_manager();
-                manager.update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
-                manager.read(cx).active.clone().unwrap()
-            })
-            .unwrap();
-        let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        cx.run_until_parked();
-        let bot = cx
-            .debug_bounds(Box::leak(format!("bot-title-tab-{bot}").into_boxed_str()))
-            .unwrap();
-        let first = cx
-            .debug_bounds(Box::leak(format!("title-tab-{a}").into_boxed_str()))
-            .unwrap();
-        let second = cx
-            .debug_bounds(Box::leak(format!("title-tab-{b}").into_boxed_str()))
-            .unwrap();
-        assert_eq!(bot.left() - second.right(), px(2.));
-        assert_eq!(second.left() - first.right(), px(2.));
-        assert_eq!(bot.size, first.size);
-        window
-            .update(cx, |shell, _, cx| {
-                assert_eq!(shell.visible_tabs(cx).len(), 3);
-                assert_eq!(shell.tab_scroll.bounds_for_item(2), Some(bot));
-                assert_eq!(shell.tab_scroll.bounds_for_item(0), Some(first));
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
     fn crowded_tabs_fit_and_hold_the_new_tab_button_still_while_one_opens(cx: &mut TestAppContext) {
         let (window, _, _) = window(cx);
         let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
@@ -9869,11 +9832,13 @@ mod tests {
         settle(cx);
         settle(cx);
         let strip = cx.debug_bounds("title-tab-strip").unwrap();
+        // Keep the strip's 6px gap before the trailing controls, or before
+        // the open sidebar, whose header holds them instead.
         let first_control = cx
-            .debug_bounds("project-diff-stat")
+            .debug_bounds("sidebar-frame")
+            .or_else(|| cx.debug_bounds("project-diff-stat"))
             .or_else(|| cx.debug_bounds("titlebar-file-search"))
             .unwrap();
-        // Keep the strip's 6px gap before the trailing controls.
         assert_eq!(strip.right(), first_control.left() - px(6.));
         let settled = cx.debug_bounds("new-tab").unwrap();
         assert!(settled.right() <= strip.right(), "every tab fits");
@@ -11360,6 +11325,8 @@ mod tests {
         let ids = (a.id, b.id);
         let mut state = Workspace::default();
         state.preferences.ui_scale = scale;
+        // Most layout tests were written for the sidebar at the right edge.
+        state.preferences.sidebar_right = true;
         assert!(state.classic_layout);
         state.add_project("/work/another-project");
         state.add_project("/work/vorkspace");

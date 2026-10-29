@@ -69,8 +69,8 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
         assert_eq!(header.size.height, px(header::HEIGHT));
         assert_eq!(face.center().x, header.center().x);
         assert_eq!(name.center().x, header.center().x);
-        assert!(header.top() >= px(TITLE_BAR_HEIGHT));
-        assert_eq!(face.top(), transcript.top() + px(8.));
+
+        assert_eq!(face.top(), transcript.top() + px(header::TOP));
         assert_eq!(face.size, size(px(64.), px(64.)));
         assert!(face.bottom() <= name.top() && name.bottom() <= header.bottom());
         assert_eq!(header.top(), transcript.top());
@@ -187,7 +187,7 @@ fn bot_header_passes_selection_clicks_and_scroll_to_overlapped_chat(cx: &mut Tes
                                     div()
                                         .id("header-underlay-control")
                                         .absolute()
-                                        .top(px(74.))
+                                        .top(px(header::TOP + 66.))
                                         .w_full()
                                         .h(px(22.))
                                         .on_click(cx.listener(|this, _, _, _| this.clicks += 1)),

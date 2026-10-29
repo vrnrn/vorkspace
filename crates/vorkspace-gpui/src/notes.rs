@@ -1041,11 +1041,11 @@ impl gpui::Render for Notes {
             .cloned()
             .collect();
         let list = div().relative().w(px(self.list_width)).h_full().flex_shrink_0().min_h_0().flex().flex_col().border_r_1().border_color(content(0.07))
-            .child(div().h(px(36.)).flex_shrink_0().px_2().flex().items_center().gap_1().border_b_1().border_color(content(0.07)).child(icon("search", 12.))
-                .child(div().flex_1().min_w_0().child(self.query.clone()))
+            .child(div().h(px(36.)).flex_shrink_0().px(px(8.)).flex().items_center().gap(px(1.)).border_b_1().border_color(content(0.07))
+                .child(div().flex_1().min_w_0().h(px(28.)).px(px(6.)).flex().items_center().gap(px(6.)).child(icon("search", 12.)).child(self.query.clone()))
                 .child(icon_button("create-note", "New note", "plus").on_click(cx.listener(|this, _, window, cx| this.create(window, cx)))))
             .child(div().id("notes-list").role(Role::ListBox).aria_label("Saved notes").flex_1().min_h_0().overflow_y_scroll().p(px(6.))
-                .when(visible.is_empty(), |d| d.child(div().px_1p5().py_2().text_size(px(12.)).text_color(content(0.5)).child(if self.loading { "Loading notes…" } else if !query.trim().is_empty() { "No matching notes" } else { "No notes yet. Save a turn from the transcript, or create one here." })))
+                .when(visible.is_empty(), |d| d.child(div().p(px(12.)).text_size(px(12.)).line_height(px(19.)).text_color(content(0.5)).child(if self.loading { "Loading notes…" } else if !query.trim().is_empty() { "No matching notes" } else { "No notes yet. Save a turn from the transcript, or create one here." })))
                 .children(visible.iter().enumerate().map(|(ix, note)| {
                     let id = note.id.clone();
                     let active = self.selected.as_ref() == Some(&id);

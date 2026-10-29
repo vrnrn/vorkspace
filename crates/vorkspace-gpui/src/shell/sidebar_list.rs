@@ -1,5 +1,6 @@
 //! Only construct and lay out sidebar cards near the viewport.
 use super::*;
+
 use gpui::{ListAlignment, ListState, list};
 use std::cell::{Cell, RefCell};
 use vorkspace_core::session_groups::Entry;
@@ -382,7 +383,6 @@ impl Shell {
                     self.workspace.preferences.notes && self.workspace.sidebar_notes_visible
                 }
                 SidebarNavigation::Automations => self.workspace.sidebar_automations_visible,
-                SidebarNavigation::Terminal => self.workspace.sidebar_terminal_visible,
             })
             .collect()
     }
@@ -399,7 +399,6 @@ impl Shell {
                         .contains(provider.id()),
                     SidebarNavigation::Notes => self.workspace.sidebar_notes_visible,
                     SidebarNavigation::Automations => self.workspace.sidebar_automations_visible,
-                    SidebarNavigation::Terminal => self.workspace.sidebar_terminal_visible,
                 };
                 MenuAction::new(format!("sidebar-{}", item.id()), item.label())
                     .icon(item.icon())
@@ -491,7 +490,6 @@ impl Shell {
                     &mut self.workspace.sidebar_notes_visible
                 }
                 "sidebar-automations" => &mut self.workspace.sidebar_automations_visible,
-                "sidebar-terminal" => &mut self.workspace.sidebar_terminal_visible,
                 "sidebar-bots" => &mut self.workspace.preferences.bots,
                 "sidebar-subscriptions" => &mut self.workspace.sidebar_subscriptions_visible,
                 _ => return,
@@ -529,28 +527,19 @@ impl Shell {
                     .group("rail-search")
                     .w_full()
                     .h(px(32.))
-                    .mb_1()
-                    .px_1p5()
+                    .px_2()
                     .rounded_md()
-                    .border_1()
-                    .border_color(content(0.08))
-                    // RailSearch's Tailwind shadow-sm, including
-                    // its tighter second layer below the border.
-                    // The vendored shader keeps it outside the
-                    // box, as CSS does.
-                    .shadow(vec![
-                        BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into()).blur_radius(px(3.)),
-                        BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into())
-                            .blur_radius(px(2.))
-                            .spread_radius(px(-1.)),
-                    ])
-                    .text_color(content(if self.sidebar_hover == Some("Search") {
-                        1.
-                    } else {
-                        0.5
-                    }))
+                    .relative()
+                    .child(self.liquid.row("search", self.app_search.is_some()))
+                    .text_color(content(
+                        if self.app_search.is_some() || self.sidebar_hover == Some("Search") {
+                            1.
+                        } else {
+                            0.5
+                        },
+                    ))
                     .font_weight(FontWeight::MEDIUM)
-                    .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                    .hover(|s| s.text_color(content(1.)))
                     .on_hover(cx.listener(|this, hovered, _, cx| {
                         this.sidebar_hover = if *hovered { Some("Search") } else { None };
                         this.sidebar_frame.update(cx, |_, cx| cx.notify());
@@ -566,15 +555,7 @@ impl Shell {
                             .text_color(content(0.35))
                             .group_hover("rail-search", |s| s.text_color(content(0.7))),
                     )
-                    .child(div().flex_1().min_w_0().h(px(20.)).child("Search"))
-                    .child(
-                        // The shortcut span sits outside the label's `font-medium`.
-                        div()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::NORMAL)
-                            .text_color(content(0.4))
-                            .child("⌘K"),
-                    ),
+                    .child(div().flex_1().min_w_0().h(px(20.)).child("Search")),
             )
             .children(
                 self.visible_sidebar_navigation(cx)
@@ -588,11 +569,7 @@ impl Shell {
                         let unread =
                             connector.is_some_and(|provider| self.connector_unread(provider, cx));
                         div()
-                            .id(if label == "Terminal" {
-                                "terminal"
-                            } else {
-                                label
-                            })
+                            .id(label)
                             .debug_selector(move || format!("sidebar-navigation-{label}"))
                             .role(Role::Button)
                             .aria_label(if unread {
@@ -616,8 +593,9 @@ impl Shell {
                             } else {
                                 0.5
                             }))
-                            .when(selected, |d| d.bg(content(0.1)))
-                            .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                            .relative()
+                            .child(self.liquid.row(label, selected))
+                            .hover(|s| s.text_color(content(1.)))
                             .child(icon(glyph, 16.).text_color(content(if selected {
                                 0.7
                             } else {
@@ -633,7 +611,6 @@ impl Shell {
                                 "Jira" => this.open_connector(Connector::Jira, window, cx),
                                 "Notes" => this.open_notes(window, cx),
                                 "Automations" => this.open_automations(window, cx),
-                                "Terminal" => this.open_terminal_tab(window, cx),
                                 _ => (),
                             }))
                             .on_hover(cx.listener(move |this, hovered, _, cx| {
@@ -690,7 +667,7 @@ mod tests {
         let sidebar = visual.debug_bounds("classic-project-rail").unwrap();
         let search = visual.debug_bounds("sidebar-search-field").unwrap();
         assert_eq!(search.left() - sidebar.left(), px(8.));
-        assert_eq!(sidebar.right() - search.right(), px(9.));
+        assert_eq!(sidebar.right() - search.right(), px(8.));
     }
 
     #[gpui::test]
@@ -723,7 +700,8 @@ mod tests {
         visual.run_until_parked();
         let selector: &'static str = Box::leak(format!("sidebar-session-{card}").into_boxed_str());
         assert_eq!(visual.debug_bounds(selector).unwrap().size.height, px(32.));
-        assert!(visual.debug_bounds("sidebar-activity-card").is_some());
+        let tree: &'static str = Box::leak(format!("project-session-{b}").into_boxed_str());
+        assert!(visual.debug_bounds(tree).is_some());
         window
             .update(visual, |shell, _, cx| {
                 let loaded = shell.sessions.len();
@@ -955,14 +933,7 @@ mod tests {
             .update(visual, |shell, w, cx| {
                 assert_eq!(
                     shell.workspace.sidebar_navigation_order,
-                    [
-                        "automations",
-                        "github",
-                        "gitlab",
-                        "jira",
-                        "notes",
-                        "terminal"
-                    ]
+                    ["automations", "github", "gitlab", "jira", "notes"]
                 );
                 assert!(shell.workspace.sidebar_automations_visible);
                 assert!(shell.workspace.sidebar_hidden_connectors.is_empty());
@@ -996,7 +967,8 @@ mod tests {
         visual.simulate_click(toggle.center(), Default::default());
         visual.run_until_parked();
         assert!(visual.debug_bounds("sidebar-navigation-GitHub").is_none());
-        assert!(visual.debug_bounds("app-title-tab-GitHub").is_some());
+        // Connectors are sidebar pages, not tabs.
+        assert!(visual.debug_bounds("app-title-tab-GitHub").is_none());
         window
             .update(visual, |shell, _, cx| {
                 assert!(shell.enabled_connectors(cx).contains(&Connector::Github));
@@ -1065,14 +1037,7 @@ mod tests {
                     );
                     assert_eq!(
                         shell.workspace.sidebar_navigation_order,
-                        [
-                            "automations",
-                            "github",
-                            "gitlab",
-                            "jira",
-                            "notes",
-                            "terminal"
-                        ]
+                        ["automations", "github", "gitlab", "jira", "notes"]
                     );
                     assert!(shell.workspace.sidebar_hidden_connectors.contains("github"));
                 })

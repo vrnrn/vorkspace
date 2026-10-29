@@ -98,10 +98,14 @@ impl Shell {
                         );
                     })),
             )
+            // The project's diff stat lives here while the sidebar is open.
+            .children(self.project_diff_stat(cx))
             .child(
-                icon_button("classic-find-file", "Search files", "search").on_click(
-                    cx.listener(|this, _, window, cx| this.open_quick_open(false, window, cx)),
-                ),
+                icon_button("classic-find-file", "Search files", "search")
+                    .debug_selector(|| "sidebar-file-search".into())
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_quick_open(false, window, cx)),
+                    ),
             )
             .child(
                 icon_button("classic-new-session", "New session", "plus")

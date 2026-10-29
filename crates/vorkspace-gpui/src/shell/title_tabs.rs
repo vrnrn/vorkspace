@@ -134,7 +134,15 @@ impl Shell {
         }
     }
 
+    /// Sidebar pages fill the pane without a tab strip.
+    pub(super) fn tabless_page(&self, cx: &App) -> bool {
+        self.active_app_view.is_some() || self.app_search.is_some() || self.bot_active(cx)
+    }
+
     pub(super) fn remember_title_tab(&mut self, tab: TitleTab) {
+        if !tab.in_strip() {
+            return;
+        }
         if !self.workspace.title_order.contains(&tab) {
             self.workspace.title_order.push(tab.clone());
         }
@@ -387,34 +395,7 @@ impl Shell {
 mod tests {
     use super::*;
     use crate::shell::tests::window;
-    use gpui::{TestAppContext, WindowHandle};
-
-    fn add_session(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -> i64 {
-        let summary = locked(&shell.store)
-            .unwrap()
-            .create("codex", &shell.workspace.project)
-            .unwrap();
-        let id = summary.id;
-        shell.add(summary, cx);
-        let focus = shell.worktree_focus.get(&shell.workspace.project).cloned();
-        shell.seed_worktree(id, focus.as_ref(), cx);
-        shell.open(id, window, cx);
-        id
-    }
-
-    fn add_bot(window: WindowHandle<Shell>, cx: &mut TestAppContext) -> TitleTab {
-        window
-            .update(cx, |shell, w, cx| {
-                shell
-                    .bot_manager()
-                    .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |shell, _, cx| shell.active_title_tab(cx).unwrap())
-            .unwrap()
-    }
+    use gpui::TestAppContext;
 
     #[test]
     #[ignore = "Requires Metal and VOKKY_CONNECTOR_CAPTURE_DIR"]
@@ -491,399 +472,6 @@ mod tests {
             .unwrap();
     }
     #[gpui::test]
-    fn connector_navigation_reuses_orders_closes_restores_and_disables_tabs(
-        cx: &mut TestAppContext,
-    ) {
-        let (window, _, session) = window(cx);
-        window
-            .update(cx, |shell, w, cx| {
-                shell.workspace.preferences.tab_animations = false;
-                shell.workspace.sidebar_inbox_visible = false;
-                shell.ensure_background_inbox(w, cx);
-                shell
-                    .inbox
-                    .as_ref()
-                    .unwrap()
-                    .update(cx, |owner, _| owner.suspend_refresh_for_test());
-                shell.invalidate_chrome(cx);
-            })
-            .unwrap();
-        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        assert!(visual.debug_bounds("sidebar-navigation-Inbox").is_none());
-        for selector in [
-            "sidebar-navigation-GitHub",
-            "sidebar-navigation-GitLab",
-            "sidebar-navigation-Jira",
-        ] {
-            assert!(visual.debug_bounds(selector).is_some());
-        }
-        let github = visual.debug_bounds("sidebar-navigation-GitHub").unwrap();
-        visual.simulate_click(github.center(), Default::default());
-        visual.run_until_parked();
-        let github_tab = TitleTab::App(app_views::AppView::Connector(Connector::Github));
-        let jira_tab = TitleTab::App(app_views::AppView::Connector(Connector::Jira));
-        let page = window
-            .update(visual, |shell, w, cx| {
-                shell.open_connector(Connector::Jira, w, cx);
-                shell.open_connector(Connector::Github, w, cx);
-                shell.open_connector(Connector::Github, w, cx);
-                assert!(shell.visible_tabs(cx).contains(&TitleTab::Session(session)));
-                assert_eq!(
-                    shell
-                        .workspace
-                        .title_order
-                        .iter()
-                        .filter(|tab| **tab == github_tab)
-                        .count(),
-                    1
-                );
-                assert!(shell.visible_tabs(cx).contains(&jira_tab));
-                shell.reorder_title_tab(&jira_tab, 0, cx);
-                assert_eq!(shell.visible_tabs(cx)[0], jira_tab);
-                let page = shell.connector_pages[&Connector::Github].clone();
-                shell.close_title_tabs(std::slice::from_ref(&github_tab), None, w, cx);
-                assert!(!shell.workspace.title_order.contains(&github_tab));
-                shell.open_connector(Connector::Github, w, cx);
-                assert_eq!(shell.connector_pages[&Connector::Github], page);
-                let saved = shell.latest_state.lock().unwrap().clone();
-                let sessions = shell
-                    .session_summaries
-                    .values()
-                    .map(|s| (s.id, s.cwd.clone()))
-                    .collect::<Vec<_>>();
-                let restored =
-                    Workspace::restore(Some(&saved), &sessions, &shell.workspace.project);
-                assert_eq!(restored.title_order, shell.workspace.title_order);
-                assert_eq!(restored.scope_focus[&shell.tab_scope()], github_tab);
-                shell.workspace.project_rail_open = false;
-                shell.invalidate_chrome(cx);
-                cx.notify();
-                page
-            })
-            .unwrap();
-        visual.run_until_parked();
-        for selector in [
-            "sidebar-navigation-GitHub",
-            "sidebar-navigation-GitLab",
-            "sidebar-navigation-Jira",
-        ] {
-            assert!(visual.debug_bounds(selector).is_some());
-        }
-        assert!(visual.debug_bounds("app-title-tab-GitHub").is_some());
-        assert!(visual.debug_bounds("app-title-tab-Jira").is_some());
-        assert!(visual.debug_bounds("inbox-source-jira").is_none());
-        let settings = visual.debug_bounds("connector-settings");
-        // A normal app page retains a settings recovery action.
-        window
-            .update(visual, |shell, w, cx| {
-                shell.open_settings(crate::settings::Section::Connectors, w, cx);
-            })
-            .unwrap();
-        visual.run_until_parked();
-        assert!(settings.is_some());
-        let toggle = visual
-            .debug_bounds("settings-toggle-inbox-connector-github")
-            .unwrap();
-        visual.simulate_click(toggle.center(), Default::default());
-        visual.run_until_parked();
-        window
-            .update(visual, |shell, w, cx| {
-                assert!(shell.settings.is_some());
-                assert!(!shell.workspace.title_order.contains(&github_tab));
-                assert!(
-                    !shell
-                        .workspace
-                        .scope_focus
-                        .values()
-                        .any(|tab| *tab == github_tab)
-                );
-                assert!(shell.workspace.title_order.contains(&jira_tab));
-                shell.close_settings(w, cx);
-            })
-            .unwrap();
-        visual.run_until_parked();
-        assert!(visual.debug_bounds("sidebar-navigation-GitHub").is_none());
-        assert!(visual.debug_bounds("sidebar-navigation-Jira").is_some());
-        window
-            .update(visual, |shell, w, cx| {
-                shell.open_settings(crate::settings::Section::Connectors, w, cx)
-            })
-            .unwrap();
-        visual.run_until_parked();
-        let toggle = visual
-            .debug_bounds("settings-toggle-inbox-connector-github")
-            .unwrap();
-        visual.simulate_click(toggle.center(), Default::default());
-        visual.run_until_parked();
-        window
-            .update(visual, |shell, w, cx| {
-                shell.close_settings(w, cx);
-                shell.open_connector(Connector::Github, w, cx);
-                assert_eq!(shell.connector_pages[&Connector::Github], page);
-            })
-            .unwrap();
-        visual.run_until_parked();
-        assert!(visual.debug_bounds("sidebar-navigation-GitHub").is_some());
-        let (store, summaries, saved, project, order) = window
-            .read_with(visual, |shell, _| {
-                (
-                    shell.store.clone(),
-                    shell
-                        .session_summaries
-                        .values()
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                    shell.latest_state.lock().unwrap().clone(),
-                    shell.workspace.project.clone(),
-                    shell.workspace.title_order.clone(),
-                )
-            })
-            .unwrap();
-        let reopened = visual.cx.update(|cx| {
-            cx.open_window(Default::default(), |_, cx| {
-                cx.new(|cx| Shell::new(store, summaries, project, Some(saved), cx))
-            })
-            .unwrap()
-        });
-        visual.run_until_parked();
-        reopened
-            .read_with(visual, |shell, cx| {
-                assert_eq!(shell.active_title_tab(cx), Some(github_tab));
-                assert_eq!(shell.workspace.title_order, order);
-                assert!(shell.visible_tabs(cx).contains(&jira_tab));
-            })
-            .unwrap();
-    }
-    #[gpui::test]
-    fn mixed_tabs_open_in_order_and_close_to_the_visible_neighbor(cx: &mut TestAppContext) {
-        let (window, other_project, first) = window(cx);
-        let bot = add_bot(window, cx);
-        let second = window.update(cx, add_session).unwrap();
-        cx.run_until_parked();
-        let last = add_bot(window, cx);
-        window
-            .update(cx, |shell, w, cx| {
-                assert_eq!(
-                    shell.visible_tabs(cx),
-                    [
-                        TitleTab::Session(first),
-                        bot.clone(),
-                        TitleTab::Session(second),
-                        last.clone()
-                    ]
-                );
-                shell.open_title_tab(&bot, w, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |shell, w, cx| {
-                shell.close_title_tabs(std::slice::from_ref(&bot), None, w, cx);
-                assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(second)));
-                shell.close_title_tabs(&[last], None, w, cx);
-                assert_eq!(
-                    shell.active_title_tab(cx),
-                    Some(TitleTab::Session(second)),
-                    "inactive close preserves focus"
-                );
-                assert!(
-                    shell.sessions[&second]
-                        .read(cx)
-                        .input
-                        .focus_handle(cx)
-                        .is_focused(w)
-                );
-                shell.close(second, w, cx);
-                assert_eq!(shell.workspace.active, Some(first));
-                assert_eq!(shell.workspace.project, "/work/vorkspace");
-                assert!(shell.workspace.tabs.contains(&other_project));
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn bot_close_button_and_cmd_w_share_selection_and_focus(cx: &mut TestAppContext) {
-        let (window, _, first) = window(cx);
-        cx.update(|cx| {
-            bind_keys(cx);
-            input::bind(cx);
-            crate::clock::use_test_clock(cx);
-        });
-        let bot = add_bot(window, cx);
-        let second = window.update(cx, add_session).unwrap();
-        window
-            .update(cx, |shell, w, cx| shell.open_title_tab(&bot, w, cx))
-            .unwrap();
-        cx.run_until_parked();
-        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        let close = visual.debug_bounds("close-bot-tab-button").unwrap();
-        visual.simulate_click(close.center(), Default::default());
-        visual.run_until_parked();
-        window
-            .update(visual, |shell, w, cx| {
-                assert_eq!(shell.workspace.active, Some(second));
-                assert_eq!(
-                    shell.visible_tabs(cx),
-                    [TitleTab::Session(first), TitleTab::Session(second)]
-                );
-                assert!(
-                    shell.sessions[&second]
-                        .read(cx)
-                        .input
-                        .focus_handle(cx)
-                        .is_focused(w)
-                );
-            })
-            .unwrap();
-        let bot = add_bot(window, visual);
-        let modifier = "cmd";
-        visual.simulate_keystrokes(&format!("{modifier}-w"));
-        visual.run_until_parked();
-        window
-            .update(visual, |shell, w, cx| {
-                assert!(!shell.visible_tabs(cx).contains(&bot));
-                assert_eq!(shell.workspace.active, Some(second));
-                assert!(
-                    shell.sessions[&second]
-                        .read(cx)
-                        .input
-                        .focus_handle(cx)
-                        .is_focused(w)
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn worktree_tabs_cycle_close_and_return_without_touching_other_scopes(cx: &mut TestAppContext) {
-        let (window, other_project, main) = window(cx);
-        let bot_main = add_bot(window, cx);
-        let feature = crate::worktree_switcher::WorktreeFocus {
-            path: "/work/feature".into(),
-            branch: Some("feature".into()),
-        };
-        window
-            .update(cx, |shell, w, cx| {
-                shell.select_worktree(Some(feature.clone()), w, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let feature_session = window
-            .update(cx, |shell, _, _| shell.workspace.active.unwrap())
-            .unwrap();
-        let bot_feature = add_bot(window, cx);
-        window
-            .update(cx, |shell, w, cx| {
-                assert_eq!(
-                    shell.visible_tabs(cx),
-                    [TitleTab::Session(feature_session), bot_feature.clone()]
-                );
-                shell.cycle(1, w, cx);
-                assert_eq!(shell.workspace.active, Some(feature_session));
-                shell.activate_tab(-1, w, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |shell, w, cx| {
-                assert_eq!(shell.active_title_tab(cx), Some(bot_feature.clone()));
-                let TitleTab::Bot { id, .. } = &bot_feature else {
-                    panic!("expected a Bot");
-                };
-                shell.run_menu(MenuTarget::BotTab(id.clone()), "others", None, w, cx);
-                assert_eq!(
-                    shell.visible_tabs(cx).as_slice(),
-                    std::slice::from_ref(&bot_feature)
-                );
-                assert!(shell.workspace.tabs.contains(&main));
-                assert!(shell.workspace.tabs.contains(&other_project));
-                shell.select_worktree(None, w, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |shell, w, cx| {
-                assert_eq!(shell.active_title_tab(cx), Some(bot_main.clone()));
-                assert_eq!(
-                    shell.visible_tabs(cx),
-                    [TitleTab::Session(main), bot_main.clone()]
-                );
-                shell.select_worktree(Some(feature), w, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |shell, w, cx| {
-                assert_eq!(shell.active_title_tab(cx), Some(bot_feature));
-                shell.close_title_tabs(&shell.visible_tabs(cx), None, w, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |shell, _, cx| {
-                assert_eq!(shell.workspace.project, "/work/vorkspace");
-                assert_eq!(shell.working_copy(), "/work/feature");
-                assert_eq!(shell.visible_tabs(cx).len(), 1);
-                assert!(shell.workspace.title_order.contains(&bot_main));
-                assert!(shell.workspace.tabs.contains(&other_project));
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn mixed_reorder_and_restart_preserve_order_and_selected_bot(cx: &mut TestAppContext) {
-        let (window, _, first) = window(cx);
-        let bot = add_bot(window, cx);
-        let second = window.update(cx, add_session).unwrap();
-        window
-            .update(cx, |shell, w, cx| {
-                shell.reorder_title_tab(&bot, 0, cx);
-                shell.open_title_tab(&bot, w, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let (store, summaries, saved) = window
-            .update(cx, |shell, _, cx| {
-                assert_eq!(
-                    shell.visible_tabs(cx),
-                    [
-                        bot.clone(),
-                        TitleTab::Session(first),
-                        TitleTab::Session(second)
-                    ]
-                );
-                let db = locked(&shell.store).unwrap();
-                (
-                    shell.store.clone(),
-                    db.sessions().unwrap(),
-                    serde_json::to_string(&shell.workspace).unwrap(),
-                )
-            })
-            .unwrap();
-        let restored = cx.update(|cx| {
-            cx.open_window(Default::default(), |_, cx| {
-                cx.new(|cx| Shell::new(store, summaries, "/work/vorkspace".into(), Some(saved), cx))
-            })
-            .unwrap()
-        });
-        cx.run_until_parked();
-        restored
-            .update(cx, |shell, _, cx| {
-                assert_eq!(
-                    shell.visible_tabs(cx),
-                    [
-                        bot.clone(),
-                        TitleTab::Session(first),
-                        TitleTab::Session(second)
-                    ]
-                );
-                assert_eq!(shell.active_title_tab(cx), Some(bot));
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
     fn rapid_new_tabs_follow_request_order(cx: &mut TestAppContext) {
         let (window, _, first) = window(cx);
         let providers = [Kind::Claude, Kind::Codex, Kind::Claude, Kind::Codex];
@@ -921,6 +509,15 @@ mod interaction_tests {
     use crate::shell::tests::window;
     use gpui::{Modifiers, TestAppContext, point};
 
+    /// The selected rail row is painted by `crate::liquid`, not as a quad.
+    fn pill_at(window: gpui::WindowHandle<Shell>, key: &str, cx: &mut TestAppContext) -> bool {
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                shell.liquid.selected().as_deref() == Some(key)
+            })
+            .unwrap()
+    }
     fn sidebar_highlight(
         window: gpui::WindowHandle<Shell>,
         selector: String,
@@ -980,6 +577,7 @@ mod interaction_tests {
             panic!("expected a Bot");
         };
         let bot_row = format!("bot-rail-{id}");
+        let bot_key = format!("bot:{id}");
         let session_row = format!("sidebar-session-{session}");
         let project_row = window
             .update(cx, |shell, _, _| {
@@ -993,7 +591,7 @@ mod interaction_tests {
             })
             .unwrap();
         assert!(sidebar_highlight(window, session_row.clone(), cx));
-        assert!(!sidebar_highlight(window, bot_row.clone(), cx));
+        assert!(!pill_at(window, &bot_key, cx));
         let click = |selector: &str, cx: &mut TestAppContext| {
             let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
             let bounds = visual
@@ -1005,7 +603,7 @@ mod interaction_tests {
             visual.refresh().unwrap();
         };
         click(&bot_row, cx);
-        assert!(sidebar_highlight(window, bot_row.clone(), cx));
+        assert!(pill_at(window, &bot_key, cx));
         assert!(
             gpui::VisualTestContext::from_window(window.into(), cx)
                 .debug_bounds(Box::leak(session_row.clone().into_boxed_str()))
@@ -1016,10 +614,10 @@ mod interaction_tests {
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.workspace.active, Some(session));
                 assert_eq!(shell.workspace.project, "/work/vorkspace");
-                assert_eq!(
+                assert_ne!(
                     shell.workspace.scope_focus.get(&shell.tab_scope()),
                     Some(&bot),
-                    "the explicit project click must override the remembered Bot surface"
+                    "a Bot page is never remembered as a tab"
                 );
             })
             .unwrap();
@@ -1037,7 +635,7 @@ mod interaction_tests {
             })
             .unwrap();
         assert!(sidebar_highlight(window, session_row.clone(), cx));
-        assert!(!sidebar_highlight(window, bot_row.clone(), cx));
+        assert!(!pill_at(window, &bot_key, cx));
         // Opening from the title strip must also clear an old bulk selection.
         window
             .update(cx, |shell, w, cx| {
@@ -1065,7 +663,7 @@ mod interaction_tests {
                 assert!(shell.sidebar_target.is_none());
             })
             .unwrap();
-        assert!(sidebar_highlight(window, bot_row.clone(), cx));
+        assert!(pill_at(window, &bot_key, cx));
         for selector in [&session_row, &format!("sidebar-session-{other}")] {
             assert!(
                 gpui::VisualTestContext::from_window(window.into(), cx)
@@ -1076,103 +674,11 @@ mod interaction_tests {
         }
         click(&project_row, cx);
         assert!(sidebar_highlight(window, session_row, cx));
-        assert!(!sidebar_highlight(window, bot_row, cx));
+        assert!(!pill_at(window, &bot_key, cx));
         assert!(!sidebar_highlight(
             window,
             format!("sidebar-session-{other}"),
             cx
         ));
-    }
-
-    #[gpui::test]
-    fn closing_a_session_button_selects_the_adjacent_bot_and_restores_its_composer(
-        cx: &mut TestAppContext,
-    ) {
-        let (window, _, first) = window(cx);
-        window
-            .update(cx, |shell, w, cx| {
-                shell
-                    .bot_manager()
-                    .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let bot = window
-            .update(cx, |shell, w, cx| {
-                let bot = shell.active_title_tab(cx).unwrap();
-                shell.open(first, w, cx);
-                bot
-            })
-            .unwrap();
-        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        let close = visual
-            .debug_bounds(Box::leak(
-                format!("close-title-tab-{first}").into_boxed_str(),
-            ))
-            .unwrap();
-        visual.simulate_click(close.center(), Default::default());
-        visual.run_until_parked();
-        window
-            .update(visual, |shell, w, cx| {
-                assert_eq!(shell.active_title_tab(cx), Some(bot));
-                let chat = shell.bot_manager().read(cx).chat().unwrap();
-                assert!(chat.read(cx).input.focus_handle(cx).is_focused(w));
-                assert_eq!(shell.workspace.project, "/work/vorkspace");
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn dragging_a_bot_uses_the_mixed_strip_slots_and_keeps_the_active_session(
-        cx: &mut TestAppContext,
-    ) {
-        let (window, _, first) = window(cx);
-        window
-            .update(cx, |shell, w, cx| {
-                shell
-                    .bot_manager()
-                    .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let bot = window
-            .update(cx, |shell, w, cx| {
-                let bot = shell.active_title_tab(cx).unwrap();
-                shell.open(first, w, cx);
-                bot
-            })
-            .unwrap();
-        let TitleTab::Bot { id, .. } = &bot else {
-            panic!("expected a Bot");
-        };
-        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        let session_bounds = visual
-            .debug_bounds(Box::leak(format!("title-tab-{first}").into_boxed_str()))
-            .unwrap();
-        let bot_bounds = visual
-            .debug_bounds(Box::leak(format!("bot-title-tab-{id}").into_boxed_str()))
-            .unwrap();
-        visual.simulate_mouse_down(bot_bounds.center(), MouseButton::Left, Modifiers::default());
-        visual.simulate_mouse_move(
-            point(session_bounds.center().x, bot_bounds.center().y),
-            MouseButton::Left,
-            Modifiers::default(),
-        );
-        visual.run_until_parked();
-        visual.simulate_mouse_up(
-            point(session_bounds.center().x, bot_bounds.center().y),
-            MouseButton::Left,
-            Modifiers::default(),
-        );
-        visual.run_until_parked();
-        window
-            .update(visual, |shell, _, cx| {
-                assert_eq!(shell.visible_tabs(cx), [bot, TitleTab::Session(first)]);
-                assert_eq!(shell.workspace.active, Some(first));
-                assert!(!shell.bot_active(cx));
-            })
-            .unwrap();
     }
 }

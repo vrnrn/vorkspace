@@ -1,6 +1,6 @@
 # Vox
 
-Vox is the optional voice face in the title bar. Turn it on in Settings, then click it to start a call. It starts disabled. Stop ends the call; silent mode shows replies without speaking them.
+Vox is the optional voice face. Turn it on in Settings. Its face is hidden from the title bar for now, so you can't start a call from the window yet; once it's back, click it to start a call. It starts disabled. Stop ends the call; silent mode shows replies without speaking them.
 
 Hiding the app or minimizing its window ends the call. Switching chats or projects, opening Settings, or using another app keeps it connected. You start the next call yourself when ready.
 

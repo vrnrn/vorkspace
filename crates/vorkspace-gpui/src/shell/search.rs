@@ -197,7 +197,6 @@ impl Shell {
                     live,
                     projects,
                     recent,
-                    classic: self.workspace.classic_layout,
                     logos: self
                         .workspace
                         .project_appearance
@@ -420,68 +419,5 @@ mod tests {
                 );
             })
             .unwrap();
-    }
-    #[gpui::test]
-    fn app_search_shares_tab_sizing_order_cycle_and_close(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            input::bind(cx);
-            super::super::bind_keys(cx);
-            crate::clock::use_test_clock(cx);
-        });
-        let (window, _, _) = crate::shell::tests::window(cx);
-        window
-            .update(cx, |shell, w, cx| {
-                for _ in 0..10 {
-                    let summary = locked(&shell.store)
-                        .unwrap()
-                        .create("codex", &shell.workspace.project)
-                        .unwrap();
-                    let id = summary.id;
-                    shell.add(summary, cx);
-                    shell.open(id, w, cx);
-                }
-                shell.open_app_search(w, cx);
-                assert_eq!(shell.visible_tabs(cx).last(), Some(&TitleTab::Search));
-                assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Search));
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        let strip = visual.debug_bounds("title-tab-strip").unwrap();
-        let search = visual.debug_bounds("search-title-tab").unwrap();
-        let new = visual.debug_bounds("new-tab").unwrap();
-        assert!(
-            new.right() <= strip.right(),
-            "Search and every session must fit before the new-tab button"
-        );
-        assert!(search.right() <= new.left());
-        assert!(
-            new.left() - search.right() <= px(4.5),
-            "Search uses the same 2px gap and button margin"
-        );
-        assert_eq!(search.size.width, px(SELECTED_TAB_MIN_WIDTH));
-        window
-            .update(visual, |shell, w, cx| {
-                assert_eq!(shell.tab_scroll.max_offset().x, px(0.));
-                shell.cycle(-1, w, cx);
-                assert!(shell.app_search.is_none());
-                assert!(matches!(
-                    shell.active_title_tab(cx),
-                    Some(TitleTab::Session(_))
-                ));
-                shell.cycle(1, w, cx);
-                assert!(shell.app_search.is_some());
-                shell.reorder_title_tab(&TitleTab::Search, 0, cx);
-                assert_eq!(shell.visible_tabs(cx).first(), Some(&TitleTab::Search));
-                shell.run_title_tab_menu(TitleTab::Search, "right", w, cx);
-                assert_eq!(shell.visible_tabs(cx), vec![TitleTab::Search]);
-                assert!(shell.app_search.is_some());
-                shell.close_search_tab(w, cx);
-                assert!(!shell.workspace.title_order.contains(&TitleTab::Search));
-                assert!(shell.app_search.is_none() && shell.saved_search.is_none());
-            })
-            .unwrap();
-        visual.run_until_parked();
     }
 }

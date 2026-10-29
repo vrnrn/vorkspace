@@ -10,7 +10,7 @@ The **Enable Jira connector** switch hides Jira and stops polling while
 keeping credentials and filters. **Default Bot** preselects a chat destination;
 you can choose a different Bot or local project before sending a ticket.
 
-Open the Jira tab from the sidebar to browse issues, read descriptions and comments,
+Open the Jira page from the sidebar to browse issues, read descriptions and comments,
 post comments, ask about a ticket, or start work in a local project. Starting work
 and asking about a ticket include its description and Jira identifier.
 
@@ -26,7 +26,7 @@ Choose **Project** or **JQL** from the **Filter tickets by** dropdown in Jira se
   `filter = 12345`. Select **Apply JQL** to check the query with Jira and save it.
   Invalid queries leave the previous filter active. The query replaces project,
   assignment, and status fetch constraints and loads up to 100 matching tickets.
-  Its ordering is sent to Jira unchanged; the Jira tab displays tickets by last
+  Its ordering is sent to Jira unchanged; the Jira page displays tickets by last
   update. Jira status, time, and text filters can still narrow displayed results.
 
 Selecting JQL hides Jira project rows from **Project notifications** at the top

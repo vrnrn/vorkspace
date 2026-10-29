@@ -203,6 +203,12 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "bot rail compact collapsed icons top divider project picker",
     ),
     (
+        "bot-channels",
+        Section::Bots,
+        "Channels",
+        "channels experimental rooms bots rail",
+    ),
+    (
         "bot-list",
         Section::Bots,
         "Your bots",
@@ -273,6 +279,12 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::General,
         "Tab animations",
         "motion open close resize transition",
+    ),
+    (
+        "sidebar-right",
+        Section::General,
+        "Switch sidebar to right side",
+        "sessions explorer changes position side right left layout",
     ),
     (
         "theme",

@@ -222,7 +222,15 @@ impl Shell {
             }
         }
     }
-    fn project_delete_guard(&self, path: &str, ids: &[i64], cx: &App) -> Result<(), String> {
+    /// `before_release` skips what `release_project` will settle once deletion
+    /// is confirmed: the selection, idle tabs and loaded views, worktree focus.
+    fn project_delete_guard(
+        &self,
+        path: &str,
+        ids: &[i64],
+        before_release: bool,
+        cx: &App,
+    ) -> Result<(), String> {
         let key = vorkspace_core::files::path_key(path);
         if !self
             .workspace
@@ -233,7 +241,7 @@ impl Shell {
         {
             return Err("The project is no longer available or is already being deleted.".into());
         }
-        if vorkspace_core::files::path_key(&self.workspace.project) == key {
+        if !before_release && vorkspace_core::files::path_key(&self.workspace.project) == key {
             return Err("Switch to another project before deleting this project.".into());
         }
         if self
@@ -253,9 +261,9 @@ impl Shell {
         }
         if ids.iter().any(|id| {
             self.deleting.contains(id)
-                || self.workspace.tab_of(*id).is_some()
-                || self.sessions.contains_key(id)
                 || self.busy_sessions.contains(id)
+                || !before_release
+                    && (self.workspace.tab_of(*id).is_some() || self.sessions.contains_key(id))
                 || self
                     .workspace
                     .review_owners
@@ -289,7 +297,7 @@ impl Shell {
                 .title_order
                 .iter()
                 .any(|tab| matches!(tab, TitleTab::Terminal { cwd, .. } if within(cwd, path)) || matches!(tab, TitleTab::Bot { project, worktree, .. } if within(project, path) || within(worktree, path)))
-            || self.worktree_focus.iter().any(|(p, _)| within(p, path))
+            || !before_release && self.worktree_focus.iter().any(|(p, _)| within(p, path))
         {
             return Err(
                 "Close this project's terminals and worktree views before deleting it.".into(),
@@ -297,6 +305,110 @@ impl Shell {
         }
         Ok(())
     }
+    /// Another project to select when removing `path`, which may be selected.
+    fn other_project(&self, path: &str) -> Result<String, String> {
+        let key = vorkspace_core::files::path_key(path);
+        self.workspace
+            .projects
+            .iter()
+            .find(|p| vorkspace_core::files::path_key(p) != key)
+            .cloned()
+            .ok_or_else(|| "Add another project before removing your only one.".into())
+    }
+
+    /// Selects another project if `path` is selected, so the project being
+    /// removed can be the one on screen.
+    fn leave_project(
+        &mut self,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if vorkspace_core::files::path_key(&self.workspace.project)
+            == vorkspace_core::files::path_key(path)
+        {
+            let other = self.other_project(path)?;
+            self.select_project(other, window, cx);
+        }
+        Ok(())
+    }
+
+    /// After confirming deletion: leave the project, close its idle tabs and
+    /// drop its idle loaded views, which the deletion would discard anyway.
+    /// Running conversations stay, and the guard then refuses.
+    fn release_project(
+        &mut self,
+        path: &str,
+        ids: &[i64],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = self.leave_project(path, window, cx) {
+            self.error = Some(error);
+            return;
+        }
+        let idle: Vec<_> = ids
+            .iter()
+            .copied()
+            .filter(|id| !self.busy_sessions.contains(id))
+            .collect();
+        let open: Vec<_> = idle
+            .iter()
+            .copied()
+            .filter(|id| self.workspace.tab_of(*id).is_some())
+            .collect();
+        self.close_tabs(&open, None, window, cx);
+        for id in idle {
+            if self.workspace.tab_of(id).is_none() {
+                self.sessions.remove(&id);
+            }
+        }
+        self.worktree_focus.retain(|p, _| !within(p, path));
+    }
+
+    /// Archiving hides a project; its idle tabs stay, hidden with it, and
+    /// return when it is restored. Running work and terminals in it refuse.
+    pub(super) fn archive_project(
+        &mut self,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = vorkspace_core::files::path_key(path);
+        let busy = self.session_summaries.iter().any(|(id, summary)| {
+            let worktree = self.session_worktrees.get(id).and_then(|p| p.as_deref());
+            (within(&summary.cwd, path) || worktree.is_some_and(|p| within(p, path)))
+                && self.session_metadata(*id, cx).busy
+        });
+        let terminals = self
+            .terminals
+            .iter()
+            .any(|(p, terms)| within(p, path) && !terms.is_empty())
+            || self
+                .workspace
+                .title_order
+                .iter()
+                .any(|tab| matches!(tab, TitleTab::Terminal { cwd, .. } if within(cwd, path)));
+        if busy || terminals {
+            self.error = Some(
+                "Stop this project's running conversations and close its terminals before archiving it."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
+        if let Err(error) = self.leave_project(path, window, cx) {
+            self.error = Some(error);
+            cx.notify();
+            return;
+        }
+        let mut next = self.workspace.clone();
+        next.projects
+            .retain(|p| vorkspace_core::files::path_key(p) != key);
+        next.project_archive.insert(key, true);
+        self.commit_project_archive(next, cx);
+    }
+
     pub(super) fn confirm_delete_project(
         &mut self,
         path: String,
@@ -310,7 +422,8 @@ impl Shell {
         }
         let sessions: Vec<_> = self.session_summaries.values().cloned().collect();
         let ids = match scoped_sessions(&path, &sessions, &self.session_worktrees).and_then(|ids| {
-            self.project_delete_guard(&path, &ids, cx)?;
+            self.project_delete_guard(&path, &ids, true, cx)?;
+            self.other_project(&path)?;
             Ok(ids)
         }) {
             Ok(ids) => ids,
@@ -331,11 +444,15 @@ impl Shell {
             &["Delete", "Cancel"],
             cx,
         );
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             if answer.await != Ok(0) {
                 return;
             }
-            let _ = this.update(cx, |this, cx| this.begin_project_delete(path, ids, cx));
+            let _ = this.update_in(cx, |this, window, cx| {
+                // Only now, once confirmed, leave the project and let go of it.
+                this.release_project(&path, &ids, window, cx);
+                this.begin_project_delete(path, ids, cx)
+            });
         })
         .detach();
     }
@@ -343,7 +460,7 @@ impl Shell {
         let current: Vec<_> = self.session_summaries.values().cloned().collect();
         let guard = scoped_sessions(&path, &current, &self.session_worktrees).and_then(|now| {
             if now == ids {
-                self.project_delete_guard(&path, &ids, cx)
+                self.project_delete_guard(&path, &ids, false, cx)
             } else {
                 Err("Conversations changed after confirmation; try again.".into())
             }
@@ -387,7 +504,7 @@ impl Shell {
                 for id in &ids { this.deleting.remove(id); }
                 for id in &result.deleted { this.forget_session(*id, cx); }
                 this.deleting_projects.remove(&key);
-                let owner_check = if result.error.is_none() { this.project_delete_guard(&path, &ids, cx) } else { Ok(()) };
+                let owner_check = if result.error.is_none() { this.project_delete_guard(&path, &ids, false, cx) } else { Ok(()) };
                 let check = if result.error.is_none() { locked(&store).and_then(|store| store.sessions().and_then(|sessions| store.session_worktrees().and_then(|trees| scoped_sessions(&path, &sessions, &trees)))).and_then(|remaining| if remaining.is_empty() { Ok(()) } else { Err("New conversations appeared while deleting; the project was kept.".into()) }) } else { Ok(()) };
                 let failure = result.error.or_else(|| owner_check.err()).or_else(|| check.err());
                 if let Some(error) = failure {
@@ -587,21 +704,24 @@ mod tests {
             .unwrap();
     }
     #[gpui::test]
-    fn open_project_and_open_session_refuse_delete(cx: &mut gpui::TestAppContext) {
+    fn selected_project_and_open_session_need_release_before_delete(cx: &mut gpui::TestAppContext) {
         let (window, a, _) = crate::shell::tests::window(cx);
         window
             .update(cx, |shell, _, cx| {
                 let current = shell.workspace.project.clone();
+                // Once released, a selected project can't be deleted out from
+                // under the screen; before release that's left to release.
                 assert!(
                     shell
-                        .project_delete_guard(&current, &[], cx)
+                        .project_delete_guard(&current, &[], false, cx)
                         .unwrap_err()
                         .contains("Switch")
                 );
+                assert!(shell.project_delete_guard(&current, &[], true, cx).is_ok());
                 shell.workspace.project = "/work/vorkspace".into();
                 assert!(
                     shell
-                        .project_delete_guard("/work/another-project", &[a], cx)
+                        .project_delete_guard("/work/another-project", &[a], false, cx)
                         .is_err()
                 );
             })

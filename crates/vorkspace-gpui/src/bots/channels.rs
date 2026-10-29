@@ -1,4 +1,5 @@
 use super::*;
+
 use crate::popover::{Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle};
 use gpui::{AnyView, EventEmitter, FocusHandle};
 use serde_json::{Value, json};
@@ -551,7 +552,7 @@ impl Bots {
     }
 
     pub(crate) fn classic_channels_open(&self) -> bool {
-        self.prefs.bots && self.channels.open
+        self.prefs.bots && self.prefs.channels && self.channels.open
     }
 
     pub(crate) fn close_classic_channels(&mut self, cx: &mut Context<Self>) {
@@ -564,8 +565,12 @@ impl Bots {
 
     /// The original rail lists Channels beside Bots, regardless of which
     /// project's session/file pane happens to be selected.
-    pub(crate) fn classic_channels_rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        if !self.prefs.bots {
+    pub(crate) fn classic_channels_rail(
+        &mut self,
+        liquid: &crate::liquid::Liquid,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if !self.prefs.bots || !self.prefs.channels {
             return div().into_any_element();
         }
         let channels = self.channels.state.channels.clone();
@@ -582,11 +587,13 @@ impl Bots {
             .pb_3()
             .child(
                 section_label("Channels").child(
-                    icon_button("classic-add-channel", "New channel", "plus")
+                    icon_button_hover("classic-add-channel", "New channel", "plus", 0.)
                         .debug_selector(|| "classic-add-channel".into())
                         .focusable()
                         .tab_stop(true)
                         .size(px(20.))
+                        .relative()
+                        .child(liquid.row("add:channel", false))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_classic_channel(None, window, cx);
                         })),
@@ -601,11 +608,7 @@ impl Bots {
                 let selected = self.channels.open
                     && self.channels.selected.as_deref() == Some(channel.id.as_str());
                 let unread = self.channel_unread(&id);
-                let seed = channel.resolved_seed();
-                let grid = channel.resolved_grid();
-                let textured = channel.textured;
                 let bg = channel.resolved_color();
-                let fg = channel.resolved_fg_color();
                 div()
                     .id(SharedString::from(format!("classic-channel-{id}")))
                     .debug_selector(move || format!("classic-channel-{selector}"))
@@ -630,11 +633,19 @@ impl Bots {
                     .gap_2()
                     .text_size(px(14.))
                     .opacity(if selected { 1. } else { 0.65 })
-                    .when(selected, |d| {
-                        d.child(avatar::sidebar_selection_pill(seed, grid, textured, bg, fg))
-                    })
-                    .hover(|s| s.bg(content(0.08)).opacity(1.))
-                    .focus(|s| s.bg(content(0.08)).opacity(1.))
+                    .child(liquid.row(format!("channel:{id}"), selected))
+                    // Like a Project, its mark is the grid in its colour.
+                    .child(
+                        div()
+                            .size(px(16.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(crate::session_mark::color_dots(bg)),
+                    )
+                    .hover(|s| s.opacity(1.))
+                    .focus(|s| s.opacity(1.))
                     .child(
                         div()
                             .debug_selector({
@@ -1248,6 +1259,7 @@ mod classic_rail_tests {
             .unwrap();
         manager.update(cx, |manager, cx| {
             assert!(manager.active.is_none());
+            manager.prefs.channels = true;
             manager.roster.bots.push(Bot { id: "reader".into(), name: "Reader".into(), ..Default::default() });
             manager.channels.state.channels.push(Channel {
                 id: "team".into(),
@@ -1268,7 +1280,11 @@ mod classic_rail_tests {
         let label = visual.debug_bounds("channel-label-team").unwrap();
         let bot = visual.debug_bounds("bot-rail-reader").unwrap();
         let project = visual.debug_bounds("classic-project-label-0").unwrap();
-        assert_eq!(label.left(), bot.left() + px(8.));
+        assert_eq!(
+            label.left(),
+            bot.left() + px(32.),
+            "after the 16px mark slot"
+        );
         assert_eq!(label.left(), project.left());
         assert!(visual.debug_bounds("channel-unread-team").is_some());
         visual.simulate_click(channel.center(), Default::default());

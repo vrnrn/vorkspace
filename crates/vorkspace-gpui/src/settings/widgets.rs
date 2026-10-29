@@ -245,6 +245,7 @@ impl SettingsView {
                 "sounds"
                     | "notifications"
                     | "tab-animations"
+                    | "sidebar-right"
                     | "notes"
                     | "quick-composer"
                     | "clipboard-history"
@@ -261,6 +262,7 @@ impl SettingsView {
                     | "claude-hooks"
                     | "bots-enabled"
                     | "rail-bots-pinned"
+                    | "bot-channels"
                     | "bot-menu-bar-icon"
                     | "show-archived"
             )

@@ -602,34 +602,37 @@ mod tests {
     use gpui::TestAppContext;
 
     #[gpui::test]
-    fn project_archive_refuses_open_work_and_inventory_restores(cx: &mut TestAppContext) {
+    fn project_archive_leaves_the_selected_project_and_refuses_running_work(
+        cx: &mut TestAppContext,
+    ) {
         let (window, a, _) = window(cx);
         window
-            .update(cx, |shell, _, cx| {
-                shell.archive_project("/work/vorkspace", cx);
+            .update(cx, |shell, w, cx| {
+                // Running work in a project refuses its archive.
+                shell.sessions[&a].update(cx, |view, _| view.busy = true);
+                let busy_project = shell.session_metadata(a, cx).summary.cwd.clone();
+                shell.archive_project(&busy_project, w, cx);
                 assert!(
                     shell
                         .error
                         .as_deref()
-                        .is_some_and(|e| e.contains("switch to another"))
+                        .is_some_and(|e| e.contains("running conversations"))
                 );
-                shell.archive_project("/work/another-project", cx);
                 assert_ne!(
-                    shell.workspace.project_archive.get("/work/another-project"),
+                    shell.workspace.project_archive.get(&busy_project),
                     Some(&true)
                 );
-                shell.workspace.tabs.retain(|id| *id != a);
-                shell
-                    .workspace
-                    .title_order
-                    .retain(|tab| *tab != TitleTab::Session(a));
+                shell.sessions[&a].update(cx, |view, _| view.busy = false);
+                // The selected project can be archived: another one is selected.
                 shell.workspace.add_project("/work/archive");
-                shell.archive_project("/work/archive", cx);
+                shell.workspace.project = "/work/archive".into();
+                shell.archive_project("/work/archive", w, cx);
                 assert_eq!(
                     shell.workspace.project_archive.get("/work/archive"),
                     Some(&true)
                 );
                 assert!(!shell.workspace.projects.contains(&"/work/archive".into()));
+                assert_ne!(shell.workspace.project, "/work/archive");
             })
             .unwrap();
         window

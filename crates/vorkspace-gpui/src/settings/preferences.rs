@@ -18,6 +18,9 @@ pub(crate) struct Preferences {
     pub file_word_wrap: bool,
     pub file_view_mode: String,
     pub tab_animations: bool,
+    /// Sessions, Explorer and Changes sit at the window's right edge instead of
+    /// between the project rail and the conversation.
+    pub sidebar_right: bool,
     pub notes: bool,
     pub quick_composer: bool,
     pub clipboard_history: bool,
@@ -82,6 +85,8 @@ pub(crate) struct Preferences {
     // Bots
     pub bots: bool,
     pub rail_bots_pinned: bool,
+    /// Experimental: show the Channels section in the project rail.
+    pub channels: bool,
     pub bot_menu_bar_icon: bool,
     // Archive
     pub show_archived: bool,
@@ -126,6 +131,7 @@ impl Default for Preferences {
             file_word_wrap: true,
             file_view_mode: "preview".into(),
             tab_animations: false,
+            sidebar_right: false,
             notes: true,
             quick_composer: false,
             clipboard_history: true,
@@ -178,6 +184,7 @@ impl Default for Preferences {
             provider_efforts: HashMap::new(),
             bots: true,
             rail_bots_pinned: false,
+            channels: false,
             bot_menu_bar_icon: true,
             show_archived: false,
             keybindings: HashMap::new(),
