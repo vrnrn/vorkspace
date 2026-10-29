@@ -96,6 +96,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.groups.insert(project, groups);
-        self.invalidate_chrome(cx);
+        // Bot callers can still hold their entity while applying these groups.
+        // Keep state current, but refresh only after that update has returned.
+        let owner = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = owner.update(cx, |owner, cx| owner.invalidate_chrome(cx));
+        });
     }
 }

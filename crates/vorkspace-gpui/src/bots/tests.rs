@@ -2488,6 +2488,123 @@ fn app_actions_are_project_scoped_and_mutation_retries_are_idempotent(cx: &mut T
         assert!(m.hidden_session(child));
     });
 }
+
+fn selected_working_session(s: &Setup, cx: &mut TestAppContext) -> i64 {
+    let summary = locked(&s.store)
+        .unwrap()
+        .create("codex", &s.project)
+        .unwrap();
+    let id = summary.id;
+    s.window
+        .update(cx, |shell, _, cx| {
+            shell.bot_install(
+                summary,
+                vorkspace_core::agent::Settings::default(),
+                String::new(),
+                true,
+                cx,
+            );
+            shell.workspace.open(id);
+            shell
+                .bot_session_entity(id)
+                .unwrap()
+                .update(cx, |view, cx| {
+                    // Exercise activity projection without starting a provider.
+                    view.busy = true;
+                    cx.emit(SessionChanged);
+                    cx.notify();
+                });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    id
+}
+
+#[gpui::test]
+fn app_group_publication_during_start_preserves_launches_and_idempotent_receipts(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let working = selected_working_session(&s, cx);
+    s.manager.update(cx, |manager, _| {
+        let bot = manager.roster.get_mut(&s.id).unwrap();
+        bot.show_started_sessions_in_sidebar = true;
+        bot.use_sidebar_folders = true;
+    });
+    let mut children = Vec::new();
+    for request in ["group-first", "group-second"] {
+        let input = json!({
+            "project":s.project,
+            "prompt":request,
+            "draft":true,
+            "reveal":false,
+            "notifyOnComplete":true,
+        });
+        let started = call(&s, request, "sessions.start", input.clone(), cx)
+            .try_recv()
+            .unwrap()
+            .unwrap();
+        assert_eq!(started["accepted"], true);
+        let child = started["sessionId"].as_i64().unwrap();
+        children.push(child);
+        assert_eq!(
+            call(&s, request, "sessions.start", input, cx)
+                .try_recv()
+                .unwrap()
+                .unwrap(),
+            started,
+            "retry must reuse the accepted launch"
+        );
+        let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+        let bot = saved.get(&s.id).unwrap();
+        assert_eq!(bot.launches.len(), children.len());
+        let launch = bot.launches.iter().find(|l| l.session_id == child).unwrap();
+        assert!(launch.notify_on_complete);
+        assert!(!launch.completed);
+        let groups = locked(&s.store).unwrap().groups(&s.project).unwrap();
+        assert_eq!(groups.folders.len(), 1);
+        let folder = groups.folder_of(child).unwrap();
+        assert_eq!(folder.name, bot.label());
+        assert_eq!(folder.session_ids, children);
+        s.window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(shell.bot_groups(&s.project), groups);
+                assert_eq!(shell.workspace.active, Some(working));
+                assert!(shell.bot_session_entity(working).unwrap().read(cx).busy);
+                let view = shell.bot_session_entity(child).unwrap();
+                assert_eq!(view.read(cx).input.read(cx).content, request);
+                assert!(!view.read(cx).busy);
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
+fn app_group_publication_during_folder_move_keeps_selected_work(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let working = selected_working_session(&s, cx);
+    let moved = call(
+        &s,
+        "group-move",
+        "folders.move",
+        json!({"project":s.project,"sessionId":working,"newFolderName":"Manual"}),
+        cx,
+    )
+    .try_recv()
+    .unwrap()
+    .unwrap();
+    assert_eq!(moved["moved"], true);
+    let groups = locked(&s.store).unwrap().groups(&s.project).unwrap();
+    assert_eq!(groups.folder_of(working).unwrap().name, "Manual");
+    s.window
+        .update(cx, |shell, _, cx| {
+            assert_eq!(shell.bot_groups(&s.project), groups);
+            assert_eq!(shell.workspace.active, Some(working));
+            assert!(shell.bot_session_entity(working).unwrap().read(cx).busy);
+        })
+        .unwrap();
+}
+
 #[gpui::test]
 fn app_commands_recheck_deferred_ownership_and_protect_cold_and_self_targets(
     cx: &mut TestAppContext,
