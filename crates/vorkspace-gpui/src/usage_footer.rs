@@ -1274,6 +1274,7 @@ impl Render for UsageFooter {
                                 this.open_subscription(picked.clone(), window, cx)
                             }))
                             .on_action(cx.listener(move |this, _: &ToggleUsage, window, cx| {
+                                this.request_refresh(key.clone(), cx);
                                 this.open_subscription(key.clone(), window, cx)
                             })),
                     )
@@ -1379,7 +1380,10 @@ mod tests {
 
     use super::*;
     #[gpui::test]
-    fn clicking_an_expanded_row_requests_that_accounts_refresh(cx: &mut gpui::TestAppContext) {
+    fn subscription_pointer_and_keyboard_activation_refresh_the_selected_account(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(bind);
         let directory = tempfile::tempdir().unwrap();
         let store = std::sync::Arc::new(std::sync::Mutex::new(
             vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
@@ -1436,6 +1440,37 @@ mod tests {
             .read_with(&visual, |footer, _| footer.refresh_requests.clone())
             .unwrap();
         assert_eq!(requested, vec![keys[1].clone()]);
+
+        for compact in [false, true] {
+            for (keystroke, key) in [("enter", &keys[0]), ("space", &keys[1])] {
+                window
+                    .update(&mut visual, |footer, window, cx| {
+                        footer.dismiss(window, cx);
+                        footer.set_compact(compact, cx);
+                        footer.refresh_requests.clear();
+                        window.focus(&footer.rows[key].1, cx);
+                    })
+                    .unwrap();
+                visual.run_until_parked();
+                visual.simulate_keystrokes(keystroke);
+                visual.run_until_parked();
+                window
+                    .update(&mut visual, |footer, _, _| {
+                        assert_eq!(footer.refresh_requests, vec![key.clone()]);
+                        assert_eq!(footer.open_subscription_key(), Some(key));
+                    })
+                    .unwrap();
+                visual.simulate_keystrokes("escape");
+                visual.run_until_parked();
+                window
+                    .update(&mut visual, |footer, window, _| {
+                        assert!(!footer.open);
+                        assert!(footer.rows[key].1.is_focused(window));
+                        assert_eq!(footer.refresh_requests, vec![key.clone()]);
+                    })
+                    .unwrap();
+            }
+        }
     }
 
     #[gpui::test]
