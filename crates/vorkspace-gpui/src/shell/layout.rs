@@ -49,7 +49,9 @@ impl Shell {
         let app_view = self.settings.is_none()
             && (self.active_app_view.is_some() || self.app_search.is_some());
         let bare = self.bare_page(cx);
-        let tab_bar = (!bare).then(|| self.titlebar(window, cx));
+        // Collapsed navigation can extend past the rail. Keep its drag row
+        // above page headers so the controls cannot cover their inputs.
+        let tab_bar = (!bare || self.strip_lead(window) > 0.).then(|| self.titlebar(window, cx));
         let navigation = self.navigation(window, cx);
         let rail_width = self.classic_rail_width();
         // At zero width the cached rail is not rendered, so it cannot stop
@@ -142,9 +144,9 @@ impl Shell {
             )
             .into_any_element()
     }
-    /// Search, app views, Bots and channels start at the window's top edge,
-    /// without a title bar; a Bot's details controls stay in the corner above
-    /// its right-hand panel. Settings keeps its header over any of them.
+    /// Sidebar pages omit the tabs. An expanded rail leaves them at the top;
+    /// collapsed navigation keeps a drag row above them for its overhang.
+    /// Settings keeps its own header over any page.
     pub(super) fn bare_page(&self, cx: &gpui::App) -> bool {
         self.settings.is_none()
             && (self.active_app_view.is_some() || self.app_search.is_some() || self.bot_active(cx))
@@ -376,7 +378,7 @@ mod tests {
     use super::*;
     use crate::clock::Instant;
     use crate::{bots::Bots, shell::tests::window};
-    use gpui::{TestAppContext, WindowHandle};
+    use gpui::{Focusable, TestAppContext, WindowHandle};
     use std::time::Duration;
 
     fn mixed_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, Entity<Bots>, String, i64) {
@@ -466,7 +468,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn pages_have_no_title_bar_but_settings_keeps_its_header_over_them(cx: &mut TestAppContext) {
+    fn expanded_pages_have_no_title_bar_but_settings_keeps_its_header_over_them(
+        cx: &mut TestAppContext,
+    ) {
         crate::clock::use_test_clock(cx);
         let (window, _, _) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
@@ -485,6 +489,67 @@ mod tests {
             .unwrap();
         visual.run_until_parked();
         assert!(visual.debug_bounds("settings-header").is_some());
+    }
+
+    #[gpui::test]
+    fn search_header_clears_navigation_and_keeps_its_query_across_rail_modes(
+        cx: &mut TestAppContext,
+    ) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, _) = window(cx);
+        let input = window
+            .update(cx, |shell, w, cx| {
+                w.activate_window();
+                shell.open_app_search(w, cx);
+                let input = shell
+                    .app_search
+                    .as_ref()
+                    .unwrap()
+                    .view
+                    .read(cx)
+                    .input
+                    .clone();
+                input.update(cx, |input, cx| input.set_text("query draft".into(), cx));
+                input
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1400.), px(900.)));
+        for mode in ["expanded", "compact", "hidden", "expanded"] {
+            window
+                .update(visual, |shell, w, cx| {
+                    shell.workspace.project_rail_open = mode == "expanded";
+                    if mode != "expanded" {
+                        shell.workspace.preferences.collapsed_project_rail = mode.into();
+                    }
+                    w.focus(&shell.focus, cx);
+                    shell.invalidate_chrome(cx);
+                    cx.notify();
+                })
+                .unwrap();
+            visual.run_until_parked();
+            let navigation = visual.debug_bounds("titlebar-navigation").unwrap();
+            let pane = visual.debug_bounds("main-pane-frame").unwrap();
+            let header = visual.debug_bounds("app-search-header").unwrap();
+            if navigation.right() > pane.left() {
+                assert!(header.top() >= navigation.bottom(), "{mode}: {header:?}");
+            } else {
+                assert_eq!(header.top(), pane.top(), "{mode}");
+            }
+            assert!(visual.debug_bounds("title-tab-strip").is_none(), "{mode}");
+            // This query point lies under the overhanging buttons without clearance.
+            visual.simulate_click(
+                gpui::point(header.left() + px(48.), header.center().y),
+                Default::default(),
+            );
+            visual.run_until_parked();
+            window
+                .update(visual, |_, w, cx| {
+                    assert!(input.read(cx).focus_handle(cx).is_focused(w), "{mode}");
+                    assert_eq!(input.read(cx).content, "query draft", "{mode}");
+                })
+                .unwrap();
+        }
     }
 
     #[gpui::test]
