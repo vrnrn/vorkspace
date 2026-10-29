@@ -976,14 +976,17 @@ pub(crate) fn nav(
     section: Section,
     select: impl Fn(Section, &mut Window, &mut App) + Clone + 'static,
     back: impl Fn(&mut Window, &mut App) + 'static,
+    liquid: &crate::liquid::Liquid,
 ) -> AnyElement {
     let row = |id: SharedString, label: &'static str, path: &'static str, active: bool| {
+        let key = id.clone();
         div()
             .id(id.clone())
             .debug_selector(move || id.to_string())
             .role(Role::Button)
             .aria_label(label)
             .aria_selected(active)
+            .relative()
             .w_full()
             .flex()
             .items_center()
@@ -992,12 +995,13 @@ pub(crate) fn nav(
             .px_2()
             .py(px(6.))
             .cursor_pointer()
+            .child(liquid.row(key, active))
             .map(|d| {
                 if active {
-                    d.bg(content(0.1)).text_color(content(1.))
+                    d.text_color(content(1.))
                 } else {
                     d.text_color(content(0.5))
-                        .hover(|s| s.bg(content(0.05)).text_color(content(1.)))
+                        .hover(|s| s.text_color(content(1.)))
                 }
             })
             .child(

@@ -13,14 +13,12 @@ use vorkspace_core::{provider::Kind, usage};
 
 mod resets;
 
-actions!(usage_footer, [DismissUsage, ToggleUsage, RefreshUsage]);
+actions!(usage_footer, [DismissUsage, ToggleUsage]);
 pub(crate) fn bind(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", DismissUsage, Some("UsageDetails")),
         KeyBinding::new("enter", ToggleUsage, Some("UsageChip")),
         KeyBinding::new("space", ToggleUsage, Some("UsageChip")),
-        KeyBinding::new("enter", RefreshUsage, Some("UsageRefresh")),
-        KeyBinding::new("space", RefreshUsage, Some("UsageRefresh")),
     ]);
 }
 
@@ -54,6 +52,8 @@ pub(crate) struct UsageFooter {
     anchor: AnchorSlot,
     trigger: FocusHandle,
     refresh_focus: FocusHandle,
+    #[cfg(test)]
+    refresh_requests: Vec<Key>,
     details: FocusHandle,
     previous_focus: Option<FocusHandle>,
     open: bool,
@@ -157,6 +157,8 @@ impl UsageFooter {
             anchor: AnchorSlot::default(),
             trigger: cx.focus_handle(),
             refresh_focus: cx.focus_handle(),
+            #[cfg(test)]
+            refresh_requests: Vec::new(),
             details: cx.focus_handle(),
             previous_focus: None,
             open: false,
@@ -209,6 +211,17 @@ impl UsageFooter {
         if self.compact != compact {
             self.compact = compact;
             cx.notify();
+        }
+    }
+    /// Clicking an account refreshes that account's usage in addition to
+    /// opening its details, so no separate refresh control is needed.
+    fn request_refresh(&mut self, key: Key, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        self.refresh_requests.push(key.clone());
+        if let Some(center) = crate::accounts::get(cx) {
+            center.update(cx, |center, cx| center.refresh(key, true, cx));
+        } else {
+            self.refresh(true, cx);
         }
     }
     fn refresh_subscriptions(&self, cx: &mut Context<Self>) {
@@ -1122,7 +1135,7 @@ impl Render for UsageFooter {
         let now = usage::now_ms();
         let mut rows = Vec::new();
         for (key, name, state) in subscriptions {
-            let (anchor, trigger, refresh_focus) = self
+            let (anchor, trigger, _) = self
                 .rows
                 .entry(key.clone())
                 .or_insert_with(|| (AnchorSlot::default(), cx.focus_handle(), cx.focus_handle()))
@@ -1172,7 +1185,6 @@ impl Render for UsageFooter {
             }
             let ring = rail_window(state.snapshot.as_ref());
             let picked = key.clone();
-            let refresh = key.clone();
             let row_id = format!(
                 "subscription-{}-{}-{}",
                 key.kind.id(),
@@ -1258,58 +1270,14 @@ impl Render for UsageFooter {
                                 )
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
+                                this.request_refresh(picked.clone(), cx);
                                 this.open_subscription(picked.clone(), window, cx)
                             }))
                             .on_action(cx.listener(move |this, _: &ToggleUsage, window, cx| {
+                                this.request_refresh(key.clone(), cx);
                                 this.open_subscription(key.clone(), window, cx)
                             })),
                     )
-                    .when(!self.compact, |d| {
-                        d.child(
-                            div()
-                                .id(gpui::SharedString::from(format!(
-                                    "subscription-refresh-{}-{}-{}",
-                                    refresh.kind.id(),
-                                    refresh.profile.id,
-                                    refresh.billing
-                                )))
-                                .role(Role::Button)
-                                .aria_label("Refresh usage")
-                                .track_focus(&refresh_focus)
-                                .tab_index(0)
-                                .key_context("UsageRefresh")
-                                .size(px(22.))
-                                .rounded_md()
-                                .flex_shrink_0()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .opacity(if state.fetching { 0.5 } else { 1. })
-                                .hover(|s| s.bg(content(0.08)))
-                                .child(icon("refresh", 12.))
-                                .on_click(cx.listener({
-                                    let refresh = refresh.clone();
-                                    move |this, _, _, cx| {
-                                        if let Some(center) = crate::accounts::get(cx) {
-                                            center.update(cx, |center, cx| {
-                                                center.refresh(refresh.clone(), true, cx)
-                                            });
-                                        } else {
-                                            this.refresh(true, cx);
-                                        }
-                                    }
-                                }))
-                                .on_action(cx.listener(move |this, _: &RefreshUsage, _, cx| {
-                                    if let Some(center) = crate::accounts::get(cx) {
-                                        center.update(cx, |center, cx| {
-                                            center.refresh(refresh.clone(), true, cx)
-                                        });
-                                    } else {
-                                        this.refresh(true, cx);
-                                    }
-                                })),
-                        )
-                    })
                     .into_any_element(),
             );
         }
@@ -1325,7 +1293,6 @@ impl Render for UsageFooter {
             .flex()
             .flex_col()
             .text_color(content(0.55))
-            .when(!self.compact, |d| d.child(section_label("Subscriptions")))
             .child(
                 div()
                     .id("subscriptions-list")
@@ -1339,6 +1306,9 @@ impl Render for UsageFooter {
                 d.child(
                     popover("usage-details", Anchor::Slot(self.anchor.clone()))
                         .side(Side::Top)
+                        // Flush with the row it opens from, and with its corners.
+                        .align(crate::popover::Align::Start)
+                        .radius(6.)
                         .gap(7.)
                         .width(if self.show_accounts { 340. } else { 300. })
                         .max_height(460.)
@@ -1409,6 +1379,100 @@ mod tests {
     }
 
     use super::*;
+    #[gpui::test]
+    fn subscription_pointer_and_keyboard_activation_refresh_the_selected_account(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(bind);
+        let directory = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        ));
+        let keys = cx.update(|cx| {
+            crate::accounts::install(store, cx);
+            crate::accounts::get(cx).unwrap().update(cx, |center, cx| {
+                let keys = [Kind::Codex, Kind::Claude]
+                    .map(|kind| Key::new(kind, center.profile("default"), None));
+                for key in &keys {
+                    center
+                        .usage
+                        .entry(key.clone())
+                        .or_default()
+                        .complete(Ok(Snapshot {
+                            windows: vec![usage::Window {
+                                used_percent: 10.,
+                                minutes: 300,
+                                resets_at: None,
+                            }],
+                            updated_at: usage::now_ms(),
+                            ..Default::default()
+                        }));
+                }
+                cx.notify();
+                keys
+            })
+        });
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| UsageFooter::new(Kind::Codex, cx))
+            })
+            .unwrap()
+        });
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let id = |key: &Key| -> &'static str {
+            format!(
+                "subscription-{}-{}-{}",
+                key.kind.id(),
+                key.profile.id,
+                key.billing
+            )
+            .leak()
+        };
+        let a = visual.debug_bounds(id(&keys[0])).unwrap();
+        let b = visual.debug_bounds(id(&keys[1])).unwrap();
+        assert!(b.origin.y > a.origin.y, "rows stack");
+        assert!(a.size.width > px(100.), "rows are detailed, not rings");
+        assert!(visual.debug_bounds("subscription-refresh").is_none());
+        visual.simulate_click(b.center(), gpui::Modifiers::none());
+        visual.run_until_parked();
+        let requested = window
+            .read_with(&visual, |footer, _| footer.refresh_requests.clone())
+            .unwrap();
+        assert_eq!(requested, vec![keys[1].clone()]);
+
+        for compact in [false, true] {
+            for (keystroke, key) in [("enter", &keys[0]), ("space", &keys[1])] {
+                window
+                    .update(&mut visual, |footer, window, cx| {
+                        footer.dismiss(window, cx);
+                        footer.set_compact(compact, cx);
+                        footer.refresh_requests.clear();
+                        window.focus(&footer.rows[key].1, cx);
+                    })
+                    .unwrap();
+                visual.run_until_parked();
+                visual.simulate_keystrokes(keystroke);
+                visual.run_until_parked();
+                window
+                    .update(&mut visual, |footer, _, _| {
+                        assert_eq!(footer.refresh_requests, vec![key.clone()]);
+                        assert_eq!(footer.open_subscription_key(), Some(key));
+                    })
+                    .unwrap();
+                visual.simulate_keystrokes("escape");
+                visual.run_until_parked();
+                window
+                    .update(&mut visual, |footer, window, _| {
+                        assert!(!footer.open);
+                        assert!(footer.rows[key].1.is_focused(window));
+                        assert_eq!(footer.refresh_requests, vec![key.clone()]);
+                    })
+                    .unwrap();
+            }
+        }
+    }
+
     #[gpui::test]
     fn subscriptions_keep_account_usage_separate_from_the_active_conversation(
         cx: &mut gpui::TestAppContext,

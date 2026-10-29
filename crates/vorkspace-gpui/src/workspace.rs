@@ -75,23 +75,20 @@ pub(crate) enum SidebarNavigation {
     Connector(Connector),
     Notes,
     Automations,
-    Terminal,
 }
 impl SidebarNavigation {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::Connector(Connector::Github),
         Self::Connector(Connector::Gitlab),
         Self::Connector(Connector::Jira),
         Self::Notes,
         Self::Automations,
-        Self::Terminal,
     ];
     pub fn id(self) -> &'static str {
         match self {
             Self::Connector(provider) => provider.id(),
             Self::Notes => "notes",
             Self::Automations => "automations",
-            Self::Terminal => "terminal",
         }
     }
     pub fn from_id(id: &str) -> Option<Self> {
@@ -102,7 +99,6 @@ impl SidebarNavigation {
             Self::Connector(provider) => provider.label(),
             Self::Notes => "Notes",
             Self::Automations => "Automations",
-            Self::Terminal => "Terminal",
         }
     }
     pub fn icon(self) -> &'static str {
@@ -110,7 +106,6 @@ impl SidebarNavigation {
             Self::Connector(provider) => provider.icon(),
             Self::Notes => "note",
             Self::Automations => "zap",
-            Self::Terminal => "terminal",
         }
     }
     pub fn normalize(order: &[String]) -> Vec<Self> {
@@ -150,6 +145,11 @@ pub(crate) enum TitleTab {
 }
 
 impl TitleTab {
+    /// Only a project's sessions and terminals are tabs; Search, app views
+    /// and Bots are sidebar pages. Older workspaces may still list them.
+    pub fn in_strip(&self) -> bool {
+        matches!(self, Self::Session(_) | Self::Terminal { .. })
+    }
     pub fn session(&self) -> Option<i64> {
         match self {
             Self::Session(id) => Some(*id),
@@ -324,7 +324,6 @@ pub(crate) struct Workspace {
     pub compact_session_cards: bool,
     pub sidebar_notes_visible: bool,
     pub sidebar_automations_visible: bool,
-    pub sidebar_terminal_visible: bool,
     pub sidebar_inbox_visible: bool,
     /// Show qualifying running and unseen finished sessions in the project rail.
     pub sidebar_activity_visible: bool,
@@ -513,7 +512,6 @@ impl Default for Workspace {
             compact_session_cards: true,
             sidebar_notes_visible: true,
             sidebar_automations_visible: true,
-            sidebar_terminal_visible: true,
             sidebar_inbox_visible: true,
             sidebar_activity_visible: true,
             sidebar_subscriptions_visible: true,
@@ -798,36 +796,6 @@ impl Workspace {
         true
     }
 
-    /// The old Inbox visibility flag is deliberately ignored: enable toggles
-    /// are the sole authority for connector availability.
-    pub fn normalize_connector_tabs(&mut self, state: &vorkspace_core::inbox::ViewState) {
-        let fallback = Connector::from_id(&state.source)
-            .filter(|provider| state.connectors.enabled(provider.id()))
-            .or_else(|| {
-                state
-                    .connectors
-                    .enabled_providers()
-                    .find_map(Connector::from_id)
-            });
-        let normalize = |tab: &TitleTab| match tab {
-            TitleTab::App(AppView::Inbox) => {
-                fallback.map(|provider| TitleTab::App(AppView::Connector(provider)))
-            }
-            TitleTab::App(AppView::Connector(provider))
-                if !state.connectors.enabled(provider.id()) =>
-            {
-                None
-            }
-            _ => Some(tab.clone()),
-        };
-        self.title_order = self.title_order.iter().filter_map(normalize).collect();
-        self.scope_focus = self
-            .scope_focus
-            .iter()
-            .filter_map(|(scope, tab)| normalize(tab).map(|tab| (scope.clone(), tab)))
-            .collect();
-        self.normalize_title_order();
-    }
     pub fn sidebar_tab(&self) -> SidebarTab {
         self.sidebar_tabs
             .get(&self.project)
@@ -1267,8 +1235,11 @@ impl Workspace {
         self.tab_workspaces.retain(|tab, _| self.tabs.contains(tab));
         let mut seen = HashSet::new();
         self.title_order.retain(|tab| {
-            tab.session().is_none_or(|id| self.tabs.contains(&id)) && seen.insert(tab.clone())
+            tab.in_strip()
+                && tab.session().is_none_or(|id| self.tabs.contains(&id))
+                && seen.insert(tab.clone())
         });
+        self.scope_focus.retain(|_, tab| tab.in_strip());
         for id in &self.tabs {
             let tab = TitleTab::Session(*id);
             if seen.insert(tab.clone()) {
@@ -1399,11 +1370,10 @@ mod tests {
     fn terminal_legacy_restore_preserves_other_tabs_and_upgrades_scope_identity() {
         let raw = r#"{"tabs":[42],"active":42,"project":"/work","title_order":[{"Session":42},{"terminal":{"cwd":"/work"}},{"App":"Notes"},{"terminal":{"cwd":"/work"}},{"terminal":{"id":700,"cwd":"/work"}},{"terminal":{"cwd":"/other"}},"Search",{"Bot":{"id":"bot","project":"/work","worktree":"/work"}}],"scope_focus":{"first":{"terminal":{"cwd":"/work"}},"also-first":{"terminal":{"cwd":"/work"}},"other":{"terminal":{"cwd":"/other"}},"modern":{"terminal":{"id":700,"cwd":"/work"}}}}"#;
         let workspace = Workspace::restore(Some(raw), &[(42, "/work".into())], "/work");
-        assert_eq!(workspace.title_order.len(), 8);
+        // Search, app views and Bots are sidebar pages now, never tabs.
+        assert_eq!(workspace.title_order.len(), 5);
         assert_eq!(workspace.title_order[0], TitleTab::Session(42));
-        assert_eq!(workspace.title_order[2], TitleTab::App(AppView::Notes));
-        assert_eq!(workspace.title_order[6], TitleTab::Search);
-        assert!(matches!(&workspace.title_order[7], TitleTab::Bot { id, .. } if id == "bot"));
+        assert!(workspace.title_order.iter().all(TitleTab::in_strip));
         assert_eq!(workspace.active, Some(42));
         let terminals: Vec<_> = workspace
             .title_order
@@ -1432,10 +1402,10 @@ mod tests {
             workspace.scope_focus["also-first"],
             workspace.title_order[1]
         );
-        assert_eq!(workspace.scope_focus["other"], workspace.title_order[5]);
-        assert_eq!(workspace.scope_focus["modern"], workspace.title_order[4]);
+        assert_eq!(workspace.scope_focus["other"], workspace.title_order[4]);
+        assert_eq!(workspace.scope_focus["modern"], workspace.title_order[3]);
         assert!(matches!(
-            workspace.title_order[4],
+            workspace.title_order[3],
             TitleTab::Terminal { id: 700, .. }
         ));
         let saved = serde_json::to_string(&workspace).unwrap();
@@ -1449,51 +1419,6 @@ mod tests {
         assert!(id > 700, "saved identities stay reserved after closing");
     }
 
-    #[test]
-    fn connector_legacy_restore_preserves_other_tabs_and_uses_enabled_saved_source() {
-        let raw = r#"{"tabs":[1],"active":1,"project":"/work","title_order":[{"Session":1},{"App":"Inbox"},{"App":"Notes"},{"App":{"Connector":"gitlab"}}],"scope_focus":{"scope":{"App":"Inbox"}},"sidebar_inbox_visible":false}"#;
-        let mut state = vorkspace_core::inbox::ViewState {
-            source: "gitlab".into(),
-            ..Default::default()
-        };
-        let mut workspace = Workspace::restore(Some(raw), &[(1, "/work".into())], "/work");
-        workspace.normalize_connector_tabs(&state);
-        assert_eq!(
-            workspace.title_order,
-            [
-                TitleTab::Session(1),
-                TitleTab::App(AppView::Connector(Connector::Gitlab)),
-                TitleTab::App(AppView::Notes)
-            ]
-        );
-        assert_eq!(
-            workspace.scope_focus["scope"],
-            TitleTab::App(AppView::Connector(Connector::Gitlab))
-        );
-        state.connectors.set("gitlab", false).unwrap();
-        let mut fallback = Workspace::restore(Some(raw), &[(1, "/work".into())], "/work");
-        fallback.normalize_connector_tabs(&state);
-        assert!(
-            fallback
-                .title_order
-                .contains(&TitleTab::App(AppView::Connector(Connector::Github)))
-        );
-        for provider in vorkspace_core::inbox::PROVIDERS {
-            state.connectors.set(provider, false).unwrap();
-        }
-        fallback.normalize_connector_tabs(&state);
-        assert_eq!(
-            fallback.title_order,
-            [TitleTab::Session(1), TitleTab::App(AppView::Notes)]
-        );
-        let encoded = serde_json::to_string(&workspace).unwrap();
-        let restored = Workspace::restore(Some(&encoded), &[(1, "/work".into())], "/work");
-        assert_eq!(restored.title_order, workspace.title_order);
-        assert_eq!(
-            serde_json::from_str::<crate::settings::Section>(r#""inbox""#).unwrap(),
-            crate::settings::Section::Connectors
-        );
-    }
     #[test]
     fn original_layout_is_used_for_fresh_and_previously_experimental_workspaces() {
         assert!(Workspace::default().classic_layout);
@@ -1526,14 +1451,7 @@ mod tests {
         let mut state = Workspace::restore(Some(&saved.to_string()), &[], "/work");
         assert_eq!(
             state.sidebar_navigation_order,
-            [
-                "notes",
-                "github",
-                "automations",
-                "gitlab",
-                "jira",
-                "terminal"
-            ]
+            ["notes", "github", "automations", "gitlab", "jira"]
         );
         use SidebarNavigation::{Automations, Connector as Provider, Notes};
         let available = [
@@ -1550,14 +1468,7 @@ mod tests {
         ));
         assert_eq!(
             state.sidebar_navigation_order,
-            [
-                "jira",
-                "notes",
-                "github",
-                "gitlab",
-                "automations",
-                "terminal"
-            ]
+            ["jira", "notes", "github", "gitlab", "automations"]
         );
         // GitLab's slot survives its absence; hidden GitHub is still reorderable.
         assert!(state.reorder_sidebar_navigation(
@@ -1568,14 +1479,7 @@ mod tests {
         ));
         assert_eq!(
             state.sidebar_navigation_order,
-            [
-                "jira",
-                "notes",
-                "automations",
-                "gitlab",
-                "github",
-                "terminal"
-            ]
+            ["jira", "notes", "automations", "gitlab", "github"]
         );
         assert!(!state.reorder_sidebar_navigation(
             Provider(Connector::Gitlab),
@@ -1604,14 +1508,7 @@ mod tests {
         ));
         assert_eq!(
             state.sidebar_navigation_order,
-            [
-                "jira",
-                "gitlab",
-                "notes",
-                "automations",
-                "github",
-                "terminal"
-            ]
+            ["jira", "gitlab", "notes", "automations", "github"]
         );
     }
 

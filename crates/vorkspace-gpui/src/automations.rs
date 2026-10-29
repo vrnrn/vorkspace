@@ -878,10 +878,10 @@ impl Render for Automations {
         if visible.is_empty() {
             list = list.child(
                 div()
-                    .px(px(12.))
-                    .py(px(32.))
+                    .p(px(12.))
                     .text_size(px(12.))
-                    .text_color(content(0.45))
+                    .line_height(px(19.))
+                    .text_color(content(0.5))
                     .child(if self.loading {
                         "Loading automations…"
                     } else if query.trim().is_empty() {
@@ -984,9 +984,19 @@ impl Render for Automations {
                     .border_color(content(0.07))
                     .flex()
                     .items_center()
-                    .gap(px(4.))
-                    .child(icon("search", 12.))
-                    .child(div().flex_1().min_w_0().child(self.filter.clone()))
+                    .gap(px(1.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(28.))
+                            .px(px(6.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(icon("search", 12.))
+                            .child(self.filter.clone()),
+                    )
                     .child(
                         icon_button("new-automation", "New automation", "plus").on_click(
                             cx.listener(|this, _, _, cx| {

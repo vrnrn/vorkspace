@@ -126,9 +126,8 @@ fn compact_footer_centers_and_fits_through_zoom_accounts_and_expansion(cx: &mut 
                     .unwrap();
                 settle(visual);
                 let rail = visual.debug_bounds("classic-project-rail").unwrap();
-                let divider = visual.debug_bounds("classic-project-rail-divider").unwrap();
                 let settings = visual.debug_bounds("classic-rail-settings").unwrap();
-                let center = (rail.left() + divider.left()) / 2.;
+                let center = rail.center().x;
                 near(settings.center().x, center);
                 near(settings.size.width, px(32.));
                 near(settings.size.height, px(32.));
@@ -144,7 +143,7 @@ fn compact_footer_centers_and_fits_through_zoom_accounts_and_expansion(cx: &mut 
                     near(bounds.center().x, center);
                     near(bounds.size.width, px(32.));
                     near(bounds.size.height, px(32.));
-                    assert!(bounds.left() >= rail.left() && bounds.right() <= divider.left());
+                    assert!(bounds.left() >= rail.left() && bounds.right() <= rail.right());
                     if ix > 0 {
                         assert!(controls[ix - 1].bottom() + px(3.) <= bounds.top());
                     }

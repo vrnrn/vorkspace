@@ -1603,6 +1603,8 @@ fn setup(cx: &mut TestAppContext) -> Setup {
     let manager = window
         .update(cx, |shell, _, cx| {
             shell.workspace.right_panel_open = true;
+            // These tests were written for the sidebar at the right edge.
+            shell.workspace.preferences.sidebar_right = true;
             cx.notify();
             shell.bot_manager()
         })
@@ -2486,6 +2488,123 @@ fn app_actions_are_project_scoped_and_mutation_retries_are_idempotent(cx: &mut T
         assert!(m.hidden_session(child));
     });
 }
+
+fn selected_working_session(s: &Setup, cx: &mut TestAppContext) -> i64 {
+    let summary = locked(&s.store)
+        .unwrap()
+        .create("codex", &s.project)
+        .unwrap();
+    let id = summary.id;
+    s.window
+        .update(cx, |shell, _, cx| {
+            shell.bot_install(
+                summary,
+                vorkspace_core::agent::Settings::default(),
+                String::new(),
+                true,
+                cx,
+            );
+            shell.workspace.open(id);
+            shell
+                .bot_session_entity(id)
+                .unwrap()
+                .update(cx, |view, cx| {
+                    // Exercise activity projection without starting a provider.
+                    view.busy = true;
+                    cx.emit(SessionChanged);
+                    cx.notify();
+                });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    id
+}
+
+#[gpui::test]
+fn app_group_publication_during_start_preserves_launches_and_idempotent_receipts(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let working = selected_working_session(&s, cx);
+    s.manager.update(cx, |manager, _| {
+        let bot = manager.roster.get_mut(&s.id).unwrap();
+        bot.show_started_sessions_in_sidebar = true;
+        bot.use_sidebar_folders = true;
+    });
+    let mut children = Vec::new();
+    for request in ["group-first", "group-second"] {
+        let input = json!({
+            "project":s.project,
+            "prompt":request,
+            "draft":true,
+            "reveal":false,
+            "notifyOnComplete":true,
+        });
+        let started = call(&s, request, "sessions.start", input.clone(), cx)
+            .try_recv()
+            .unwrap()
+            .unwrap();
+        assert_eq!(started["accepted"], true);
+        let child = started["sessionId"].as_i64().unwrap();
+        children.push(child);
+        assert_eq!(
+            call(&s, request, "sessions.start", input, cx)
+                .try_recv()
+                .unwrap()
+                .unwrap(),
+            started,
+            "retry must reuse the accepted launch"
+        );
+        let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+        let bot = saved.get(&s.id).unwrap();
+        assert_eq!(bot.launches.len(), children.len());
+        let launch = bot.launches.iter().find(|l| l.session_id == child).unwrap();
+        assert!(launch.notify_on_complete);
+        assert!(!launch.completed);
+        let groups = locked(&s.store).unwrap().groups(&s.project).unwrap();
+        assert_eq!(groups.folders.len(), 1);
+        let folder = groups.folder_of(child).unwrap();
+        assert_eq!(folder.name, bot.label());
+        assert_eq!(folder.session_ids, children);
+        s.window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(shell.bot_groups(&s.project), groups);
+                assert_eq!(shell.workspace.active, Some(working));
+                assert!(shell.bot_session_entity(working).unwrap().read(cx).busy);
+                let view = shell.bot_session_entity(child).unwrap();
+                assert_eq!(view.read(cx).input.read(cx).content, request);
+                assert!(!view.read(cx).busy);
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
+fn app_group_publication_during_folder_move_keeps_selected_work(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let working = selected_working_session(&s, cx);
+    let moved = call(
+        &s,
+        "group-move",
+        "folders.move",
+        json!({"project":s.project,"sessionId":working,"newFolderName":"Manual"}),
+        cx,
+    )
+    .try_recv()
+    .unwrap()
+    .unwrap();
+    assert_eq!(moved["moved"], true);
+    let groups = locked(&s.store).unwrap().groups(&s.project).unwrap();
+    assert_eq!(groups.folder_of(working).unwrap().name, "Manual");
+    s.window
+        .update(cx, |shell, _, cx| {
+            assert_eq!(shell.bot_groups(&s.project), groups);
+            assert_eq!(shell.workspace.active, Some(working));
+            assert!(shell.bot_session_entity(working).unwrap().read(cx).busy);
+        })
+        .unwrap();
+}
+
 #[gpui::test]
 fn app_commands_recheck_deferred_ownership_and_protect_cold_and_self_targets(
     cx: &mut TestAppContext,
@@ -2910,17 +3029,22 @@ fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
     let panel = visual.debug_bounds("right-panel-frame").unwrap();
     let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
     let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-    let title_tabs = visual.debug_bounds("title-tab-strip").unwrap();
-    assert!((tabs.top() - title_tabs.top()).abs() <= px(0.5));
+    assert!(
+        visual.debug_bounds("title-tab-strip").is_none(),
+        "a Bot is a sidebar page, without session tabs"
+    );
+    assert_eq!(tabs.top(), panel.top());
     assert_eq!(tabs.size.height, px(TITLE_BAR_HEIGHT));
     assert_eq!(tabs.left(), panel.left() + px(6.));
     assert!(
         visual.debug_bounds("bot-activity").is_none(),
         "work is disclosed in chat"
     );
-    let search = visual.debug_bounds("titlebar-file-search").unwrap();
-    assert_eq!(search.left() - tabs.right(), px(6.));
-    assert_eq!(toggle.left() - search.right(), px(4.));
+    assert!(
+        visual.debug_bounds("titlebar-file-search").is_none(),
+        "a Bot has no project files to search"
+    );
+    assert!(toggle.left() >= tabs.right());
     assert!(tabs.bottom() <= panel.top() + px(TITLE_BAR_HEIGHT));
     assert_eq!(
         visual.debug_bounds("bot-session-list").unwrap().top(),
@@ -2934,10 +3058,9 @@ fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
         visual.debug_bounds("sidebar-frame").is_none(),
         "a Bot owns the main surface beside the project rail"
     );
-    assert!(title_tabs.right() <= tabs.left());
-    let selector = Box::leak(format!("title-tab-{session}").into_boxed_str());
-    let tab = visual.debug_bounds(selector).unwrap();
-    visual.simulate_click(tab.center(), Default::default());
+    // The project row returns to its tabs.
+    let project = visual.debug_bounds("classic-project-0").unwrap();
+    visual.simulate_click(project.center(), Default::default());
     visual.run_until_parked();
     let rail = visual.debug_bounds("classic-project-rail").unwrap();
     let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
@@ -3056,10 +3179,9 @@ fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut T
         assert!((divider.center().x - panel.left() - px(0.5)).abs() <= px(0.5));
         assert_eq!(panel.size.width, px(width));
         let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
-        let search = visual.debug_bounds("titlebar-file-search").unwrap();
         let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
         assert!(
-            tabs.right() <= search.left() && search.right() < toggle.left(),
+            tabs.right() < toggle.left(),
             "Bot header actions stay available at the minimum details width"
         );
     }
@@ -3154,9 +3276,9 @@ fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original
         visual,
         |manager, _| matches!(manager.route,Some(Route::Session(id)) if id==session)
     ));
-    let selector = Box::leak(format!("title-tab-{session}").into_boxed_str());
-    let open = visual.debug_bounds(selector).unwrap();
-    visual.simulate_click(open.center(), Default::default());
+    // The project row returns to its tabs.
+    let project = visual.debug_bounds("classic-project-0").unwrap();
+    visual.simulate_click(project.center(), Default::default());
     visual.run_until_parked();
     crate::clock::settle_animations(s.window, visual);
     let rail = visual.debug_bounds("classic-project-rail").unwrap();

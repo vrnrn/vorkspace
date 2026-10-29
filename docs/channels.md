@@ -2,11 +2,15 @@
 
 Channels use existing conversation owners for provider execution, approvals, Stop, and persistence. Opening a channel does not start work. Voice controls are documented in [Vox](vox.md).
 
+Channels are experimental and off by default. Turn on **Settings → Bots → Channels** to
+show the **Channels** section; turning it off hides the section and closes an open
+channel. A channel opens as a sidebar page, without a tab strip.
+
 Choose a channel under **Channels** in the main sidebar, or use its **+** button
 to create one. Choose member Bots and an optional topic; the gear at the right
 of the header opens a channel settings popover for the name, topic and members.
 Type `@` in the composer to choose a member Bot; Enter or Tab inserts the
-mention, and Escape dismisses suggestions. The sidebar shows channels as `# name` with a 30% opacity concentric-texture or solid-color highlight when selected; right-click a channel row (or click `...`) to customize its name, texture toggle (`60%` vs. No Texture), seed, grid scale, and color(s). A dot
+mention, and Escape dismisses suggestions. The sidebar shows channels as `# name`, with a small dot grid in the channel's color; right-click a channel row (or click `...`) to customize its name, texture toggle (`60%` vs. No Texture), seed, grid scale, and color(s). A dot
 marks unread messages and clears when you view the conversation. Read markers
 are saved across restarts. Conversations render Markdown and keep a separate
 composer: Enter sends and Shift+Enter adds a line. A human message without mentions
@@ -56,9 +60,10 @@ user's own message to a busy Bot steers its running turn when the chat
 Follow-ups setting is Steer and the provider supports steering; it is otherwise
 held for the next turn. A turn answering a peer is never steered, so its reply
 contains only that conversation.
-The primary conversation displays the incoming body in a **Bot-to-bot** block
-with sender and recipient names. Its answer identifies the peer it addresses;
-automatic replies and one-way follow-ups use different labels. These labels
+The primary conversation displays the incoming body like a chat message: the
+sender's name chip and a muted "→ recipient" label above a soft rounded bubble.
+Its answer is headed by the replying Bot's chip and a muted "replying to
+sender" label. These labels
 are derived from the saved internal envelope, including existing histories,
 and remain visible on queued or failed deliveries.
 

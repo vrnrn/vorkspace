@@ -25,7 +25,6 @@ use vorkspace_core::{
 
 pub(crate) enum Event {
     Close,
-    Settings,
     OpenSession(i64),
     StartSession {
         item: Box<Item>,

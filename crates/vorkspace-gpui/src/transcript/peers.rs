@@ -1,7 +1,30 @@
 //! Peer provenance is derived from saved internal prompts, independently of
 //! delivery cursors and the provider's conversation state.
 use super::*;
-use vorkspace_core::bot::peers::{Origin, presentation};
+use crate::bots::avatar::BotLookConfig;
+use std::collections::HashMap;
+use vorkspace_core::bot::{
+    Bot,
+    peers::{Origin, presentation},
+};
+
+/// Name -> look for resolving a saved sender. A name that is shared by several
+/// roster Bots is dropped: the saved envelope cannot say which one sent it.
+pub(crate) fn peer_looks(bots: &[Bot]) -> HashMap<String, BotLookConfig> {
+    let mut looks = HashMap::new();
+    let mut ambiguous = std::collections::HashSet::new();
+    for bot in bots {
+        let name = bot.label().trim().to_owned();
+        if looks
+            .insert(name.clone(), BotLookConfig::from_bot(bot))
+            .is_some()
+        {
+            ambiguous.insert(name);
+        }
+    }
+    looks.retain(|name, _| !ambiguous.contains(name));
+    looks
+}
 
 pub(super) fn prompt_origin(rows: &[Row]) -> Option<Origin> {
     if !rows.first().is_some_and(|row| {
@@ -13,12 +36,71 @@ pub(super) fn prompt_origin(rows: &[Row]) -> Option<Origin> {
     presentation(&text).map(|(origin, _)| origin)
 }
 
+fn peer_route(recipient: &str, queued: bool) -> String {
+    format!("→ {recipient}{}", if queued { " · Queued" } else { "" })
+}
+
+fn replying_to(sender: &str) -> String {
+    format!("replying to {sender}")
+}
+
 impl TranscriptView {
     pub(super) fn peer_at(&self, start: usize) -> Option<&Origin> {
         let message = self
             .messages
             .get(self.messages.partition_point(|m| m.start < start))?;
         message.peer.as_ref().filter(|_| message.start == start)
+    }
+
+    /// Replace the roster snapshot used to give a peer sender its avatar.
+    pub(crate) fn set_peer_looks(
+        &mut self,
+        looks: HashMap<String, BotLookConfig>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.peer_looks != looks {
+            self.peer_looks = looks;
+            cx.notify();
+        }
+    }
+
+    /// The sender's name in a rounded pill. Saved envelopes carry only the
+    /// sender's name, so the avatar appears only when the current roster has
+    /// exactly one Bot of that name; otherwise the chip is name-only.
+    fn peer_chip(&self, name: &str) -> gpui::Div {
+        let look = self.peer_looks.get(name.trim()).cloned();
+        div()
+            .debug_selector(|| "bot-peer-chip".into())
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .flex_shrink_0()
+            .max_w(px(320.))
+            .rounded_full()
+            .bg(content(0.07))
+            .py(px(2.))
+            .pr_3()
+            .when_some(look, |d, look| {
+                d.pl_2().child(
+                    div()
+                        .debug_selector(|| "bot-peer-chip-avatar".into())
+                        .size(px(14.))
+                        .flex_shrink_0()
+                        .child(crate::bots::avatar::avatar_with_look(
+                            look, "idle", 14., true,
+                        )),
+                )
+            })
+            .when(!self.peer_looks.contains_key(name.trim()), |d| d.pl_3())
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(content(0.8))
+                    .child(name.to_owned()),
+            )
     }
 
     pub(super) fn peer_message_label(&self, peer: &Origin, queued: bool) -> gpui::AnyElement {
@@ -31,20 +113,25 @@ impl TranscriptView {
             .debug_selector(|| "bot-peer-message-label".into())
             .role(Role::Label)
             .aria_label(format!(
-                "{}Bot-to-bot message from {} to {recipient}",
-                if queued { "Queued " } else { "" },
+                "{}{} to {recipient}",
+                if queued { "Queued: " } else { "" },
                 peer.name,
             ))
             .min_w_0()
-            .pb_1p5()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .pb_1()
             .text_size(px(12.))
             .line_height(px(18.))
             .text_color(content(0.6))
-            .child(format!(
-                "Bot-to-bot · {} → {recipient}{}",
-                peer.name,
-                if queued { " · Queued" } else { "" },
-            ))
+            .child(self.peer_chip(&peer.name))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(peer_route(recipient, queued)),
+            )
             .into_any_element()
     }
 
@@ -61,32 +148,45 @@ impl TranscriptView {
             .w_full()
             .max_w(px(576.))
             .min_w_0()
-            .border_l_2()
-            .border_color(content(0.2))
-            .bg(content(0.04))
-            .px_3()
+            .flex()
+            .flex_col()
+            .items_start()
             .pt(px(if first { 10. } else { 0. }))
             .pb(px(if last { 10. } else { 0. }))
-            .line_height(px(20.))
             .when(first, |d| d.child(self.peer_message_label(peer, false)))
-            .child(body)
+            .child(
+                div()
+                    .debug_selector(|| "bot-peer-bubble".into())
+                    .max_w_full()
+                    .min_w_0()
+                    .when(!(first && last), |d| d.w_full())
+                    .bg(user_bubble_fill())
+                    .px_3()
+                    .pt(px(if first { 8. } else { 0. }))
+                    .pb(px(if last { 8. } else { 0. }))
+                    .when(first, |d| d.rounded_t_xl())
+                    .when(last, |d| d.rounded_b_xl())
+                    .text_size(px(14.))
+                    .line_height(px(20.))
+                    .child(body),
+            )
             .into_any_element()
     }
 
     pub(super) fn peer_response_label(&self, turn: usize) -> Option<gpui::AnyElement> {
         let prompt = self.prompt_start(turn);
         let peer = self.peer_at(prompt)?;
-        let label = if peer.auto_reply {
-            format!("→ {} · Bot reply", peer.name)
-        } else {
-            format!("Responding to {}", peer.name)
-        };
+        let label = replying_to(&peer.name);
+        let bot = self
+            .bot_look
+            .as_ref()
+            .map_or("Bot", |(_, name)| name.as_ref());
         Some(
             div()
                 .id("bot-peer-response-label")
                 .debug_selector(|| "bot-peer-response-label".into())
                 .role(Role::Label)
-                .aria_label(label.clone())
+                .aria_label(format!("{bot}, {label}"))
                 .min_w_0()
                 .truncate()
                 .text_size(px(12.))
@@ -229,6 +329,33 @@ mod tests {
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
         assert!(visual.debug_bounds("bot-peer-message-label").is_some());
+        assert!(visual.debug_bounds("bot-peer-chip").is_some());
+        assert!(
+            visual.debug_bounds("bot-peer-chip-avatar").is_none(),
+            "an unknown sender keeps the name-only chip"
+        );
+        let bot = |id: &str| Bot {
+            id: id.into(),
+            name: "Alpha".into(),
+            ..Default::default()
+        };
+        window
+            .update(visual, |view, _, cx| {
+                view.set_peer_looks(peer_looks(&[bot("a")]), cx)
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("bot-peer-chip-avatar").is_some());
+        window
+            .update(visual, |view, _, cx| {
+                view.set_peer_looks(peer_looks(&[bot("a"), bot("b")]), cx)
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(
+            visual.debug_bounds("bot-peer-chip-avatar").is_none(),
+            "an ambiguous name must not guess an avatar"
+        );
         window
             .update(visual, |view, _, cx| {
                 let mut transcript = Transcript::default();
@@ -250,5 +377,15 @@ mod tests {
         visual.run_until_parked();
         assert!(visual.debug_bounds("bot-peer-message-label").is_some());
         assert!(visual.debug_bounds("bot-peer-response-label").is_some());
+    }
+
+    #[test]
+    fn peer_labels_read_like_chat_without_bot_to_bot_wording() {
+        assert_eq!(peer_route("x", false), "→ x");
+        assert_eq!(peer_route("x", true), "→ x · Queued");
+        assert_eq!(replying_to("y"), "replying to y");
+        for text in [peer_route("x", true), replying_to("y")] {
+            assert!(!text.contains("Bot-to-bot") && !text.contains("Bot reply"));
+        }
     }
 }

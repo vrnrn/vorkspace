@@ -74,45 +74,38 @@ fn assert_titlebar(
         "{percent}% fullscreen={fullscreen}: forward={forward:?} nav={nav:?}"
     );
     assert!(visual.debug_bounds("toggle-project-rail").is_none());
-    if visual
-        .debug_bounds("classic-project-rail-divider")
-        .is_some()
-    {
-        let divider = platform_bounds(window, visual, "classic-project-rail-divider");
-        near(divider.top(), 40. * scale);
-        if native {
-            assert!(divider.top() >= px(20. * scale + 7.));
-        }
-    }
-    let tabs = platform_bounds(window, visual, "title-tab-strip");
-    assert!(
-        tabs.left() + px(pixel) >= nav.right(),
-        "{tabs:?} overlaps {nav:?}"
-    );
-    // The strip's background can snap a device pixel across the column edge.
-    // Its actual tab/new-tab hit areas must stay entirely clear of navigation.
-    let selectors = window
-        .update(visual, |shell, _, cx| {
-            shell
-                .visible_tabs(cx)
-                .into_iter()
-                .map(|tab| match tab {
-                    TitleTab::Session(id) => format!("title-tab-{id}"),
-                    TitleTab::Bot { id, .. } => format!("bot-title-tab-{id}"),
-                    TitleTab::App(view) => format!("app-title-tab-{}", view.label()),
-                    TitleTab::Terminal { id, .. } => format!("terminal-title-tab-{id}"),
-                    TitleTab::Search => "search-title-tab".into(),
-                })
-                .chain(std::iter::once("new-tab".into()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap();
-    for selector in selectors {
-        let bounds = platform_bounds(window, visual, Box::leak(selector.into_boxed_str()));
+    // Sidebar pages (Bots, app views) have no tab strip.
+    if visual.debug_bounds("title-tab-strip").is_some() {
+        let tabs = platform_bounds(window, visual, "title-tab-strip");
         assert!(
-            bounds.left() + px(0.02) >= nav.right(),
-            "tab hit area {bounds:?} overlaps {nav:?}"
+            tabs.left() + px(pixel) >= nav.right(),
+            "{tabs:?} overlaps {nav:?}"
         );
+        // The strip's background can snap a device pixel across the column edge.
+        // Its actual tab/new-tab hit areas must stay entirely clear of navigation.
+        let selectors = window
+            .update(visual, |shell, _, cx| {
+                shell
+                    .visible_tabs(cx)
+                    .into_iter()
+                    .map(|tab| match tab {
+                        TitleTab::Session(id) => format!("title-tab-{id}"),
+                        TitleTab::Bot { id, .. } => format!("bot-title-tab-{id}"),
+                        TitleTab::App(view) => format!("app-title-tab-{}", view.label()),
+                        TitleTab::Terminal { id, .. } => format!("terminal-title-tab-{id}"),
+                        TitleTab::Search => "search-title-tab".into(),
+                    })
+                    .chain(std::iter::once("new-tab".into()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap();
+        for selector in selectors {
+            let bounds = platform_bounds(window, visual, Box::leak(selector.into_boxed_str()));
+            assert!(
+                bounds.left() + px(0.02) >= nav.right(),
+                "tab hit area {bounds:?} overlaps {nav:?}"
+            );
+        }
     }
     window
         .update(visual, |shell, w, _| {
@@ -174,13 +167,6 @@ fn zoomed_titlebar_keeps_native_controls_navigation_and_tabs_separate(cx: &mut T
                             .unwrap();
                         settle(visual);
                         assert_titlebar(window, visual, percent, fullscreen);
-                        if mode == "hidden" {
-                            assert!(
-                                visual
-                                    .debug_bounds("classic-project-rail-divider")
-                                    .is_none()
-                            );
-                        }
                     }
                 }
             }

@@ -18,7 +18,7 @@ In **Settings → Providers**, use **Models** beside an agent to choose which mo
 
 ## Multiple accounts & usage-limit continuation
 
-The **Subscriptions** section above Settings in the project sidebar shows usage across connected provider accounts. Each row opens its usage details and account controls; its summary shows the most-used limit window, and the details include every window. Use **Sidebar options → Subscriptions** to show or hide it. This preference is saved without disconnecting accounts or changing active conversations. Terminal commands remain available from the application menu and keyboard shortcuts.
+The **Subscriptions** area above Settings in the project sidebar shows usage across connected provider accounts, without a heading or refresh buttons. Each account is a row whose summary shows the most-used limit window; the icon rail shows usage rings instead. Clicking one refreshes its usage and opens its details and account controls, which include every window, in a card aligned with the row; banked resets show their title and expiry without the provider's promotional text. Use **Sidebar options → Subscriptions** to show or hide it. This preference is saved without disconnecting accounts or changing active conversations. Terminal commands remain available from the application menu and keyboard shortcuts.
 
 In **Settings → Providers**, you can add multiple **Claude Code** and **Codex** accounts (each isolated under its own provider home directory) and switch the active account globally or per conversation.
 

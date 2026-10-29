@@ -8,7 +8,8 @@ use vorkspace_core::bot::Bot;
 
 const FACE: f32 = 64.;
 const BACKDROP: f32 = 256.;
-pub(super) const TOP: f32 = 8.;
+/// Clear of the window's top edge: the Bot page has no title bar.
+pub(super) const TOP: f32 = 24.;
 pub(super) const HEIGHT: f32 = TOP + FACE + 2. + 22.;
 
 #[derive(Clone)]

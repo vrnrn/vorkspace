@@ -1,6 +1,6 @@
 # Vox
 
-Vox is an optional voice conversation in the title bar. Enable it in Settings → Vox; it starts disabled. Clicking its face begins a call. Stop releases microphone capture immediately, ends the call, and denies late app actions. Silent mode keeps the reply bubble while suppressing spoken playback.
+Vox is an optional voice conversation. Enable it in Settings → Vox; it starts disabled. Its title bar face is hidden for now, so a call cannot be started from the window; when shown, clicking the face begins a call. Stop releases microphone capture immediately, ends the call, and denies late app actions. Silent mode keeps the reply bubble while suppressing spoken playback.
 
 Hiding the application or minimizing the calling window ends its Vox call. Switching chats, projects, or Settings, losing keyboard focus, and covering the window keep the call connected. Native hide/minimize observers belong to the active call and are removed when it ends; a delayed event from an earlier call cannot stop its successor.
 

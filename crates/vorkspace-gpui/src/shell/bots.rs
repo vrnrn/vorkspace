@@ -13,6 +13,13 @@ pub(crate) struct BotSession {
     pub model: SharedString,
 }
 impl Shell {
+    pub(super) fn close_bot_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Park the page, retaining Bot/channel drafts and in-flight work.
+        if let Some(bots) = self.bots.clone() {
+            bots.update(cx, |bots, cx| bots.close(cx));
+        }
+        self.close_app_view(window, cx);
+    }
     #[cfg(test)]
     pub(crate) fn bot_manager(&self) -> Entity<crate::bots::Bots> {
         self.bots.as_ref().unwrap().clone()
@@ -89,6 +96,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.groups.insert(project, groups);
-        self.invalidate_chrome(cx);
+        // Bot callers can still hold their entity while applying these groups.
+        // Keep state current, but refresh only after that update has returned.
+        let owner = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = owner.update(cx, |owner, cx| owner.invalidate_chrome(cx));
+        });
     }
 }

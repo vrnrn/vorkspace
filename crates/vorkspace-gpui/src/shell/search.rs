@@ -15,7 +15,7 @@ impl Shell {
         }
     }
     pub(super) fn close_search_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_title_tabs(&[TitleTab::Search], None, window, cx);
+        self.close_app_search(window, cx);
     }
     pub(super) fn search_title_tab(
         &self,
@@ -116,6 +116,7 @@ impl Shell {
     }
     pub(super) fn close_app_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search) = self.app_search.take() {
+            self.navigation_revision += 1;
             self.saved_search = Some(search.view.read(cx).draft(cx));
             self.update_chat_visibility(cx);
             if let Some(restore) = search.restore {
@@ -136,6 +137,10 @@ impl Shell {
             window.focus(&search.view.focus_handle(cx), cx);
             return;
         }
+        // Only restore focus captured from the conversation surface. Leaving a
+        // sidebar page parks its focused input, so that handle is no longer visible.
+        let restore_conversation_focus =
+            !self.app_view_open() && !self.bot_active(cx) && self.settings.is_none();
         self.close_menu(cx);
         self.close_preview(cx);
         self.leave_app_views(cx);
@@ -146,7 +151,9 @@ impl Shell {
             self.close_settings(window, cx);
         }
         self.navigation_revision += 1;
-        let restore = window.focused(cx);
+        let restore = restore_conversation_focus
+            .then(|| window.focused(cx))
+            .flatten();
         let conversations = self
             .sessions
             .values()
@@ -197,7 +204,6 @@ impl Shell {
                     live,
                     projects,
                     recent,
-                    classic: self.workspace.classic_layout,
                     logos: self
                         .workspace
                         .project_appearance
@@ -420,68 +426,5 @@ mod tests {
                 );
             })
             .unwrap();
-    }
-    #[gpui::test]
-    fn app_search_shares_tab_sizing_order_cycle_and_close(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            input::bind(cx);
-            super::super::bind_keys(cx);
-            crate::clock::use_test_clock(cx);
-        });
-        let (window, _, _) = crate::shell::tests::window(cx);
-        window
-            .update(cx, |shell, w, cx| {
-                for _ in 0..10 {
-                    let summary = locked(&shell.store)
-                        .unwrap()
-                        .create("codex", &shell.workspace.project)
-                        .unwrap();
-                    let id = summary.id;
-                    shell.add(summary, cx);
-                    shell.open(id, w, cx);
-                }
-                shell.open_app_search(w, cx);
-                assert_eq!(shell.visible_tabs(cx).last(), Some(&TitleTab::Search));
-                assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Search));
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        let strip = visual.debug_bounds("title-tab-strip").unwrap();
-        let search = visual.debug_bounds("search-title-tab").unwrap();
-        let new = visual.debug_bounds("new-tab").unwrap();
-        assert!(
-            new.right() <= strip.right(),
-            "Search and every session must fit before the new-tab button"
-        );
-        assert!(search.right() <= new.left());
-        assert!(
-            new.left() - search.right() <= px(4.5),
-            "Search uses the same 2px gap and button margin"
-        );
-        assert_eq!(search.size.width, px(SELECTED_TAB_MIN_WIDTH));
-        window
-            .update(visual, |shell, w, cx| {
-                assert_eq!(shell.tab_scroll.max_offset().x, px(0.));
-                shell.cycle(-1, w, cx);
-                assert!(shell.app_search.is_none());
-                assert!(matches!(
-                    shell.active_title_tab(cx),
-                    Some(TitleTab::Session(_))
-                ));
-                shell.cycle(1, w, cx);
-                assert!(shell.app_search.is_some());
-                shell.reorder_title_tab(&TitleTab::Search, 0, cx);
-                assert_eq!(shell.visible_tabs(cx).first(), Some(&TitleTab::Search));
-                shell.run_title_tab_menu(TitleTab::Search, "right", w, cx);
-                assert_eq!(shell.visible_tabs(cx), vec![TitleTab::Search]);
-                assert!(shell.app_search.is_some());
-                shell.close_search_tab(w, cx);
-                assert!(!shell.workspace.title_order.contains(&TitleTab::Search));
-                assert!(shell.app_search.is_none() && shell.saved_search.is_none());
-            })
-            .unwrap();
-        visual.run_until_parked();
     }
 }

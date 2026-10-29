@@ -14,7 +14,7 @@ const COMPACT_ROW_HEIGHT: f32 = 36.;
 const ELAPSED_TICK: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Status {
+pub(super) enum Status {
     Approval,
     Working,
     Done,
@@ -27,7 +27,7 @@ impl Status {
             Self::Done => "Done",
         }
     }
-    fn glyph(self) -> &'static str {
+    pub(super) fn glyph(self) -> &'static str {
         match self {
             Self::Approval => "alert-circle",
             Self::Working => "response-activity",
@@ -798,6 +798,24 @@ impl Render for LiveAgents {
 }
 
 impl Shell {
+    /// Why a session belongs in the sidebar's activity: running, waiting on an
+    /// approval, or finished unseen. Archived and deleting sessions never do.
+    pub(super) fn sidebar_status(&self, id: i64, cx: &App) -> Option<Status> {
+        let metadata = self.session_metadata(id, cx);
+        if metadata.summary.archived || self.deleting.contains(&id) {
+            return None;
+        }
+        if metadata.needs_approval() {
+            Some(Status::Approval)
+        } else if metadata.responding() || self.remote_marks.get(&id).is_some_and(|state| state.0) {
+            Some(Status::Working)
+        } else if !metadata.busy && self.unseen_finished.contains(&id) {
+            Some(Status::Done)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn sync_live_agents(&self, cx: &mut Context<Self>) {
         // App CLI and Bot launchers both install into this registry, independently
         // of tab/project selection and project folder collapse state. Remote marks
@@ -815,21 +833,8 @@ impl Shell {
                 if !self.session_summaries.contains_key(&id) {
                     return None;
                 }
+                let status = self.sidebar_status(id, cx)?;
                 let metadata = self.session_metadata(id, cx);
-                if metadata.summary.archived || self.deleting.contains(&id) {
-                    return None;
-                }
-                let status = if metadata.needs_approval() {
-                    Status::Approval
-                } else if metadata.responding()
-                    || self.remote_marks.get(&id).is_some_and(|state| state.0)
-                {
-                    Status::Working
-                } else if !metadata.busy && self.unseen_finished.contains(&id) {
-                    Status::Done
-                } else {
-                    return None;
-                };
                 Some(Agent {
                     id,
                     title: metadata.display_title(),

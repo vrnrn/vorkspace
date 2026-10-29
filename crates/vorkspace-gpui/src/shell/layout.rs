@@ -44,14 +44,64 @@ impl Shell {
             .clone()
             .filter(|_| right_shown && self.settings.is_none())
             .map(|panel| self.right_panel_frame(panel, right_width, full, cx));
-        let tab_bar = self.titlebar(window, cx);
+        // Search and app views (connectors, Notes, Automations) start at the top edge.
+        // Settings keeps its own header, whichever page it was opened from.
+        let app_view = self.settings.is_none()
+            && (self.active_app_view.is_some() || self.app_search.is_some());
+        let bare = self.bare_page(cx);
+        // Collapsed navigation can extend past the rail. Keep its drag row
+        // above page headers so the controls cannot cover their inputs.
+        let tab_bar = (!bare || self.strip_lead(window) > 0.).then(|| self.titlebar(window, cx));
         let navigation = self.navigation(window, cx);
         let rail_width = self.classic_rail_width();
-        let corner = self
-            .settings
-            .is_none()
-            .then(|| self.panel_toggle(window, cx));
+        // At zero width the cached rail is not rendered, so it cannot stop
+        // presentation tasks itself.
+        if rail_width <= 0. {
+            self.hide_project_marks(cx);
+        }
+        let corner = (self.settings.is_none() && !app_view).then(|| self.panel_toggle(window, cx));
         let header = self.classic_workspace_header(cx);
+        // Sessions, Explorer and Changes sit beside the rail or at the right edge.
+        let left = !self.workspace.preferences.sidebar_right;
+        let sidebar_navigation_row = left && self.strip_lead(window) > 0.;
+        let sidebar = (sidebar_width > 0.).then(|| {
+            div()
+                .id("sidebar-frame")
+                .debug_selector(|| "sidebar-frame".into())
+                .relative()
+                .w(px(sidebar_width))
+                .h_full()
+                .flex_shrink_0()
+                .overflow_hidden()
+                // Rounded toward its left neighbour like the pane, so its line
+                // curves at the top and bottom; on the left, the rail draws it.
+                .rounded_l(px(12.))
+                .when(!left, |d| d.border_l_1())
+                .border_color(crate::right_panel::stroke())
+                .child(
+                    div()
+                        .absolute()
+                        .map(|d| if left { d.left_0() } else { d.right_0() })
+                        .top_0()
+                        .w(px(self.workspace.right_panel_width))
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .opacity(self.sidebar_fraction)
+                        // A collapsed rail leaves navigation over the left sidebar.
+                        // Give it a row above the project switcher and its actions.
+                        .when(sidebar_navigation_row, |d| {
+                            d.child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0())
+                        })
+                        .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0().child(header))
+                        .child(div().flex_1().min_h_0().child(self.sidebar_contents())),
+                )
+        });
+        let (before, after) = if left {
+            (sidebar, None)
+        } else {
+            (None, sidebar)
+        };
         div()
             .flex_1()
             .min_h_0()
@@ -67,6 +117,7 @@ impl Shell {
                     ),
                 )
             })
+            .children(before)
             .child(
                 div()
                     .id("main-pane-frame")
@@ -76,37 +127,16 @@ impl Shell {
                     .h_full()
                     .flex()
                     .flex_col()
+                    .rounded_l(px(12.))
+                    // Beside a left sidebar, the pane draws its own curved edge.
+                    .when(left, |d| {
+                        d.border_l_1().border_color(crate::right_panel::stroke())
+                    })
                     .bg(pane_fill())
-                    .child(tab_bar)
+                    .children(tab_bar)
                     .child(card),
             )
-            .when(sidebar_width > 0., |d| {
-                d.child(
-                    div()
-                        .id("sidebar-frame")
-                        .debug_selector(|| "sidebar-frame".into())
-                        .relative()
-                        .w(px(sidebar_width))
-                        .h_full()
-                        .flex_shrink_0()
-                        .overflow_hidden()
-                        .border_l_1()
-                        .border_color(crate::right_panel::stroke())
-                        .child(
-                            div()
-                                .absolute()
-                                .right_0()
-                                .top_0()
-                                .w(px(self.workspace.right_panel_width))
-                                .h_full()
-                                .flex()
-                                .flex_col()
-                                .opacity(self.sidebar_fraction)
-                                .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0().child(header))
-                                .child(div().flex_1().min_h_0().child(self.sidebar_contents())),
-                        ),
-                )
-            })
+            .children(after)
             .children(self.sidebar_resize(cx))
             .children(panel.map(|panel| div().h_full().bg(pane_fill()).child(panel)))
             .child(div().absolute().top_0().left_0().child(navigation))
@@ -114,11 +144,18 @@ impl Shell {
                 div()
                     .absolute()
                     .top_0()
-                    .right(px(sidebar_width))
+                    .right(px(if left { 0. } else { sidebar_width }))
                     .h(px(TITLE_BAR_HEIGHT))
                     .children(corner),
             )
             .into_any_element()
+    }
+    /// Sidebar pages omit the tabs. An expanded rail leaves them at the top;
+    /// collapsed navigation keeps a drag row above them for its overhang.
+    /// Settings keeps its own header over any page.
+    pub(super) fn bare_page(&self, cx: &gpui::App) -> bool {
+        self.settings.is_none()
+            && (self.active_app_view.is_some() || self.app_search.is_some() || self.bot_active(cx))
     }
     /// Bot details retain the window corner; project tools have their own header.
     pub(super) fn corner_room(&self, cx: &gpui::App) -> f32 {
@@ -134,6 +171,10 @@ impl Shell {
             }
             return 6. + CORNER_BUTTONS_WIDTH + 12.;
         }
+        // The open sidebar's header holds them instead (`classic_corner`).
+        if self.sidebar_fraction > 0. {
+            return 6.;
+        }
         6. + self.diff_stat_room(cx) + 24. + 12.
     }
     pub(super) fn classic_corner(
@@ -141,6 +182,10 @@ impl Shell {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // The open sidebar's header has its own search and the diff stat.
+        if self.sidebar_fraction > 0. {
+            return div().into_any_element();
+        }
         div()
             .h(px(TITLE_BAR_HEIGHT))
             .flex_shrink_0()
@@ -174,13 +219,19 @@ impl Shell {
             && self.sidebar_fraction > 0.
             && self.sidebar_slide.is_none())
         .then(|| {
-            // Drag the left separator of the shared right-hand sidebar.
+            // Drag the sidebar's separator on the pane's side.
             let border = self.workspace.right_panel_width - 0.5;
             div()
                 .id("sidebar-resize")
                 .debug_selector(|| "sidebar-resize".into())
                 .absolute()
-                .right(px(border - 2.))
+                .map(|d| {
+                    if !self.workspace.preferences.sidebar_right {
+                        d.left(px(self.classic_rail_width() + border - 2.))
+                    } else {
+                        d.right(px(border - 2.))
+                    }
+                })
                 .w(px(4.))
                 .h_full()
                 .cursor(CursorStyle::ResizeLeftRight)
@@ -333,13 +384,16 @@ mod tests {
     use super::*;
     use crate::clock::Instant;
     use crate::{bots::Bots, shell::tests::window};
-    use gpui::{TestAppContext, WindowHandle};
+    use gpui::{Focusable, TestAppContext, WindowHandle};
     use std::time::Duration;
 
     fn mixed_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, Entity<Bots>, String, i64) {
         let (window, _, session) = window(cx);
         let (manager, id) = window
             .update(cx, |shell, w, cx| {
+                // Channels are experimental and hidden by default.
+                shell.workspace.preferences.channels = true;
+                shell.apply_preferences(cx);
                 let manager = shell.bot_manager();
                 manager.update(cx, |m, cx| {
                     m.create_named(Vec::new(), w, cx);
@@ -351,6 +405,217 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         (window, manager, id, session)
+    }
+
+    #[gpui::test]
+    fn the_sidebar_sits_beside_the_rail_by_default_or_switches_right(cx: &mut TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, session) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1400.), px(900.)));
+        window
+            .update(visual, |shell, w, cx| {
+                shell.open(session, w, cx);
+                shell.set_sidebar_visible(true, cx);
+                // The sidebar sits beside the rail by default.
+                shell.workspace.preferences.sidebar_right = false;
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        crate::clock::settle_animations(window, visual);
+        let rail = visual.debug_bounds("classic-project-rail").unwrap();
+        let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        let pane = visual.debug_bounds("main-pane-frame").unwrap();
+        let strip = visual.debug_bounds("title-tab-strip").unwrap();
+        assert_eq!(sidebar.left(), rail.right());
+        assert_eq!(pane.left(), sidebar.right());
+        assert!(
+            strip.left() >= pane.left(),
+            "tabs head the pane, after the sidebar"
+        );
+        // Its separator faces the pane.
+        let sash = visual.debug_bounds("sidebar-resize").unwrap();
+        assert!((sash.center().x - sidebar.right()).abs() <= px(2.5));
+        // Switched to the right, it follows the pane.
+        window
+            .update(visual, |shell, _, cx| {
+                shell.workspace.preferences.sidebar_right = true;
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let pane = visual.debug_bounds("main-pane-frame").unwrap();
+        let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        assert_eq!(pane.left(), rail.right());
+        assert_eq!(sidebar.left(), pane.right());
+    }
+
+    #[gpui::test]
+    fn sidebar_project_switcher_clears_navigation_across_rail_modes(cx: &mut TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, session) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1400.), px(900.)));
+        window
+            .update(visual, |shell, w, cx| {
+                w.activate_window();
+                shell.open(session, w, cx);
+                shell.set_sidebar_visible(true, cx);
+            })
+            .unwrap();
+        crate::clock::settle_animations(window, visual);
+        for right in [false, true] {
+            for mode in ["expanded", "compact", "hidden", "expanded"] {
+                window
+                    .update(visual, |shell, _, cx| {
+                        shell.workspace.preferences.sidebar_right = right;
+                        shell.workspace.project_rail_open = mode == "expanded";
+                        if mode != "expanded" {
+                            shell.workspace.preferences.collapsed_project_rail = mode.into();
+                        }
+                        shell.invalidate_chrome(cx);
+                        cx.notify();
+                    })
+                    .unwrap();
+                visual.run_until_parked();
+                let navigation = visual.debug_bounds("titlebar-navigation").unwrap();
+                let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+                let header = visual.debug_bounds("classic-workspace-header").unwrap();
+                if navigation.right() > sidebar.left() {
+                    assert!(
+                        header.top() >= navigation.bottom(),
+                        "{mode}, right={right}: {header:?} overlaps {navigation:?}"
+                    );
+                } else {
+                    assert_eq!(header.top(), sidebar.top(), "{mode}, right={right}");
+                }
+                // Click the leading edge that used to sit beneath navigation.
+                let project = visual.debug_bounds("sidebar-project-button").unwrap();
+                visual.simulate_click(
+                    gpui::point(project.left() + px(12.), project.center().y),
+                    Default::default(),
+                );
+                visual.run_until_parked();
+                window
+                    .update(visual, |shell, _, cx| {
+                        assert!(
+                            shell.menu_open(&super::super::MenuTarget::Header),
+                            "{mode}, right={right}: the project switcher remains clickable"
+                        );
+                        shell.close_menu(cx);
+                    })
+                    .unwrap();
+                visual.run_until_parked();
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn the_active_tab_is_the_selected_pill_of_the_tab_strip(cx: &mut TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, session) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        window
+            .update(visual, |shell, w, cx| shell.open(session, w, cx))
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                let id = shell.workspace.active_tab().unwrap();
+                assert_eq!(
+                    shell.tab_liquid.selected().as_deref(),
+                    Some(format!("tab:{id}").as_str())
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn expanded_pages_have_no_title_bar_but_settings_keeps_its_header_over_them(
+        cx: &mut TestAppContext,
+    ) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, _) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        window
+            .update(visual, |shell, w, cx| {
+                shell.open_connector(crate::workspace::Connector::Github, w, cx)
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("title-tab-strip").is_none());
+        assert!(visual.debug_bounds("settings-header").is_none());
+        window
+            .update(visual, |shell, w, cx| {
+                shell.open_settings(crate::settings::Section::General, w, cx)
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("settings-header").is_some());
+    }
+
+    #[gpui::test]
+    fn search_header_clears_navigation_and_keeps_its_query_across_rail_modes(
+        cx: &mut TestAppContext,
+    ) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, _) = window(cx);
+        let input = window
+            .update(cx, |shell, w, cx| {
+                w.activate_window();
+                shell.open_app_search(w, cx);
+                let input = shell
+                    .app_search
+                    .as_ref()
+                    .unwrap()
+                    .view
+                    .read(cx)
+                    .input
+                    .clone();
+                input.update(cx, |input, cx| input.set_text("query draft".into(), cx));
+                input
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1400.), px(900.)));
+        for mode in ["expanded", "compact", "hidden", "expanded"] {
+            window
+                .update(visual, |shell, w, cx| {
+                    shell.workspace.project_rail_open = mode == "expanded";
+                    if mode != "expanded" {
+                        shell.workspace.preferences.collapsed_project_rail = mode.into();
+                    }
+                    w.focus(&shell.focus, cx);
+                    shell.invalidate_chrome(cx);
+                    cx.notify();
+                })
+                .unwrap();
+            visual.run_until_parked();
+            let navigation = visual.debug_bounds("titlebar-navigation").unwrap();
+            let pane = visual.debug_bounds("main-pane-frame").unwrap();
+            let header = visual.debug_bounds("app-search-header").unwrap();
+            if navigation.right() > pane.left() {
+                assert!(header.top() >= navigation.bottom(), "{mode}: {header:?}");
+            } else {
+                assert_eq!(header.top(), pane.top(), "{mode}");
+            }
+            assert!(visual.debug_bounds("title-tab-strip").is_none(), "{mode}");
+            // This query point lies under the overhanging buttons without clearance.
+            visual.simulate_click(
+                gpui::point(header.left() + px(48.), header.center().y),
+                Default::default(),
+            );
+            visual.run_until_parked();
+            window
+                .update(visual, |_, w, cx| {
+                    assert!(input.read(cx).focus_handle(cx).is_focused(w), "{mode}");
+                    assert_eq!(input.read(cx).content, "query draft", "{mode}");
+                })
+                .unwrap();
+        }
     }
 
     #[gpui::test]

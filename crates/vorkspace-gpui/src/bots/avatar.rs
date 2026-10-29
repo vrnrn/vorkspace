@@ -16,7 +16,7 @@ use vorkspace_core::{
     bot::Bot,
     project_appearance::{
         BotAnimState, default_foreground_color, default_seed_for, normalize_badge_shape,
-        normalize_bot_face, render_badge_or_bot, render_textured_pill,
+        normalize_bot_face, render_badge_or_bot,
     },
 };
 
@@ -583,20 +583,6 @@ const FRAME_CACHE_BYTES: usize = 16 * 1024 * 1024;
 static FRAME_CACHE: LazyLock<Mutex<ImageCache<FrameCacheKey>>> =
     LazyLock::new(|| Mutex::new(ImageCache::new(FRAME_CACHE_BYTES)));
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct PillCacheKey {
-    seed: u32,
-    grid: u8,
-    textured: bool,
-    bg_color: u32,
-    fg_color: u32,
-    width: u32,
-    height: u32,
-}
-
-static PILL_CACHE: LazyLock<Mutex<ImageCache<PillCacheKey>>> =
-    LazyLock::new(|| Mutex::new(ImageCache::new(4 * 1024 * 1024)));
-
 fn frame_cache_key(
     is_bot: bool,
     look: &BotLookConfig,
@@ -660,47 +646,6 @@ pub(crate) fn cached_badge_or_bot_image(
 
 /// Render a 30% opacity full-button concentric texture / color highlight pill for
 /// selected Project and Channel rows in the sidebar.
-pub(crate) fn sidebar_selection_pill(
-    seed: u32,
-    grid: u8,
-    textured: bool,
-    bg_color: u32,
-    fg_color: u32,
-) -> AnyElement {
-    let key = PillCacheKey {
-        seed,
-        grid: grid.clamp(2, 8),
-        textured,
-        bg_color,
-        fg_color,
-        width: 360,
-        height: 64,
-    };
-    canvas(
-        |_, _, _| {},
-        move |bounds, _, window, cx| {
-            let image = cached_image(&PILL_CACHE, key.clone(), window, cx, || {
-                to_render_image(render_textured_pill(
-                    key.seed,
-                    key.grid,
-                    key.textured,
-                    key.bg_color,
-                    key.fg_color,
-                    key.width,
-                    key.height,
-                ))
-            });
-            // `rounded_md`, stretched to fill the row.
-            let radius = Corners::all(window.rem_size() * 0.375);
-            let _ = window.paint_image(bounds, bounds, radius, image, 0, false);
-        },
-    )
-    .absolute()
-    .inset_0()
-    .size_full()
-    .into_any_element()
-}
-
 fn compute_bot_anim(
     seed: u32,
     status: &str,

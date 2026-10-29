@@ -50,6 +50,7 @@ impl Shell {
             TitleTab::Terminal { cwd, .. } => cwd.clone(),
             _ => label.to_owned(),
         };
+        let pill = format!("tool:{identity}");
         let display_label = match &tab {
             TitleTab::Terminal { cwd, .. } => format!("Terminal · {}", project_name(cwd)),
             _ => label.to_owned(),
@@ -76,15 +77,15 @@ impl Shell {
             .relative()
             .child(
                 title_tab_plate(active, false)
+                    .relative()
+                    .child(self.tab_liquid.row(pill, active))
                     .text_color(content(if active { 1. } else { 0.5 }))
                     .w_full()
                     .min_w_0()
                     .when(close && width >= TAB_CLOSE_MIN_WIDTH, |d| d.pr_7())
                     .when(width < 30., |d| d.px(px(((width - 14.) / 2.).max(0.))))
                     .gap(px(6.))
-                    .group_hover("app-title-tab", |s| {
-                        s.text_color(content(1.)).bg(title_tab_fill(active, true))
-                    })
+                    .group_hover("app-title-tab", |s| s.text_color(content(1.)))
                     .child(icon(glyph, 14.))
                     .child(
                         div()
@@ -104,7 +105,7 @@ impl Shell {
                         .aria_label(format!("Close {}", label))
                         .absolute()
                         .right_1()
-                        .top(px(10.))
+                        .top(px(10. + TAB_LABEL_DROP))
                         .size(px(20.))
                         .rounded_sm()
                         .flex()
@@ -183,6 +184,7 @@ impl Shell {
         self.invalidate_chrome(cx);
     }
     pub(super) fn close_app_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigation_revision += 1;
         self.leave_app_views(cx);
         if self.workspace.active.is_none() {
             let previous = self
@@ -375,9 +377,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match event {
-            inbox::Event::Settings => {
-                self.open_settings(crate::settings::Section::Connectors, window, cx)
-            }
             inbox::Event::Close => self.close_app_view(window, cx),
             inbox::Event::OpenSession(id) => self.open(*id, window, cx),
             inbox::Event::StartSession { item, prompt, bot } => {

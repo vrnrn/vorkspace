@@ -138,7 +138,11 @@ mod tests {
                 })
                 .unwrap();
             visual.run_until_parked();
-            let search = visual.debug_bounds("titlebar-file-search").unwrap();
+            // With the sidebar open, its header holds the file search instead.
+            let search = visual
+                .debug_bounds("titlebar-file-search")
+                .or_else(|| visual.debug_bounds("sidebar-file-search"))
+                .unwrap();
             visual.simulate_click(search.center(), Default::default());
             visual.run_until_parked();
             window

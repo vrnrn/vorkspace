@@ -28,6 +28,9 @@ pub(crate) const TITLE_TAB_MAX_WIDTH: f32 = 224.;
 pub(crate) const PANE_HEADER_HEIGHT: f32 = 36.;
 /// Every tab's plate: title, file and terminal tabs, and the new-tab button.
 pub(crate) const TAB_PLATE_HEIGHT: f32 = 27.;
+/// How far a tab's label and close button sit below the bar's centre, so
+/// they centre in the pill that runs from the plate down to the bar's line.
+pub(crate) const TAB_LABEL_DROP: f32 = 3.;
 
 /// Attachment previews keep a fixed crop, independent of image dimensions.
 pub(crate) fn attachment_thumbnail(source: impl Into<gpui::ImageSource>) -> gpui::AnyElement {
@@ -247,16 +250,18 @@ pub(crate) fn title_tab_fill(selected: bool, hovered: bool) -> Hsla {
     })
 }
 
-/// The plate for session tabs in the title bar.
+/// The plate for session tabs in the title bar. Its fill is a pill rising
+/// from the line beneath the tabs (`crate::liquid`), so the plate has none.
 /// Headline ink owns inactive dimming; the plate never fades its children.
-pub(crate) fn title_tab_plate(selected: bool, hovered: bool) -> Div {
+pub(crate) fn title_tab_plate(_selected: bool, _hovered: bool) -> Div {
     div()
         .h(px(TAB_PLATE_HEIGHT))
         .rounded_md()
         .px_2()
+        // The pill runs on to the line beneath; centre the label within it.
+        .pt(px(TAB_LABEL_DROP * 2.))
         .flex()
         .items_center()
-        .bg(title_tab_fill(selected, hovered))
 }
 pub(crate) fn shell_fill() -> Hsla {
     if let Some(fill) = TOKENS.with(|t| t.borrow().as_ref().map(|t| t.shell)) {

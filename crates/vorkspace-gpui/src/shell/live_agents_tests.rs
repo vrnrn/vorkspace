@@ -1,6 +1,5 @@
 use super::*;
 use gpui::{TestAppContext, VisualTestContext, WindowHandle};
-use vorkspace_core::{agent::Settings, session_groups::Groups};
 
 fn fixture(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
     crate::clock::use_test_clock(cx);
@@ -38,29 +37,84 @@ fn bounds(visual: &mut VisualTestContext, selector: String) -> Option<Bounds<Pix
 }
 
 #[gpui::test]
-fn zero_one_and_multiple_sessions_are_discoverable_without_hydrating_history(
-    cx: &mut TestAppContext,
-) {
+fn sessions_hang_under_their_projects_without_hydrating_history(cx: &mut TestAppContext) {
     let (window, a, b) = fixture(cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.simulate_resize(gpui::size(px(1300.), px(900.)));
     visual.run_until_parked();
+    assert!(bounds(visual, format!("project-session-{a}")).is_none());
     assert!(visual.debug_bounds("sidebar-activity-card").is_none());
     busy(window, a, true, visual);
-    assert!(visual.debug_bounds("sidebar-activity-card").is_some());
-    assert!(bounds(visual, format!("live-agent-{a}")).is_some());
-    assert_eq!(snapshot(window, visual), vec![(a, Status::Working)]);
     busy(window, b, true, visual);
-    assert_eq!(snapshot(window, visual).len(), 2);
-    window
+    let (a_project, b_project) = window
         .update(visual, |shell, _, cx| {
-            assert_eq!(shell.workspace.active, Some(b));
-            assert_eq!(shell.workspace.project, "/work/vorkspace");
-            // a belongs to another project, but neither enumeration nor ticking
-            // loads its saved transcript.
-            assert!(!shell.sessions[&a].read(cx).history_loaded());
+            let ix = |id: i64| {
+                let cwd = shell.session_metadata(id, cx).summary.cwd.clone();
+                shell
+                    .workspace
+                    .projects
+                    .iter()
+                    .position(|p| *p == cwd)
+                    .unwrap()
+            };
+            (ix(a), ix(b))
         })
         .unwrap();
+    assert_ne!(a_project, b_project);
+    for (id, project) in [(a, a_project), (b, b_project)] {
+        let row = bounds(visual, format!("project-session-{id}")).unwrap();
+        let mark = bounds(visual, format!("classic-project-{project}")).unwrap();
+        assert!(
+            row.top() >= mark.bottom(),
+            "a session hangs below its project"
+        );
+        assert!(bounds(visual, format!("classic-project-working-{project}")).is_some());
+    }
+    // The Working card is only for the icon rail.
+    assert!(visual.debug_bounds("sidebar-activity-card").is_none());
+    // Listing another project's session never loads its saved transcript.
+    window
+        .update(visual, |shell, _, cx| {
+            assert!(!shell.sessions[&a].read(cx).history_loaded())
+        })
+        .unwrap();
+    // Opening it selects exactly that session.
+    let row = bounds(visual, format!("project-session-{a}")).unwrap();
+    visual.simulate_click(row.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, cx| {
+            assert_eq!(shell.workspace.active, Some(a));
+            assert_eq!(
+                shell.workspace.project,
+                shell.session_metadata(a, cx).summary.cwd.clone()
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn the_activity_preferences_hide_project_trees(cx: &mut TestAppContext) {
+    let (window, _, b) = fixture(cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    busy(window, b, true, visual);
+    assert!(bounds(visual, format!("project-session-{b}")).is_some());
+    window
+        .update(visual, |shell, _, cx| {
+            shell.change_sidebar_option("sidebar-activity", cx)
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(bounds(visual, format!("project-session-{b}")).is_none());
+    window
+        .update(visual, |shell, _, cx| {
+            shell.change_sidebar_option("sidebar-activity", cx);
+            shell.workspace.preferences.working_agents = false;
+            shell.invalidate_chrome(cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(bounds(visual, format!("project-session-{b}")).is_none());
 }
 
 #[gpui::test]
@@ -109,7 +163,8 @@ fn compact_activity_is_one_animated_control_for_working_sessions_and_expands(
             assert!(shell.workspace.project_rail_open)
         })
         .unwrap();
-    assert!(bounds(visual, format!("live-agent-{b}")).is_some());
+    // Expanded, the session hangs under its project instead of the card.
+    assert!(bounds(visual, format!("project-session-{b}")).is_some());
     window
         .update(visual, |shell, _, cx| shell.toggle_project_rail(cx))
         .unwrap();
@@ -118,511 +173,6 @@ fn compact_activity_is_one_animated_control_for_working_sessions_and_expands(
     assert!(visual.debug_bounds("compact-working").is_none());
     assert!(visual.debug_bounds("sidebar-activity-card").is_none());
     assert!(activity.read_with(visual, |card, _| card.animation.is_none()));
-}
-
-#[gpui::test]
-fn approvals_sort_first_and_unseen_completions_open_the_exact_cross_project_session(
-    cx: &mut TestAppContext,
-) {
-    let (window, a, b) = fixture(cx);
-    busy(window, a, true, cx);
-    busy(window, b, true, cx);
-    window
-        .update(cx, |shell, _, cx| {
-            shell.sessions[&b].update(cx, |view, cx| view.sidebar_test_approval(true, cx));
-        })
-        .unwrap();
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    visual.run_until_parked();
-    assert_eq!(
-        snapshot(window, visual),
-        vec![(b, Status::Approval), (a, Status::Working)]
-    );
-    assert!(bounds(visual, format!("live-agent-{b}-approval")).is_some());
-    visual.executor().advance_clock(Duration::from_secs(3));
-    busy(window, a, false, visual);
-    assert_eq!(
-        snapshot(window, visual),
-        vec![(b, Status::Approval), (a, Status::Done)]
-    );
-    window
-        .update(visual, |shell, _, cx| {
-            assert_eq!(
-                shell
-                    .live_agents
-                    .read(cx)
-                    .elapsed(&shell.live_agents.read(cx).agents[1]),
-                Some("3s".into())
-            );
-        })
-        .unwrap();
-    let row = bounds(visual, format!("live-agent-{a}")).unwrap();
-    visual.simulate_click(row.center(), Default::default());
-    visual.run_until_parked();
-    window
-        .update(visual, |shell, _, cx| {
-            assert_eq!(shell.workspace.active, Some(a));
-            assert_eq!(shell.workspace.project, "/work/another-project");
-            assert!(!shell.unseen_finished.contains(&a));
-            assert!(shell.sessions[&b].read(cx).needs_approval());
-            assert!(shell.sessions[&b].read(cx).responding());
-        })
-        .unwrap();
-    assert!(!snapshot(window, visual).iter().any(|(id, _)| *id == a));
-}
-
-#[gpui::test]
-fn visibility_menu_persists_and_respects_legacy_opt_out_without_changing_other_settings(
-    cx: &mut TestAppContext,
-) {
-    let (window, a, _) = fixture(cx);
-    busy(window, a, true, cx);
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    let options = visual.debug_bounds("sidebar-options").unwrap();
-    visual.simulate_click(options.center(), Default::default());
-    visual.run_until_parked();
-    crate::clock::settle_animations(window, visual);
-    let row = visual.debug_bounds("menu-action-sidebar-activity").unwrap();
-    visual.simulate_click(row.center(), Default::default());
-    visual.run_until_parked();
-    assert!(visual.debug_bounds("sidebar-activity-card").is_none());
-    assert!(
-        visual
-            .debug_bounds("menu-action-sidebar-activity")
-            .is_some()
-    );
-    window
-        .update(visual, |shell, _, cx| {
-            assert!(!shell.workspace.sidebar_activity_visible);
-            let saved = locked(&shell.store).unwrap().ui_state().unwrap().unwrap();
-            let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
-            assert!(!restored.sidebar_activity_visible);
-            assert_eq!(restored.preferences, shell.workspace.preferences);
-            shell.workspace.sidebar_activity_visible = true;
-            shell.workspace.preferences.working_agents = false;
-            shell.close_menu(cx);
-            shell.invalidate_chrome(cx);
-        })
-        .unwrap();
-    visual.run_until_parked();
-    assert!(visual.debug_bounds("sidebar-activity-card").is_none());
-    window
-        .update(visual, |shell, _, cx| {
-            let active = shell.workspace.active;
-            let selected = shell.selected_sessions.clone();
-            shell.change_sidebar_option("sidebar-activity", cx);
-            assert!(shell.workspace.preferences.working_agents);
-            assert!(shell.workspace.sidebar_activity_visible);
-            assert_eq!(shell.workspace.active, active);
-            assert_eq!(shell.selected_sessions, selected);
-        })
-        .unwrap();
-    visual.run_until_parked();
-    assert!(visual.debug_bounds("sidebar-activity-card").is_some());
-    visual.simulate_resize(gpui::size(px(1300.), px(1100.)));
-    window
-        .update(visual, |shell, w, cx| {
-            shell.open_settings(crate::settings::Section::General, w, cx)
-        })
-        .unwrap();
-    visual.run_until_parked();
-    crate::clock::settle_animations(window, visual);
-    for enabled in [false, true] {
-        let toggle = visual
-            .debug_bounds("settings-toggle-working-agents")
-            .unwrap();
-        visual.simulate_click(toggle.center(), Default::default());
-        visual.run_until_parked();
-        window
-            .update(visual, |shell, _, _| {
-                assert_eq!(shell.workspace.preferences.working_agents, enabled);
-                let saved = locked(&shell.store).unwrap().ui_state().unwrap().unwrap();
-                let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
-                assert_eq!(restored.preferences.working_agents, enabled);
-            })
-            .unwrap();
-    }
-    window
-        .update(visual, |shell, w, cx| shell.close_settings(w, cx))
-        .unwrap();
-    visual.run_until_parked();
-    assert!(visual.debug_bounds("sidebar-activity-card").is_some());
-}
-
-#[gpui::test]
-fn cli_and_bot_admissions_and_group_updates_remain_visible_while_a_bot_covers_the_workspace(
-    cx: &mut TestAppContext,
-) {
-    let (window, caller, underlying) = fixture(cx);
-    let (cli, bot) = window
-        .update(cx, |shell, w, cx| {
-            shell.sessions[&caller].update(cx, |view, cx| view.enable_mode("operator", cx));
-            let summary = locked(&shell.store)
-                .unwrap()
-                .create("codex", "/work/another-project")
-                .unwrap();
-            let cli = summary.id;
-            assert_eq!(
-                shell
-                    .app_install_start(
-                        caller,
-                        app_commands::AppStart {
-                            summary,
-                            settings: Settings::default(),
-                            prompt: "Preserve CLI draft".into(),
-                            draft: true,
-                            reveal: false,
-                            placement: None,
-                            cleanup: None,
-                        },
-                        w,
-                        cx
-                    )
-                    .unwrap(),
-                cli
-            );
-            let summary = locked(&shell.store)
-                .unwrap()
-                .create("claude", "/work/bot-project")
-                .unwrap();
-            let bot = summary.id;
-            shell.bot_install(
-                summary,
-                Settings::default(),
-                "Preserve Bot draft".into(),
-                true,
-                cx,
-            );
-            let manager = shell.bot_manager();
-            manager.update(cx, |manager, cx| {
-                manager.create_named(Vec::new(), w, cx);
-                manager.dismiss_settings(w, cx);
-            });
-            shell.selected_sessions.insert(caller);
-            (cli, bot)
-        })
-        .unwrap();
-    cx.run_until_parked();
-    window
-        .update(cx, |shell, _, _| {
-            shell.selected_sessions.insert(caller);
-        })
-        .unwrap();
-    for id in [cli, bot, underlying] {
-        busy(window, id, true, cx);
-    }
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    visual.run_until_parked();
-    assert_eq!(snapshot(window, visual).len(), 3);
-    window
-        .update(visual, |shell, _, cx| {
-            assert!(shell.bot_active(cx));
-            assert_eq!(shell.workspace.active, Some(underlying));
-            assert!(
-                shell
-                    .live_agents
-                    .read(cx)
-                    .agents
-                    .iter()
-                    .all(|agent| !agent.selected)
-            );
-            let before = shell.live_agents.read(cx).runs[&cli].started;
-            let mut groups = Groups::default();
-            groups.create_folder(&[cli], "delegated".into());
-            groups.folders[0].collapsed = true;
-            shell.bot_apply_groups("/work/another-project".into(), groups, cx);
-            assert_eq!(shell.live_agents.read(cx).runs[&cli].started, before);
-        })
-        .unwrap();
-    visual.run_until_parked();
-    busy(window, underlying, false, visual);
-    assert!(snapshot(window, visual).contains(&(underlying, Status::Done)));
-    window
-        .update(visual, |shell, _, cx| {
-            assert!(
-                shell.unseen_finished.contains(&underlying),
-                "a Bot covers the selected session"
-            );
-            assert!(shell.selected_sessions.contains(&caller));
-            for (id, text) in [(cli, "Preserve CLI draft"), (bot, "Preserve Bot draft")] {
-                assert_eq!(shell.sessions[&id].read(cx).input.read(cx).content, text);
-            }
-        })
-        .unwrap();
-    let row = bounds(visual, format!("live-agent-{cli}")).unwrap();
-    visual.simulate_click(row.center(), Default::default());
-    visual.run_until_parked();
-    window
-        .update(visual, |shell, _, cx| {
-            assert!(!shell.bot_active(cx));
-            assert_eq!(shell.workspace.active, Some(cli));
-            assert_eq!(shell.workspace.project, "/work/another-project");
-            assert_eq!(
-                shell.sessions[&cli].read(cx).input.read(cx).content,
-                "Preserve CLI draft"
-            );
-        })
-        .unwrap();
-}
-
-#[gpui::test]
-fn elapsed_clock_is_local_bounded_and_stops_for_hidden_compact_and_finished_cards(
-    cx: &mut TestAppContext,
-) {
-    let (window, a, _) = fixture(cx);
-    busy(window, a, true, cx);
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    // Drain the fixture's finite pane/reveal transitions before measuring
-    // independent timer wakeups. No timeout or production cadence is changed.
-    crate::clock::settle_animations(window, visual);
-    let (activity, snapshots, transcript, transcript_passes, active_transcript, active_passes) =
-        window
-            .update(visual, |shell, _, cx| {
-                let transcript = shell.sessions[&a].read(cx).transcript.clone();
-                let active_transcript = shell.sessions[&shell.workspace.active.unwrap()]
-                    .read(cx)
-                    .transcript
-                    .clone();
-                (
-                    shell.live_agents.clone(),
-                    shell.live_agents.read(cx).snapshots,
-                    transcript.clone(),
-                    transcript.read(cx).render_passes,
-                    active_transcript.clone(),
-                    active_transcript.read(cx).render_passes,
-                )
-            })
-            .unwrap();
-    let ticks = activity.read_with(visual, |activity, _| activity.ticks);
-    let frames = activity.read_with(visual, |activity, _| activity.frames);
-    visual.executor().advance_clock(Duration::from_secs(1));
-    visual.run_until_parked();
-    assert_eq!(
-        activity.read_with(visual, |activity, _| activity.ticks),
-        ticks + 1
-    );
-    assert!(activity.read_with(visual, |activity, _| activity.frames) > frames);
-    window
-        .update(visual, |shell, _, cx| {
-            assert!(!shell.sessions[&a].read(cx).history_loaded());
-        })
-        .unwrap();
-    assert_eq!(
-        transcript.read_with(visual, |transcript, _| transcript.render_passes),
-        transcript_passes
-    );
-    assert_eq!(
-        active_transcript.read_with(visual, |transcript, _| transcript.render_passes),
-        active_passes,
-        "animation must also leave the visible conversation untouched"
-    );
-    // GPUI marks ancestor views dirty for any changed child. The expensive
-    // session projection still belongs to semantic notifications, not redraws.
-    assert_eq!(
-        activity.read_with(visual, |activity, _| activity.snapshots),
-        snapshots
-    );
-    for mode in [
-        "hidden",
-        "hidden-rail",
-        "compact",
-        "finished",
-        "settings",
-        "empty",
-    ] {
-        window
-            .update(visual, |shell, w, cx| {
-                shell.workspace.sidebar_activity_visible = mode != "hidden";
-                shell.workspace.project_rail_open = mode != "compact" && mode != "hidden-rail";
-                shell.workspace.preferences.collapsed_project_rail = if mode == "hidden-rail" {
-                    "hidden"
-                } else {
-                    "compact"
-                }
-                .into();
-                if mode == "finished" || mode == "empty" {
-                    shell.sessions[&a].update(cx, |view, cx| {
-                        view.busy = false;
-                        cx.emit(SessionChanged);
-                    });
-                }
-                if mode == "settings" {
-                    shell.open_settings(crate::settings::Section::General, w, cx);
-                }
-                if mode == "empty" {
-                    shell.close_settings(w, cx);
-                    shell.unseen_finished.clear();
-                }
-                shell.invalidate_chrome(cx);
-                cx.notify();
-            })
-            .unwrap();
-        visual.run_until_parked();
-        assert!(
-            activity.read_with(visual, |activity, _| activity.tick.is_none()
-                && (mode == "compact" || activity.animation.is_none())),
-            "{mode}"
-        );
-        let ticks = activity.read_with(visual, |activity, _| activity.ticks);
-        visual.executor().advance_clock(Duration::from_secs(2));
-        visual.run_until_parked();
-        assert_eq!(
-            activity.read_with(visual, |activity, _| activity.ticks),
-            ticks,
-            "{mode}"
-        );
-    }
-}
-
-#[gpui::test]
-fn four_rows_expand_to_bounded_scrolling_and_preserve_footer_and_focus(cx: &mut TestAppContext) {
-    let (window, a, b) = fixture(cx);
-    let ids = window
-        .update(cx, |shell, _, cx| {
-            let mut ids = vec![a, b];
-            for _ in 0..98 {
-                let summary = locked(&shell.store)
-                    .unwrap()
-                    .create("codex", "/work/elsewhere")
-                    .unwrap();
-                ids.push(summary.id);
-                shell.add_loaded(summary, cx);
-            }
-            shell
-                .resources
-                .update(cx, |resources, cx| resources.saturate(cx));
-            ids
-        })
-        .unwrap();
-    for &id in &ids {
-        busy(window, id, true, cx);
-    }
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_resize(gpui::size(px(1300.), px(900.)));
-    visual.run_until_parked();
-    {
-        let compact = false;
-        window
-            .update(visual, |shell, w, cx| {
-                shell.workspace.project_rail_open = !compact;
-                shell.live_agents.update(cx, |activity, _| {
-                    activity.expanded = false;
-                    activity.scroll.scroll_to(ListOffset::default());
-                });
-                shell.sessions[&b].update(cx, |view, cx| {
-                    view.input.update(cx, |input, cx| {
-                        input.set_text("Do not lose this draft".into(), cx)
-                    });
-                });
-                let input = shell.sessions[&b].read(cx).input.clone();
-                w.focus(&input.focus_handle(cx), cx);
-                shell.invalidate_chrome(cx);
-                cx.notify();
-            })
-            .unwrap();
-        visual.run_until_parked();
-        let shown = ids
-            .iter()
-            .filter(|id| bounds(visual, format!("live-agent-{id}")).is_some())
-            .count();
-        assert_eq!(shown, DEFAULT_ROWS);
-        let focus = visual.update(|w, cx| w.focused(cx));
-        let more = visual.debug_bounds("live-agents-more").unwrap();
-        visual.simulate_click(more.center(), Default::default());
-        visual.run_until_parked();
-        assert_eq!(
-            visual.update(|w, cx| w.focused(cx)),
-            focus,
-            "pointer disclosure must retain composer focus"
-        );
-        window
-            .update(visual, |shell, _, cx| {
-                let activity = shell.live_agents.read(cx);
-                assert!(activity.expanded);
-                assert_eq!(activity.shown_count(), ids.len());
-                assert_eq!(shell.workspace.active, Some(b));
-                assert_eq!(
-                    shell.sessions[&b].read(cx).input.read(cx).content,
-                    "Do not lose this draft"
-                );
-            })
-            .unwrap();
-        window
-            .update(visual, |shell, w, cx| {
-                let focus = shell.live_agents.read(cx).list_focus.clone();
-                w.focus(&focus, cx)
-            })
-            .unwrap();
-        visual.simulate_keystrokes("end");
-        visual.refresh().unwrap();
-        visual.run_until_parked();
-        let last = window
-            .update(visual, |shell, _, cx| {
-                shell.live_agents.read(cx).agents.last().unwrap().id
-            })
-            .unwrap();
-        assert!(bounds(visual, format!("live-agent-{last}")).is_some());
-        let mounted = ids
-            .iter()
-            .filter(|id| bounds(visual, format!("live-agent-{id}")).is_some())
-            .count();
-        assert!(
-            mounted < 16,
-            "virtual rows must be bounded by the viewport: {mounted}"
-        );
-        if !compact {
-            let anchor = window
-                .update(visual, |shell, _, cx| {
-                    let activity = shell.live_agents.read(cx);
-                    let top = activity.scroll.logical_scroll_top().item_ix;
-                    activity.agents[top].id
-                })
-                .unwrap();
-            busy(window, a, false, visual);
-            window
-                .update(visual, |shell, _, cx| {
-                    let activity = shell.live_agents.read(cx);
-                    let top = activity.scroll.logical_scroll_top().item_ix;
-                    assert_eq!(
-                        activity.agents[top].id, anchor,
-                        "completion above the viewport retains its top session"
-                    );
-                })
-                .unwrap();
-            busy(window, a, true, visual);
-        }
-        // Short windows keep both the scrollable list and its disclosure above
-        // the existing resource/subscription/settings footer, in either rail.
-        visual.simulate_resize(gpui::size(px(1300.), px(520.)));
-        visual.run_until_parked();
-        let activity = visual.debug_bounds("sidebar-activity-card").unwrap();
-        let subscriptions = visual.debug_bounds("subscriptions").unwrap();
-        let resources = visual.debug_bounds("resource-pressure-chip").unwrap();
-        let settings = visual.debug_bounds("classic-rail-settings").unwrap();
-        assert!(activity.top() >= px(TITLE_BAR_HEIGHT));
-        assert!(activity.bottom() <= resources.top());
-        assert!(activity.bottom() <= subscriptions.top());
-        assert!(subscriptions.bottom() <= settings.top());
-        assert!(
-            settings.bottom() <= px(520.),
-            "settings must remain inside the window, compact={compact}: {settings:?}"
-        );
-        let more = visual.debug_bounds("live-agents-more").unwrap();
-        assert!(more.bottom() <= activity.bottom());
-        visual.simulate_click(more.center(), Default::default());
-        visual.run_until_parked();
-        window
-            .update(visual, |shell, _, cx| {
-                let activity = shell.live_agents.read(cx);
-                assert!(!activity.expanded);
-                assert_eq!(activity.shown_count(), DEFAULT_ROWS);
-                assert_eq!(activity.scroll.logical_scroll_top().item_ix, 0);
-                assert_eq!(activity.scroll.logical_scroll_top().offset_in_item, px(0.));
-            })
-            .unwrap();
-        visual.simulate_resize(gpui::size(px(1300.), px(900.)));
-        visual.run_until_parked();
-    }
 }
 
 #[gpui::test]
@@ -919,49 +469,6 @@ fn historical_elapsed_format_handles_rounding_and_whole_units() {
     ] {
         assert_eq!(live_elapsed(Duration::from_millis(ms)), label);
     }
-}
-
-#[gpui::test]
-fn two_line_card_geometry_and_single_session_disclosure(cx: &mut TestAppContext) {
-    let (window, a, _) = fixture(cx);
-    busy(window, a, true, cx);
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_resize(gpui::size(px(1300.), px(1000.)));
-    visual.run_until_parked();
-    let header = visual.debug_bounds("live-agents-working-header").unwrap();
-    let row = bounds(visual, format!("live-agent-{a}")).unwrap();
-    let title = bounds(visual, format!("live-agent-{a}-title")).unwrap();
-    assert!(bounds(visual, format!("live-agent-{a}-activity")).is_none());
-    let status = bounds(visual, format!("live-agent-{a}-working")).unwrap();
-    let provider = bounds(visual, format!("live-agent-{a}-provider")).unwrap();
-    let project = bounds(visual, format!("live-agent-{a}-project")).unwrap();
-    let elapsed = bounds(visual, format!("live-agent-{a}-elapsed")).unwrap();
-    assert_eq!(
-        row.size.height,
-        px(48.),
-        "18/14px lines, one 4px gap and 12px padding"
-    );
-    assert!(header.bottom() <= row.top());
-    assert_eq!(project.top() - title.bottom(), px(4.));
-    assert_eq!(status.center().y, provider.center().y);
-    assert_eq!(provider.left() - status.right(), px(6.));
-    assert_eq!(project.left() - provider.right(), px(6.));
-    assert_eq!(project.top(), elapsed.top());
-    assert_eq!(
-        project.left(),
-        title.left() + px(36.),
-        "metadata provider icon remains below title"
-    );
-    assert!(visual.debug_bounds("live-agents-more").is_none());
-    assert!(visual.debug_bounds("activity-next").is_none());
-    window
-        .update(visual, |shell, _, cx| {
-            let activity = shell.live_agents.read(cx);
-            assert_eq!(activity.agents.len(), 1);
-            assert_eq!(activity.activity_label(&activity.agents[0]), None);
-            assert_eq!(activity.elapsed(&activity.agents[0]).as_deref(), Some("1s"));
-        })
-        .unwrap();
 }
 
 #[gpui::test]

@@ -86,6 +86,20 @@ impl SettingsView {
                 )],
             ),
             self.row(
+                Some("sidebar-right"),
+                false,
+                "Switch sidebar to right side",
+                Some("Show Sessions, Explorer and Changes at the window's right edge instead of beside the project rail.".into()),
+                vec![self.toggle(
+                    "sidebar-right",
+                    "Switch sidebar to right side",
+                    p.sidebar_right,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.sidebar_right = on),
+                )],
+            ),
+            self.row(
                 Some("notes"),
                 false,
                 "Notes",

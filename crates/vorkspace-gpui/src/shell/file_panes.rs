@@ -172,7 +172,10 @@ mod tests {
                 let pane = shell.workspace.active.unwrap();
                 assert_ne!(pane, session, "the file has its own title tab");
                 assert_eq!(shell.workspace.session_for_pane(pane), session);
-                assert!(shell.visible_tabs(cx).contains(&bot));
+                assert!(
+                    !shell.visible_tabs(cx).contains(&bot),
+                    "a Bot is a page, not a tab"
+                );
                 assert!(shell.visible_tabs(cx).contains(&TitleTab::Session(session)));
                 let review = shell.active_review(cx).unwrap();
                 assert!(review.read(cx).state.chat_hidden);
@@ -231,7 +234,10 @@ mod tests {
                 );
                 assert!(reopened.read(cx).dirty);
                 assert!(reopened.read(cx).focus_handle(cx).contains_focused(w, cx));
-                assert!(shell.visible_tabs(cx).contains(&bot));
+                assert!(
+                    !shell.visible_tabs(cx).contains(&bot),
+                    "a Bot is a page, not a tab"
+                );
             })
             .unwrap();
         std::fs::remove_dir_all(folder).unwrap();
