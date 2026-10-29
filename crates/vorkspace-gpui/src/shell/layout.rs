@@ -63,6 +63,7 @@ impl Shell {
         let header = self.classic_workspace_header(cx);
         // Sessions, Explorer and Changes sit beside the rail or at the right edge.
         let left = !self.workspace.preferences.sidebar_right;
+        let sidebar_navigation_row = left && self.strip_lead(window) > 0.;
         let sidebar = (sidebar_width > 0.).then(|| {
             div()
                 .id("sidebar-frame")
@@ -87,6 +88,11 @@ impl Shell {
                         .flex()
                         .flex_col()
                         .opacity(self.sidebar_fraction)
+                        // A collapsed rail leaves navigation over the left sidebar.
+                        // Give it a row above the project switcher and its actions.
+                        .when(sidebar_navigation_row, |d| {
+                            d.child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0())
+                        })
                         .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0().child(header))
                         .child(div().flex_1().min_h_0().child(self.sidebar_contents())),
                 )
@@ -445,6 +451,66 @@ mod tests {
         let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
         assert_eq!(pane.left(), rail.right());
         assert_eq!(sidebar.left(), pane.right());
+    }
+
+    #[gpui::test]
+    fn sidebar_project_switcher_clears_navigation_across_rail_modes(cx: &mut TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, session) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1400.), px(900.)));
+        window
+            .update(visual, |shell, w, cx| {
+                w.activate_window();
+                shell.open(session, w, cx);
+                shell.set_sidebar_visible(true, cx);
+            })
+            .unwrap();
+        crate::clock::settle_animations(window, visual);
+        for right in [false, true] {
+            for mode in ["expanded", "compact", "hidden", "expanded"] {
+                window
+                    .update(visual, |shell, _, cx| {
+                        shell.workspace.preferences.sidebar_right = right;
+                        shell.workspace.project_rail_open = mode == "expanded";
+                        if mode != "expanded" {
+                            shell.workspace.preferences.collapsed_project_rail = mode.into();
+                        }
+                        shell.invalidate_chrome(cx);
+                        cx.notify();
+                    })
+                    .unwrap();
+                visual.run_until_parked();
+                let navigation = visual.debug_bounds("titlebar-navigation").unwrap();
+                let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+                let header = visual.debug_bounds("classic-workspace-header").unwrap();
+                if navigation.right() > sidebar.left() {
+                    assert!(
+                        header.top() >= navigation.bottom(),
+                        "{mode}, right={right}: {header:?} overlaps {navigation:?}"
+                    );
+                } else {
+                    assert_eq!(header.top(), sidebar.top(), "{mode}, right={right}");
+                }
+                // Click the leading edge that used to sit beneath navigation.
+                let project = visual.debug_bounds("sidebar-project-button").unwrap();
+                visual.simulate_click(
+                    gpui::point(project.left() + px(12.), project.center().y),
+                    Default::default(),
+                );
+                visual.run_until_parked();
+                window
+                    .update(visual, |shell, _, cx| {
+                        assert!(
+                            shell.menu_open(&super::super::MenuTarget::Header),
+                            "{mode}, right={right}: the project switcher remains clickable"
+                        );
+                        shell.close_menu(cx);
+                    })
+                    .unwrap();
+                visual.run_until_parked();
+            }
+        }
     }
 
     #[gpui::test]
