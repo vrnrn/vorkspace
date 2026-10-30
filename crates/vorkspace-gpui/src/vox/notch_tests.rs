@@ -261,6 +261,7 @@ fn native_notch_state_captures() {
         window
             .update(&mut cx, |voice, _, cx| {
                 voice.notch.activity = activity.into();
+                voice.silent = !reply.is_empty();
                 voice.reply = reply.into();
                 voice.reply_id = name.into();
                 voice.face = if activity == "thinking" { "p-p" } else { "o-o" }.into();
