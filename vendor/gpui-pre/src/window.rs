@@ -5300,7 +5300,6 @@ impl Window {
         });
     }
 
-    /// Removes an image from the sprite atlas.
     /// Whether this window's atlas holds `data`'s first frame.
     #[cfg(any(test, feature = "test-support"))]
     pub fn has_image_sprite(&self, data: &RenderImage) -> bool {
@@ -5313,6 +5312,7 @@ impl Window {
         )
     }
 
+    /// Removes an image from the sprite atlas.
     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
         for frame_index in 0..data.frame_count() {
             let params = RenderImageParams {
