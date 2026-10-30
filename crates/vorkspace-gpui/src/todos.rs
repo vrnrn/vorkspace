@@ -23,6 +23,19 @@ pub(crate) fn changed(cx: &mut App) {
     cx.set_global(TodoRevision(next));
 }
 
+type ChangeWork =
+    Box<dyn FnOnce(&vorkspace_core::store::Store, &TodoBoard) -> Result<(), String> + Send>;
+
+/// A store change waiting its turn. A view's changes run one at a time, in
+/// the order they were made, so a later click can't be overwritten by an
+/// earlier one that reached the database second.
+struct Change {
+    board: TodoBoard,
+    work: ChangeWork,
+    /// A submitted draft to put back if the change fails.
+    draft: Option<String>,
+}
+
 #[derive(Clone)]
 struct DraggedTodo {
     board: String,
@@ -53,7 +66,14 @@ pub(crate) struct TodoBoardView {
     loaded: bool,
     /// Guards against an older load landing after a newer one.
     generation: u64,
+    /// The last load's failure.
     error: Option<String>,
+    /// The last change's failure; a reload doesn't clear it.
+    change_error: Option<String>,
+    changes: async_channel::Sender<Change>,
+    /// Changes sent and not yet finished. Loads wait for them to finish, so
+    /// a reload between two changes can't show the first undoing the second.
+    pending_changes: usize,
     /// Side-by-side columns; otherwise stacked.
     columns: bool,
     draft: Entity<Input>,
@@ -74,6 +94,27 @@ impl TodoBoardView {
             cx.subscribe(&draft, |this, _, _: &input::Submitted, cx| this.add(cx)),
             cx.observe_global::<TodoRevision>(|this, cx| this.refresh(cx)),
         ];
+        let (changes, queue) = async_channel::unbounded::<Change>();
+        // Queued changes still run if the view closes; the queue ends once
+        // it is empty and the view is gone.
+        let worker_store = store.clone();
+        cx.spawn(async move |this, cx| {
+            while let Ok(Change { board, work, draft }) = queue.recv().await {
+                let store = worker_store.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { work(&*locked(&store)?, &board) })
+                    .await;
+                let idle = queue.is_empty();
+                cx.update(|cx| {
+                    let _ = this.update(cx, |this, cx| this.finish_change(result, draft, cx));
+                    if idle {
+                        changed(cx);
+                    }
+                });
+            }
+        })
+        .detach();
         Self {
             store,
             board: None,
@@ -81,6 +122,9 @@ impl TodoBoardView {
             loaded: false,
             generation: 0,
             error: None,
+            change_error: None,
+            changes,
+            pending_changes: 0,
             columns,
             draft,
             editing: None,
@@ -92,11 +136,14 @@ impl TodoBoardView {
         self.board.as_ref()
     }
 
-    pub(crate) fn open_count(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|item| item.status != TodoStatus::Done)
-            .count()
+    /// Open items, once the board has loaded.
+    pub(crate) fn open_count(&self) -> Option<usize> {
+        self.loaded.then(|| {
+            self.items
+                .iter()
+                .filter(|item| item.status != TodoStatus::Done)
+                .count()
+        })
     }
 
     #[cfg(test)]
@@ -113,12 +160,17 @@ impl TodoBoardView {
         self.items.clear();
         self.loaded = false;
         self.error = None;
+        self.change_error = None;
         self.refresh(cx);
         cx.notify();
     }
 
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
+        // The last queued change reloads every view when it finishes.
+        if self.pending_changes > 0 {
+            return;
+        }
         let Some(board) = self.board.clone() else {
             return;
         };
@@ -147,7 +199,8 @@ impl TodoBoardView {
         .detach();
     }
 
-    /// Runs a store change off the main thread, then reloads every view.
+    /// Queues a store change to run off the main thread after this view's
+    /// earlier ones; every view reloads once the queue is empty.
     fn change(
         &mut self,
         work: impl FnOnce(&vorkspace_core::store::Store, &TodoBoard) -> Result<(), String>
@@ -155,24 +208,52 @@ impl TodoBoardView {
         + 'static,
         cx: &mut Context<Self>,
     ) {
+        self.queue_change(work, None, cx);
+    }
+
+    fn queue_change(
+        &mut self,
+        work: impl FnOnce(&vorkspace_core::store::Store, &TodoBoard) -> Result<(), String>
+        + Send
+        + 'static,
+        draft: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(board) = self.board.clone() else {
             return;
         };
-        let store = self.store.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { work(&*locked(&store)?, &board) });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                if let Err(error) = result {
-                    this.error = Some(error);
-                    cx.notify();
-                }
-                changed(cx);
-            });
-        })
-        .detach();
+        let change = Change {
+            board,
+            work: Box::new(work),
+            draft,
+        };
+        if self.changes.try_send(change).is_err() {
+            return;
+        }
+        self.pending_changes += 1;
+        // A load already under way predates this change.
+        self.generation += 1;
+        self.change_error = None;
+        cx.notify();
+    }
+
+    fn finish_change(
+        &mut self,
+        result: Result<(), String>,
+        draft: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_changes = self.pending_changes.saturating_sub(1);
+        if let Err(error) = result {
+            self.change_error = Some(error);
+            // Put the submission back unless something newer was typed.
+            if let Some(title) = draft
+                && self.draft.read(cx).content.is_empty()
+            {
+                self.draft.update(cx, |input, cx| input.set_text(title, cx));
+            }
+            cx.notify();
+        }
     }
 
     fn add(&mut self, cx: &mut Context<Self>) {
@@ -180,10 +261,20 @@ impl TodoBoardView {
         if title.trim().is_empty() {
             return;
         }
+        // Keep a title the store would refuse in the field, with the reason.
+        if let Err(error) = vorkspace_core::todos::clean_title(&title) {
+            self.change_error = Some(error);
+            cx.notify();
+            return;
+        }
         self.draft
             .update(cx, |draft, cx| draft.set_text(String::new(), cx));
-        self.change(
-            move |store, board| store.add_todo(board, &title, TodoStatus::Todo).map(|_| ()),
+        self.queue_change(
+            {
+                let title = title.clone();
+                move |store, board| store.add_todo(board, &title, TodoStatus::Todo).map(|_| ())
+            },
+            Some(title),
             cx,
         );
     }
@@ -506,14 +597,19 @@ impl Render for TodoBoardView {
                     .child(icon("plus", 12.))
                     .child(div().flex_1().min_w_0().child(self.draft.clone())),
             )
-            .children(self.error.clone().map(|error| {
-                div()
-                    .px_3()
-                    .pb_2()
-                    .text_size(px(12.))
-                    .text_color(gpui::rgb(0xe5484d))
-                    .child(error)
-            }))
+            .children(
+                self.change_error
+                    .clone()
+                    .or(self.error.clone())
+                    .map(|error| {
+                        div()
+                            .px_3()
+                            .pb_2()
+                            .text_size(px(12.))
+                            .text_color(gpui::rgb(0xe5484d))
+                            .child(error)
+                    }),
+            )
             .child(body)
     }
 }
@@ -867,6 +963,73 @@ mod tests {
         );
         other
             .update(cx, |view, _, _| assert!(view.items().is_empty()))
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_refused_title_stays_in_the_field_with_its_reason(cx: &mut TestAppContext) {
+        let (window, store) = board_window(cx);
+        let long = "x".repeat(vorkspace_core::todos::MAX_TITLE + 1);
+        window
+            .update(cx, |view, _, cx| {
+                view.draft
+                    .update(cx, |draft, cx| draft.set_text(long.clone(), cx));
+                view.add(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(
+            locked(&store)
+                .unwrap()
+                .list_todos(&TodoBoard::Personal)
+                .unwrap()
+                .is_empty()
+        );
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(view.draft.read(cx).content.to_string(), long);
+                assert!(view.change_error.as_deref().unwrap().contains("limited"));
+            })
+            .unwrap();
+        // An unrelated reload keeps the reason visible.
+        cx.update(changed);
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| assert!(view.change_error.is_some()))
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn changes_reach_the_store_in_the_order_they_were_made(cx: &mut TestAppContext) {
+        let (window, store) = board_window(cx);
+        let item = locked(&store)
+            .unwrap()
+            .add_todo(&TodoBoard::Personal, "Twice", TodoStatus::Todo)
+            .unwrap();
+        cx.update(changed);
+        cx.run_until_parked();
+        // Two clicks before either write lands.
+        window
+            .update(cx, |view, _, cx| {
+                view.advance(item.id.clone(), TodoStatus::Todo, cx);
+                view.advance(item.id.clone(), TodoStatus::InProgress, cx);
+                // A reload between the writes would show the first one.
+                view.refresh(cx);
+                assert_eq!(view.items()[0].status, TodoStatus::Done);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let stored = locked(&store)
+            .unwrap()
+            .get_todo(&TodoBoard::Personal, &item.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, TodoStatus::Done);
+        window
+            .update(cx, |view, _, _| {
+                assert_eq!(view.pending_changes, 0);
+                assert_eq!(view.items()[0].status, TodoStatus::Done);
+            })
             .unwrap();
     }
 
