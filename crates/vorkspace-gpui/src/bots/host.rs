@@ -86,6 +86,8 @@ impl Bots {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                // A started minion joins the roster below, which then holds its name.
+                this.pending_minion_names.remove(&call.request_id);
                 let result = match result {
                     Ok((value, Effect::Start(start))) => {
                         this.publish_start(call, bot_id, value, *start, window, cx);
@@ -419,12 +421,14 @@ impl Bots {
                 let source_provider=source.as_ref().map(|v|v.read(cx).summary.provider.clone()).unwrap_or_else(||"codex".into());
                 let source_project=source.as_ref().map(|v|v.read(cx).summary.cwd.clone()).unwrap_or_else(||project.clone());
                 let settings=source.as_ref().map(|v|v.read(cx).bot_execution_settings()).unwrap_or_default();
-                let name=minion_name(&bot,input.get("name").and_then(Value::as_str));
+                let reserved=self.pending_minion_names.values().filter(|(b,_)|b==&bot.id).map(|(_,n)|n.as_str()).collect::<Vec<_>>();
+                let name=minion_name(&bot,input.get("name").and_then(Value::as_str),&reserved);
                 // A minion is a session started like any other, titled with its name.
                 let mut launch_input=json!({"prompt":input.get("prompt").cloned().unwrap_or_default(),"project":project,"title":name});
                 for key in ["harness","model"]{if let Some(value)=input.get(key){launch_input[key]=value.clone();}}
                 let mut launch=match bot::launch::Launch::parse(&launch_input,&source_provider,&source_project,&project,settings,false){Ok(launch)=>launch,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
                 if launch.provider.id()!=source_provider { launch.settings.account=crate::accounts::get(cx).map(|center|center.read(cx).selected(launch.provider,&project)).unwrap_or_default(); }
+                self.pending_minion_names.insert(call.request_id.clone(),(bot.id.clone(),name.clone()));
                 self.call_work(call,target,move|store|{
                     let mut store=locked(&store)?;
                     let summary=launch.create(&mut store,&project)?;
@@ -697,8 +701,8 @@ fn minion_allowed(action: &str) -> bool {
         )
 }
 
-/// The requested name, or the next free "Minion N".
-fn minion_name(bot: &Bot, requested: Option<&str>) -> String {
+/// The requested name, or the next "Minion N" neither taken nor reserved.
+fn minion_name(bot: &Bot, requested: Option<&str>, reserved: &[&str]) -> String {
     let requested: String = requested
         .unwrap_or_default()
         .split_whitespace()
@@ -712,7 +716,9 @@ fn minion_name(bot: &Bot, requested: Option<&str>) -> String {
     }
     (1..)
         .map(|n| format!("Minion {n}"))
-        .find(|name| !bot.minions.iter().any(|m| &m.name == name))
+        .find(|name| {
+            !bot.minions.iter().any(|m| &m.name == name) && !reserved.contains(&name.as_str())
+        })
         .unwrap()
 }
 

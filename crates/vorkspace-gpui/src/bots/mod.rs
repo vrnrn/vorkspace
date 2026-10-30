@@ -89,6 +89,9 @@ pub(crate) type MinionRegistry =
 
 pub(crate) struct Bots {
     pub(crate) minion_registry: MinionRegistry,
+    /// Minion names chosen for spawns still being created, by request ID
+    /// with their Bot, so parallel spawns can't pick the same default name.
+    pending_minion_names: HashMap<String, (String, String)>,
     channels: channels::ChannelUi,
     parent_window: Option<gpui::AnyWindowHandle>,
     owner: WeakEntity<Shell>,
@@ -380,6 +383,7 @@ impl Bots {
             notice_region,
             details,
             minion_registry: Default::default(),
+            pending_minion_names: HashMap::new(),
             overview_tab: OverviewTab::Sessions,
             todo_board: None,
             todo_counts: HashMap::new(),

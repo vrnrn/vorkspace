@@ -160,9 +160,10 @@ pub(crate) struct Conversation {
     reviewing_submission: bool,
     submission_recovery_epoch: u64,
     app_environment: std::collections::HashMap<String, String>,
-    /// A Bot's minion: its parent's context and capability, applied to every
-    /// turn instead of this session's own app environment. Never saved.
-    pub(crate) minion: Option<crate::bots::MinionAttachment>,
+    /// Bots' minion sessions. A minion's turns take its parent's context
+    /// and capability from here as each turn starts, so turning Minions on
+    /// or off reaches sessions that are already open. Never saved.
+    pub(crate) minions: Option<crate::bots::MinionRegistry>,
     planning_orchestration: bool,
     pub(crate) orchestration_plan: Option<vorkspace_core::orchestration::Plan>,
     orchestration_error: Option<String>,
@@ -615,7 +616,7 @@ impl Conversation {
             reviewing_submission: false,
             submission_recovery_epoch: 0,
             app_environment: Default::default(),
-            minion: None,
+            minions: None,
             planning_orchestration: false,
             orchestration_plan: None,
             orchestration_error: None,
@@ -1361,9 +1362,9 @@ impl Conversation {
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| !p.claude_hooks);
         settings.model = self.model.clone();
-        if let Some((context, environment)) = &self.minion {
-            settings.minion = Some(context.clone());
-            settings.environment.extend(environment.clone());
+        if let Some((context, environment)) = self.minion() {
+            settings.minion = Some(context);
+            settings.environment.extend(environment);
         } else {
             settings.environment.extend(self.app_environment.clone());
         }
