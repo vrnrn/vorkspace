@@ -191,6 +191,166 @@ mod tests {
     use vorkspace_core::{store::Store, transcript::Row};
 
     #[gpui::test]
+    fn stale_history_refresh_preserves_chat_scroll(cx: &mut TestAppContext) {
+        for bot in [false, true] {
+            for following in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let mut store = Store::open_vorkspace(&dir.path().join("history.db")).unwrap();
+                let session = store.create("codex", "/project").unwrap();
+                let id = session.id;
+                let rows: Vec<_> = (0..30)
+                    .flat_map(|turn| {
+                        [
+                            Row {
+                                role: "user".into(),
+                                text: format!("Question {turn}"),
+                                first: true,
+                                sent_at: None,
+                            },
+                            Row {
+                                role: "assistant".into(),
+                                text: format!("Answer {turn}.\n\n{}", "More detail.\n\n".repeat(4)),
+                                first: true,
+                                sent_at: None,
+                            },
+                        ]
+                    })
+                    .collect();
+                store.write_rows(id, 0, &rows).unwrap();
+                let store = Arc::new(Mutex::new(store));
+                let chat = cx.new(|cx| Conversation::new(session, store.clone(), cx));
+                chat.update(cx, |chat, cx| {
+                    if bot {
+                        chat.configure_bot(
+                            vorkspace_core::bot::Bot::default(),
+                            dir.path().to_owned(),
+                            Default::default(),
+                            cx,
+                        );
+                    }
+                    chat.load(cx);
+                });
+                cx.run_until_parked();
+                let transcript = chat.read_with(cx, |chat, _| chat.transcript.clone());
+                // Open an older Bot page before the refresh. It must remain
+                // open along with the reader's position within it.
+                if bot {
+                    chat.update(cx, |chat, cx| {
+                        chat.reveal_search(0, "Question 0".into(), cx)
+                    });
+                    cx.run_until_parked();
+                }
+                let window = cx.update(|cx| {
+                    cx.open_window(
+                        gpui::WindowOptions {
+                            window_bounds: Some(gpui::WindowBounds::Windowed(gpui::Bounds::new(
+                                gpui::point(px(0.), px(0.)),
+                                gpui::size(px(900.), px(600.)),
+                            ))),
+                            ..Default::default()
+                        },
+                        |_, _| transcript.clone(),
+                    )
+                    .unwrap()
+                });
+                transcript.update(cx, |view, cx| {
+                    if following {
+                        view.list.set_follow_mode(gpui::FollowMode::Tail);
+                    } else {
+                        view.list.scroll_to(gpui::ListOffset {
+                            item_ix: 6,
+                            offset_in_item: px(7.),
+                        });
+                    }
+                    cx.notify();
+                });
+                cx.refresh().unwrap();
+                cx.run_until_parked();
+                let before = transcript.read_with(cx, |view, _| view.list.logical_scroll_top());
+                assert_eq!(
+                    transcript.read_with(cx, |view, _| view.list.is_following_tail()),
+                    following
+                );
+                store
+                    .lock()
+                    .unwrap()
+                    .write_rows(
+                        id,
+                        rows.len(),
+                        &[Row {
+                            role: "user".into(),
+                            text: "Message saved by another view".into(),
+                            first: true,
+                            sent_at: None,
+                        }],
+                    )
+                    .unwrap();
+                chat.update(cx, |chat, cx| chat.refresh_if_stale(cx));
+                cx.run_until_parked();
+                window.update(cx, |_, _, cx| cx.notify()).unwrap();
+                cx.refresh().unwrap();
+                cx.run_until_parked();
+                transcript.read_with(cx, |view, _| {
+                    assert_eq!(view.source_rows().len(), rows.len() + 1);
+                    assert_eq!(view.list.is_following_tail(), following);
+                    if !following {
+                        let after = view.list.logical_scroll_top();
+                        assert_eq!(after.item_ix, before.item_ix, "bot={bot}");
+                        assert_eq!(after.offset_in_item, before.offset_in_item, "bot={bot}");
+                    }
+                });
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn stale_history_refresh_cannot_replace_a_newer_turn(cx: &mut TestAppContext) {
+        for running in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut store = Store::open_vorkspace(&dir.path().join("history.db")).unwrap();
+            let session = store.create("codex", "/project").unwrap();
+            let id = session.id;
+            let row = |role: &str, text: &str| Row {
+                role: role.into(),
+                text: text.into(),
+                first: true,
+                sent_at: None,
+            };
+            store.write_rows(id, 0, &[row("user", "Question")]).unwrap();
+            let store = Arc::new(Mutex::new(store));
+            let chat = cx.new(|cx| Conversation::new(session, store.clone(), cx));
+            chat.update(cx, |chat, cx| chat.load(cx));
+            cx.run_until_parked();
+            store
+                .lock()
+                .unwrap()
+                .write_rows(id, 1, &[row("assistant", "Previously saved answer")])
+                .unwrap();
+            chat.update(cx, |chat, cx| {
+                chat.refresh_if_stale(cx);
+                // Admit a turn before the asynchronous refresh can publish.
+                // It may even finish before that older read returns.
+                chat.submission_generation += 1;
+                chat.busy = running;
+                chat.transcript.update(cx, |view, cx| {
+                    view.patch(
+                        1,
+                        vec![row("user", "New question"), row("assistant", "New answer")],
+                        cx,
+                    );
+                });
+            });
+            cx.run_until_parked();
+            chat.read_with(cx, |chat, cx| {
+                let rows = chat.transcript.read(cx).source_rows();
+                assert_eq!(rows.len(), 3, "running={running}");
+                assert_eq!(rows[1].text, "New question");
+                assert_eq!(rows[2].text, "New answer");
+            });
+        }
+    }
+
+    #[gpui::test]
     fn partial_history_restores_before_queued_mutation(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("history.db");

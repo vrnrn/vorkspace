@@ -925,6 +925,7 @@ impl Conversation {
         let id = self.summary.id;
         let store = self.store.clone();
         let current_rev = self.loaded_history_revision;
+        let submission = self.submission_generation;
         let bot = self.settings.bot.is_some();
         let work = cx.background_executor().spawn(async move {
             let store = locked(&store)?;
@@ -943,11 +944,25 @@ impl Conversation {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
+                // Focus can start this read just before another turn, history
+                // restore or refresh takes ownership of the visible transcript.
+                if this.submission_generation != submission
+                    || this.loaded_history_revision != current_rev
+                    || this.loading
+                    || this.history_unloaded
+                    || this.history_partial
+                    || this.busy
+                    || this.stopping
+                {
+                    return;
+                }
                 if let Ok(Some((history, turns, rev))) = result {
                     this.settings.turns = turns.clone();
                     this.transcript.update(cx, |view, cx| {
                         view.turns = turns;
-                        view.restore_prepared_history(history, cx);
+                        // Keep the existing rows, reading anchor and opened
+                        // Bot pages while applying the authoritative snapshot.
+                        view.install_prepared_history(history, cx);
                     });
                     this.loaded_history_revision = Some(rev);
                     this.status = "Ready".into();
