@@ -1079,9 +1079,10 @@ impl Shell {
             )
         }));
         if let Some(voice) = &this.vox {
-            crate::vox::register(voice, cx);
+            crate::vox::register(voice, &this.workspace.preferences, cx);
             this.observations.push(cx.observe(voice, |this, _, cx| {
                 this.sync_settings(cx);
+                this.project_rail_frame.update(cx, |_, cx| cx.notify());
                 cx.notify();
             }));
         }
@@ -7738,9 +7739,6 @@ impl Render for Shell {
                             && shell.status_menu.is_some()
                             && !shell.unsaved_files(cx)
                         {
-                            if let Some(vox) = &shell.vox {
-                                vox.update(cx, |v, cx| v.stop(cx));
-                            }
                             crate::traffic_lights::hide(window);
                             return false;
                         }
@@ -7766,6 +7764,9 @@ impl Render for Shell {
                             .detach();
                             false
                         } else {
+                            if let Some(voice) = &shell.vox {
+                                voice.update(cx, |voice, cx| voice.stop(cx));
+                            }
                             true
                         }
                     })
@@ -8084,13 +8085,6 @@ impl Render for Shell {
                 }
             }))
             .on_action(cx.listener(|this, _: &DismissMenu, window, cx| {
-                if this
-                    .vox
-                    .as_ref()
-                    .is_some_and(|voice| voice.update(cx, |voice, cx| voice.dismiss_reply(cx)))
-                {
-                    return;
-                }
                 if this.remote_project_picker.is_some() {
                     this.close_remote_project(window, cx);
                     return;

@@ -1,5 +1,12 @@
+mod controller;
 mod host;
-mod visibility;
+mod native;
+mod notch;
+#[cfg(test)]
+mod notch_tests;
+#[cfg(debug_assertions)]
+pub(crate) mod preview;
+pub(crate) use controller::{configure, error as shortcut_error, toggle};
 mod web;
 use crate::{
     runtime::{Database, locked},
@@ -24,7 +31,11 @@ pub(crate) struct Vox {
     active: Arc<AtomicBool>,
     task: Option<gpui::Task<()>>,
     web: Option<web::Web>,
-    visibility: Option<visibility::Watch>,
+    panel: Option<gpui::WindowHandle<Self>>,
+    notch: notch::Presentation,
+    idle_task: Option<gpui::Task<()>>,
+    screen_watch: Option<native::ScreenChanges>,
+    screen_task: Option<gpui::Task<()>>,
     enabled: bool,
     silent: bool,
     microphone: Value,
@@ -43,7 +54,12 @@ pub(crate) struct Vox {
 #[derive(Default)]
 struct Calls(Vec<WeakEntity<Vox>>);
 impl gpui::Global for Calls {}
-pub(crate) fn register(voice: &gpui::Entity<Vox>, cx: &mut gpui::App) {
+pub(crate) fn register(
+    voice: &gpui::Entity<Vox>,
+    prefs: &crate::settings::Preferences,
+    cx: &mut gpui::App,
+) {
+    configure(prefs, cx);
     if !cx.has_global::<Calls>() {
         cx.set_global(Calls::default());
     }
@@ -80,6 +96,64 @@ pub(crate) fn shutdown(cx: &mut gpui::App) -> gpui::Task<()> {
     })
 }
 impl Vox {
+    pub(super) fn toggle_call(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if !self.enabled {
+            self.stop(cx);
+            return;
+        }
+        if self.running() || self.active.load(Ordering::Relaxed) {
+            self.stop(cx);
+        } else {
+            self.notch.reopen(native::Geometry::read());
+            self.start(window, cx);
+        }
+    }
+
+    fn attach_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let voice = cx.weak_entity();
+        window.on_window_should_close(cx, move |_, cx| {
+            voice
+                .update(cx, |voice, cx| {
+                    voice.stop(cx);
+                    if voice.running() {
+                        false
+                    } else {
+                        voice.release_panel();
+                        true
+                    }
+                })
+                .unwrap_or(true)
+        });
+        self.observe_screens(cx);
+    }
+
+    fn release_panel(&mut self) {
+        self.notch.placement.close();
+        self.panel = None;
+        self.screen_watch = None;
+        self.screen_task = None;
+    }
+
+    fn observe_screens(&mut self, cx: &mut Context<Self>) {
+        let (watch, receiver) = native::ScreenChanges::new();
+        self.screen_watch = Some(watch);
+        self.screen_task = Some(cx.spawn(async move |this, cx| {
+            while receiver.recv().await.is_ok() {
+                let _ = this.update(cx, |voice, cx| {
+                    voice.notch.geometry = native::Geometry::read();
+                    voice.notch.reposition();
+                    cx.notify();
+                });
+            }
+        }));
+    }
+
+    pub(crate) fn set_project(&mut self, project: String) {
+        if !self.running() {
+            self.cwd = project;
+        }
+    }
+
     pub(crate) fn running(&self) -> bool {
         self.host.is_some() || self.state == "connecting"
     }
@@ -98,7 +172,11 @@ impl Vox {
             active: Arc::new(AtomicBool::new(false)),
             task: None,
             web: None,
-            visibility: None,
+            panel: None,
+            notch: notch::Presentation::default(),
+            idle_task: None,
+            screen_watch: None,
+            screen_task: None,
             enabled: prefs.vox_enabled,
             silent: prefs.vox_silent,
             microphone: prefs.vox_microphone.clone(),
@@ -120,6 +198,7 @@ impl Vox {
         prefs: &crate::settings::Preferences,
         cx: &mut Context<Self>,
     ) {
+        configure(prefs, cx);
         self.enabled = prefs.vox_enabled;
         self.silent = prefs.vox_silent;
         self.microphone = prefs.vox_microphone.clone();
@@ -131,9 +210,14 @@ impl Vox {
         cx.notify();
     }
     pub(crate) fn stop(&mut self, cx: &mut Context<Self>) {
+        self.notch.close();
+        self.notch.hearing = false;
+        self.notch.activity = "listening".into();
+        self.idle_task = None;
         self.active.store(false, Ordering::Relaxed);
-        {
-            self.visibility = None;
+        if self.state == "stopping" {
+            cx.notify();
+            return;
         }
         {
             self.web = None;
@@ -161,15 +245,20 @@ impl Vox {
     }
     fn finish(&mut self, cx: &mut Context<Self>) {
         self.active.store(false, Ordering::Relaxed);
-        {
-            self.visibility = None;
-        }
         self.host = None;
         {
             self.web = None;
         }
         self.state = "idle".into();
-        self.face = "vox".into();
+        self.notch.hearing = false;
+        self.notch.activity = "listening".into();
+        self.face = "o-o".into();
+        if self.error.is_some() && self.enabled && self.owner.upgrade().is_some() {
+            self.notch.closing = false;
+            self.touch(cx);
+        } else {
+            self.notch.close();
+        }
         cx.notify();
     }
     fn start(&mut self, _window: &Window, cx: &mut Context<Self>) {
@@ -188,27 +277,7 @@ impl Vox {
         self.receipts.clear();
         self.state = "connecting".into();
         self.face = "-_-".into();
-        {
-            let (watch, hidden) = match visibility::Watch::new(_window, self.active.clone()) {
-                Ok(watch) => watch,
-                Err(error) => {
-                    self.error = Some(error);
-                    self.finish(cx);
-                    return;
-                }
-            };
-            self.visibility = Some(watch);
-            cx.spawn(async move |this, cx| {
-                if hidden.recv().await.is_ok() {
-                    let _ = this.update(cx, |this, cx| {
-                        if this.generation == generation && this.visibility.is_some() {
-                            this.stop(cx);
-                        }
-                    });
-                }
-            })
-            .detach();
-        }
+        self.touch(cx);
         let cwd = self.cwd.clone();
         let lock_path = match locked(&self.store).and_then(|db| {
             db.data_dir()
@@ -308,6 +377,7 @@ impl Vox {
                     self.error = Some(error.chars().take(500).collect());
                 }
                 if self.active.load(Ordering::Relaxed) {
+                    self.display_activity(input, cx);
                     self.state = state.into();
                     self.face = match input["display"]["activity"].as_str() {
                         Some("thinking") => "p-p",
@@ -341,6 +411,7 @@ impl Vox {
                     .and_then(|v| v.last())
                     .and_then(|v| v["text"].as_str())
                 {
+                    let previous = self.reply_id.clone();
                     self.reply = text.chars().take(4000).collect();
                     self.reply_id = input["display"]["lines"]
                         .as_array()
@@ -352,6 +423,9 @@ impl Vox {
                         .as_array()
                         .and_then(|lines| lines.last())
                         .is_some_and(|line| line["truncated"] == true);
+                    if self.reply_id != previous {
+                        self.completed_reply(cx);
+                    }
                 }
                 cx.notify();
                 Ok(Value::Null)
@@ -416,7 +490,9 @@ impl Vox {
                 } else {
                     let result = self
                         .owner
-                        .update(cx, |owner, cx| owner.vox_action(action, input, window, cx))
+                        .update_in(cx, |owner, owner_window, cx| {
+                            owner.vox_action(action, input, owner_window, cx)
+                        })
                         .unwrap_or(Err("Workspace closed".into()));
                     self.receipts.insert(request, (signature, result.clone()));
                     result
@@ -439,7 +515,7 @@ impl Vox {
         }
         let message = if let Some(error) = &self.error {
             (format!("error:{error}"), error.clone())
-        } else if self.silent && self.active.load(Ordering::Relaxed) && !self.reply.is_empty() {
+        } else if self.silent && !self.reply.is_empty() {
             (
                 format!("reply:{}", self.reply_id),
                 format!(
@@ -463,81 +539,16 @@ impl Vox {
         true
     }
 }
+impl Drop for Vox {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Relaxed);
+        self.notch.placement.close();
+    }
+}
+
 impl gpui::Render for Vox {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut root = div().relative().flex().items_center();
-        if !self.enabled {
-            return root;
-        }
-        if self.enabled {
-            root = root.child(
-                div()
-                    .id("vox-toggle")
-                    .role(gpui::Role::Button)
-                    .aria_label(if self.active.load(Ordering::Relaxed) {
-                        "End Vox call"
-                    } else {
-                        "Start Vox call"
-                    })
-                    .px_3()
-                    .py_1()
-                    .text_size(px(13.))
-                    .font_family(crate::markdown::FIXED_FONT)
-                    .text_color(content(0.8))
-                    .child(self.face.clone())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.active.load(Ordering::Relaxed) {
-                            this.stop(cx);
-                        } else {
-                            this.start(window, cx);
-                        }
-                    })),
-            );
-        }
-        if let Some((_, text)) = self.bubble_message() {
-            let reply = self
-                .reply_input
-                .get_or_insert_with(|| {
-                    cx.new(|cx| {
-                        let mut input = crate::input::Input::memory_fact("Vox reply", cx);
-                        input.set_read_only(true);
-                        input
-                    })
-                })
-                .clone();
-            if reply.read(cx).content.as_str() != text {
-                reply.update(cx, |input, cx| input.set_text(text, cx));
-            }
-            root = root.child(
-                div()
-                    .id("vox-reply")
-                    .absolute()
-                    .top(px(36.))
-                    .right_0()
-                    .w(px(340.))
-                    .max_h(px(220.))
-                    .overflow_y_scroll()
-                    .p_3()
-                    .rounded_lg()
-                    .bg(pane_fill())
-                    .text_size(px(13.))
-                    .text_color(content(0.9))
-                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                        this.dismiss_reply(cx);
-                    }))
-                    .child(reply)
-                    .child(
-                        div()
-                            .id("dismiss-vox-reply")
-                            .role(gpui::Role::Button)
-                            .child("dismiss")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.dismiss_reply(cx);
-                            })),
-                    ),
-            );
-        }
-        root
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_notch(window, cx)
     }
 }
 

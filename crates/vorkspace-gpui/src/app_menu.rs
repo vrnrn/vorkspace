@@ -13,7 +13,7 @@ pub(crate) fn remember(window: &gpui::Window, cx: &mut App) {
     cx.set_global(WorkspaceTarget(Some(window.window_handle())));
 }
 
-fn workspace_target(cx: &App) -> Option<AnyWindowHandle> {
+pub(crate) fn workspace_target(cx: &App) -> Option<AnyWindowHandle> {
     let windows = cx.windows();
     let live = |handle: &AnyWindowHandle| {
         handle.downcast::<shell::Shell>().is_some() && windows.contains(handle)

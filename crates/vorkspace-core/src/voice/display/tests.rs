@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn current_user_speech_blocks_idle_and_stale_speech_end_cannot_release_it() {
+    let mut display = Display::default();
+    display.realtime(
+        &json!({"type":"turn.created","turn":{"id":"old","role":"user","start_ms":0,"end_ms":1}}),
+    );
+    display.realtime(
+        &json!({"type":"turn.created","turn":{"id":"new","role":"user","start_ms":10,"end_ms":11}}),
+    );
+    assert_eq!(display.snapshot()["hearing"], true);
+    display.realtime(
+        &json!({"type":"turn.done","turn":{"id":"old","role":"user","start_ms":0,"end_ms":5}}),
+    );
+    assert_eq!(display.snapshot()["hearing"], true);
+    assert_eq!(display.snapshot()["activity"], "listening");
+    display.realtime(
+        &json!({"type":"turn.done","turn":{"id":"new","role":"user","start_ms":10,"end_ms":20}}),
+    );
+    assert_eq!(display.snapshot()["hearing"], false);
+    assert_eq!(display.snapshot()["activity"], "thinking");
+}
+
+#[test]
 fn only_final_assistant_speech_is_retained_and_bounded() {
     let mut display = Display::default();
     for _ in 0..100 {

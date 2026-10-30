@@ -10,6 +10,7 @@ fn compact_footer(
     resources: Entity<crate::resource_pressure::ResourceMonitor>,
     usage: Option<Entity<crate::usage_footer::UsageFooter>>,
     settings: impl IntoElement,
+    vox: Option<AnyElement>,
 ) -> gpui::Div {
     div()
         .w_full()
@@ -19,6 +20,7 @@ fn compact_footer(
         .gap_1()
         .py_2()
         .child(resources)
+        .children(vox)
         .children(usage)
         .child(settings)
 }
@@ -373,6 +375,7 @@ impl Shell {
                 },
             )
             .child(div().mx_2().child(self.resources.clone()))
+            .child(div().px_2().child(self.vox_launcher(false, cx)))
             .when(self.workspace.sidebar_subscriptions_visible, |d| {
                 d.child(div().px_2().child(self.usage_footer.clone()))
             })
@@ -979,6 +982,7 @@ impl Shell {
             compact_settings_button().on_click(cx.listener(|this, _, window, cx| {
                 this.open_settings(crate::settings::Section::General, window, cx)
             })),
+            Some(self.vox_launcher(true, cx)),
         ))
         .into_any_element()
     }

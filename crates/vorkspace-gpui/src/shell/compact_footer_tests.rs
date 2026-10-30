@@ -342,6 +342,7 @@ fn native_compact_footer_capture() {
                             self.resources.clone(),
                             Some(self.usage.clone()),
                             compact_settings_button(),
+                            None,
                         )),
                 )
         }

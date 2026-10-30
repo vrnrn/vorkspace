@@ -55,6 +55,12 @@ pub(crate) const BINDINGS: &[Binding] = &[
         fixed: false,
     },
     Binding {
+        command: "App: Vox",
+        keys: "⌃⌥Space",
+        when: "Anywhere",
+        fixed: false,
+    },
+    Binding {
         command: "App: Quick Composer",
         keys: "⌘⇧Space",
         when: "Anywhere",
