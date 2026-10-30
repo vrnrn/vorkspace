@@ -27,10 +27,25 @@ fn window(cx: &mut TestAppContext) -> WindowHandle<Vox> {
         cx.open_window(Default::default(), |_, cx| cx.new(voice))
             .unwrap()
     });
+    // As the controller does once the notch opens.
+    window
+        .update(cx, |voice, _, _| voice.panel = Some(window))
+        .unwrap();
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.simulate_mouse_move(gpui::point(px(900.), px(600.)), None, Default::default());
     visual.run_until_parked();
     window
+}
+
+/// Gives the notch the keyboard, with the pointer away from it.
+fn activate(window: WindowHandle<Vox>, cx: &mut TestAppContext) {
+    window
+        .update(cx, |_, window, _| window.activate_window())
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.simulate_mouse_move(gpui::point(px(900.), px(600.)), None, Default::default());
+    visual.run_until_parked();
 }
 
 #[gpui::test]
@@ -198,6 +213,7 @@ fn keyboard_reading_keeps_a_completed_reply_open_until_dismissal(cx: &mut TestAp
         })
         .unwrap();
     cx.run_until_parked();
+    activate(window, cx);
     window
         .update(cx, |voice, window, cx| {
             window.focus(
@@ -275,4 +291,120 @@ fn native_notch_state_captures() {
             .save(output.join(format!("vox-{name}.png")))
             .unwrap();
     }
+}
+
+#[gpui::test]
+fn a_focused_reply_stops_counting_as_reading_after_switching_apps(cx: &mut TestAppContext) {
+    use gpui::Focusable;
+    let window = window(cx);
+    window
+        .update(cx, |voice, _, cx| {
+            voice.reply = "Focused, then left behind".into();
+            voice.reply_id = "one".into();
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    activate(window, cx);
+    window
+        .update(cx, |voice, window, cx| {
+            let reply = voice
+                .reply_input
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .focus_handle(cx);
+            window.focus(&reply, cx);
+            voice.touch(cx);
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.deactivate_window();
+    visual.simulate_mouse_move(gpui::point(px(900.), px(600.)), None, Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |voice, window, cx| {
+            // Deactivation keeps the window's focus.
+            assert!(!window.is_window_active());
+            let reply = voice
+                .reply_input
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .focus_handle(cx);
+            assert!(reply.is_focused(window));
+        })
+        .unwrap();
+    visual.executor().advance_clock(Duration::from_secs(30));
+    visual.run_until_parked();
+    window
+        .update(visual, |voice, _, _| {
+            assert!(!voice.active.load(Ordering::Relaxed))
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn idle_deadlines_use_the_notch_window_when_another_window_renders_vox(cx: &mut TestAppContext) {
+    use gpui::Focusable;
+    let window = window(cx);
+    let voice = window.update(cx, |_, _, cx| cx.entity()).unwrap();
+    // A workspace window that reads Vox while rendering, as the rail does,
+    // becomes the entity's most recent window.
+    struct Workspace(gpui::Entity<Vox>);
+    impl Render for Workspace {
+        fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().child(if self.0.read(cx).running() {
+                "on"
+            } else {
+                "off"
+            })
+        }
+    }
+    let workspace = cx.update(|cx| {
+        let voice = voice.clone();
+        cx.open_window(Default::default(), |_, cx| cx.new(|_| Workspace(voice)))
+            .unwrap()
+    });
+    cx.run_until_parked();
+    window
+        .update(cx, |voice, _, cx| {
+            voice.reply = "Read in the notch".into();
+            voice.reply_id = "one".into();
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    activate(window, cx);
+    window
+        .update(cx, |voice, window, cx| {
+            let reply = voice
+                .reply_input
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .focus_handle(cx);
+            window.focus(&reply, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    workspace
+        .update(cx, |_, window, cx| {
+            window.refresh();
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window.update(cx, |voice, _, cx| voice.touch(cx)).unwrap();
+    cx.executor().advance_clock(Duration::from_secs(35));
+    cx.run_until_parked();
+    window
+        .update(cx, |voice, _, _| {
+            assert!(
+                voice.active.load(Ordering::Relaxed),
+                "the reply focused in the notch keeps the call open"
+            )
+        })
+        .unwrap();
 }

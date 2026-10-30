@@ -125,25 +125,46 @@ impl Vox {
             cx.background_executor()
                 .timer(deadline.saturating_duration_since(Instant::now()))
                 .await;
-            let _ = this.update_in(cx, |voice, window, cx| {
-                if voice.generation != generation
-                    || voice.notch.touched != touched
-                    || voice.notch.closing
-                    || voice.notch.paused()
-                {
-                    return;
-                }
-                if voice
+            if Self::in_panel(&this, cx, |voice, window, cx| {
+                voice.idle_deadline(generation, touched, Some(window), cx)
+            })
+            .is_none()
+            {
+                let _ = this.update(cx, |voice, cx| {
+                    voice.idle_deadline(generation, touched, None, cx)
+                });
+            }
+        }));
+    }
+
+    fn idle_deadline(
+        &mut self,
+        generation: u64,
+        touched: Instant,
+        panel: Option<&Window>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.generation != generation
+            || self.notch.touched != touched
+            || self.notch.closing
+            || self.notch.paused()
+        {
+            return;
+        }
+        // A focused reply is being read only while its panel has the
+        // keyboard: switching apps keeps the focus but ends the reading.
+        let reading = panel.is_some_and(|window| {
+            window.is_window_active()
+                && self
                     .reply_input
                     .as_ref()
                     .is_some_and(|reply| reply.read(cx).focus_handle(cx).is_focused(window))
-                {
-                    voice.touch(cx);
-                    return;
-                }
-                voice.stop(cx);
-            });
-        }));
+        });
+        if reading {
+            self.touch(cx);
+            return;
+        }
+        self.stop(cx);
     }
 
     pub(super) fn display_activity(&mut self, input: &Value, cx: &mut Context<Self>) {

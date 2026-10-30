@@ -127,6 +127,18 @@ impl Vox {
         self.observe_screens(cx);
     }
 
+    /// Runs `f` in the notch window. Workspace windows read this entity
+    /// too, so its current window can't be trusted for window-bound work
+    /// such as mounting the microphone page or checking reply focus.
+    fn in_panel<R>(
+        this: &WeakEntity<Self>,
+        cx: &mut gpui::AsyncApp,
+        f: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) -> R,
+    ) -> Option<R> {
+        let panel = this.read_with(cx, |voice, _| voice.panel).ok().flatten()?;
+        panel.update(cx, f).ok()
+    }
+
     fn release_panel(&mut self) {
         self.notch.placement.close();
         self.panel = None;
@@ -317,14 +329,14 @@ impl Vox {
                 Ok(Some(rx)) => rx,
                 _ => return,
             };
+            // A call lives in its notch; once the notch is gone, so is the call.
             while let Ok(frame) = rx.recv().await {
-                if this
-                    .update_in(cx, |this, window, cx| {
-                        if this.generation == generation {
-                            this.frame(frame, window, cx);
-                        }
-                    })
-                    .is_err()
+                if Self::in_panel(&this, cx, |this, window, cx| {
+                    if this.generation == generation {
+                        this.frame(frame, window, cx);
+                    }
+                })
+                .is_none()
                 {
                     break;
                 }
