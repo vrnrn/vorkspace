@@ -34,12 +34,37 @@ fn compact_settings_button() -> gpui::Stateful<gpui::Div> {
 impl Shell {
     pub(super) fn classic_rail_width(&self) -> f32 {
         if self.workspace.project_rail_open || self.settings.is_some() {
-            self.workspace.project_rail_width
+            self.workspace
+                .project_rail_width
+                .max(self.open_rail_floor())
         } else if self.workspace.preferences.collapsed_project_rail == "hidden" {
             0.
         } else {
             COMPACT_WIDTH
         }
+    }
+
+    /// The open rail holds all of navigation. At low zoom the native traffic
+    /// lights take more logical width than the saved rail, and an overhang
+    /// would push the page below a second title row.
+    pub(super) fn open_rail_floor(&self) -> f32 {
+        let lights = traffic_light_inset(
+            self.workspace.preferences.interface_scale(),
+            self.fullscreen,
+        );
+        // Each button rounds to whole device pixels: at most half a pixel more
+        // at 1x (`navigation_button_size`).
+        (lights + 3. * 24.5 + 6.).ceil()
+    }
+
+    /// The icon rail borders the pane directly, so its divider turns into the
+    /// rule under navigation's overhang rather than meeting it at a right angle.
+    pub(super) fn rail_meets_title_rule(&self) -> bool {
+        self.workspace.classic_layout
+            && !self.workspace.project_rail_open
+            && self.settings.is_none()
+            && self.classic_rail_width() > 0.
+            && (self.workspace.preferences.sidebar_right || self.sidebar_fraction <= 0.)
     }
 
     pub(super) fn toggle_project_rail(&mut self, cx: &mut Context<Self>) {
@@ -118,12 +143,14 @@ impl Shell {
             // into the pane (crate::liquid), below the native titlebar controls.
             .child({
                 // Around its neighbour's rounded corners (the pane, or a left
-                // sidebar); the top one not beside the icon rail, whose
-                // navigation overhangs it.
-                self.liquid.surface(
-                    self.workspace.project_rail_open || self.settings.is_some(),
-                    true,
-                )
+                // sidebar). Beside the icon rail, navigation overhangs the
+                // pane, so it turns into the title bar's rule instead.
+                let cap_top = if self.workspace.project_rail_open || self.settings.is_some() {
+                    Some(0.)
+                } else {
+                    self.rail_meets_title_rule().then_some(TITLE_BAR_HEIGHT)
+                };
+                self.liquid.surface(cap_top, true)
             })
             .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0())
             .child(crate::bots::avatar::sidebar_cursor_tracker());
@@ -364,7 +391,7 @@ impl Shell {
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {
                             this.project_rail_drag =
-                                Some((event.position.x, this.workspace.project_rail_width));
+                                Some((event.position.x, this.classic_rail_width()));
                             cx.stop_propagation();
                         }),
                     ),

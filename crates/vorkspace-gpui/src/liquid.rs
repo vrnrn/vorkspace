@@ -28,7 +28,7 @@ const DRAIN: Duration = Duration::from_millis(71);
 /// Pills sit this far inside their rows, so neighbours never touch.
 const INSET: f32 = 1.;
 /// The pane's outer corners, which the divider follows.
-const PANE_RADIUS: f32 = 12.;
+pub(crate) const PANE_RADIUS: f32 = 12.;
 /// A selected row's fill; a hovered one's is `HOVER` of it.
 const SELECTED: f32 = 0.1;
 const HOVER: f32 = 0.7;
@@ -159,9 +159,11 @@ impl Liquid {
     /// Paints the divider down this element's right edge, which must be the
     /// pane's left edge, and every pill running into it. Lay it over the whole
     /// rail. With `cap_bottom` the divider follows the pane's rounded bottom
-    /// corner; with `cap_top` the top one, otherwise it starts below the title
-    /// bar and its native controls.
-    pub(crate) fn surface(&self, cap_top: bool, cap_bottom: bool) -> impl IntoElement {
+    /// corner. `cap_top` is how far down the pane's top edge meets it: the
+    /// pane's own corner at zero, or the title bar's rule under navigation
+    /// that overhangs the rail. Without it, it starts below the title bar
+    /// and its native controls.
+    pub(crate) fn surface(&self, cap_top: Option<f32>, cap_bottom: bool) -> impl IntoElement {
         let state = self.0.clone();
         let paint = self.0.clone();
         canvas(
@@ -189,8 +191,8 @@ impl Liquid {
                 let mut y = top
                     + if below {
                         0.
-                    } else if cap_top {
-                        PANE_RADIUS
+                    } else if let Some(cap) = cap_top {
+                        cap + PANE_RADIUS
                     } else {
                         crate::theme::TITLE_BAR_HEIGHT
                     };
@@ -199,9 +201,11 @@ impl Liquid {
                 let x = edge - 0.5;
                 let at = |x: f32, y: f32| point(px(x), px(y));
                 let mut corners = PathBuilder::stroke(px(1.));
-                if cap_top {
-                    corners.move_to(at(x, top + PANE_RADIUS));
-                    corners.curve_to(at(edge + PANE_RADIUS, top - 0.5), at(x, top - 0.5));
+                if let Some(cap) = cap_top {
+                    // The pane's top edge, or the rule just above its row.
+                    let rule = top + cap - 0.5;
+                    corners.move_to(at(x, top + cap + PANE_RADIUS));
+                    corners.curve_to(at(edge + PANE_RADIUS, rule), at(x, rule));
                 }
                 if cap_bottom {
                     corners.move_to(at(x, end));
@@ -510,7 +514,7 @@ mod tests {
                 gpui::div()
                     .size_full()
                     .relative()
-                    .child(self.0.surface(false, true))
+                    .child(self.0.surface(None, true))
                     .child(
                         gpui::div()
                             .debug_selector(|| "row".into())

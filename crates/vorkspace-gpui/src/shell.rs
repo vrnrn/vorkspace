@@ -3936,7 +3936,10 @@ impl Shell {
     /// The target's current size, the range it rests in, and pixels per unit.
     fn resize_extent(&self, target: &ResizeTarget) -> Option<(f32, f32, f32, f32)> {
         Some(match target {
-            ResizeTarget::ProjectRail => (self.workspace.project_rail_width, 180., 360., 1.),
+            ResizeTarget::ProjectRail => {
+                let min = self.open_rail_floor().clamp(180., 360.);
+                (self.workspace.project_rail_width.max(min), min, 360., 1.)
+            }
             ResizeTarget::Sidebar | ResizeTarget::RightPanel => {
                 let (min, max) = (crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX);
                 let max = max.min((self.viewport_width * 0.5).floor()).max(min);
@@ -4888,12 +4891,24 @@ impl Shell {
             .child(if classic {
                 // Reserve the navigation's overhang without a second drag
                 // handler underneath its buttons (classic_body owns gestures).
+                // Where the rail's divider curves into it, the rule starts
+                // after the curve.
+                let curve = if self.rail_meets_title_rule() {
+                    crate::liquid::PANE_RADIUS
+                } else {
+                    0.
+                };
                 div()
                     .h_full()
                     .w(px(self.strip_lead(window)))
                     .flex_shrink_0()
-                    .border_b_1()
-                    .border_color(crate::right_panel::stroke())
+                    .pl(px(curve))
+                    .child(
+                        div()
+                            .size_full()
+                            .border_b_1()
+                            .border_color(crate::right_panel::stroke()),
+                    )
                     .into_any_element()
             } else {
                 self.navigation(window, cx).into_any_element()
@@ -7476,7 +7491,7 @@ impl Shell {
             .items_center()
             .overflow_hidden()
             // The line beneath the tabs, and their pills rising out of it.
-            .child(self.tab_liquid.surface(false, false))
+            .child(self.tab_liquid.surface(None, false))
             .child(
                 div()
                     .id("session-tabs")
