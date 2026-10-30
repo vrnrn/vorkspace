@@ -352,6 +352,29 @@ mod tests {
             .is_err());
         let listed = store.todo_action(&board, "todos.list", &json!({})).unwrap();
         assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+        // A validated `before` reorders by ID.
+        let first = store
+            .todo_action(&board, "todos.add", &json!({"title":"First"}))
+            .unwrap();
+        let second = store
+            .todo_action(&board, "todos.add", &json!({"title":"Second"}))
+            .unwrap();
+        let reorder = json!({"id":second["id"],"before":first["id"]});
+        crate::bot::api::validate("todos.update", &reorder).unwrap();
+        store.todo_action(&board, "todos.update", &reorder).unwrap();
+        let titles: Vec<_> = store
+            .list_todos(&board)
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.status == TodoStatus::Todo)
+            .map(|item| item.title)
+            .collect();
+        assert_eq!(titles, ["Second", "First"]);
+        for item in [&first, &second] {
+            store
+                .todo_action(&board, "todos.remove", &json!({"id":item["id"]}))
+                .unwrap();
+        }
         // Another board cannot reach it.
         assert!(store
             .todo_action(&TodoBoard::Personal, "todos.remove", &json!({"id":id}))
