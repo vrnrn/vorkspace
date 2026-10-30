@@ -286,9 +286,6 @@ fn adjacent<T: PartialEq + Clone>(items: &[T], current: Option<&T>, step: isize)
 #[derive(Clone, PartialEq)]
 pub(crate) enum MenuTarget {
     Tab(i64),
-    BotTab(String),
-    SearchTab,
-    AppTab(app_views::AppView),
     TerminalTitleTab(TitleTab),
     Session(i64),
     Folder(String),
@@ -3939,7 +3936,10 @@ impl Shell {
     /// The target's current size, the range it rests in, and pixels per unit.
     fn resize_extent(&self, target: &ResizeTarget) -> Option<(f32, f32, f32, f32)> {
         Some(match target {
-            ResizeTarget::ProjectRail => (self.workspace.project_rail_width, 180., 360., 1.),
+            ResizeTarget::ProjectRail => {
+                let min = self.open_rail_floor().clamp(180., 360.);
+                (self.workspace.project_rail_width.max(min), min, 360., 1.)
+            }
             ResizeTarget::Sidebar | ResizeTarget::RightPanel => {
                 let (min, max) = (crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX);
                 let max = max.min((self.viewport_width * 0.5).floor()).max(min);
@@ -4891,12 +4891,24 @@ impl Shell {
             .child(if classic {
                 // Reserve the navigation's overhang without a second drag
                 // handler underneath its buttons (classic_body owns gestures).
+                // Where the rail's divider curves into it, the rule starts
+                // after the curve.
+                let curve = if self.rail_meets_title_rule() {
+                    crate::liquid::PANE_RADIUS
+                } else {
+                    0.
+                };
                 div()
                     .h_full()
                     .w(px(self.strip_lead(window)))
                     .flex_shrink_0()
-                    .border_b_1()
-                    .border_color(crate::right_panel::stroke())
+                    .pl(px(curve))
+                    .child(
+                        div()
+                            .size_full()
+                            .border_b_1()
+                            .border_color(crate::right_panel::stroke()),
+                    )
                     .into_any_element()
             } else {
                 self.navigation(window, cx).into_any_element()
@@ -5311,17 +5323,10 @@ impl Shell {
         match target {
             // Answered by terminal_menu_items above.
             MenuTarget::TerminalTab(_) => ("".into(), Vec::new(), 160., MenuStyle::Explorer),
-            MenuTarget::Tab(_)
-            | MenuTarget::BotTab(_)
-            | MenuTarget::SearchTab
-            | MenuTarget::AppTab(_)
-            | MenuTarget::TerminalTitleTab(_) => {
-                let tab = match target {
-                    MenuTarget::Tab(id) => TitleTab::Session(*id),
-                    MenuTarget::BotTab(id) => self.bot_tab(id.clone()),
-                    MenuTarget::SearchTab => TitleTab::Search,
-                    MenuTarget::AppTab(view) => TitleTab::App(*view),
-                    MenuTarget::TerminalTitleTab(tab) => tab.clone(),
+            MenuTarget::Tab(_) | MenuTarget::TerminalTitleTab(_) => {
+                let (tab, label) = match target {
+                    MenuTarget::Tab(id) => (TitleTab::Session(*id), title(id)),
+                    MenuTarget::TerminalTitleTab(tab) => (tab.clone(), "Terminal".into()),
                     _ => unreachable!(),
                 };
                 let tabs = self.visible_tabs(cx);
@@ -5369,22 +5374,7 @@ impl Shell {
                     ]);
                 }
                 (
-                    format!(
-                        "Tab actions for {}",
-                        match &tab {
-                            TitleTab::Session(id) => title(id),
-                            TitleTab::Search => "Search".into(),
-                            TitleTab::App(view) => view.label().into(),
-                            TitleTab::Terminal { .. } => "Terminal".into(),
-                            TitleTab::Bot { id, .. } => self
-                                .bots
-                                .as_ref()
-                                .and_then(|m| m.read(cx).roster.get(id))
-                                .map(|m| m.label())
-                                .unwrap_or_default(),
-                        }
-                    )
-                    .into(),
+                    format!("Tab actions for {label}").into(),
                     items,
                     244.,
                     MenuStyle::Explorer,
@@ -5640,11 +5630,6 @@ impl Shell {
             MenuTarget::SidebarOptions => self.change_sidebar_option(action, cx),
             MenuTarget::Tab(id) => {
                 self.run_title_tab_menu(TitleTab::Session(id), action, window, cx)
-            }
-            MenuTarget::BotTab(id) => self.run_title_tab_menu(self.bot_tab(id), action, window, cx),
-            MenuTarget::SearchTab => self.run_title_tab_menu(TitleTab::Search, action, window, cx),
-            MenuTarget::AppTab(view) => {
-                self.run_title_tab_menu(TitleTab::App(view), action, window, cx)
             }
             MenuTarget::TerminalTitleTab(tab) => self.run_title_tab_menu(tab, action, window, cx),
             MenuTarget::Session(id) => self.run_session_menu(id, action, window, cx),
@@ -7417,9 +7402,9 @@ impl Shell {
             .enumerate()
             .filter_map(|(ix, tab)| match tab {
                 TitleTab::Session(id) => session_elements.remove(id),
-                TitleTab::App(view) => {
+                TitleTab::Terminal { id, cwd } => {
                     let element = self
-                        .app_title_tab(*view, tab_width(tab), cx)
+                        .terminal_title_tab(*id, cwd, tab_width(tab), cx)
                         .left(shifts[ix]);
                     Some(if dragged.as_ref() == Some(tab) {
                         gpui::deferred(element).with_priority(1).into_any_element()
@@ -7427,62 +7412,7 @@ impl Shell {
                         element.into_any_element()
                     })
                 }
-                TitleTab::Terminal { .. } => {
-                    let element = self
-                        .tool_title_tab(tab.clone(), "Terminal", "terminal", tab_width(tab), cx)
-                        .left(shifts[ix]);
-                    Some(if dragged.as_ref() == Some(tab) {
-                        gpui::deferred(element).with_priority(1).into_any_element()
-                    } else {
-                        element.into_any_element()
-                    })
-                }
-                TitleTab::Search => {
-                    let element = self.search_title_tab(tab_width(tab), cx).left(shifts[ix]);
-                    Some(if dragged.as_ref() == Some(tab) {
-                        gpui::deferred(element).with_priority(1).into_any_element()
-                    } else {
-                        element.into_any_element()
-                    })
-                }
-                TitleTab::Bot { id, .. } => {
-                    let manager = self.bots.clone()?;
-                    let w = tab_width(tab);
-                    let element = manager.update(cx, |m, cx| m.title_tab(id, w, cx))?;
-                    let drag_id = tab.clone();
-                    let menu_id = id.clone();
-                    let dragging = dragged.as_ref() == Some(tab);
-                    let element = div()
-                        .id(SharedString::from(format!("bot-tab-slot-{id}")))
-                        .h(px(TITLE_BAR_HEIGHT))
-                        .w(px(w))
-                        .flex_shrink_0()
-                        .relative()
-                        .left(shifts[ix])
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, event, _, cx| {
-                                this.start_tab_drag(drag_id.clone(), event, cx);
-                            }),
-                        )
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                this.open_menu(
-                                    MenuTarget::BotTab(menu_id.clone()),
-                                    Anchor::Point(event.position),
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        )
-                        .child(element);
-                    Some(if dragging {
-                        gpui::deferred(element).with_priority(1).into_any()
-                    } else {
-                        element.into_any()
-                    })
-                }
+                TitleTab::Search | TitleTab::App(_) | TitleTab::Bot { .. } => None,
             })
             .collect();
         if moving || opening || switching {
@@ -7561,7 +7491,7 @@ impl Shell {
             .items_center()
             .overflow_hidden()
             // The line beneath the tabs, and their pills rising out of it.
-            .child(self.tab_liquid.surface(false, false))
+            .child(self.tab_liquid.surface(None, false))
             .child(
                 div()
                     .id("session-tabs")

@@ -90,10 +90,10 @@ fn assert_titlebar(
                     .into_iter()
                     .map(|tab| match tab {
                         TitleTab::Session(id) => format!("title-tab-{id}"),
-                        TitleTab::Bot { id, .. } => format!("bot-title-tab-{id}"),
-                        TitleTab::App(view) => format!("app-title-tab-{}", view.label()),
                         TitleTab::Terminal { id, .. } => format!("terminal-title-tab-{id}"),
-                        TitleTab::Search => "search-title-tab".into(),
+                        TitleTab::Search | TitleTab::App(_) | TitleTab::Bot { .. } => {
+                            panic!("sidebar page appeared in the title strip: {tab:?}")
+                        }
                     })
                     .chain(std::iter::once("new-tab".into()))
                     .collect::<Vec<_>>()

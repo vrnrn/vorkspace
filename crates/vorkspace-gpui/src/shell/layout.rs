@@ -129,7 +129,7 @@ impl Shell {
                     .flex_col()
                     .rounded_l(px(12.))
                     // Beside a left sidebar, the pane draws its own curved edge.
-                    .when(left, |d| {
+                    .when(left && sidebar_width > 0., |d| {
                         d.border_l_1().border_color(crate::right_panel::stroke())
                     })
                     .bg(pane_fill())
@@ -387,6 +387,27 @@ mod tests {
     use gpui::{Focusable, TestAppContext, WindowHandle};
     use std::time::Duration;
 
+    fn pane_has_left_border(
+        window: WindowHandle<Shell>,
+        visual: &mut gpui::VisualTestContext,
+    ) -> bool {
+        let pane = visual.debug_bounds("main-pane-frame").unwrap();
+        window
+            .update(visual, |_, window, _| {
+                let scale = window.scale_factor();
+                window.painted_quads().iter().any(|quad| {
+                    (quad.bounds.left().0 - pane.left().as_f32() * scale).abs() < 0.5
+                        && (quad.bounds.top().0 - pane.top().as_f32() * scale).abs() < 0.5
+                        && (quad.bounds.size.width.0 - pane.size.width.as_f32() * scale).abs() < 0.5
+                        && (quad.bounds.size.height.0 - pane.size.height.as_f32() * scale).abs()
+                            < 0.5
+                        && quad.border_widths.left.0 > 0.
+                        && quad.border_color.a > 0.
+                })
+            })
+            .unwrap()
+    }
+
     fn mixed_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, Entity<Bots>, String, i64) {
         let (window, _, session) = window(cx);
         let (manager, id) = window
@@ -431,6 +452,7 @@ mod tests {
         let strip = visual.debug_bounds("title-tab-strip").unwrap();
         assert_eq!(sidebar.left(), rail.right());
         assert_eq!(pane.left(), sidebar.right());
+        assert!(pane_has_left_border(window, visual));
         assert!(
             strip.left() >= pane.left(),
             "tabs head the pane, after the sidebar"
@@ -451,6 +473,19 @@ mod tests {
         let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
         assert_eq!(pane.left(), rail.right());
         assert_eq!(sidebar.left(), pane.right());
+        assert!(!pane_has_left_border(window, visual));
+        // The rail owns the divider again once the left sidebar closes.
+        window
+            .update(visual, |shell, _, cx| {
+                shell.workspace.preferences.sidebar_right = false;
+                shell.set_sidebar_visible(false, cx);
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            })
+            .unwrap();
+        crate::clock::settle_animations(window, visual);
+        assert!(visual.debug_bounds("sidebar-frame").is_none());
+        assert!(!pane_has_left_border(window, visual));
     }
 
     #[gpui::test]
@@ -566,6 +601,7 @@ mod tests {
         let input = window
             .update(cx, |shell, w, cx| {
                 w.activate_window();
+                shell.workspace.preferences.sidebar_right = false;
                 shell.open_app_search(w, cx);
                 let input = shell
                     .app_search
@@ -597,6 +633,12 @@ mod tests {
             let navigation = visual.debug_bounds("titlebar-navigation").unwrap();
             let pane = visual.debug_bounds("main-pane-frame").unwrap();
             let header = visual.debug_bounds("app-search-header").unwrap();
+            assert!(!pane_has_left_border(window, visual), "{mode}");
+            assert_eq!(
+                header.left(),
+                pane.left(),
+                "{mode}: the rail owns the divider when no left sidebar is drawn"
+            );
             if navigation.right() > pane.left() {
                 assert!(header.top() >= navigation.bottom(), "{mode}: {header:?}");
             } else {
@@ -1061,5 +1103,114 @@ mod tests {
                 .unwrap())
         );
         assert!(visual.debug_bounds("bot-overview-panel").is_some());
+    }
+}
+
+#[cfg(test)]
+mod navigation_fit_tests {
+    use super::*;
+    use crate::shell::tests::window;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn the_open_rail_holds_navigation_at_low_zoom(cx: &mut TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, _) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1100.), px(800.)));
+        for scale in [60, 80, 100, 160] {
+            window
+                .update(visual, |shell, w, cx| {
+                    shell.workspace.project_rail_open = true;
+                    shell.workspace.project_rail_width = 180.;
+                    shell.workspace.preferences.ui_scale = scale;
+                    cx.set_global(shell.workspace.preferences.clone());
+                    w.set_ui_scale(scale as f32 / 100., cx);
+                    shell.open_app_search(w, cx);
+                    shell.invalidate_chrome(cx);
+                    cx.notify();
+                })
+                .unwrap();
+            crate::clock::settle_animations(window, visual);
+            let rail = visual.debug_bounds("classic-project-rail").unwrap();
+            let forward = visual.debug_bounds("visit-forward").unwrap();
+            let pane = visual.debug_bounds("main-pane-frame").unwrap();
+            let header = visual.debug_bounds("app-search-header").unwrap();
+            assert!(
+                forward.right() <= rail.right(),
+                "{scale}%: {forward:?} {rail:?}"
+            );
+            // No second title row pushes the page down.
+            assert_eq!(header.top(), pane.top(), "{scale}%");
+            // The saved width is untouched for when zoom rises again.
+            window
+                .update(visual, |shell, _, _| {
+                    assert_eq!(shell.workspace.project_rail_width, 180., "{scale}%")
+                })
+                .unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn the_icon_rail_divider_curves_into_the_title_rule(cx: &mut TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, session) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let lead_rule_left = |visual: &mut gpui::VisualTestContext| {
+            window
+                .update(visual, |_, w, _| {
+                    let scale = w.scale_factor();
+                    w.painted_quads()
+                        .iter()
+                        .filter(|q| {
+                            q.border_widths.bottom.0 > 0.
+                                && q.border_color.a > 0.
+                                && q.bounds.top().0 == 0.
+                                && (q.bounds.size.height.0 / scale - TITLE_BAR_HEIGHT).abs() < 0.5
+                        })
+                        .map(|q| q.bounds.left().0 / scale)
+                        .fold(f32::INFINITY, f32::min)
+                })
+                .unwrap()
+        };
+        for sidebar_right in [true, false] {
+            window
+                .update(visual, |shell, w, cx| {
+                    shell.workspace.project_rail_open = false;
+                    shell.workspace.preferences.sidebar_right = sidebar_right;
+                    shell.open(session, w, cx);
+                    shell.set_sidebar_visible(false, cx);
+                    shell.invalidate_chrome(cx);
+                    cx.notify();
+                })
+                .unwrap();
+            crate::clock::settle_animations(window, visual);
+            let rail = visual.debug_bounds("classic-project-rail").unwrap();
+            window
+                .update(visual, |shell, _, _| assert!(shell.rail_meets_title_rule()))
+                .unwrap();
+            // The rule leaves the corner to the divider's curve.
+            assert_eq!(
+                lead_rule_left(visual),
+                rail.right().as_f32() + crate::liquid::PANE_RADIUS,
+                "sidebar_right={sidebar_right} rail={rail:?} pane={:?}",
+                visual.debug_bounds("main-pane-frame")
+            );
+        }
+        // A left sidebar takes the rail's place beside the pane.
+        window
+            .update(visual, |shell, _, cx| {
+                shell.set_sidebar_visible(true, cx);
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            })
+            .unwrap();
+        crate::clock::settle_animations(window, visual);
+        window
+            .update(visual, |shell, _, _| {
+                assert!(!shell.rail_meets_title_rule())
+            })
+            .unwrap();
     }
 }
