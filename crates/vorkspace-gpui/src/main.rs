@@ -13,6 +13,7 @@ mod context_meter;
 mod controls;
 mod conversation;
 mod dev_reload;
+mod diagrams;
 mod diff_view;
 mod editor_analysis;
 mod editor_scrollbar;

@@ -162,6 +162,11 @@ pub(crate) enum Part {
     },
     Rule,
     Math(String),
+    /// A complete ```svg or ```mermaid fence, drawn as a diagram.
+    Diagram {
+        kind: crate::diagrams::DiagramKind,
+        source: SharedString,
+    },
 }
 #[derive(Clone)]
 pub(crate) struct MarkdownRow {
@@ -213,7 +218,28 @@ fn flatten(
                 );
             }
         }
-        Block::CodeBlock { language, code } => {
+        Block::CodeBlock {
+            language,
+            code,
+            closed: true,
+        } if language
+            .as_deref()
+            .and_then(crate::diagrams::DiagramKind::for_language)
+            .is_some() =>
+        {
+            let kind = language
+                .as_deref()
+                .and_then(crate::diagrams::DiagramKind::for_language)
+                .unwrap();
+            add(
+                Part::Diagram {
+                    kind,
+                    source: code.clone().into(),
+                },
+                16.,
+            );
+        }
+        Block::CodeBlock { language, code, .. } => {
             let fence = Arc::new(Fence::new(language.as_deref().unwrap_or(""), code));
             for at in (0..fence.lines.len()).step_by(PART_LINES) {
                 add(
@@ -765,6 +791,30 @@ pub(crate) fn body_selected(
             .py_2()
             .child(div().w_full().h(px(1.)).bg(content(0.1)))
             .into_any_element(),
+        Part::Diagram { kind, source } => {
+            let code = source.clone();
+            body.child(crate::diagrams::diagram(
+                *kind,
+                source.clone(),
+                None,
+                move || {
+                    // Until drawn, or if it cannot be: the source as written.
+                    div()
+                        .w_full()
+                        .px_3()
+                        .py_2()
+                        .rounded(px(10.))
+                        .bg(content(0.06))
+                        .font_family(FIXED_FONT)
+                        .text_size(px(12.))
+                        .line_height(px(18.))
+                        .text_color(content(0.7))
+                        .child(code.clone())
+                        .into_any_element()
+                },
+            ))
+            .into_any_element()
+        }
         Part::Math(tex) => {
             let styled = StyledText::new(tex.clone());
             let layout = styled.layout().clone();
@@ -1119,5 +1169,48 @@ mod file_link_tests {
                 assert_ne!(window.cursor_style(), Some(CursorStyle::PointingHand));
             })
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod diagram_tests {
+    use super::*;
+    use crate::{diagrams::DiagramKind, markdown_model::parse_full};
+
+    fn parts(text: &str) -> Vec<Part> {
+        parse_full(text)
+            .blocks
+            .iter()
+            .flat_map(|block| rows(&block.block))
+            .map(|row| row.part)
+            .collect()
+    }
+
+    #[test]
+    fn complete_diagram_fences_draw_and_open_ones_stay_code() {
+        let done = parts("Here:\n\n```mermaid\nflowchart LR\n  A --> B\n```\n");
+        assert!(matches!(
+            &done[1],
+            Part::Diagram { kind: DiagramKind::Mermaid, source } if source.contains("A --> B")
+        ));
+        let svg = parts("```svg\n<svg viewBox=\"0 0 4 4\"/>\n```");
+        assert!(matches!(
+            &svg[0],
+            Part::Diagram {
+                kind: DiagramKind::Svg,
+                ..
+            }
+        ));
+        // Still streaming: no closing fence yet.
+        let open = parts("```mermaid\nflowchart LR\n  A -->");
+        assert!(matches!(&open[0], Part::Code { .. }));
+        // A closed fence followed by more text is complete.
+        let later = parts("```mermaid\nflowchart LR\n  A --> B\n```\n\nAfter");
+        assert!(matches!(&later[0], Part::Diagram { .. }));
+        // Other languages are ordinary code.
+        assert!(matches!(
+            &parts("```rust\nfn x() {}\n```")[0],
+            Part::Code { .. }
+        ));
     }
 }

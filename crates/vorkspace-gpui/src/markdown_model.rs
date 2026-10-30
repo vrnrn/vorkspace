@@ -41,6 +41,9 @@ pub(crate) enum Block {
     CodeBlock {
         language: Option<String>,
         code: String,
+        /// False for a fence still open at the end of the text, such as one
+        /// arriving in a streamed reply.
+        closed: bool,
     },
     List {
         ordered_start: Option<u64>,
@@ -298,8 +301,16 @@ fn parse_with_breaks(text: &str, hard_breaks: bool) -> BlockTree {
     .collect::<Vec<_>>()
     .into_iter()
     .peekable();
+    let mut blocks = blocks(&mut events, None, 0);
+    // pulldown-cmark closes a fence at the end of the text. Only a closing
+    // fence line proves the block is complete.
+    if let Some(Block::CodeBlock { closed, .. }) = blocks.last_mut() {
+        let last = text.trim_end().lines().last().unwrap_or_default().trim();
+        *closed =
+            last.len() >= 3 && (last.chars().all(|c| c == '`') || last.chars().all(|c| c == '~'));
+    }
     BlockTree {
-        blocks: blocks(&mut events, None, 0)
+        blocks: blocks
             .into_iter()
             .map(|block| Arc::new(TopBlock { block }))
             .collect(),
@@ -341,7 +352,11 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
                             _ => {}
                         }
                     }
-                    out.push(Block::CodeBlock { language, code });
+                    out.push(Block::CodeBlock {
+                        language,
+                        code,
+                        closed: true,
+                    });
                 }
                 Tag::BlockQuote(kind) => out.push(Block::BlockQuote {
                     children: blocks(events, Some(TagEnd::BlockQuote(kind)), depth + 1),

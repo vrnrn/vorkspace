@@ -53,6 +53,8 @@ Scene objects: visual.object({kind:'box'|'sphere'|'cylinder'|'cone'|'plane'},
 {position:[x,y,z],rotation:[x,y,z],scale:[x,y,z],color:'accent'}).
 Custom geometry: {kind:'mesh',vertices:[[x,y,z],...],indices:[[a,b,c],...]}
 or {kind:'line',points:[[x,y,z],...],width:1}. Rotations are radians.
+visual.mermaid(source,{title?}) draws Mermaid syntax; visual.svg(markup,{title?})
+draws one static <svg> element. Both render natively; see Diagrams below.
 Camera: {eye:[5,4,6],target:[0,0,0],fov:45}. Use controls and state to change
 geometry or camera; every handler rerenders. State is local to this visual.
 
@@ -66,11 +68,13 @@ hardcode font families or CSS. Native controls and the app theme own those style
 Include units, chart legends, readable labels, and useful empty states. Keep
 supporting prose in the conversation.
 The sandbox has no DOM, network, files, timers, imports, or external libraries.
-No HTML, SVG markup, or shader code. Source is limited to 64 KiB; keep
+No HTML or shader code; SVG only through visual.svg. Source is limited to 64 KiB; keep
 scripts compact. Check validates execution, the initial component tree, and representative controls;
 it does not capture a screenshot. Fix errors before publishing. Set a concise
 title for the published visual. Never expose capability environment variables.
 "#;
+/// Diagram guidance, shared with Bot context.
+pub const DIAGRAMS: &str = include_str!("diagrams.md");
 
 #[derive(Serialize, Deserialize)]
 struct Wire {
@@ -528,7 +532,7 @@ pub fn client(args: &[String]) -> Result<Value, String> {
         .filter(|a| !matches!(a.as_str(), "help" | "--help" | "-h"))
     else {
         return Ok(
-            json!({"help":format!("Usage: vorkspace-gpui visual docs\n       vorkspace-gpui visual check|show --input FILE [--title TITLE] [--id ID]\nFILE is JavaScript source, or JSON with source/title/id/requestId. Use - for stdin.\n{DOCUMENTATION}")}),
+            json!({"help":format!("Usage: vorkspace-gpui visual docs\n       vorkspace-gpui visual check|show --input FILE [--title TITLE] [--id ID]\nFILE is JavaScript source, or JSON with source/title/id/requestId. Use - for stdin.\n{DOCUMENTATION}\n{DIAGRAMS}")}),
         );
     };
     if action == "docs" {
@@ -609,7 +613,7 @@ pub fn client(args: &[String]) -> Result<Value, String> {
 
 fn documentation() -> Value {
     json!({
-        "documentation": DOCUMENTATION,
+        "documentation": format!("{DOCUMENTATION}\n{DIAGRAMS}"),
         "cli": {
             "check": "vorkspace-gpui visual check --input FILE",
             "show": "vorkspace-gpui visual show --input FILE --title TITLE"

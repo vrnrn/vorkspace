@@ -55,6 +55,7 @@ Handlers update local state and the app rerenders the component tree. The script
 | Choices | `tabs(labels, selectedIndex, handler)`, `select(label, options, selectedIndex, handler)` |
 | Drawing | `canvas(shapes, {width, height})` |
 | Geometry | `scene(objects, {width, height, camera})` |
+| Diagrams | `mermaid(source, {title})`, `svg(markup, {title})` |
 
 All functions above belong to `visual`. Option objects and their fields are optional unless the component needs the value. Chart types are `bar`, `line`, and `area`. Each series has a `label`, numeric `values`, and an optional semantic `color`. All series have equal lengths; labels, when supplied, match that length.
 
@@ -65,6 +66,18 @@ Canvas drawing uses `rect`, `circle`, `line`, `polyline`, and `label`. Coordinat
 Use `ink`, `muted`, `faint`, `accent`, `positive`, `negative`, `warning`, and `series1` through `series6` for colors. Use `caption`, `small`, `body`, `subtitle`, `title`, or `hero` for text sizes. Unsupported style properties and arbitrary color strings fail validation.
 
 Let the app draw buttons, inputs, switches, and choice controls. Use layout components rather than painting controls onto a canvas. Prefer gaps around 8–16, restrained headings, clear units, and chart or scene heights around 220–360. The outer visual inherits the conversation's appearance rather than introducing a page background.
+
+## Diagrams
+
+Diagrams render natively in three places: visuals (`visual.mermaid`, `visual.svg`), Markdown (replies, Notes and Bot documents) and HTML documents.
+
+- **Mermaid** source is rendered to SVG by the vendored [Pele](https://pele.run) bundle (`assets/pele.global.js`, MIT) in a warm QuickJS context per worker thread, with links and remote images off and a per-call deadline. Pele themes its output with CSS variables, which the native SVG renderer does not resolve, so `diagrams.rs` replaces every `var(--…)` with the live palette (or Pele's fallback) and evaluates `color-mix()` before rasterizing.
+- **SVG** must be one static `<svg>` element: scripts, `foreignObject` and `javascript:` are rejected, and `<image>` elements that do not use an inline `data:` URI are removed, so a drawing never reads files or the network.
+- Both are rasterized at twice their logical size through a GPUI image asset on the background executor, keyed by kind, source and palette, so a theme change redraws them. Until a diagram is drawn, or if it cannot be, Markdown shows its source and a visual shows a short notice.
+- In Markdown, a fenced ```mermaid (or `mmd`) or ```svg block is drawn only once its closing fence exists, so a streaming reply does not render every partial diagram.
+- HTML documents that contain `<pre class="mermaid">` or a `language-mermaid` code block also receive Pele inside their sandboxed iframe, themed by the document's variables; other documents do not carry it. Inline `<svg>` already works there.
+
+`visual docs` ends with drawing guidance adapted from Cathryn Lavery's [diagram-design](https://github.com/cathrynlavery/diagram-design) skill (MIT): delete before adding, at most 9 nodes, 12 arrows and 2 accent elements, orthogonal connectors, masked short labels, a 4px grid, no shadows or glows, and an accessible SVG title and description. Bot context points at it for diagrams in replies and documents.
 
 ## 3D geometry
 

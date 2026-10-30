@@ -172,6 +172,38 @@ pub enum Node {
         objects: Vec<SceneObject>,
         camera: Camera,
     },
+    /// Static SVG markup, drawn natively.
+    Svg {
+        markup: String,
+        title: Option<String>,
+    },
+    /// Mermaid source, rendered to SVG by Pele and drawn natively.
+    Mermaid {
+        source: String,
+        title: Option<String>,
+    },
+}
+
+pub const MAX_SVG_BYTES: usize = 256 * 1024;
+pub const MAX_MERMAID_BYTES: usize = 50_000;
+
+/// Static SVG only: one <svg> root, no scripts or embedded HTML.
+pub fn validate_svg(markup: &str) -> Result<(), String> {
+    let trimmed = markup.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if trimmed.is_empty() || trimmed.len() > MAX_SVG_BYTES {
+        return Err(format!("SVG must contain 1–{MAX_SVG_BYTES} bytes"));
+    }
+    if !(lower.starts_with("<svg") || lower.starts_with("<?xml")) || !lower.contains("</svg>") {
+        return Err("SVG must be a single <svg> element".into());
+    }
+    if ["<script", "<foreignobject", "javascript:"]
+        .iter()
+        .any(|bad| lower.contains(bad))
+    {
+        return Err("SVG may not contain scripts or foreignObject".into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -453,6 +485,22 @@ impl Node {
                 }
                 for object in objects {
                     object.validate(budget)?;
+                }
+            }
+            Self::Svg { markup, title } => {
+                validate_svg(markup)?;
+                if let Some(title) = title {
+                    budget.text(title, 256)?;
+                }
+            }
+            Self::Mermaid { source, title } => {
+                if source.trim().is_empty() || source.len() > MAX_MERMAID_BYTES {
+                    return Err(format!(
+                        "Mermaid source must contain 1–{MAX_MERMAID_BYTES} bytes"
+                    ));
+                }
+                if let Some(title) = title {
+                    budget.text(title, 256)?;
                 }
             }
         }
