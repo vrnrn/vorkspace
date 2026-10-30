@@ -749,9 +749,17 @@ mod tests {
         let quoted = plain.replace("<svg ", r#"<svg data-note="a > color=b" "#);
         assert_eq!(pixel(&quoted, &dark), [0xff, 0xee, 0xdd, 255]);
         // Non-ASCII attributes, names or values, are scanned safely.
-        for attribute in [r#"data-é="label""#, r#"data-note="é > ü""#, r#"é="1" 日本="2""#] {
+        for attribute in [
+            r#"data-é="label""#,
+            r#"data-note="é > ü""#,
+            r#"é="1" 日本="2""#,
+        ] {
             let unicode = plain.replace("<svg ", &format!("<svg {attribute} "));
-            assert_eq!(pixel(&unicode, &dark), [0xff, 0xee, 0xdd, 255], "{attribute}");
+            assert_eq!(
+                pixel(&unicode, &dark),
+                [0xff, 0xee, 0xdd, 255],
+                "{attribute}"
+            );
         }
     }
 
