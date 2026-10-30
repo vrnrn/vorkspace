@@ -3,8 +3,8 @@
 //! then the SVG is rasterized off the main thread through GPUI's image assets.
 use crate::theme::*;
 use gpui::{
-    AnyElement, App, Asset, Hsla, ImageCacheError, ImageSource, IntoElement, ParentElement,
-    RenderImage, SharedString, Styled, Window, div, img, prelude::*,
+    AnyElement, App, Asset, EntityId, Global, Hsla, ImageCacheError, ImageSource, IntoElement,
+    ParentElement, RenderImage, SharedString, Styled, Window, div, img, prelude::*,
 };
 use rquickjs::{Context, Function, Object, Runtime};
 use std::{
@@ -319,37 +319,71 @@ fn mix(inner: &str) -> Option<String> {
     ))
 }
 
-/// Drops `<image>` elements that point anywhere but an inline `data:` URI,
-/// so a drawn SVG never reads files or the network.
-pub(crate) fn without_external_images(svg: &str) -> String {
-    let mut out = String::with_capacity(svg.len());
-    let mut rest = svg;
-    loop {
-        let lower = rest.to_ascii_lowercase();
-        let Some(at) = lower.find("<image") else {
-            out.push_str(rest);
-            return out;
-        };
-        out.push_str(&rest[..at]);
-        let end = lower[at..]
-            .find('>')
-            .map(|i| at + i + 1)
-            .unwrap_or(rest.len());
-        let tag = &lower[at..end];
-        let inline = ["href=\"data:", "href='data:"]
-            .iter()
-            .any(|prefix| tag.contains(prefix))
-            && !tag.contains("href=\"http")
-            && !tag.contains("href='http");
-        if inline {
-            out.push_str(&rest[at..end]);
-        }
-        // A paired `</image>` closes nothing once its opening tag is gone.
-        rest = &rest[end..];
-        if !inline && rest.to_ascii_lowercase().starts_with("</image>") {
-            rest = &rest["</image>".len()..];
+/// Gives a hand-written SVG's root the palette's text colour, so
+/// `currentColor` follows the theme. The rasterizer has no parent style to
+/// inherit from; a root `color` the author set, or any stylesheet, still wins.
+fn with_default_color(svg: &str, palette: &Palette) -> String {
+    let lower = svg.to_ascii_lowercase();
+    let Some(open) = lower.find("<svg") else {
+        return svg.to_owned();
+    };
+    let name_end = open + "<svg".len();
+    // The root tag's attributes, up to its `>` outside quotes.
+    let mut quote = None;
+    let mut close = None;
+    for (ix, c) in lower[name_end..].char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '>') => {
+                close = Some(name_end + ix);
+                break;
+            }
+            _ => {}
         }
     }
+    let Some(close) = close else {
+        return svg.to_owned();
+    };
+    let attributes = &lower[name_end..close];
+    if !lower[name_end..].starts_with(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+        || has_attribute(attributes, "color")
+    {
+        return svg.to_owned();
+    }
+    format!(
+        "{} color=\"{}\"{}",
+        &svg[..name_end],
+        palette.fg,
+        &svg[name_end..]
+    )
+}
+
+/// Whether a tag's attribute text names `name` exactly, outside quoted values.
+fn has_attribute(attributes: &str, name: &str) -> bool {
+    let bytes = attributes.as_bytes();
+    let mut quote = None;
+    let mut ix = 0;
+    while ix < bytes.len() {
+        let c = bytes[ix];
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == b'"' || c == b'\'' => quote = Some(c),
+            None if attributes[ix..].starts_with(name)
+                && (ix == 0 || bytes[ix - 1].is_ascii_whitespace()) =>
+            {
+                let rest = attributes[ix + name.len()..].trim_start();
+                if rest.starts_with('=') {
+                    return true;
+                }
+            }
+            None => {}
+        }
+        ix += 1;
+    }
+    false
 }
 
 /// The SVG to rasterize for a diagram.
@@ -359,21 +393,25 @@ pub(crate) fn prepare(
     palette: &Palette,
 ) -> Result<String, String> {
     match kind {
+        // `<image>` references resolve only to inline data when rasterized.
         DiagramKind::Svg => {
             validate_svg(source)?;
-            Ok(without_external_images(source))
+            Ok(with_default_color(source, palette))
         }
         DiagramKind::Mermaid => Ok(themed(&mermaid_svg(source)?, palette)),
     }
 }
 
-/// Rasterized at twice the logical size, for sharp edges on Retina displays.
-const SCALE: f32 = 2.;
+/// The logical scale. GPUI's renderer rasterizes at twice this, for sharp
+/// edges on Retina displays, and lays the image out at its logical size.
+const SCALE: f32 = 1.;
+
+type DiagramKey = (DiagramKind, SharedString, Palette);
 
 pub(crate) enum DiagramAsset {}
 
 impl Asset for DiagramAsset {
-    type Source = (DiagramKind, SharedString, Palette);
+    type Source = DiagramKey;
     type Output = Result<Arc<RenderImage>, ImageCacheError>;
 
     fn load(
@@ -384,9 +422,135 @@ impl Asset for DiagramAsset {
         async move {
             let svg =
                 prepare(kind, &source, &palette).map_err(|e| ImageCacheError::Asset(e.into()))?;
+            // Agent-written SVG may embed `data:` images but never read files.
             renderer
-                .render_single_frame(svg.as_bytes(), SCALE)
+                .parse_untrusted_svg(svg.as_bytes())
+                .and_then(|svg| renderer.render_parsed(&svg, SCALE))
                 .map_err(|e| ImageCacheError::Asset(e.to_string().into()))
+        }
+    }
+}
+
+/// Retained raster bytes, an RGBA estimate, past which diagrams not drawn
+/// in the latest frame are released.
+const RETAINED_BYTES: usize = 64 << 20;
+
+/// GPUI keeps a loaded asset until it is removed, so every distinct source
+/// or palette would otherwise keep its raster for the life of the app.
+/// Once retained rasters pass the budget, diagrams their views have since
+/// redrawn without go first, with their sprites. Diagrams whose view hasn't
+/// drawn again (hidden, or a cached view still painting them) go next, and
+/// give up only their pixels: their sprite may still be on screen. Diagrams
+/// drawn in the latest frame stay.
+struct Retained {
+    budget: usize,
+    frame: u64,
+    bytes: usize,
+    entries: HashMap<DiagramKey, Retention>,
+    /// The latest frame in which each view drew a diagram.
+    views: HashMap<EntityId, u64>,
+    ending: bool,
+}
+
+struct Retention {
+    image: Arc<RenderImage>,
+    bytes: usize,
+    drawn: u64,
+    /// The views that drew it, and the frame each last did.
+    owners: HashMap<EntityId, u64>,
+}
+
+impl Default for Retained {
+    fn default() -> Self {
+        Self {
+            budget: RETAINED_BYTES,
+            frame: 0,
+            bytes: 0,
+            entries: HashMap::new(),
+            views: HashMap::new(),
+            ending: false,
+        }
+    }
+}
+
+impl Global for Retained {}
+
+fn raster_bytes(image: &RenderImage) -> usize {
+    (0..image.frame_count())
+        .map(|frame| {
+            let size = image.size(frame);
+            size.width.0.max(0) as usize * size.height.0.max(0) as usize * 4
+        })
+        .sum()
+}
+
+/// Records that `view` drew this diagram in the current frame.
+fn retain(key: &DiagramKey, image: &Arc<RenderImage>, view: EntityId, cx: &mut App) {
+    let retained = cx.default_global::<Retained>();
+    let frame = retained.frame;
+    retained.views.insert(view, frame);
+    match retained.entries.get_mut(key) {
+        Some(entry) => {
+            entry.drawn = frame;
+            entry.owners.insert(view, frame);
+        }
+        None => {
+            let bytes = raster_bytes(image);
+            retained.bytes += bytes;
+            retained.entries.insert(
+                key.clone(),
+                Retention {
+                    image: image.clone(),
+                    bytes,
+                    drawn: frame,
+                    owners: HashMap::from([(view, frame)]),
+                },
+            );
+        }
+    }
+    if !retained.ending {
+        retained.ending = true;
+        // Runs once this frame's drawing is done.
+        cx.defer(end_frame);
+    }
+}
+
+fn end_frame(cx: &mut App) {
+    let retained = cx.global_mut::<Retained>();
+    retained.ending = false;
+    let frame = retained.frame;
+    retained.frame += 1;
+    if retained.bytes <= retained.budget {
+        return;
+    }
+    let views = &retained.views;
+    let mut candidates: Vec<_> = retained
+        .entries
+        .iter()
+        .filter(|(_, entry)| entry.drawn < frame)
+        .map(|(key, entry)| {
+            let redrawn_without = entry
+                .owners
+                .iter()
+                .all(|(view, drawn)| views.get(view).is_some_and(|latest| latest > drawn));
+            (!redrawn_without, entry.drawn, key.clone())
+        })
+        .collect();
+    candidates.sort_by_key(|(maybe_shown, drawn, _)| (*maybe_shown, *drawn));
+    let mut released = Vec::new();
+    for (maybe_shown, _, key) in candidates {
+        if retained.bytes <= retained.budget {
+            break;
+        }
+        if let Some(entry) = retained.entries.remove(&key) {
+            retained.bytes -= entry.bytes;
+            released.push((key, entry.image, !maybe_shown));
+        }
+    }
+    for (key, image, sprite) in released {
+        cx.remove_asset::<DiagramAsset>(&key);
+        if sprite {
+            cx.drop_image(image, None);
         }
     }
 }
@@ -413,7 +577,13 @@ pub(crate) fn diagram(
         .overflow_hidden()
         .child(
             img(ImageSource::Custom(Arc::new(
-                move |window: &mut Window, cx: &mut App| window.use_asset::<DiagramAsset>(&key, cx),
+                move |window: &mut Window, cx: &mut App| {
+                    let image = window.use_asset::<DiagramAsset>(&key, cx);
+                    if let Some(Ok(image)) = &image {
+                        retain(&key, image, window.current_view(), cx);
+                    }
+                    image
+                },
             )))
             .max_w_full()
             .with_fallback(fallback)
@@ -481,13 +651,13 @@ mod tests {
         assert_eq!(mix_colors("color-mix(oops"), "color-mix(oops");
     }
 
+    /// The first pixel, BGRA.
+    fn first_pixel(image: &RenderImage) -> [u8; 4] {
+        image.as_bytes(0).unwrap()[..4].try_into().unwrap()
+    }
+
     #[test]
-    fn svg_blocks_lose_external_images_and_reject_scripts() {
-        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><image href="file:///etc/passwd"/><image href="data:image/png;base64,AAAA"/><rect width="4" height="4"/></svg>"#;
-        let kept = prepare(DiagramKind::Svg, svg, &palette()).unwrap();
-        assert!(!kept.contains("passwd"));
-        assert!(kept.contains("data:image/png"));
-        assert!(kept.contains("<rect"));
+    fn svg_blocks_reject_scripts() {
         assert!(
             prepare(
                 DiagramKind::Svg,
@@ -497,6 +667,86 @@ mod tests {
             .is_err()
         );
         assert!(prepare(DiagramKind::Svg, "<div>no</div>", &palette()).is_err());
+    }
+
+    #[gpui::test]
+    fn untrusted_svg_embeds_inline_images_but_never_reads_files(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("private.png");
+        let red = image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 0, 0, 255]));
+        red.save(&path).unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        red.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let inline =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png.into_inner());
+        let drawing = |href: &str, extra: &str| {
+            format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="4" height="4"><image {extra} xlink:href="{href}" width="4" height="4"/></svg>"#
+            )
+        };
+        let renderer = cx.update(|cx| cx.svg_renderer());
+        let untrusted = |svg: &str| {
+            let svg = prepare(DiagramKind::Svg, svg, &palette()).unwrap();
+            let parsed = renderer.parse_untrusted_svg(svg.as_bytes()).unwrap();
+            renderer.render_parsed(&parsed, SCALE).unwrap()
+        };
+        let file = drawing(path.to_str().unwrap(), r#"data-href="data:ignored""#);
+        // The trusted path reads it, so this drawing does reach a file.
+        let trusted = renderer
+            .render_single_frame(file.as_bytes(), SCALE)
+            .unwrap();
+        assert_ne!(first_pixel(&trusted)[3], 0);
+        assert_eq!(first_pixel(&untrusted(&file))[3], 0);
+        let file_uri = drawing(&format!("file://{}", path.display()), "");
+        assert_eq!(first_pixel(&untrusted(&file_uri))[3], 0);
+        // Nested SVG images get no further.
+        let nested =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, file.as_bytes());
+        let nested = drawing(&format!("data:image/svg+xml;base64,{nested}"), "");
+        assert_eq!(first_pixel(&untrusted(&nested))[3], 0);
+        let data = drawing(&format!("data:image/png;base64,{inline}"), "");
+        assert_eq!(first_pixel(&untrusted(&data)), [0, 0, 255, 255]);
+    }
+
+    #[gpui::test]
+    fn diagrams_keep_their_logical_size_at_a_retina_raster(cx: &mut gpui::TestAppContext) {
+        let renderer = cx.update(|cx| cx.svg_renderer());
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="64"><rect width="160" height="64"/></svg>"#;
+        let parsed = renderer.parse_untrusted_svg(svg.as_bytes()).unwrap();
+        let image = renderer.render_parsed(&parsed, SCALE).unwrap();
+        assert_eq!(image.size(0).width.0, 320);
+        assert_eq!(image.size(0).height.0, 128);
+    }
+
+    #[gpui::test]
+    fn raw_svg_current_color_follows_the_palette(cx: &mut gpui::TestAppContext) {
+        let renderer = cx.update(|cx| cx.svg_renderer());
+        let pixel = |svg: &str, palette: &Palette| {
+            let svg = prepare(DiagramKind::Svg, svg, palette).unwrap();
+            let parsed = renderer.parse_untrusted_svg(svg.as_bytes()).unwrap();
+            first_pixel(&renderer.render_parsed(&parsed, SCALE).unwrap())
+        };
+        let light = Palette {
+            fg: "#112233".into(),
+            ..palette()
+        };
+        let dark = Palette {
+            fg: "#ddeeff".into(),
+            ..palette()
+        };
+        let plain = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="currentColor"/></svg>"#;
+        assert_eq!(pixel(plain, &light), [0x33, 0x22, 0x11, 255]);
+        assert_eq!(pixel(plain, &dark), [0xff, 0xee, 0xdd, 255]);
+        // Authored colours stay, however they were set.
+        let attribute = plain.replace("<svg ", r##"<svg color="#00ff00" "##);
+        assert_eq!(pixel(&attribute, &dark), [0, 255, 0, 255]);
+        let styled = plain.replace("<svg ", r##"<svg style="color:#00ff00" "##);
+        assert_eq!(pixel(&styled, &dark), [0, 255, 0, 255]);
+        // Attributes ending in `color` are not the root's colour.
+        let stop = plain.replace("<svg ", r##"<svg stop-color="#00ff00" "##);
+        assert_eq!(pixel(&stop, &dark), [0xff, 0xee, 0xdd, 255]);
+        let quoted = plain.replace("<svg ", r#"<svg data-note="a > color=b" "#);
+        assert_eq!(pixel(&quoted, &dark), [0xff, 0xee, 0xdd, 255]);
     }
 
     #[test]
@@ -512,6 +762,115 @@ mod tests {
         assert_eq!(DiagramKind::for_language("rust"), None);
     }
 
+    struct Diagrams(Vec<&'static str>);
+    impl gpui::Render for Diagrams {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().size_full().children(self.0.iter().map(|source| {
+                diagram(DiagramKind::Svg, (*source).into(), None, || {
+                    div().into_any_element()
+                })
+            }))
+        }
+    }
+
+    const FIRST: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="red"/></svg>"#;
+    const SECOND: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="green"/></svg>"#;
+
+    fn key(source: &'static str) -> DiagramKey {
+        (DiagramKind::Svg, source.into(), Palette::current())
+    }
+
+    fn draw(
+        cx: &mut gpui::TestAppContext,
+        sources: Vec<&'static str>,
+    ) -> gpui::WindowHandle<Diagrams> {
+        let window = cx.update(|cx| {
+            cx.set_global(Retained {
+                budget: 0,
+                ..Default::default()
+            });
+            cx.open_window(Default::default(), |_, cx| cx.new(|_| Diagrams(sources)))
+                .unwrap()
+        });
+        cx.run_until_parked();
+        window
+    }
+
+    fn show(
+        window: gpui::WindowHandle<Diagrams>,
+        sources: Vec<&'static str>,
+        cx: &mut gpui::TestAppContext,
+    ) {
+        window
+            .update(cx, |view, _, cx| {
+                view.0 = sources;
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn replaced_diagrams_release_their_rasters(cx: &mut gpui::TestAppContext) {
+        let window = draw(cx, vec![FIRST]);
+        cx.update(|cx| {
+            assert!(cx.has_asset::<DiagramAsset>(&key(FIRST)));
+            assert_eq!(cx.global::<Retained>().entries.len(), 1);
+        });
+        show(window, vec![SECOND], cx);
+        cx.update(|cx| {
+            assert!(!cx.has_asset::<DiagramAsset>(&key(FIRST)));
+            assert!(cx.has_asset::<DiagramAsset>(&key(SECOND)));
+            let retained = cx.global::<Retained>();
+            assert_eq!(retained.entries.len(), 1);
+            assert!(retained.entries.contains_key(&key(SECOND)));
+            assert_eq!(
+                retained.bytes,
+                retained.entries[&key(SECOND)].bytes,
+                "the released raster leaves the count"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn diagrams_in_the_latest_frame_stay_over_budget(cx: &mut gpui::TestAppContext) {
+        let window = draw(cx, vec![FIRST, SECOND]);
+        for _ in 0..3 {
+            window.update(cx, |_, window, _| window.refresh()).unwrap();
+            cx.run_until_parked();
+        }
+        cx.update(|cx| {
+            assert!(cx.has_asset::<DiagramAsset>(&key(FIRST)));
+            assert!(cx.has_asset::<DiagramAsset>(&key(SECOND)));
+            assert_eq!(cx.global::<Retained>().entries.len(), 2);
+        });
+    }
+
+    #[gpui::test]
+    fn a_view_that_has_not_redrawn_keeps_its_sprite(cx: &mut gpui::TestAppContext) {
+        let shown = draw(cx, vec![FIRST]);
+        let image = cx.update(|cx| cx.global::<Retained>().entries[&key(FIRST)].image.clone());
+        // Another view draws while the first stays as it was, as a cached
+        // view does: its diagram gives up its pixels, not its sprite.
+        let other = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|_| Diagrams(vec![SECOND]))
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        other.update(cx, |_, window, _| window.refresh()).unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(!cx.has_asset::<DiagramAsset>(&key(FIRST)));
+            assert!(cx.global::<Retained>().entries.contains_key(&key(SECOND)));
+        });
+        // Only this test still holds its pixels.
+        assert_eq!(Arc::strong_count(&image), 1);
+        show(shown, vec![FIRST], cx);
+        cx.update(|cx| assert!(cx.has_asset::<DiagramAsset>(&key(FIRST))));
+    }
+
     #[gpui::test]
     fn the_asset_rasterizes_a_themed_diagram(cx: &mut gpui::TestAppContext) {
         let key = (
@@ -521,7 +880,8 @@ mod tests {
         );
         let renderer = cx.update(|cx| cx.svg_renderer());
         let svg = prepare(key.0, &key.1, &key.2).unwrap();
-        let image = renderer.render_single_frame(svg.as_bytes(), SCALE).unwrap();
+        let parsed = renderer.parse_untrusted_svg(svg.as_bytes()).unwrap();
+        let image = renderer.render_parsed(&parsed, SCALE).unwrap();
         assert!(image.size(0).width.0 > 0);
     }
 }

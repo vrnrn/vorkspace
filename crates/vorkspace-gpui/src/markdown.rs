@@ -1207,6 +1207,24 @@ mod diagram_tests {
         // A closed fence followed by more text is complete.
         let later = parts("```mermaid\nflowchart LR\n  A --> B\n```\n\nAfter");
         assert!(matches!(&later[0], Part::Diagram { .. }));
+        // Nested fences stream the same way, in lists and quotes.
+        let nested = |text: &str| {
+            parts(text)
+                .iter()
+                .any(|part| matches!(part, Part::Diagram { .. }))
+        };
+        assert!(!nested(
+            "- Plan:\n\n  ```mermaid\n  flowchart LR\n    A -->"
+        ));
+        assert!(nested(
+            "- Plan:\n\n  ```mermaid\n  flowchart LR\n    A --> B\n  ```"
+        ));
+        assert!(!nested("> ```mermaid\n> flowchart LR\n>   A -->"));
+        assert!(nested("> ```mermaid\n> flowchart LR\n>   A --> B\n> ```"));
+        // A fence its list item ends can't grow.
+        assert!(nested(
+            "- ```mermaid\n  flowchart LR\n    A --> B\n\nAfter the list"
+        ));
         // Other languages are ordinary code.
         assert!(matches!(
             &parts("```rust\nfn x() {}\n```")[0],

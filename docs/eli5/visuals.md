@@ -13,7 +13,7 @@ See [the visual API](../visuals.md) for examples and limits.
 
 ## Diagrams
 
-Agents can also draw diagrams. When a reply, note or Bot document contains a Mermaid diagram (a simple text format for flowcharts, sequences and the like) or a picture written as SVG, the app draws it right there instead of showing the code. Mermaid diagrams are drawn by a small open-source library called Pele and take on the app's colours, so they look right in light and dark mode. Pictures can't run code or load anything from your computer or the internet.
+Agents can also draw diagrams. When a reply, note or Bot document contains a Mermaid diagram (a simple text format for flowcharts, sequences and the like) or a picture written as SVG, the app draws it right there instead of showing the code. Mermaid diagrams are drawn by a small open-source library called Pele and take on the app's colours, so they look right in light and dark mode. Pictures can't run code or load anything from your computer or the internet. The app also lets go of drawings you've moved on from once they add up, and redraws one if you come back to it.
 
 Agents also get a short set of drawing rules, borrowed from the diagram-design project: keep diagrams small, highlight only one or two things, use straight right-angle lines, and leave out anything that doesn't help.
 

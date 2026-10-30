@@ -125,16 +125,45 @@ fn sandbox(body: &str) -> String {
 /// document's own sandbox, themed by its variables. Only documents that use
 /// Mermaid carry the renderer.
 fn mermaid_support(body: &str) -> String {
-    let lower = body.to_ascii_lowercase();
-    if !(lower.contains("mermaid")
-        && (lower.contains("class=\"mermaid") || lower.contains("language-mermaid")))
-    {
+    if !uses_mermaid_class(body) {
         return String::new();
     }
     format!(
         "<style>.pele{{--pele-bg:var(--background);--pele-fg:var(--foreground);--pele-muted:var(--muted);--pele-line:var(--muted);--pele-surface:var(--surface);--pele-surface-alt:var(--border);--pele-border:var(--border);--pele-accent:var(--accent);--pele-font:var(--font-sans)}}</style><script>{}</script><script>for(const el of document.querySelectorAll('pre.mermaid,code.language-mermaid')){{const host=el.tagName==='CODE'&&el.parentElement&&el.parentElement.tagName==='PRE'?el.parentElement:el;try{{pele.mount(host,el.textContent)}}catch(e){{}}}}</script>",
         include_str!("../../assets/pele.global.js")
     )
+}
+/// Whether any `class` attribute holds a `mermaid` or `language-mermaid`
+/// token, in any quote style or order. The mount script's selectors then
+/// decide what is drawn.
+fn uses_mermaid_class(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    let mut rest = lower.as_str();
+    while let Some(at) = rest.find("class") {
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + "class".len()..].trim_start();
+        rest = &rest[at + "class".len()..];
+        if !before.is_some_and(char::is_whitespace) {
+            continue;
+        }
+        let Some(value) = after.strip_prefix('=').map(str::trim_start) else {
+            continue;
+        };
+        let value = match value.chars().next() {
+            Some(quote @ ('"' | '\'')) => value[1..].split(quote).next().unwrap_or_default(),
+            _ => value
+                .split(|c: char| c.is_whitespace() || c == '>')
+                .next()
+                .unwrap_or_default(),
+        };
+        if value
+            .split_whitespace()
+            .any(|token| matches!(token, "mermaid" | "language-mermaid"))
+        {
+            return true;
+        }
+    }
+    false
 }
 impl Html {
     pub(super) fn new(body: String) -> Self {
@@ -319,5 +348,22 @@ mod tests {
         assert!(html.contains("--pele-bg:var(--background)"));
         // Still inside the opaque iframe's escaped source.
         assert!(!html.contains("<script>"));
+        // Any quote style or class order.
+        for body in [
+            "<pre class='mermaid'>flowchart LR\n A --> B</pre>",
+            "<pre class=\"diagram mermaid\">flowchart LR\n A --> B</pre>",
+            "<PRE CLASS = mermaid>flowchart LR\n A --> B</PRE>",
+            "<pre><code class=\"hljs language-mermaid\">flowchart LR</code></pre>",
+        ] {
+            assert!(sandbox(body).contains("pele.mount"), "{body}");
+        }
+        // Mentions and lookalike classes carry nothing.
+        for body in [
+            "<p>Mermaid diagrams are supported.</p>",
+            "<pre class=\"mermaid-like\">x</pre>",
+            "<pre data-class=\"mermaid\">x</pre>",
+        ] {
+            assert!(!sandbox(body).contains("pele.mount"), "{body}");
+        }
     }
 }
