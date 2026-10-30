@@ -147,12 +147,13 @@ impl Shell {
                     .aria_label("Workspace")
                     .h(px(36.))
                     .flex_shrink_0()
+                    .relative()
                     .flex()
-                    .items_center()
+                    // Each tab's pill runs from its top down to the line.
+                    .items_end()
                     .gap_px()
                     .px_2()
-                    .border_b_1()
-                    .border_color(crate::right_panel::stroke())
+                    .child(self.sidebar_tab_liquid.surface(None, false))
                     .children(tabs.into_iter().map(|item| {
                         let selected = tab == item
                             || (tab == SidebarTab::Graph && item == SidebarTab::Changes);
@@ -166,20 +167,27 @@ impl Shell {
                             .aria_selected(selected)
                             .focusable()
                             .tab_stop(true)
-                            .h(px(28.))
+                            .h(px(30.))
                             .flex_1()
                             .min_w_0()
+                            .relative()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded_md()
+                            .rounded_t_md()
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(content(if selected { 0.9 } else { 0.5 }))
-                            .when(selected, |d| d.bg(content(0.1)))
-                            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                            .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
+                            .hover(|s| s.text_color(content(1.)))
+                            .focus(|s| s.text_color(content(1.)))
+                            .child(
+                                self.sidebar_tab_liquid
+                                    .row(format!("sidebar-tab:{}", item.label()), selected),
+                            )
                             .child(item.label())
+                            .on_hover(cx.listener(|this, _, _, cx| {
+                                this.sidebar_frame.update(cx, |_, cx| cx.notify())
+                            }))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.select_classic_sidebar(item, window, cx)
                             }))

@@ -57,14 +57,14 @@ impl Shell {
         (lights + 3. * 24.5 + 6.).ceil()
     }
 
-    /// The icon rail borders the pane directly, so its divider turns into the
-    /// rule under navigation's overhang rather than meeting it at a right angle.
+    /// Navigation always overhangs the icon rail, under a rule across the pane
+    /// or a left sidebar. The divider turns into that rule rather than
+    /// meeting it at a right angle.
     pub(super) fn rail_meets_title_rule(&self) -> bool {
         self.workspace.classic_layout
             && !self.workspace.project_rail_open
             && self.settings.is_none()
             && self.classic_rail_width() > 0.
-            && (self.workspace.preferences.sidebar_right || self.sidebar_fraction <= 0.)
     }
 
     pub(super) fn toggle_project_rail(&mut self, cx: &mut Context<Self>) {
