@@ -33,7 +33,31 @@ fn pause_busy_claim(_: i32) -> bool {
 #[test]
 fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
     use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
+
+    // Closing a descriptor releases its flock only once no process shares the
+    // open file. A child spawned by a sibling test in this process can share
+    // it until exec, so holding the probe to one attempt needs a process that
+    // spawns nothing else.
+    const CHILD: &str = "VORKSPACE_SIDECAR_LOCK_PROBE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "store::shared::tests::bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
 
     for edit in [true, false] {
         let directory = tempfile::tempdir().unwrap();
@@ -120,19 +144,7 @@ fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
             .write(true)
             .open(lock_path)
             .unwrap();
-        // A process forked by a concurrent test can briefly inherit this flock
-        // until it execs, so one contended attempt proves nothing. Retrying is
-        // safe because both workers stay parked here: an inverted lock order
-        // keeps the lock held past the deadline and still fails.
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let probe_result = loop {
-            match probe.try_lock() {
-                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                result => break result,
-            }
-        };
+        let probe_result = probe.try_lock();
         let available = probe_result.is_ok();
         drop(probe);
         // On a regression, release the busy handler first so neither worker is
