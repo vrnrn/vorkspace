@@ -4455,7 +4455,7 @@ fn minions_share_their_parents_memory_and_stay_in_their_lane(cx: &mut TestAppCon
             .read(cx)
             .bot_session_entity(minion)
             .unwrap();
-        let attached = view.read(cx).minion.clone().unwrap();
+        let attached = view.read(cx).minion().unwrap();
         assert_eq!(attached.0.name, "Scout");
         assert_eq!(attached.0.bot.id, s.id);
     });
@@ -4513,4 +4513,124 @@ fn minions_share_their_parents_memory_and_stay_in_their_lane(cx: &mut TestAppCon
     )
     .unwrap();
     assert_eq!(second["name"], "Minion 1");
+}
+
+#[gpui::test]
+fn open_minions_follow_the_setting_and_parallel_spawns_get_distinct_names(cx: &mut TestAppContext) {
+    // Minions' first turns start at once; they must not reach a real provider.
+    // SAFETY: GPUI tests run on one thread (`--test-threads=1`).
+    unsafe { std::env::set_var("VORKSPACE_CODEX_BINARY", "/usr/bin/false") };
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // SAFETY: as above.
+            unsafe { std::env::remove_var("VORKSPACE_CODEX_BINARY") };
+        }
+    }
+    let _restore = Restore;
+    let s = setup(cx);
+    let set_minions = |enabled: bool, cx: &mut TestAppContext| {
+        s.manager.update(cx, |m, cx| {
+            let mut prefs = m.prefs.clone();
+            prefs.minions = enabled;
+            m.set_preferences(prefs, cx);
+        });
+    };
+    set_minions(true, cx);
+
+    // Two unnamed spawns admitted before either is created.
+    let (first, first_rx) = mpsc::channel();
+    let (second, second_rx) = mpsc::channel();
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    handle
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                for (request, reply) in [("parallel-1", first), ("parallel-2", second)] {
+                    let call = bot::bridge::Call {
+                        session: s.session,
+                        request_id: request.into(),
+                        action: "minions.spawn".into(),
+                        input: json!({"prompt":"Look around"}),
+                        reply,
+                    };
+                    m.app_call(call, w, cx);
+                }
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let first = first_rx.try_recv().unwrap().unwrap();
+    let second = second_rx.try_recv().unwrap().unwrap();
+    assert_ne!(first["name"], second["name"]);
+    let minion = first["sessionId"].as_i64().unwrap();
+    cx.update(|cx| {
+        let m = s.manager.read(cx);
+        let mut names: Vec<_> = m
+            .roster
+            .get(&s.id)
+            .unwrap()
+            .minions
+            .iter()
+            .map(|m| m.name.clone())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["Minion 1", "Minion 2"]);
+        assert!(m.pending_minion_names.is_empty());
+    });
+
+    // An open minion session follows the setting without being reopened.
+    let view = cx.update(|cx| {
+        s.manager
+            .read(cx)
+            .owner
+            .upgrade()
+            .unwrap()
+            .read(cx)
+            .bot_session_entity(minion)
+            .unwrap()
+    });
+    set_minions(false, cx);
+    assert!(view.read_with(cx, |view, _| view.minion().is_none()));
+    set_minions(true, cx);
+    let attached = view.read_with(cx, |view, _| view.minion()).unwrap();
+    assert_eq!(attached.0.bot.id, s.id);
+    assert_eq!(attached.0.name, first["name"].as_str().unwrap());
+}
+
+#[gpui::test]
+fn todo_badge_counts_without_opening_the_board(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let board = vorkspace_core::todos::TodoBoard::Bot(s.id.clone());
+    locked(&s.store)
+        .unwrap()
+        .add_todo(&board, "Persisted", vorkspace_core::todos::TodoStatus::Todo)
+        .unwrap();
+    // A restart opens straight to the Sessions tab.
+    let (owner, prefs) = s
+        .manager
+        .read_with(cx, |m, _| (m.owner.clone(), m.prefs.clone()));
+    let restored = cx.new(|cx| {
+        Bots::new(
+            s.store.clone(),
+            owner,
+            prefs,
+            Some(s.id.clone()),
+            AnchorSlot::default(),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    restored.read_with(cx, |m, cx| {
+        assert!(m.overview_tab == OverviewTab::Sessions);
+        assert!(m.todo_board.is_none());
+        assert_eq!(m.open_todos(&s.id, cx), 1);
+    });
+    // A task the Bot adds while another tab is selected counts too.
+    locked(&s.store)
+        .unwrap()
+        .add_todo(&board, "Added", vorkspace_core::todos::TodoStatus::Todo)
+        .unwrap();
+    cx.update(crate::todos::changed);
+    cx.run_until_parked();
+    restored.read_with(cx, |m, cx| assert_eq!(m.open_todos(&s.id, cx), 2));
 }

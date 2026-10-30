@@ -26,6 +26,14 @@ impl Conversation {
     ) {
         self.app_environment = environment;
     }
+    /// This session's minion attachment, if it is a minion now.
+    pub(crate) fn minion(&self) -> Option<crate::bots::MinionAttachment> {
+        self.minions
+            .as_ref()?
+            .borrow()
+            .get(&self.summary.id)
+            .cloned()
+    }
     pub(crate) fn enable_mode(&mut self, id: &str, cx: &mut Context<Self>) {
         let enabled = match id {
             "draft" => self.follow_ups.draft_selected,

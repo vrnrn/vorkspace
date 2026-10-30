@@ -1031,13 +1031,11 @@ impl Shell {
                 cx,
             )
         });
-        // Views opened before Bots existed regain their minion attachment.
+        // Views opened before Bots existed share its registry too.
         this.minion_registry = bots.read(cx).minion_registry.clone();
-        for (id, attachment) in this.minion_registry.borrow().iter() {
-            if let Some(view) = this.sessions.get(id) {
-                let attachment = attachment.clone();
-                view.update(cx, |view, _| view.minion = Some(attachment));
-            }
+        for view in this.sessions.values() {
+            let registry = this.minion_registry.clone();
+            view.update(cx, |view, _| view.minions = Some(registry));
         }
         this.observations.push(
             cx.subscribe(&bots, |this, _, _: &crate::bots::Changed, cx| {
@@ -1212,7 +1210,7 @@ impl Shell {
             if let Some(bridge) = &self.app_bridge {
                 view.set_app_environment(bridge.environment(id));
             }
-            view.minion = self.minion_registry.borrow().get(&id).cloned();
+            view.minions = Some(self.minion_registry.clone());
             view.set_project_appearance(appearance, cx);
             view.transcript.update(cx, |transcript, cx| {
                 transcript.apply_preferences(&self.workspace.preferences, cx)
