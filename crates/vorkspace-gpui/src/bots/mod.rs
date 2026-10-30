@@ -101,6 +101,9 @@ pub(crate) struct Bots {
     overview_tab: OverviewTab,
     /// The current Bot's to-do board, behind its To-dos tab.
     todo_board: Option<Entity<crate::todos::TodoBoardView>>,
+    /// Open to-dos by board key, for the tab badge before a board is open.
+    todo_counts: HashMap<String, usize>,
+    todo_counts_generation: u64,
     overview_reveal: Option<crate::project_tabs::TabReveal<OverviewTab>>,
     route: Option<Route>,
     settings: Option<SettingsSection>,
@@ -366,6 +369,8 @@ impl Bots {
             details,
             overview_tab: OverviewTab::Sessions,
             todo_board: None,
+            todo_counts: HashMap::new(),
+            todo_counts_generation: 0,
             overview_reveal: None,
             route: None,
             settings: None,
@@ -448,6 +453,10 @@ impl Bots {
             this.reload_files(&id, cx);
         }
         this.resume_peer_queues(cx);
+        this.observations.push(
+            cx.observe_global::<crate::todos::TodoRevision>(|this, cx| this.load_todo_counts(cx)),
+        );
+        this.load_todo_counts(cx);
         this
     }
     pub(crate) fn is_bot_session(&self, id: i64) -> bool {

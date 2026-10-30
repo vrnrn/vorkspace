@@ -1265,15 +1265,38 @@ impl Bots {
             .child(body)
             .into_any_element()
     }
-    /// Open items on the Bot's board, once its board has loaded.
-    fn open_todos(&self, id: &str, cx: &App) -> usize {
+    /// Open items on the Bot's board: its open board's, which shows changes
+    /// at once, or else the stored count.
+    pub(super) fn open_todos(&self, id: &str, cx: &App) -> usize {
         let key = vorkspace_core::todos::TodoBoard::Bot(id.into());
         self.todo_board
             .as_ref()
             .map(|board| board.read(cx))
             .filter(|board| board.board() == Some(&key))
-            .map(|board| board.open_count())
+            .and_then(|board| board.open_count())
+            .or_else(|| self.todo_counts.get(&key.key()).copied())
             .unwrap_or(0)
+    }
+    pub(super) fn load_todo_counts(&mut self, cx: &mut Context<Self>) {
+        self.todo_counts_generation += 1;
+        let generation = self.todo_counts_generation;
+        let store = self.store.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { locked(&store)?.open_todo_counts() });
+        cx.spawn(async move |this, cx| {
+            let counts = work.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.todo_counts_generation != generation {
+                    return;
+                }
+                if let Ok(counts) = counts {
+                    this.todo_counts = counts;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
     fn todo_list(&mut self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
         let store = self.store.clone();
