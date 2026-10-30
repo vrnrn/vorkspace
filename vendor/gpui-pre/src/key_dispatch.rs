@@ -232,6 +232,11 @@ impl DispatchTree {
         }
     }
 
+    /// The views in this tree, including those reused from a cached parent.
+    pub fn view_ids(&self) -> impl Iterator<Item = EntityId> + '_ {
+        self.nodes.iter().filter_map(|node| node.view_id)
+    }
+
     pub fn pop_node(&mut self) {
         let node = &self.nodes[self.active_node_id().unwrap().0];
         if node.context.is_some() {

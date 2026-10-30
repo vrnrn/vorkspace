@@ -437,12 +437,11 @@ impl Asset for DiagramAsset {
 const RETAINED_BYTES: usize = 64 << 20;
 
 /// GPUI keeps a loaded asset until it is removed, so every distinct source
-/// or palette would otherwise keep its raster for the life of the app.
-/// Once retained rasters pass the budget, diagrams their views have since
-/// redrawn without go first, with their sprites. Diagrams whose view hasn't
-/// drawn again (hidden, or a cached view still painting them) go next, and
-/// give up only their pixels: their sprite may still be on screen. Diagrams
-/// drawn in the latest frame stay.
+/// or palette would otherwise keep its raster and sprite for the life of the
+/// app. Once retained rasters pass the budget, the least recently drawn
+/// diagrams nothing can be showing are released, raster and sprite. A view in
+/// a window's latest frame may be replaying what it last drew, so that diagram
+/// stays until the view redraws without it or leaves every frame.
 struct Retained {
     budget: usize,
     frame: u64,
@@ -524,35 +523,41 @@ fn end_frame(cx: &mut App) {
     if retained.bytes <= retained.budget {
         return;
     }
+    // With a window mid-update, what it shows can't be known. Wait.
+    let Some(shown) = cx.views_in_latest_frames() else {
+        return;
+    };
+    let retained = cx.global_mut::<Retained>();
     let views = &retained.views;
     let mut candidates: Vec<_> = retained
         .entries
         .iter()
-        .filter(|(_, entry)| entry.drawn < frame)
-        .map(|(key, entry)| {
-            let redrawn_without = entry
-                .owners
-                .iter()
-                .all(|(view, drawn)| views.get(view).is_some_and(|latest| latest > drawn));
-            (!redrawn_without, entry.drawn, key.clone())
+        .filter(|(_, entry)| {
+            entry.drawn < frame
+                && !entry.owners.iter().any(|(view, drawn)| {
+                    shown.contains(view) && views.get(view).is_none_or(|latest| latest <= drawn)
+                })
         })
+        .map(|(key, entry)| (entry.drawn, key.clone()))
         .collect();
-    candidates.sort_by_key(|(maybe_shown, drawn, _)| (*maybe_shown, *drawn));
+    candidates.sort_by_key(|(drawn, _)| *drawn);
     let mut released = Vec::new();
-    for (maybe_shown, _, key) in candidates {
+    for (_, key) in candidates {
         if retained.bytes <= retained.budget {
             break;
         }
         if let Some(entry) = retained.entries.remove(&key) {
             retained.bytes -= entry.bytes;
-            released.push((key, entry.image, !maybe_shown));
+            released.push((key, entry.image));
         }
     }
-    for (key, image, sprite) in released {
+    let entries = &retained.entries;
+    retained
+        .views
+        .retain(|view, _| entries.values().any(|e| e.owners.contains_key(view)));
+    for (key, image) in released {
         cx.remove_asset::<DiagramAsset>(&key);
-        if sprite {
-            cx.drop_image(image, None);
-        }
+        cx.drop_image(image, None);
     }
 }
 
@@ -831,7 +836,9 @@ mod tests {
             assert!(cx.has_asset::<DiagramAsset>(&key(FIRST)));
             assert_eq!(cx.global::<Retained>().entries.len(), 1);
         });
+        let first = image(FIRST, cx);
         show(window, vec![SECOND], cx);
+        assert!(!has_sprite(window, &first, cx));
         cx.update(|cx| {
             assert!(!cx.has_asset::<DiagramAsset>(&key(FIRST)));
             assert!(cx.has_asset::<DiagramAsset>(&key(SECOND)));
@@ -860,12 +867,79 @@ mod tests {
         });
     }
 
-    #[gpui::test]
-    fn a_view_that_has_not_redrawn_keeps_its_sprite(cx: &mut gpui::TestAppContext) {
-        let shown = draw(cx, vec![FIRST]);
-        let image = cx.update(|cx| cx.global::<Retained>().entries[&key(FIRST)].image.clone());
-        // Another view draws while the first stays as it was, as a cached
-        // view does: its diagram gives up its pixels, not its sprite.
+    /// A cached view inside another, as a transcript sits in its conversation.
+    struct Inner {
+        source: &'static str,
+        renders: Rc<Cell<usize>>,
+    }
+    impl gpui::Render for Inner {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get() + 1);
+            div()
+                .size_full()
+                .child(diagram(DiagramKind::Svg, self.source.into(), None, || {
+                    div().into_any_element()
+                }))
+        }
+    }
+    struct Outer(Option<gpui::Entity<Inner>>);
+    impl gpui::Render for Outer {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().size_full().children(self.0.clone().map(|inner| {
+                inner
+                    .cached(gpui::StyleRefinement::default().size_full())
+                    .into_any_element()
+            }))
+        }
+    }
+
+    struct Cached {
+        window: gpui::WindowHandle<Outer>,
+        inner: gpui::Entity<Inner>,
+        renders: Rc<Cell<usize>>,
+    }
+
+    fn cached(cx: &mut gpui::TestAppContext) -> Cached {
+        let renders = Rc::new(Cell::new(0));
+        let (window, inner) = cx.update(|cx| {
+            cx.set_global(Retained {
+                budget: 0,
+                ..Default::default()
+            });
+            let inner = cx.new(|_| Inner {
+                source: FIRST,
+                renders: renders.clone(),
+            });
+            let shown = inner.clone();
+            let window = cx
+                .open_window(Default::default(), |_, cx| cx.new(|_| Outer(Some(shown))))
+                .unwrap();
+            (window, inner)
+        });
+        cx.run_until_parked();
+        Cached {
+            window,
+            inner,
+            renders,
+        }
+    }
+
+    fn image(source: &'static str, cx: &mut gpui::TestAppContext) -> Arc<RenderImage> {
+        cx.update(|cx| cx.global::<Retained>().entries[&key(source)].image.clone())
+    }
+
+    fn has_sprite<V: 'static>(
+        window: gpui::WindowHandle<V>,
+        image: &RenderImage,
+        cx: &mut gpui::TestAppContext,
+    ) -> bool {
+        window
+            .update(cx, |_, window, _| window.has_image_sprite(image))
+            .unwrap()
+    }
+
+    /// Passes the budget by drawing a diagram in a window of its own.
+    fn draw_elsewhere(cx: &mut gpui::TestAppContext) {
         let other = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| Diagrams(vec![SECOND]))
@@ -875,14 +949,81 @@ mod tests {
         cx.run_until_parked();
         other.update(cx, |_, window, _| window.refresh()).unwrap();
         cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn a_cached_view_keeps_the_diagram_it_replays(cx: &mut gpui::TestAppContext) {
+        let test = cached(cx);
+        let first = image(FIRST, cx);
+        assert!(has_sprite(test.window, &first, cx));
+        // The parent redraws and replays the child without rendering it.
+        let renders = test.renders.get();
+        test.window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        cx.run_until_parked();
+        assert_eq!(test.renders.get(), renders);
+        cx.update(|cx| {
+            let shown = cx.views_in_latest_frames().unwrap();
+            assert!(shown.contains(&test.inner.entity_id()));
+        });
+        draw_elsewhere(cx);
+        cx.update(|cx| {
+            assert!(cx.has_asset::<DiagramAsset>(&key(FIRST)));
+            assert!(cx.global::<Retained>().entries.contains_key(&key(FIRST)));
+        });
+        assert!(has_sprite(test.window, &first, cx));
+    }
+
+    #[gpui::test]
+    fn a_hidden_view_gives_up_its_raster_and_sprite(cx: &mut gpui::TestAppContext) {
+        let test = cached(cx);
+        let first = image(FIRST, cx);
+        assert!(has_sprite(test.window, &first, cx));
+        test.window
+            .update(cx, |outer, _, cx| {
+                outer.0 = None;
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let shown = cx.views_in_latest_frames().unwrap();
+            assert!(!shown.contains(&test.inner.entity_id()));
+        });
+        draw_elsewhere(cx);
         cx.update(|cx| {
             assert!(!cx.has_asset::<DiagramAsset>(&key(FIRST)));
-            assert!(cx.global::<Retained>().entries.contains_key(&key(SECOND)));
+            let retained = cx.global::<Retained>();
+            assert!(!retained.entries.contains_key(&key(FIRST)));
+            assert_eq!(retained.bytes, retained.entries[&key(SECOND)].bytes);
+            assert!(!retained.views.contains_key(&test.inner.entity_id()));
         });
-        // Only this test still holds its pixels.
-        assert_eq!(Arc::strong_count(&image), 1);
-        show(shown, vec![FIRST], cx);
-        cx.update(|cx| assert!(cx.has_asset::<DiagramAsset>(&key(FIRST))));
+        assert!(!has_sprite(test.window, &first, cx));
+        assert_eq!(
+            Arc::strong_count(&first),
+            1,
+            "only this test holds the raster"
+        );
+
+        // Coming back renders afresh: no replay can reach the released sprite.
+        let renders = test.renders.get();
+        let inner = test.inner.clone();
+        test.window
+            .update(cx, |outer, _, cx| {
+                outer.0 = Some(inner);
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(test.renders.get() > renders);
+        let returned = image(FIRST, cx);
+        assert_ne!(returned.id, first.id);
+        assert!(has_sprite(test.window, &returned, cx));
+        assert!(!has_sprite(test.window, &first, cx));
+        cx.update(|cx| {
+            let retained = cx.global::<Retained>();
+            let total: usize = retained.entries.values().map(|entry| entry.bytes).sum();
+            assert_eq!(retained.bytes, total);
+        });
     }
 
     #[gpui::test]

@@ -3012,6 +3012,19 @@ impl App {
         self.loading_assets.remove(&asset_id);
     }
 
+    /// The views in every window's latest frame, whether drawn or replayed from
+    /// a cached parent. A view outside these paints nothing, and must render
+    /// again to return: its cached paint goes with the frame that stopped
+    /// using it. `None` while a window is being updated, as its frame can't be
+    /// read then.
+    pub fn views_in_latest_frames(&self) -> Option<FxHashSet<EntityId>> {
+        let mut views = FxHashSet::default();
+        for window in self.windows.values() {
+            views.extend(window.as_ref()?.rendered_frame.dispatch_tree.view_ids());
+        }
+        Some(views)
+    }
+
     /// Check whether an asset is present in GPUI's cache (loading or loaded),
     /// without fetching it.
     #[cfg(any(test, feature = "test-support"))]
