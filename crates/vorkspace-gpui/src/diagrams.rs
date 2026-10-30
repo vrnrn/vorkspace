@@ -362,6 +362,7 @@ fn with_default_color(svg: &str, palette: &Palette) -> String {
 
 /// Whether a tag's attribute text names `name` exactly, outside quoted values.
 fn has_attribute(attributes: &str, name: &str) -> bool {
+    // On bytes: `name` is ASCII, but attribute names and values need not be.
     let bytes = attributes.as_bytes();
     let mut quote = None;
     let mut ix = 0;
@@ -371,7 +372,7 @@ fn has_attribute(attributes: &str, name: &str) -> bool {
             Some(q) if c == q => quote = None,
             Some(_) => {}
             None if c == b'"' || c == b'\'' => quote = Some(c),
-            None if attributes[ix..].starts_with(name)
+            None if bytes[ix..].starts_with(name.as_bytes())
                 && (ix == 0 || bytes[ix - 1].is_ascii_whitespace()) =>
             {
                 let rest = attributes[ix + name.len()..].trim_start();
@@ -747,6 +748,11 @@ mod tests {
         assert_eq!(pixel(&stop, &dark), [0xff, 0xee, 0xdd, 255]);
         let quoted = plain.replace("<svg ", r#"<svg data-note="a > color=b" "#);
         assert_eq!(pixel(&quoted, &dark), [0xff, 0xee, 0xdd, 255]);
+        // Non-ASCII attributes, names or values, are scanned safely.
+        for attribute in [r#"data-é="label""#, r#"data-note="é > ü""#, r#"é="1" 日本="2""#] {
+            let unicode = plain.replace("<svg ", &format!("<svg {attribute} "));
+            assert_eq!(pixel(&unicode, &dark), [0xff, 0xee, 0xdd, 255], "{attribute}");
+        }
     }
 
     #[test]
