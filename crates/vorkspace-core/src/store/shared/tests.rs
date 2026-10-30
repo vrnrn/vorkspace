@@ -33,7 +33,7 @@ fn pause_busy_claim(_: i32) -> bool {
 #[test]
 fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
     use std::sync::mpsc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     for edit in [true, false] {
         let directory = tempfile::tempdir().unwrap();
@@ -120,7 +120,19 @@ fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
             .write(true)
             .open(lock_path)
             .unwrap();
-        let probe_result = probe.try_lock();
+        // A process forked by a concurrent test can briefly inherit this flock
+        // until it execs, so one contended attempt proves nothing. Retrying is
+        // safe because both workers stay parked here: an inverted lock order
+        // keeps the lock held past the deadline and still fails.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let probe_result = loop {
+            match probe.try_lock() {
+                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                result => break result,
+            }
+        };
         let available = probe_result.is_ok();
         drop(probe);
         // On a regression, release the busy handler first so neither worker is
