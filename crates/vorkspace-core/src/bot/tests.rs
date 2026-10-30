@@ -682,10 +682,11 @@ fn the_minion_guide_follows_the_setting() {
         ..Default::default()
     };
     set_minions_enabled(false);
-    assert!(!context(&bot, &files, Path::new("/bin/v")).contains("minions.spawn"));
+    assert!(!context(&bot, &files, Path::new("/bin/v")).contains("minions.hire"));
     set_minions_enabled(true);
     let enabled = context(&bot, &files, Path::new("/bin/v"));
     set_minions_enabled(false);
-    assert!(enabled.contains("minions.spawn"));
-    assert!(enabled.contains("mentions a minion or minions"));
+    assert!(enabled.contains("minions.hire"));
+    assert!(enabled.contains("reuse useful members"));
+    assert!(enabled.contains("minions.fire"));
 }

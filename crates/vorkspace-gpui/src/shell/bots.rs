@@ -33,7 +33,10 @@ impl Shell {
     pub(super) fn bot_details_active(&self, cx: &App) -> bool {
         self.bots.as_ref().is_some_and(|bots| {
             let bots = bots.read(cx);
-            bots.active.is_some() && !bots.classic_channels_open()
+            bots.active
+                .as_deref()
+                .is_some_and(|id| !bots.minion_read_only(id))
+                && !bots.classic_channels_open()
         })
     }
     pub(crate) fn bot_session_views(&self, cx: &App) -> Vec<BotSession> {
@@ -58,7 +61,12 @@ impl Shell {
             .collect()
     }
     pub(crate) fn bot_session_entity(&self, id: i64) -> Option<Entity<Conversation>> {
-        self.sessions.get(&id).cloned()
+        self.sessions.get(&id).cloned().or_else(|| {
+            self.bot_conversations
+                .borrow()
+                .get(&id)
+                .and_then(|v| v.upgrade())
+        })
     }
     pub(crate) fn bot_ensure_session(
         &mut self,

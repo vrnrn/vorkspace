@@ -5,6 +5,10 @@ pub(crate) struct StopOrchestration;
 
 impl Conversation {
     pub(crate) fn request_folder(&mut self, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if self.settings.bot.is_none() {
             self.completion
                 .update(cx, |completion, cx| completion.dismiss(cx));
@@ -26,6 +30,19 @@ impl Conversation {
     ) {
         self.app_environment = environment;
     }
+    /// A restored project pane may still carry its old Operator environment.
+    /// Once a Bot owns the conversation, only its configured capability applies.
+    pub(super) fn prepare_app_environment(&self, settings: &mut Settings) {
+        if settings.bot.is_some() {
+            return;
+        }
+        if let Some((context, environment)) = self.minion() {
+            settings.minion = Some(context);
+            settings.environment.extend(environment);
+        } else {
+            settings.environment.extend(self.app_environment.clone());
+        }
+    }
     /// This session's minion attachment, if it is a minion now.
     pub(crate) fn minion(&self) -> Option<crate::bots::MinionAttachment> {
         self.minions
@@ -35,6 +52,10 @@ impl Conversation {
             .cloned()
     }
     pub(crate) fn enable_mode(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         let enabled = match id {
             "draft" => self.follow_ups.draft_selected,
             "plan" => self.settings.plan,
@@ -74,6 +95,10 @@ impl Conversation {
         cx.notify();
     }
     pub(crate) fn toggle_mode(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if self.is_remote() && matches!(id, "operator" | "orchestrator") {
             self.status = "This mode is not available on remote projects.".into();
             cx.notify();
@@ -168,6 +193,10 @@ impl Conversation {
         text
     }
     pub(super) fn choose_attachments(&mut self, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
@@ -182,6 +211,10 @@ impl Conversation {
         .detach();
     }
     pub(super) fn paste_attachments(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.reject_user_entry(cx) {
+            return true;
+        }
+
         let Some(clipboard) = cx.read_from_clipboard() else {
             return false;
         };
@@ -244,6 +277,10 @@ impl Conversation {
         true
     }
     pub(super) fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         for path in paths {
             if !self.attachments.contains(&path) && !self.pending_attachments.contains(&path) {
                 self.pending_attachments.push(path);
@@ -276,6 +313,9 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) {
         self.attaching = false;
+        if self.user_read_only() {
+            return;
+        }
         match result {
             Ok(paths) => {
                 // Keep removals made while the background validation ran.
@@ -311,6 +351,10 @@ impl Conversation {
         bytes: &[u8],
         cx: &mut Context<Self>,
     ) -> Result<PathBuf, String> {
+        if self.user_read_only() {
+            return Err("Team histories cannot receive attachments".into());
+        }
+
         self.persist_composer(cx);
         if !self.composer_draft.ready_for_replacement()
             || self.attaching
@@ -502,7 +546,8 @@ impl Conversation {
         )
     }
     pub(crate) fn ready_for_external(&self, cx: &gpui::App) -> bool {
-        Kind::parse(&self.summary.provider).is_some()
+        !self.user_read_only()
+            && Kind::parse(&self.summary.provider).is_some()
             && self.composer_draft.ready_for_replacement()
             && self.pending_attachments.is_empty()
             && self.history_ready()

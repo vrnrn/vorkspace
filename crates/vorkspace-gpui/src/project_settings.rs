@@ -42,6 +42,7 @@ pub(crate) fn project_icon(appearance: &ProjectAppearance, project: &str, side: 
             let look = BotLookConfig {
                 shape: "hex".into(),
                 face: "pills".into(),
+                one_eye: false,
                 textured: appearance.textured,
                 seed: appearance.seed(project),
                 grid: appearance.grid(),

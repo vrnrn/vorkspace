@@ -4409,192 +4409,472 @@ fn call_as(
 }
 
 #[gpui::test]
-fn minions_share_their_parents_memory_and_stay_in_their_lane(cx: &mut TestAppContext) {
-    // A minion's first turn starts at once; it must not reach a real provider.
-    // SAFETY: GPUI tests run on one thread (`--test-threads=1`).
-    unsafe { std::env::set_var("VORKSPACE_CODEX_BINARY", "/usr/bin/false") };
-    struct Restore;
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            // SAFETY: as above.
-            unsafe { std::env::remove_var("VORKSPACE_CODEX_BINARY") };
-        }
-    }
-    let _restore = Restore;
+fn persistent_minion_hire_has_no_project_or_session_requirement_and_retires_durably(
+    cx: &mut TestAppContext,
+) {
     let s = setup(cx);
-    let spawn = json!({"prompt":"Scout the repository layout","name":"Scout"});
-    // Experimental and off by default.
-    let refused = call_as(&s, s.session, "off", "minions.spawn", spawn.clone(), cx);
-    assert!(refused.unwrap_err().contains("Settings"));
+    let hire = json!({"name":"Scout","role":"Repository analysis","specialties":["Rust"]});
+    assert!(
+        call_as(&s, s.session, "off", "minions.hire", hire.clone(), cx)
+            .unwrap_err()
+            .contains("Settings")
+    );
     s.manager.update(cx, |m, cx| {
         let mut prefs = m.prefs.clone();
         prefs.minions = true;
         m.set_preferences(prefs, cx);
+        m.roster.get_mut(&s.id).unwrap().projects.clear();
     });
-    let spawned = call_as(&s, s.session, "spawn", "minions.spawn", spawn, cx).unwrap();
-    let minion = spawned["sessionId"].as_i64().unwrap();
-    assert_eq!(spawned["name"], "Scout");
-    cx.update(|cx| {
-        let m = s.manager.read(cx);
-        let bot = m.roster.get(&s.id).unwrap();
-        assert_eq!(bot.minions.len(), 1);
-        assert_eq!(bot.minions[0].session_id, minion);
-        assert_eq!(bot.minions[0].project, s.project);
-        // Its parent hears back when it stops.
+    let before = locked(&s.store).unwrap().sessions().unwrap().len();
+    let hired = call_as(&s, s.session, "hire", "minions.hire", hire.clone(), cx).unwrap();
+    let id = hired["id"].as_str().unwrap().to_owned();
+    assert!(hired["sessionId"].is_null());
+    assert_eq!(locked(&s.store).unwrap().sessions().unwrap().len(), before);
+    let again = call_as(&s, s.session, "hire", "minions.hire", hire, cx).unwrap();
+    assert_eq!(again["id"], id);
+    let listed = call_as(&s, s.session, "list", "minions.list", json!({}), cx).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["role"], "Repository analysis");
+    assert_eq!(listed[0]["parentId"], s.id);
+    s.manager.update(cx, |m, cx| {
         assert!(
-            bot.launches
-                .iter()
-                .any(|l| l.session_id == minion && l.notify_on_complete)
-        );
-        // It shows under its project like a session.
-        assert!(!m.hidden_session(minion));
-        let view = m
-            .owner
-            .upgrade()
-            .unwrap()
-            .read(cx)
-            .bot_session_entity(minion)
-            .unwrap();
-        let attached = view.read(cx).minion().unwrap();
-        assert_eq!(attached.0.name, "Scout");
-        assert_eq!(attached.0.bot.id, s.id);
+            m.send_message(&id, "User text".into(), vec![], cx)
+                .unwrap_err()
+                .contains("Users cannot")
+        )
     });
-
-    // Memory written by the minion is its parent's.
-    call_as(
-        &s,
-        minion,
-        "remember",
-        "memory.add",
-        json!({"fact":"The build script lives in scripts/desktop"}),
-        cx,
-    )
-    .unwrap();
-    let memory = bot::files::load(&s.root, &s.id, None).unwrap().memory;
-    assert!(memory.contains("The build script lives in scripts/desktop"));
-    // So is the board.
-    call_as(
-        &s,
-        minion,
-        "todo",
-        "todos.add",
-        json!({"title":"Map crates"}),
-        cx,
-    )
-    .unwrap();
-    let board = vorkspace_core::todos::TodoBoard::Bot(s.id.clone());
-    assert_eq!(
-        locked(&s.store).unwrap().list_todos(&board).unwrap().len(),
-        1
-    );
-
-    // Minions cannot start work or spawn more minions.
-    for action in [
-        "sessions.start",
-        "minions.spawn",
-        "habits.add",
-        "soul.update",
-    ] {
-        let error = call_as(&s, minion, action, action, json!({"prompt":"x"}), cx).unwrap_err();
-        assert!(error.contains("Minions cannot"), "{action}: {error}");
-    }
-    let listed = call_as(&s, minion, "list", "minions.list", json!({}), cx).unwrap();
-    assert_eq!(listed[0]["name"], "Scout");
-    assert_eq!(listed[0]["sessionId"], minion);
-
-    // A second unnamed minion gets the next free name.
-    let second = call_as(
+    let retired = call_as(
         &s,
         s.session,
-        "spawn-2",
-        "minions.spawn",
-        json!({"prompt":"Check the tests"}),
+        "fire",
+        "minions.fire",
+        json!({"minion":id}),
         cx,
     )
     .unwrap();
-    assert_eq!(second["name"], "Minion 1");
+    assert_eq!(retired["retired"], true);
+    let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+    assert!(saved.get(&id).unwrap().is_retired());
+    assert_eq!(saved.team(&s.id).filter(|b| b.is_minion()).count(), 1);
+    assert!(saved.active_minions(&s.id).next().is_none());
 }
 
 #[gpui::test]
-fn open_minions_follow_the_setting_and_parallel_spawns_get_distinct_names(cx: &mut TestAppContext) {
-    // Minions' first turns start at once; they must not reach a real provider.
-    // SAFETY: GPUI tests run on one thread (`--test-threads=1`).
-    unsafe { std::env::set_var("VORKSPACE_CODEX_BINARY", "/usr/bin/false") };
-    struct Restore;
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            // SAFETY: as above.
-            unsafe { std::env::remove_var("VORKSPACE_CODEX_BINARY") };
-        }
-    }
-    let _restore = Restore;
+fn minion_actor_keeps_team_identity_but_uses_parent_storage_and_rejects_foreign_reads(
+    cx: &mut TestAppContext,
+) {
     let s = setup(cx);
-    let set_minions = |enabled: bool, cx: &mut TestAppContext| {
-        s.manager.update(cx, |m, cx| {
-            let mut prefs = m.prefs.clone();
-            prefs.minions = enabled;
-            m.set_preferences(prefs, cx);
+    let (member, session) = s.manager.update(cx, |m, cx| {
+        let mut prefs = m.prefs.clone();
+        prefs.minions = true;
+        m.set_preferences(prefs, cx);
+        let member = m
+            .roster
+            .hire_minion(&s.id, "Scout", "Analysis", vec![], None)
+            .unwrap();
+        let session = locked(&m.store)
+            .unwrap()
+            .create("codex", &s.project)
+            .unwrap()
+            .id;
+        m.roster.get_mut(&member).unwrap().session_id = Some(session);
+        // A real legacy follow-up must remain saved and durably paused when
+        // its member is retired; an empty queue has no paused read state.
+        {
+            let db = locked(&m.store).unwrap();
+            let mut queue = db.follow_ups(session).unwrap();
+            queue.revision += 1;
+            queue.messages.push(vorkspace_core::follow_up::Message {
+                id: "legacy-follow-up".into(),
+                text: "Preserve this legacy work".into(),
+                ..Default::default()
+            });
+            queue.paused = false;
+            db.accept_follow_ups(session, &queue).unwrap();
+        }
+        m.roster.bots.push(Bot {
+            id: "outsider".into(),
+            name: "Outsider".into(),
+            ..Default::default()
         });
-    };
-    set_minions(true, cx);
+        m.save(cx);
+        (member, session)
+    });
+    cx.run_until_parked();
+    call_as(
+        &s,
+        session,
+        "remember",
+        "memory.add",
+        json!({"fact":"Parent-owned team fact"}),
+        cx,
+    )
+    .unwrap();
+    assert!(
+        bot::files::load(&s.root, &s.id, None)
+            .unwrap()
+            .memory
+            .contains("Parent-owned team fact")
+    );
+    call_as(
+        &s,
+        session,
+        "todo",
+        "todos.add",
+        json!({"title":"Team task"}),
+        cx,
+    )
+    .unwrap();
+    assert_eq!(
+        locked(&s.store)
+            .unwrap()
+            .list_todos(&vorkspace_core::todos::TodoBoard::Bot(s.id.clone()))
+            .unwrap()
+            .len(),
+        1
+    );
+    for action in [
+        "sessions.start",
+        "minions.hire",
+        "minions.fire",
+        "soul.update",
+        "habits.add",
+    ] {
+        assert!(
+            call_as(&s, session, action, action, json!({}), cx)
+                .unwrap_err()
+                .contains("Minions cannot")
+        );
+    }
+    assert!(
+        call_as(
+            &s,
+            session,
+            "foreign-read",
+            "bots.read",
+            json!({"bot":"outsider"}),
+            cx
+        )
+        .is_err()
+    );
+    let listed = call_as(&s, session, "peers", "bots.list", json!({}), cx).unwrap();
+    assert!(
+        listed["bots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| b["id"] != "outsider")
+    );
+    call_as(
+        &s,
+        s.session,
+        "retire",
+        "minions.fire",
+        json!({"minion":member}),
+        cx,
+    )
+    .unwrap();
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .follow_ups(session)
+            .unwrap()
+            .paused
+    );
+    let saved: vorkspace_core::follow_up::State = serde_json::from_str(
+        &locked(&s.store)
+            .unwrap()
+            .setting(&format!("follow-up:{session}"))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(saved.paused);
+    assert_eq!(saved.messages[0].text, "Preserve this legacy work");
+    assert!(
+        call_as(
+            &s,
+            session,
+            "late",
+            "memory.add",
+            json!({"fact":"must not be saved"}),
+            cx
+        )
+        .is_err()
+    );
+    assert!(
+        !bot::files::load(&s.root, &s.id, None)
+            .unwrap()
+            .memory
+            .contains("must not be saved")
+    );
+}
 
-    // Two unnamed spawns admitted before either is created.
-    let (first, first_rx) = mpsc::channel();
-    let (second, second_rx) = mpsc::channel();
-    let handle: gpui::AnyWindowHandle = s.window.into();
-    handle
-        .update(cx, |_, w, cx| {
-            s.manager.update(cx, |m, cx| {
-                for (request, reply) in [("parallel-1", first), ("parallel-2", second)] {
-                    let call = bot::bridge::Call {
-                        session: s.session,
-                        request_id: request.into(),
-                        action: "minions.spawn".into(),
-                        input: json!({"prompt":"Look around"}),
-                        reply,
-                    };
-                    m.app_call(call, w, cx);
-                }
-            })
+#[gpui::test]
+fn failed_minion_tasks_are_recovered_by_the_parent_without_user_message_admission(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let (member, session, failed) = s.manager.update(cx, |m, cx| {
+        let mut prefs = m.prefs.clone();
+        prefs.minions = true;
+        m.set_preferences(prefs, cx);
+        let member = m
+            .roster
+            .hire_minion(&s.id, "Scout", "Review", vec![], None)
+            .unwrap();
+        let db = locked(&m.store).unwrap();
+        let summary = db.create("codex", &s.project).unwrap();
+        db.save_agent_settings(
+            summary.id,
+            &Settings {
+                usage_limit: Some(Default::default()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        drop(db);
+        m.roster.get_mut(&member).unwrap().session_id = Some(summary.id);
+        bot::peers::enqueue(
+            &mut m.roster,
+            &s.id,
+            &member,
+            "Failed task",
+            "failed",
+            0,
+            true,
+        )
+        .unwrap();
+        bot::peers::enqueue(
+            &mut m.roster,
+            &s.id,
+            &member,
+            "Later task",
+            "later",
+            0,
+            true,
+        )
+        .unwrap();
+        let failed = m.roster.get(&member).unwrap().outbox[0].id.clone();
+        m.roster.get_mut(&member).unwrap().outbox[0].error =
+            Some("Interrupted; inspect before retry".into());
+        m.save(cx);
+        (member, summary.id, failed)
+    });
+    cx.run_until_parked();
+    let retry = json!({"minion":member,"messageId":failed});
+    assert!(
+        call_as(
+            &s,
+            session,
+            "child-retry",
+            "minions.retry",
+            retry.clone(),
+            cx
+        )
+        .unwrap_err()
+        .contains("Minions cannot")
+    );
+    call_as(
+        &s,
+        s.session,
+        "parent-retry",
+        "minions.retry",
+        retry.clone(),
+        cx,
+    )
+    .unwrap();
+    let retried = s
+        .manager
+        .read_with(cx, |m, _| m.roster.get(&member).unwrap().outbox[0].clone());
+    assert_ne!(retried.id, failed);
+    assert!(retried.error.is_none());
+    call_as(&s, s.session, "parent-retry", "minions.retry", retry, cx).unwrap();
+    s.manager.update(cx, |m, cx| {
+        assert_eq!(m.roster.get(&member).unwrap().outbox[0].id, retried.id);
+        m.queue_changed(&member, &retried.id, true, cx);
+        assert_eq!(
+            m.roster.get(&member).unwrap().outbox.len(),
+            2,
+            "user controls cannot discard team work"
+        );
+        m.roster.get_mut(&member).unwrap().outbox[0].error = Some("Failed again".into());
+        m.save(cx);
+    });
+    cx.run_until_parked();
+    call_as(
+        &s,
+        s.session,
+        "parent-discard",
+        "minions.discard",
+        json!({"minion":member,"messageId":retried.id}),
+        cx,
+    )
+    .unwrap();
+    s.manager.read_with(cx, |m, _| {
+        let queue = &m.roster.get(&member).unwrap().outbox;
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].id, "peer:later");
+        assert!(queue[0].error.is_none());
+    });
+}
+
+#[gpui::test]
+fn minion_channel_work_reuses_restored_history_and_contributes_member_status(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let (member, channel, worker) = s.manager.update(cx, |m, cx| {
+        let mut prefs = m.prefs.clone();
+        prefs.minions = true;
+        m.set_preferences(prefs, cx);
+        let member = m
+            .roster
+            .hire_minion(&s.id, "Scout", "Review", vec![], None)
+            .unwrap();
+        let db = locked(&m.store).unwrap();
+        let primary = db.create("codex", &s.project).unwrap();
+        db.save_agent_settings(
+            primary.id,
+            &Settings {
+                usage_limit: Some(Default::default()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let worker = db.create("codex", &s.project).unwrap();
+        drop(db);
+        m.roster.get_mut(&member).unwrap().session_id = Some(primary.id);
+        let mut next = m.channels.state.clone();
+        let channel = next
+            .create(
+                "team-history",
+                "",
+                vec![s.id.clone(), member.clone()],
+                &m.roster,
+            )
+            .unwrap();
+        next.get_mut(&channel)
+            .unwrap()
+            .member_sessions
+            .insert(member.clone(), worker.id);
+        m.commit_channels(next, cx).unwrap();
+        m.save(cx);
+        (member, channel, worker.id)
+    });
+    let worker_summary = locked(&s.store)
+        .unwrap()
+        .bot_session(worker)
+        .unwrap()
+        .unwrap();
+    let raw = s
+        .window
+        .update(cx, |shell, _, cx| {
+            shell.bot_install(worker_summary, Settings::default(), String::new(), true, cx);
+            shell.bot_ensure_session(worker, cx).unwrap()
         })
         .unwrap();
     cx.run_until_parked();
-    let first = first_rx.try_recv().unwrap().unwrap();
-    let second = second_rx.try_recv().unwrap().unwrap();
-    assert_ne!(first["name"], second["name"]);
-    let minion = first["sessionId"].as_i64().unwrap();
-    cx.update(|cx| {
-        let m = s.manager.read(cx);
-        let mut names: Vec<_> = m
-            .roster
-            .get(&s.id)
-            .unwrap()
-            .minions
-            .iter()
-            .map(|m| m.name.clone())
-            .collect();
-        names.sort();
-        assert_eq!(names, ["Minion 1", "Minion 2"]);
-        assert!(m.pending_minion_names.is_empty());
+    s.manager.update(cx, |m, cx| {
+        m.channels.inspecting = Some((channel.clone(), member.clone()));
+        m.channel_tick(cx);
     });
+    cx.run_until_parked();
+    s.manager.update(cx, |m, cx| {
+        let view = m.channels.views[&(channel, member.clone())].clone();
+        assert_eq!(
+            view, raw,
+            "channel execution and a restored pane share one conversation"
+        );
+        assert!(view.read(cx).user_read_only());
+        m.chats[&member].update(cx, |v, _| v.settings.usage_limit = None);
+        view.update(cx, |v, _| v.busy = true);
+        assert_eq!(m.member_status(&member, cx), "working");
+        view.update(cx, |v, _| v.settings.usage_limit = Some(Default::default()));
+        assert_eq!(m.member_status(&member, cx), "needs-you");
+        view.update(cx, |v, _| v.busy = false);
+    });
+}
 
-    // An open minion session follows the setting without being reopened.
-    let view = cx.update(|cx| {
-        s.manager
-            .read(cx)
-            .owner
-            .upgrade()
+#[gpui::test]
+fn minion_channel_admission_filters_reads_and_refuses_user_posts(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let (session, team, normal) = s.manager.update(cx, |m, cx| {
+        let mut prefs = m.prefs.clone();
+        prefs.minions = true;
+        m.set_preferences(prefs, cx);
+        let member = m
+            .roster
+            .hire_minion(&s.id, "Scout", "Review", vec![], None)
+            .unwrap();
+        let session = locked(&m.store)
             .unwrap()
-            .read(cx)
-            .bot_session_entity(minion)
+            .create("codex", &s.project)
             .unwrap()
+            .id;
+        m.roster.get_mut(&member).unwrap().session_id = Some(session);
+        m.roster.bots.push(Bot {
+            id: "outsider".into(),
+            name: "Outsider".into(),
+            ..Default::default()
+        });
+        let mut next = m.channels.state.clone();
+        let team = next
+            .create("team", "", vec![s.id.clone(), member], &m.roster)
+            .unwrap();
+        let normal = next
+            .create(
+                "ordinary",
+                "",
+                vec![s.id.clone(), "outsider".into()],
+                &m.roster,
+            )
+            .unwrap();
+        m.commit_channels(next, cx).unwrap();
+        m.save(cx);
+        (session, team, normal)
     });
-    set_minions(false, cx);
-    assert!(view.read_with(cx, |view, _| view.minion().is_none()));
-    set_minions(true, cx);
-    let attached = view.read_with(cx, |view, _| view.minion()).unwrap();
-    assert_eq!(attached.0.bot.id, s.id);
-    assert_eq!(attached.0.name, first["name"].as_str().unwrap());
+    cx.run_until_parked();
+    let list = call_as(&s, session, "channels", "channels.list", json!({}), cx).unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["id"], team);
+    assert_eq!(list[0]["userReadOnly"], true);
+    assert!(
+        call_as(
+            &s,
+            session,
+            "read-outside",
+            "channels.read",
+            json!({"channel":normal}),
+            cx
+        )
+        .is_err()
+    );
+    assert!(
+        call_as(
+            &s,
+            session,
+            "mixed",
+            "channels.create",
+            json!({"name":"mixed","members":["outsider"]}),
+            cx
+        )
+        .is_err()
+    );
+    s.manager.update(cx, |m, cx| {
+        assert!(
+            m.channel_action(
+                "channels.post",
+                &json!({"channel":team,"message":"User input"}),
+                None,
+                "user-post",
+                cx
+            )
+            .is_err()
+        );
+        assert!(m.channel_user_read_only(&team));
+        assert!(m.channels.state.get(&team).unwrap().messages.is_empty());
+    });
 }
 
 #[gpui::test]

@@ -25,7 +25,10 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "todos.add" => "title status project",
         "todos.update" => "id title status before project",
         "todos.remove" => "id project",
-        "minions.spawn" => "prompt name project harness model",
+        "minions.hire" => "name role specialties project",
+        "minions.fire" => "minion",
+        "minions.retry" | "minions.discard" => "minion messageId",
+        "minions.spawn" => "prompt name role specialties project harness model",
         "minions.list" => "",
         "artifacts.list" => "kind limit offset",
         "artifacts.read" => "id",
@@ -86,6 +89,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
                 "modelSettings",
                 "schedule",
                 "tags",
+                "specialties",
                 "options",
                 "members",
                 "to",
@@ -130,6 +134,17 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         })
     }) {
         return Err("tags must be an array of up to 32 short strings".into());
+    }
+    if input.get("specialties").is_some_and(|v| {
+        v.as_array().is_none_or(|a| {
+            a.len() > 32
+                || a.iter().any(|v| {
+                    v.as_str()
+                        .is_none_or(|s| s.trim().is_empty() || s.len() > 160)
+                })
+        })
+    }) {
+        return Err("specialties must be an array of up to 32 nonempty short strings".into());
     }
     for key in ["members", "to"]
         .into_iter()
@@ -183,6 +198,23 @@ mod tests {
     use serde_json::json;
     #[test]
     fn validates_before_mutation() {
+        assert!(validate(
+            "minions.hire",
+            &json!({"name":"Scout","role":"Review","specialties":["Rust"]})
+        )
+        .is_ok());
+        assert!(validate(
+            "minions.hire",
+            &json!({"name":"Scout","role":"Review","specialties":"Rust"})
+        )
+        .is_err());
+        assert!(validate(
+            "minions.hire",
+            &json!({"name":"Scout","role":"Review","specialties":[""]})
+        )
+        .is_err());
+        assert!(validate("minions.fire", &json!({"minion":"scout"})).is_ok());
+        assert!(!is_read_only("minions.hire") && !is_read_only("minions.fire"));
         assert!(validate(
             "bots.send",
             &json!({"to":"Beta","message":"Review","expectReply":true})

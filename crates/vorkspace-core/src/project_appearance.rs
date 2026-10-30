@@ -1215,6 +1215,30 @@ pub fn render_badge_or_bot(
     pixel_side: u32,
     anim: BotAnimState,
 ) -> RgbaImage {
+    render_badge_or_bot_with_eyes(
+        is_bot, shape, face, needs_you, textured, seed, grid, bg_hex, fg_hex, pixel_side, false,
+        anim,
+    )
+}
+
+/// Render the incumbent Bot styles with either their paired eyes or one
+/// centered eye. Eye layout is a look property, independent of animation;
+/// project badges ignore it. The original entry point retains paired eyes.
+#[allow(clippy::too_many_arguments)]
+pub fn render_badge_or_bot_with_eyes(
+    is_bot: bool,
+    shape: &str,
+    face: &str,
+    needs_you: bool,
+    textured: bool,
+    seed: u32,
+    grid: u8,
+    bg_hex: u32,
+    fg_hex: u32,
+    pixel_side: u32,
+    one_eye: bool,
+    anim: BotAnimState,
+) -> RgbaImage {
     let s_u32 = pixel_side.max(16);
     let s = s_u32 as f32;
     let bucket = if s_u32 <= 64 { 96 } else { 192 };
@@ -1257,6 +1281,12 @@ pub fn render_badge_or_bot(
         anim.wide,
     );
     let eye_center = project_eye(0.0, -0.01, anim.yaw, anim.pitch, s, anim.wide);
+    let paired_eyes = [eye_left, eye_right];
+    let eyes = if one_eye {
+        std::slice::from_ref(&eye_center)
+    } else {
+        &paired_eyes
+    };
 
     let hx = s * (0.5 + anim.yaw * 0.22);
     let hy = s * (0.38 + anim.pitch * 0.22);
@@ -1311,7 +1341,7 @@ pub fn render_badge_or_bot(
                         "crossed" => {
                             let r = s * 0.085;
                             let half_w = s * 0.025;
-                            for eye in [eye_left, eye_right] {
+                            for &eye in eyes {
                                 let (lx, ly) = eye.to_local(sx, sy);
                                 let d1 = sd_segment(lx, ly, -r, -r, r, r);
                                 let d2 = sd_segment(lx, ly, -r, r, r, -r);
@@ -1323,7 +1353,7 @@ pub fn render_badge_or_bot(
                         "pills" => {
                             let ew = s * 0.118 * 0.5;
                             let eh = (s * 0.26 * anim.blink).max(s * 0.118 * 0.35) * 0.5;
-                            for eye in [eye_left, eye_right] {
+                            for &eye in eyes {
                                 let (lx, ly) = eye.to_local(sx, sy);
                                 let d = sd_rounded_box(lx, ly, ew, eh, ew.min(eh)) * eye.scale_avg;
                                 let a = (0.5 - d).clamp(0.0, 1.0);
@@ -1335,7 +1365,7 @@ pub fn render_badge_or_bot(
                         "dots" => {
                             let er = s * 0.088;
                             let b = anim.blink.max(0.08);
-                            for eye in [eye_left, eye_right] {
+                            for &eye in eyes {
                                 let (lx, ly) = eye.to_local(sx, sy);
                                 let d = (lx.hypot(ly / b) - er) * eye.scale_avg * b.min(1.0);
                                 let a = (0.5 - d).clamp(0.0, 1.0);
@@ -1346,7 +1376,7 @@ pub fn render_badge_or_bot(
                         }
                         "visor" => {
                             let (lx, ly) = eye_center.to_local(sx, sy);
-                            let vw = s * 0.58 * 0.5;
+                            let vw = s * if one_eye { 0.34 } else { 0.58 } * 0.5;
                             let vh = s * 0.25 * 0.5;
                             let d_visor =
                                 sd_rounded_box(lx, ly, vw, vh, vh * 0.96) * eye_center.scale_avg;
@@ -1355,7 +1385,8 @@ pub fn render_badge_or_bot(
                                 let mut v_col = face_rgb;
                                 let er = s * 0.055;
                                 let b = anim.blink.max(0.08);
-                                for side in [-1.0f32, 1.0f32] {
+                                let slots: &[f32] = if one_eye { &[0.] } else { &[-1., 1.] };
+                                for &side in slots {
                                     let ex = lx - side * s * 0.13;
                                     let ey = ly / b;
                                     let d_inner = sd_rounded_box(ex, ey, er, er * 1.15, er * 0.6)
@@ -1373,7 +1404,7 @@ pub fn render_badge_or_bot(
                             let r = s * 0.095;
                             let half_w = (s * 0.055).max(1.8) * 0.5;
                             let b = anim.blink.max(0.08);
-                            for eye in [eye_left, eye_right] {
+                            for &eye in eyes {
                                 let (lx, ly) = eye.to_local(sx, sy);
                                 let ly = ly / b;
                                 let d1 = sd_segment(lx, ly, -r * 0.85, r * 0.45, 0.0, -r * 0.65);
@@ -1386,23 +1417,27 @@ pub fn render_badge_or_bot(
                             }
                         }
                         "wink" => {
-                            // Left eye: pill
-                            let ew = s * 0.115 * 0.5;
-                            let eh = (s * 0.25 * anim.blink).max(s * 0.115 * 0.35) * 0.5;
-                            let (lx, ly) = eye_left.to_local(sx, sy);
-                            let d_left =
-                                sd_rounded_box(lx, ly, ew, eh, ew.min(eh)) * eye_left.scale_avg;
-                            let a_left = (0.5 - d_left).clamp(0.0, 1.0);
-                            if a_left > 0.0 {
-                                col = lerp_rgb(col, face_rgb, a_left);
+                            // Paired wink: left pill plus right caret. A
+                            // single-eye wink keeps only the centered caret.
+                            if !one_eye {
+                                let ew = s * 0.115 * 0.5;
+                                let eh = (s * 0.25 * anim.blink).max(s * 0.115 * 0.35) * 0.5;
+                                let (lx, ly) = eye_left.to_local(sx, sy);
+                                let d_left =
+                                    sd_rounded_box(lx, ly, ew, eh, ew.min(eh)) * eye_left.scale_avg;
+                                let a_left = (0.5 - d_left).clamp(0.0, 1.0);
+                                if a_left > 0.0 {
+                                    col = lerp_rgb(col, face_rgb, a_left);
+                                }
                             }
-                            // Right eye: '>' caret
+                            // The '>' remains visible during a blink.
+                            let eye = if one_eye { eye_center } else { eye_right };
                             let r = s * 0.095;
                             let half_w = (s * 0.055).max(1.8) * 0.5;
-                            let (rx, ry) = eye_right.to_local(sx, sy);
+                            let (rx, ry) = eye.to_local(sx, sy);
                             let d1 = sd_segment(rx, ry, -r * 0.7, -r * 0.55, r * 0.55, 0.0);
                             let d2 = sd_segment(rx, ry, r * 0.55, 0.0, -r * 0.7, r * 0.55);
-                            let d_right = (d1.min(d2) - half_w) * eye_right.scale_avg;
+                            let d_right = (d1.min(d2) - half_w) * eye.scale_avg;
                             let a_right = (0.5 - d_right).clamp(0.0, 1.0);
                             if a_right > 0.0 {
                                 col = lerp_rgb(col, face_rgb, a_right);
@@ -1463,6 +1498,194 @@ pub fn render_badge_or_bot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Count visible connected regions in the actual raster, rather than
+    /// inspecting the renderer's eye-placement data. Eight-way connectivity
+    /// includes diagonal carets/Xs; enclosed dark regions are visor slots.
+    fn face_regions(
+        image: &RgbaImage,
+        bright: bool,
+        enclosed_only: bool,
+    ) -> Vec<(u32, u32, u32, u32)> {
+        let (width, height) = image.dimensions();
+        let mut seen = vec![false; (width * height) as usize];
+        let matches = |x, y| {
+            let p = image.get_pixel(x, y).0;
+            let ink = p[3] > 200 && p[0] > 100;
+            ink == bright
+        };
+        let mut regions = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                if seen[(y * width + x) as usize] || !matches(x, y) {
+                    continue;
+                }
+                let mut stack = vec![(x, y)];
+                seen[(y * width + x) as usize] = true;
+                let (mut left, mut top, mut right, mut bottom) = (x, y, x, y);
+                let mut touches_edge = false;
+                while let Some((x, y)) = stack.pop() {
+                    left = left.min(x);
+                    right = right.max(x);
+                    top = top.min(y);
+                    bottom = bottom.max(y);
+                    touches_edge |= x == 0 || y == 0 || x + 1 == width || y + 1 == height;
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+                            if nx < 0 || ny < 0 || nx >= width as i32 || ny >= height as i32 {
+                                continue;
+                            }
+                            let (nx, ny) = (nx as u32, ny as u32);
+                            let at = (ny * width + nx) as usize;
+                            if !seen[at] && matches(nx, ny) {
+                                seen[at] = true;
+                                stack.push((nx, ny));
+                            }
+                        }
+                    }
+                }
+                if !enclosed_only || !touches_edge {
+                    regions.push((left, top, right, bottom));
+                }
+            }
+        }
+        regions
+    }
+
+    fn eye_fixture(shape: &str, face: &str, one_eye: bool, anim: BotAnimState) -> RgbaImage {
+        render_badge_or_bot_with_eyes(
+            true, shape, face, false, false, 12345, 4, 0x222222, 0xffffff, 128, one_eye, anim,
+        )
+    }
+
+    #[test]
+    fn one_eye_faces_stay_single_and_centered_through_gaze_blink_and_delete() {
+        let poses = [
+            BotAnimState::default(),
+            BotAnimState {
+                blink: 0.08,
+                ..Default::default()
+            },
+            BotAnimState {
+                yaw: -0.65,
+                pitch: 0.45,
+                ..Default::default()
+            },
+            BotAnimState {
+                yaw: 0.65,
+                pitch: -0.45,
+                ..Default::default()
+            },
+            BotAnimState {
+                yaw: 0.28,
+                pitch: -0.28,
+                wide: 1.14,
+                squash_x: 1.045,
+                squash_y: 0.955,
+                hop_y: -0.025,
+                tex_rot: 43.,
+                ..Default::default()
+            },
+            BotAnimState {
+                crossed_eyes: true,
+                ..Default::default()
+            },
+        ];
+        for shape in BADGE_SHAPES {
+            for face in BOT_FACES {
+                for anim in poses {
+                    let image = eye_fixture(shape, face, true, anim);
+                    let regions = face_regions(&image, true, false);
+                    assert_eq!(regions.len(), 1, "{shape}/{face}, {anim:?}: {regions:?}");
+                    let (left, top, right, bottom) = regions[0];
+                    let projected = project_eye(0., -0.01, anim.yaw, anim.pitch, 128., anim.wide);
+                    let expected_x = (projected.cx - 64.) * anim.squash_x + 64.;
+                    let expected_y =
+                        (projected.cy - 112.64) * anim.squash_y + 112.64 + anim.hop_y * 128.;
+                    assert!(((left + right + 1) as f32 * 0.5 - expected_x).abs() < 5.);
+                    assert!(((top + bottom + 1) as f32 * 0.5 - expected_y).abs() < 5.);
+                    if face == "visor" && !anim.crossed_eyes {
+                        assert_eq!(
+                            face_regions(&image, false, true).len(),
+                            1,
+                            "a one-eye visor has one slot, including during blinks"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_faces_keep_paired_eyes_and_the_legacy_entry_point() {
+        for shape in BADGE_SHAPES {
+            for face in BOT_FACES {
+                for crossed_eyes in [false, true] {
+                    let anim = BotAnimState {
+                        crossed_eyes,
+                        ..Default::default()
+                    };
+                    let paired = eye_fixture(shape, face, false, anim);
+                    let legacy = render_badge_or_bot(
+                        true, shape, face, false, false, 12345, 4, 0x222222, 0xffffff, 128, anim,
+                    );
+                    assert_eq!(legacy, paired);
+                    let regions = if face == "visor" && !crossed_eyes {
+                        face_regions(&paired, false, true)
+                    } else {
+                        face_regions(&paired, true, false)
+                    };
+                    assert_eq!(regions.len(), 2, "{shape}/{face}, crossed={crossed_eyes}");
+                    let single = eye_fixture(shape, face, true, anim);
+                    assert_ne!(single, paired);
+                    assert!(
+                        single
+                            .pixels()
+                            .zip(paired.pixels())
+                            .all(|(a, b)| a[3] == b[3]),
+                        "eye layout must preserve the body's silhouette"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eye_layout_does_not_change_project_badges_or_notification_dots() {
+        for is_bot in [false, true] {
+            let render = |one_eye| {
+                render_badge_or_bot_with_eyes(
+                    is_bot,
+                    "squircle",
+                    "visor",
+                    true,
+                    true,
+                    12345,
+                    4,
+                    0x3b82f6,
+                    0x0b1528,
+                    128,
+                    one_eye,
+                    BotAnimState::default(),
+                )
+            };
+            let paired = render(false);
+            let single = render(true);
+            if !is_bot {
+                assert_eq!(paired, single);
+            } else {
+                // Only the face changes: the complete attention dot and its
+                // surroundings are identical, even on a textured body.
+                for y in 0..32 {
+                    for x in 96..128 {
+                        assert_eq!(paired.get_pixel(x, y), single.get_pixel(x, y));
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn texture_cache_preserves_exact_pixels_across_look_and_rotation_changes() {
         use std::sync::Arc;

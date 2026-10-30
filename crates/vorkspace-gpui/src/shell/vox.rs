@@ -35,13 +35,14 @@ impl Shell {
                     })
                 });
             return Ok(
-                json!({"session":selected.map(|s|{let s=s.read(cx);json!({"id":s.summary.id,"title":s.summary.title,"cwd":s.summary.cwd,"harness":s.summary.provider,"busy":s.busy})}),"projects":projects,"bots":bots.bots.iter().map(|b|json!({"id":b.id,"name":b.label()})).collect::<Vec<_>>()}),
+                json!({"session":selected.map(|s|{let s=s.read(cx);json!({"id":s.summary.id,"title":s.summary.title,"cwd":s.summary.cwd,"harness":s.summary.provider,"busy":s.busy})}),"projects":projects,"bots":bots.bots.iter().filter(|b| !b.is_minion()).map(|b|json!({"id":b.id,"name":b.label()})).collect::<Vec<_>>()}),
             );
         }
         if action == "bots.list" {
             return Ok(json!(
                 bots.bots
                     .iter()
+                    .filter(|b| !b.is_minion())
                     .map(|b| json!({"id":b.id,"name":b.label(),"projects":b.projects}))
                     .collect::<Vec<_>>()
             ));

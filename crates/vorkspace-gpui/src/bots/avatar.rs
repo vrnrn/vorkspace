@@ -15,8 +15,8 @@ use std::{
 use vorkspace_core::{
     bot::Bot,
     project_appearance::{
-        BotAnimState, default_foreground_color, default_seed_for, normalize_badge_shape,
-        normalize_bot_face, render_badge_or_bot,
+        BADGE_SHAPES, BOT_FACES, BotAnimState, default_foreground_color, default_seed_for,
+        normalize_badge_shape, normalize_bot_face, render_badge_or_bot_with_eyes,
     },
 };
 
@@ -522,6 +522,7 @@ fn cached_image<K: Hash + Eq>(
 pub(crate) struct BotLookConfig {
     pub shape: String,
     pub face: String,
+    pub one_eye: bool,
     pub textured: bool,
     pub seed: u32,
     pub grid: u8,
@@ -530,9 +531,13 @@ pub(crate) struct BotLookConfig {
 }
 impl BotLookConfig {
     pub fn from_bot(bot: &Bot) -> Self {
+        if bot.is_minion() {
+            return minion_look(bot, &bot.id);
+        }
         Self {
             shape: bot.badge_shape().into(),
             face: bot.face_style().into(),
+            one_eye: false,
             textured: bot.textured,
             seed: bot.resolved_seed(),
             grid: bot.resolved_grid(),
@@ -545,6 +550,7 @@ impl BotLookConfig {
         Self {
             shape: "squircle".into(),
             face: normalize_bot_face(mascot).into(),
+            one_eye: false,
             textured: true,
             seed,
             grid: 4,
@@ -554,11 +560,29 @@ impl BotLookConfig {
     }
 }
 
+/// Geometry and pattern belong to the persistent team-member identity; only
+/// the palette follows its parent. Separate salts keep the face, body and grid
+/// choices independent, without storing appearance on the backend model.
+pub(crate) fn minion_look(parent: &Bot, identity: &str) -> BotLookConfig {
+    let choice = |part: &str| default_seed_for(&format!("minion-{part}:{identity}")) as usize;
+    BotLookConfig {
+        shape: BADGE_SHAPES[choice("body") % BADGE_SHAPES.len()].into(),
+        face: BOT_FACES[choice("face") % BOT_FACES.len()].into(),
+        one_eye: true,
+        textured: true,
+        seed: default_seed_for(identity),
+        grid: 2 + (choice("grid") % 7) as u8,
+        bg_color: parent.color,
+        fg_color: parent.resolved_fg_color(),
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct FrameCacheKey {
     is_bot: bool,
     shape: String,
     face: String,
+    one_eye: bool,
     needs_you: bool,
     textured: bool,
     seed: u32,
@@ -594,6 +618,7 @@ fn frame_cache_key(
         is_bot,
         shape: normalize_badge_shape(&look.shape).into(),
         face: normalize_bot_face(&look.face).into(),
+        one_eye: is_bot && look.one_eye,
         needs_you,
         textured: look.textured,
         seed: look.seed,
@@ -614,7 +639,7 @@ fn frame_cache_key(
 }
 
 fn render_frame(key: &FrameCacheKey, look: &BotLookConfig, anim: BotAnimState) -> Arc<RenderImage> {
-    to_render_image(render_badge_or_bot(
+    to_render_image(render_badge_or_bot_with_eyes(
         key.is_bot,
         &key.shape,
         &key.face,
@@ -625,6 +650,7 @@ fn render_frame(key: &FrameCacheKey, look: &BotLookConfig, anim: BotAnimState) -
         look.bg_color,
         look.fg_color,
         key.pixel_side,
+        key.one_eye,
         anim,
     ))
 }
@@ -767,6 +793,18 @@ fn schedule(window: &Window, cx: &gpui::App, next: Option<Duration>) {
 
 pub(crate) fn bot_avatar(bot: &Bot, status: &str, side: f32, still: bool) -> AnyElement {
     avatar_with_look(BotLookConfig::from_bot(bot), status, side, still)
+}
+
+/// The same cached renderer and bounded clocks as ordinary Bot avatars.
+/// Callers supply the member's persistent ID, never its mutable name or role.
+pub(crate) fn minion_avatar(
+    parent: &Bot,
+    identity: &str,
+    status: &str,
+    side: f32,
+    still: bool,
+) -> AnyElement {
+    avatar_with_look(minion_look(parent, identity), status, side, still)
 }
 
 /// Chat identity has explicitly no pointer gaze. Unlike `avatar_with_look` and
@@ -1291,3 +1329,6 @@ mod preview_tests {
 
 #[cfg(test)]
 mod idle_tests;
+
+#[cfg(test)]
+mod minion_tests;

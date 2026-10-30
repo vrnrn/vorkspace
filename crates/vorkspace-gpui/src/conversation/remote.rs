@@ -352,6 +352,10 @@ impl Conversation {
         false
     }
     pub(super) fn remote_draft_action(&mut self, send: bool, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if self.busy || self.stopping || self.remote_state.pending || !self.remote_state.online {
             return;
         }
@@ -371,6 +375,10 @@ impl Conversation {
         self.launch_prompt(prompt, cx);
     }
     pub(super) fn remote_save_draft(&mut self, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if self.remote_send_guard(cx) {
             return;
         }
@@ -403,6 +411,10 @@ impl Conversation {
             })))).into_any_element())
     }
     fn retry_remote(&mut self, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if let Some(error) = self.remote_state.legacy_recovery_error() {
             self.status = error.to_owned();
             cx.notify();
@@ -422,6 +434,10 @@ impl Conversation {
         self.remote_state.snapshot = None;
     }
     fn restore_remote_message(&mut self, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if let Some(error) = self.remote_state.legacy_recovery_error() {
             self.status = error.to_owned();
             cx.notify();

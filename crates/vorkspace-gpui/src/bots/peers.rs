@@ -11,7 +11,9 @@ impl Bots {
             .bots
             .iter()
             .filter(|bot| {
-                !self.chats.contains_key(&bot.id)
+                self.roster.is_active(&bot.id)
+                    && (!bot.is_minion() || (self.prefs.bots && self.prefs.minions))
+                    && !self.chats.contains_key(&bot.id)
                     && bot.outbox.first().is_some_and(|message| {
                         message.error.is_none() && self.persisted_messages.contains(&message.id)
                     })
@@ -104,7 +106,7 @@ impl Bots {
     ) -> Result<Value, String> {
         match call.action.as_str() {
             "bots.list" => Ok(
-                json!({"bots":self.roster.bots.iter().filter(|b| b.id != author).map(|b| json!({"id":b.id,"name":b.label(),"mascot":b.mascot,"status":self.chats.get(&b.id).map(|v|v.read(cx).bot_status()).unwrap_or("idle")})).collect::<Vec<_>>()}),
+                json!({"bots":self.roster.bots.iter().filter(|b| b.id != author && self.roster.can_communicate(author,&b.id)).map(|b| json!({"id":b.id,"name":b.label(),"mascot":b.mascot,"minion":b.minion,"status":self.chats.get(&b.id).map(|v|v.read(cx).bot_status()).unwrap_or("idle")})).collect::<Vec<_>>()}),
             ),
             "bots.send" => self.queue_peer(
                 author,
@@ -124,6 +126,9 @@ impl Bots {
         sent: &Message,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if !self.roster.is_active(bot) {
+            return Ok(());
+        }
         let Some(peer) = sent
             .peer
             .as_ref()

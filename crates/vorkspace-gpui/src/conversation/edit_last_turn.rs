@@ -86,6 +86,10 @@ impl Conversation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if self.is_remote() {
             self.status = "Editing the last message is not supported by this remote host.".into();
             cx.notify();
@@ -154,6 +158,10 @@ impl Conversation {
     /// Called before ordinary send consumes composer text or attachments.
     /// Returns true while this edit owns the submission (including rejection).
     pub(super) fn submit_edited(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.reject_user_entry(cx) {
+            return true;
+        }
+
         if self.editing_last_turn.active || self.editing_last_turn.blocked {
             return true;
         }

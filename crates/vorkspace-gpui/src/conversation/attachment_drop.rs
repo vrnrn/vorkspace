@@ -10,6 +10,9 @@ impl Conversation {
         id: &'static str,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        if self.user_read_only() {
+            return div().id(id);
+        }
         if !cx.has_active_drag() {
             self.file_drag = false;
         }

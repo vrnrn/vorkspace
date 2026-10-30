@@ -193,6 +193,7 @@ impl Shell {
                     .roster
                     .bots
                     .iter()
+                    .filter(|bot| !bot.is_minion())
                     .map(|bot| crate::todos::BoardChoice {
                         board: TodoBoard::Bot(bot.id.clone()),
                         label: bot.name.clone(),
@@ -366,6 +367,7 @@ impl Shell {
                         .roster
                         .bots
                         .iter()
+                        .filter(|bot| !bot.is_minion())
                         .map(|bot| (bot.id.clone(), bot.name.clone()))
                         .collect()
                 })

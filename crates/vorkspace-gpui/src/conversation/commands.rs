@@ -30,6 +30,10 @@ impl Conversation {
     }
 
     pub(super) fn compact_context(&mut self, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if !self.history_ready() {
             self.defer_history_action(|this, cx| this.compact_context(cx), cx);
             return;

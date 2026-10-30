@@ -226,6 +226,9 @@ impl Conversation {
         }
     }
     pub(crate) fn bot_quote(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
         if self.input.read(cx).is_composing() {
             return;
         }
@@ -240,7 +243,9 @@ impl Conversation {
     pub(crate) fn bot_attention(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         div()
             .child(self.approval_shelf(window, cx))
-            .when_some(self.questions.front(), |d, (card, _)| d.child(card.clone()))
+            .when(!self.user_read_only(), |d| {
+                d.when_some(self.questions.front(), |d, (card, _)| d.child(card.clone()))
+            })
             .into_any_element()
     }
     pub(crate) fn configure_bot(
@@ -255,7 +260,10 @@ impl Conversation {
         self.completion
             .update(cx, |completion, cx| completion.set_bot_chat(cx));
         let name = bot.label();
-        let look = crate::bots::avatar::BotLookConfig::from_bot(&bot);
+        let look = self.actor_look(&bot);
+        if bot.is_minion() || self.user_read_only() {
+            self.input.update(cx, |input, _| input.set_read_only(true));
+        }
         self.transcript
             .update(cx, |t, _| t.bot_mode_with_look(look, &name));
         self.settings.environment = environment;
@@ -313,7 +321,7 @@ impl Conversation {
             .update(cx, |t, cx| t.set_pending(pending, cx));
     }
     pub(crate) fn voice_composer_ready(&self) -> bool {
-        self.history_ready() && !self.account_switching
+        !self.user_read_only() && self.history_ready() && !self.account_switching
     }
     pub(crate) fn bot_ready(&self) -> bool {
         self.history_ready()
@@ -401,6 +409,9 @@ impl Conversation {
         mode: Option<&str>,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.user_read_only() && self.settings.bot.is_none() {
+            return false;
+        }
         if !self.history_ready() {
             self.load(cx);
             return false;
@@ -433,7 +444,9 @@ impl Conversation {
         self.orchestration_error = None;
         let previous_prepared = self.settings.prepared_prompt.take();
         self.settings.prepared_prompt = message.prepared_prompt.clone();
+        self.team_dispatch = true;
         self.launch_prompt(message.text.clone(), cx);
+        self.team_dispatch = false;
         self.settings.prepared_prompt = previous_prepared;
         (
             self.settings.plan,

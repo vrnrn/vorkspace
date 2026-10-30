@@ -141,6 +141,7 @@ impl Shell {
                         .roster
                         .bots
                         .iter()
+                        .filter(|bot| !bot.is_minion())
                         .map(|m| crate::settings::BotSetting {
                             id: m.id.clone(),
                             name: m.label(),

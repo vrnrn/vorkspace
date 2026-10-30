@@ -500,6 +500,47 @@ pub(super) struct ChannelUi {
 }
 
 impl Bots {
+    pub(crate) fn channel_user_read_only(&self, id: &str) -> bool {
+        self.channels
+            .state
+            .get(id)
+            .is_some_and(|c| c.user_read_only(&self.roster))
+    }
+    /// Revalidate persisted deliveries as well as fresh posts. Firing, parent
+    /// deletion or legacy invalid membership cannot resume queued work.
+    pub(super) fn quarantine_channel_work(&mut self, cx: &mut Context<Self>) {
+        let mut next = self.channels.state.clone();
+        let mut changed = false;
+        for channel in &mut next.channels {
+            let invalid = channel
+                .deliveries
+                .iter()
+                .filter(|d| {
+                    matches!(d.state.as_str(), "queued" | "running")
+                        && !channel.delivery_allowed(d, &self.roster)
+                })
+                .map(|d| d.id.clone())
+                .collect::<HashSet<_>>();
+            for delivery in &mut channel.deliveries {
+                if invalid.contains(&delivery.id) {
+                    delivery.state = "cancelled".into();
+                    delivery.error = Some("Team membership no longer permits this work".into());
+                    if let Some(view) = self
+                        .channels
+                        .views
+                        .get(&(channel.id.clone(), delivery.bot.clone()))
+                    {
+                        view.update(cx, |v, cx| v.bot_stop(cx));
+                    }
+                    changed = true;
+                }
+            }
+        }
+        if changed && let Err(error) = self.commit_channels(next.clone(), cx) {
+            self.channels.state = next;
+            self.error = Some(error);
+        }
+    }
     fn channel_unread(&self, id: &str) -> bool {
         self.channels
             .state
@@ -724,6 +765,9 @@ impl Bots {
         let Some(channel) = self.channels.state.get(id).cloned() else {
             return;
         };
+        if channel.user_read_only(&self.roster) {
+            return;
+        }
         let editor = cx.new(|cx| ChannelLookEditor::new(channel, cx));
         let focus = editor.read(cx).focus(cx);
         let changed = cx.subscribe(&editor, |this, _, event: &ChannelLookChanged, cx| {
@@ -892,18 +936,19 @@ impl Bots {
         bot::api::validate(action, input)?;
         let mut next = self.channels.state.clone();
         let result = match action {
-            "channels.list" => json!(next.channels.iter().filter(|c| author.is_none_or(|m| c.member_ids.contains(&m.id))).map(|c| json!({"id":c.id,"name":c.name,"topic":c.topic,"memberIds":c.member_ids})).collect::<Vec<_>>()),
+            "channels.list" => json!(next.channels.iter().filter(|c| c.can_access(author.map(|a|a.id.as_str()),&self.roster)).map(|c| json!({"id":c.id,"name":c.name,"topic":c.topic,"memberIds":c.member_ids,"teamParent":c.team_parent_id(&self.roster).ok().flatten(),"userReadOnly":c.user_read_only(&self.roster)})).collect::<Vec<_>>()),
             "channels.create" => {
                 let mut members = input["members"].as_array().ok_or("Provide member Bot names")?.iter().map(|v| v.as_str().map(str::to_owned).ok_or("Invalid member".to_string())).collect::<Result<Vec<_>,_>>()?;
                 if let Some(m) = author { members.push(m.id.clone()); }
                 let id = next.create(input["name"].as_str().ok_or("Provide name")?,input["topic"].as_str().unwrap_or(""), members, &self.roster)?;
+                if author.is_none() && next.get(&id).is_some_and(|c|c.user_read_only(&self.roster)){return Err("Users cannot create Minion messaging channels".into());}
                 if let Some(author)=author && self.channels.state.get(&id).is_some_and(|c|!c.member_ids.contains(&author.id)) {return Err("This Bot is not a channel member".into());}
                 json!({"id":id})
             },
             "channels.read" | "channels.post" => {
                 let id = input["channel"].as_str().ok_or("Provide channel")?;
                 let channel = next.get(id).ok_or("Unknown channel")?;
-                if author.is_some_and(|m| !channel.member_ids.contains(&m.id)) { return Err("This Bot is not a channel member".into()); }
+                if !channel.can_access(author.map(|a|a.id.as_str()),&self.roster) { return Err("This Bot is not an active member of this channel's team".into()); }
                 if action == "channels.read" {
                     let limit = input["limit"].as_u64().unwrap_or(20).min(50) as usize;
                     let rows = channel.messages.iter().rev().take(limit).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>();
@@ -927,9 +972,10 @@ impl Bots {
         if self.channels.load_error.is_some() {
             return;
         }
+        self.quarantine_channel_work(cx);
         if let Some(key) = self.channels.inspecting.clone()
             && !self.channels.views.contains_key(&key)
-            && let Some(bot) = self.roster.get(&key.1).cloned()
+            && let Some(bot) = self.roster.effective_bot(&key.1)
         {
             self.load_channel_view(key, bot, cx);
         }
@@ -954,7 +1000,20 @@ impl Bots {
             }) {
                 continue;
             }
-            let Some(bot) = self.roster.get(&delivery.bot).cloned() else {
+            if self.roster.get(&delivery.bot).is_some_and(Bot::is_minion)
+                && !(self.prefs.bots && self.prefs.minions)
+            {
+                continue;
+            }
+            if !self
+                .channels
+                .state
+                .get(&channel)
+                .is_some_and(|c| c.delivery_allowed(&delivery, &self.roster))
+            {
+                continue;
+            }
+            let Some(bot) = self.roster.effective_bot(&delivery.bot) else {
                 continue;
             };
             let Some(view) = self.channels.views.get(&key).cloned() else {
@@ -1068,9 +1127,18 @@ impl Bots {
             .copied();
         let store = self.store.clone();
         let cwd = primary.read(cx).summary.cwd.clone();
+        let minion = bot.is_minion();
         let work = cx.background_executor().spawn(async move {
             let db = locked(&store)?;
             if let Some(id) = saved {
+                if minion {
+                    let mut queue = db.follow_ups(id)?;
+                    if !queue.paused {
+                        queue.paused = true;
+                        queue.revision += 1;
+                        db.accept_follow_ups(id, &queue)?;
+                    }
+                }
                 db.bot_session(id)?
                     .ok_or("Saved channel conversation is unavailable".into())
             } else {
@@ -1092,7 +1160,9 @@ impl Bots {
                     }
                 };
                 let mut next = this.channels.state.clone();
-                let valid = this.roster.get(&key.1).is_some()
+                let inspecting = saved.is_some() && this.channels.inspecting.as_ref() == Some(&key);
+                let valid = this.roster.effective_bot(&key.1).is_some()
+                    && (inspecting || this.roster.is_active(&key.1))
                     && next.get(&key.0).is_some_and(|c| {
                         (c.member_ids.contains(&key.1)
                             || (saved.is_some() && this.channels.inspecting.as_ref() == Some(&key)))
@@ -1116,14 +1186,21 @@ impl Bots {
                     return;
                 }
                 let id = summary.id;
-                let view = cx.new(|cx| Conversation::new(summary, this.store.clone(), cx));
+                let existing = this
+                    .owner
+                    .upgrade()
+                    .and_then(|owner| owner.read(cx).bot_session_entity(id))
+                    .filter(|view| view.read(cx).settings.bot.is_none());
+                let view = existing.unwrap_or_else(|| {
+                    cx.new(|cx| Conversation::new(summary, this.store.clone(), cx))
+                });
                 let env = this
                     .bridge
                     .as_ref()
                     .map(|b| b.environment(id))
                     .unwrap_or_default();
                 let root = this.root.clone();
-                let mut bot = this.roster.get(&key.1).cloned().unwrap();
+                let mut bot = this.roster.effective_bot(&key.1).unwrap();
                 bot.outbox.clear();
                 view.update(cx, |v, cx| {
                     v.configure_bot(bot, root, env, cx);
@@ -1149,6 +1226,10 @@ impl Bots {
         .detach();
     }
     pub(super) fn channel_finished(&mut self, key: &(String, String), cx: &mut Context<Self>) {
+        if !self.roster.is_active(&key.1) {
+            self.quarantine_channel_work(cx);
+            return;
+        }
         let Some(view) = self.channels.views.get(key) else {
             return;
         };

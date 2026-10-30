@@ -9,7 +9,8 @@ mod creation;
 mod files;
 mod filters;
 mod header;
-pub(crate) use header::{ChatHeader, chat_surface};
+pub(crate) use header::{ChatHeader, chat_surface, chat_surface_with_look};
+mod effects;
 #[cfg(test)]
 mod header_tests;
 mod host;
@@ -87,11 +88,23 @@ pub(crate) type MinionAttachment = (
 pub(crate) type MinionRegistry =
     std::rc::Rc<std::cell::RefCell<std::collections::HashMap<i64, MinionAttachment>>>;
 
+/// UI admission follows durable identity, including retired members and
+/// disabled Minions. Shared snapshots avoid reborrowing Bots from a chat.
+#[derive(Clone)]
+pub(crate) struct TeamHistory {
+    pub actor: Bot,
+    pub parent: Option<Bot>,
+}
+pub(crate) type TeamHistories = std::rc::Rc<std::cell::RefCell<HashMap<i64, TeamHistory>>>;
+pub(crate) type BotConversations =
+    std::rc::Rc<std::cell::RefCell<HashMap<i64, WeakEntity<Conversation>>>>;
+
 pub(crate) struct Bots {
+    minion_effects: effects::MinionEffects,
     pub(crate) minion_registry: MinionRegistry,
-    /// Minion names chosen for spawns still being created, by request ID
-    /// with their Bot, so parallel spawns can't pick the same default name.
-    pending_minion_names: HashMap<String, (String, String)>,
+    pub(crate) team_histories: TeamHistories,
+    pub(crate) conversation_views: BotConversations,
+    retired_teams: HashSet<String>,
     channels: channels::ChannelUi,
     parent_window: Option<gpui::AnyWindowHandle>,
     owner: WeakEntity<Shell>,
@@ -178,6 +191,73 @@ impl EventEmitter<Changed> for Bots {}
 impl EventEmitter<TabOpened> for Bots {}
 impl EventEmitter<ShowDetails> for Bots {}
 impl Bots {
+    fn presentation_bot(&self, id: &str) -> Option<Bot> {
+        let mut actor = self.roster.effective_bot(id)?;
+        if let Some(parent) = self.roster.parent_of(id) {
+            actor.color = parent.color;
+            actor.fg_color = parent.fg_color;
+        }
+        Some(actor)
+    }
+    fn sync_team_histories(&self, cx: &mut Context<Self>) {
+        let mut histories = HashMap::new();
+        for actor in &self.roster.bots {
+            if actor.is_minion()
+                && let Some(session) = actor.session_id
+            {
+                histories.insert(
+                    session,
+                    TeamHistory {
+                        actor: actor.clone(),
+                        parent: self.roster.parent_of(&actor.id).cloned(),
+                    },
+                );
+            }
+        }
+        for channel in &self.channels.state.channels {
+            if channel.user_read_only(&self.roster) {
+                for (id, session) in &channel.member_sessions {
+                    if let Some(actor) = self.roster.get(id) {
+                        histories.insert(
+                            *session,
+                            TeamHistory {
+                                actor: actor.clone(),
+                                parent: self.roster.parent_of(id).cloned(),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        *self.team_histories.borrow_mut() = histories;
+        for view in self.chats.values().chain(self.channels.views.values()) {
+            self.conversation_views
+                .borrow_mut()
+                .insert(view.read(cx).summary.id, view.downgrade());
+            view.update(cx, |view, cx| {
+                view.team_histories = Some(self.team_histories.clone());
+                view.refresh_team_history(cx);
+            });
+        }
+    }
+    pub(crate) fn minion_parent(&self, id: &str) -> Option<String> {
+        self.roster.parent_of(id).map(|b| b.id.clone())
+    }
+    pub(crate) fn team_members(&self, parent: &str) -> Vec<Bot> {
+        self.roster
+            .team(parent)
+            .filter(|b| b.is_minion())
+            .filter_map(|b| self.presentation_bot(&b.id))
+            .collect()
+    }
+    pub(crate) fn minion_read_only(&self, id: &str) -> bool {
+        self.roster.get(id).is_some_and(Bot::is_minion)
+    }
+    #[cfg(test)]
+    fn session_user_read_only(&self, session: i64) -> bool {
+        self.roster.of_session(session).is_some_and(Bot::is_minion)
+            || self.team_histories.borrow().contains_key(&session)
+    }
     pub(crate) fn conversation_for_session(
         &self,
         id: i64,
@@ -383,7 +463,10 @@ impl Bots {
             notice_region,
             details,
             minion_registry: Default::default(),
-            pending_minion_names: HashMap::new(),
+            team_histories: Default::default(),
+            minion_effects: Default::default(),
+            conversation_views: Default::default(),
+            retired_teams: Default::default(),
             overview_tab: OverviewTab::Sessions,
             todo_board: None,
             todo_counts: HashMap::new(),
@@ -471,6 +554,7 @@ impl Bots {
         }
         this.resume_peer_queues(cx);
         this.sync_minions();
+        this.sync_team_histories(cx);
         this.observations.push(
             cx.observe_global::<crate::todos::TodoRevision>(|this, cx| this.load_todo_counts(cx)),
         );
@@ -512,13 +596,16 @@ impl Bots {
                     .find(|(_, view)| view.read(cx).summary.id == caller)
                     .and_then(|((_, bot), _)| self.roster.get(bot))
             })
-            .is_some_and(|bot| bot.works_on(project))
+            .is_some_and(|actor| {
+                self.roster.is_active(&actor.id)
+                    && (!actor.is_minion() || (self.prefs.bots && self.prefs.minions))
+                    && self
+                        .roster
+                        .storage_owner(&actor.id)
+                        .is_some_and(|owner| owner.works_on(project))
+            })
     }
     pub(crate) fn hidden_session(&self, id: i64) -> bool {
-        // Minions always show under their project, like sessions.
-        if self.roster.of_minion(id).is_some() {
-            return false;
-        }
         self.is_bot_session(id)
             || self.roster.bots.iter().any(|m| {
                 !m.show_started_sessions_in_sidebar && m.launches.iter().any(|l| l.session_id == id)
@@ -561,6 +648,9 @@ impl Bots {
         }
     }
     fn show_overview(&self, cx: &mut Context<Self>) {
+        if self.current().is_some_and(Bot::is_minion) {
+            return;
+        }
         if let Some(id) = self.active.clone() {
             cx.emit(ShowDetails(id));
         }
@@ -591,6 +681,9 @@ impl Bots {
         attachments: Vec<String>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if self.roster.get(id).is_some_and(Bot::is_minion) {
+            return Err("Users cannot message Minions; delegate through their parent Bot".into());
+        }
         if self.roster.get(id).is_none() {
             return Err("Bot is no longer available".into());
         }
@@ -626,13 +719,20 @@ impl Bots {
     }
     /// Peer senders resolve to avatars by name against the current roster.
     fn sync_peer_looks(&self, cx: &mut Context<Self>) {
-        let looks = crate::transcript::peer_looks(&self.roster.bots);
+        let actors = self
+            .roster
+            .bots
+            .iter()
+            .filter_map(|b| self.presentation_bot(&b.id))
+            .collect::<Vec<_>>();
+        let looks = crate::transcript::peer_looks(&actors);
         for view in self.chats.values() {
             let transcript = view.read(cx).transcript.clone();
             transcript.update(cx, |t, cx| t.set_peer_looks(looks.clone(), cx));
         }
     }
     fn changed(&mut self, cx: &mut Context<Self>) {
+        self.sync_team_histories(cx);
         self.sync_peer_looks(cx);
         cx.emit(Changed);
         cx.notify();
@@ -720,12 +820,13 @@ impl Bots {
         if self.awaiting_creation.contains(id) {
             return;
         }
-        if self.chats.contains_key(id) || !self.loading_chats.insert(id.into()) {
+        if self.chats.contains_key(id) || self.loading_chats.contains(id) {
             return;
         }
-        let Some(bot) = self.roster.get(id).cloned() else {
+        let Some(bot) = self.presentation_bot(id) else {
             return;
         };
+        self.loading_chats.insert(id.into());
         let store = self.store.clone();
         let prefs = self.prefs.clone();
         let id = id.to_string();
@@ -736,6 +837,16 @@ impl Bots {
                 return Err(format!("This Bot's saved conversation ({missing}) is unavailable. Its identity and history have been preserved."));
             }
             if let Some(session) = bot.session_id {
+                // Team work belongs exclusively to the Bot outbox. A migrated
+                // project session may have a legacy user follow-up queue.
+                if bot.is_minion() {
+                    let mut queue = db.follow_ups(session)?;
+                    if !queue.paused {
+                        queue.paused = true;
+                        queue.revision += 1;
+                        db.accept_follow_ups(session, &queue)?;
+                    }
+                }
                 let summary = db.bot_session(session)?
                     .ok_or("This Bot's saved conversation is unavailable. Reset its conversation explicitly to start a new one.")?;
                 let delivered = bot
@@ -799,9 +910,14 @@ impl Bots {
                         true
                     } else { false }
                 });
-                let bot = bot.clone();
+                let Some(bot) = this.presentation_bot(&id) else { return; };
                 let page_chat = this.active.as_deref() == Some(id.as_str());
-                let view = cx.new(|cx| Conversation::new(summary, this.store.clone(), cx));
+                let existing = this.owner.upgrade()
+                    .and_then(|owner| owner.read(cx).bot_session_entity(summary.id))
+                    .filter(|view| bot.is_minion() && view.read(cx).settings.bot.is_none());
+                let view = existing.unwrap_or_else(|| cx.new(|cx| Conversation::new(summary, this.store.clone(), cx)));
+                this.conversation_views.borrow_mut().insert(view.read(cx).summary.id, view.downgrade());
+                this.sync_team_histories(cx);
                 let root = this.root.clone();
                 let env = this
                     .bridge
@@ -809,8 +925,10 @@ impl Bots {
                     .map(|b| b.environment(view.read(cx).summary.id))
                     .unwrap_or_default();
                 view.update(cx, |view, cx| {
+                    view.team_histories = Some(this.team_histories.clone());
                     view.allow_storage_paging = page_chat;
                     view.configure_bot(bot, root, env, cx);
+                    view.refresh_team_history(cx);
                     for message in this.roster.get(&id).into_iter().flat_map(|bot| &bot.outbox) {
                         if this.persisted_messages.contains(&message.id) {
                             view.bot_draft_outbox_saved(message, cx);
@@ -889,7 +1007,7 @@ impl Bots {
                             cx.notify();
                         }
                         this.dispatch(&source, cx);
-                        if this.channels.state.channels.iter().any(|c| {
+                        if this.channels.inspecting.as_ref().is_some_and(|key| key.1 == source && !this.channels.views.contains_key(key)) || this.channels.state.channels.iter().any(|c| {
                             !this.channels.views.contains_key(&(c.id.clone(), source.clone()))
                                 && c.deliveries.iter().any(|d| d.bot == source && d.state == "queued")
                         }) { this.channel_tick(cx); }
@@ -963,6 +1081,14 @@ impl Bots {
     }
     /// Retry clears a queued message's error; discard drops it.
     fn queue_changed(&mut self, source: &str, id: &str, remove: bool, cx: &mut Context<Self>) {
+        if self.roster.get(source).is_some_and(Bot::is_minion) {
+            return;
+        }
+        self.recover_queue(source, id, remove, cx);
+    }
+    /// The Bot host validates parent ownership before using this path for a
+    /// Minion. User transcript controls continue through queue_changed above.
+    fn recover_queue(&mut self, source: &str, id: &str, remove: bool, cx: &mut Context<Self>) {
         let held = self.held.remove(id);
         self.roster.held_messages.remove(id);
         let mode = self.roster.message_modes.remove(id);
@@ -995,9 +1121,9 @@ impl Bots {
         self.configure_chat(source, cx);
     }
     fn configure_chat(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.sync_team_histories(cx);
         self.refresh_work(id, cx);
-        if let (Some(bot), Some(view)) = (self.roster.get(id).cloned(), self.chats.get(id).cloned())
-        {
+        if let (Some(bot), Some(view)) = (self.presentation_bot(id), self.chats.get(id).cloned()) {
             let env = self
                 .bridge
                 .as_ref()
@@ -1030,6 +1156,16 @@ impl Bots {
         prepared_prompt: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        if self.roster.get(id).is_some_and(Bot::is_minion) {
+            self.error =
+                Some("Users cannot message Minions; delegate through their parent Bot".into());
+            if let (Some(draft), Some(view)) = (draft_id.as_deref(), self.chats.get(id)) {
+                view.update(cx, |v, cx| {
+                    v.bot_draft_outbox_failed(draft, "Users cannot message Minions", cx)
+                });
+            }
+            return;
+        }
         if self.roster.get(id).is_none() {
             if let (Some(draft_id), Some(view)) = (draft_id.as_deref(), self.chats.get(id)) {
                 view.update(cx, |view, cx| {
@@ -1083,6 +1219,25 @@ impl Bots {
         }
     }
     fn dispatch(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.roster.is_active(id)
+            || (self.roster.get(id).is_some_and(Bot::is_minion)
+                && !(self.prefs.bots && self.prefs.minions))
+        {
+            return;
+        }
+        if self
+            .roster
+            .get(id)
+            .and_then(|b| b.outbox.first())
+            .is_some_and(|m| {
+                m.peer
+                    .as_ref()
+                    .is_some_and(|p| !self.roster.can_communicate(&p.from, id))
+                    || (self.roster.get(id).is_some_and(Bot::is_minion) && m.peer.is_none())
+            })
+        {
+            return;
+        }
         let delivered = self
             .chats
             .get(id)
@@ -1170,10 +1325,19 @@ impl Bots {
             self.steer(id, cx);
             return;
         }
+        // Refreshing context notifies the view. A held/restoring recipient must
+        // not enter a configure → observe → dispatch loop before admission.
+        if !view.read(cx).bot_ready() {
+            if view.read(cx).needs_history_restore() {
+                view.update(cx, |view, cx| view.load(cx));
+            }
+            return;
+        }
         let Some(token) = self.claim_dispatch(id, &message, cx) else {
             return;
         };
         let mode = self.roster.message_modes.get(&message.id).cloned();
+        self.configure_chat(id, cx);
         if view.update(cx, |v, cx| {
             v.bot_dispatch_with_mode(&message, mode.as_deref(), cx)
         }) {
@@ -1235,6 +1399,9 @@ impl Bots {
     /// turn keeps its reply scoped to the peer's message, so it never mixes in
     /// the user's text.
     fn steer(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.roster.is_active(id) || self.roster.get(id).is_some_and(Bot::is_minion) {
+            return;
+        }
         if self.inflight.get(id).is_some_and(|m| m.peer.is_some()) {
             return;
         }
@@ -1346,6 +1513,11 @@ impl Bots {
         if !self.prefs.bots || self.roster.get(id).is_none() {
             return;
         }
+        if self.roster.get(id).is_some_and(Bot::is_retired)
+            && let Some(parent) = self.minion_parent(id)
+        {
+            self.retired_teams.insert(parent);
+        }
         if self.active.as_deref() != Some(id) {
             self.save_open_file(cx);
             self.pause_changes(cx);
@@ -1381,7 +1553,11 @@ impl Bots {
         if self.settings.is_none()
             && let Some(chat) = self.chat()
         {
-            window.focus(&chat.read(cx).input.focus_handle(cx), cx);
+            if chat.read(cx).user_read_only() {
+                window.focus(&self.settings_focus, cx);
+            } else {
+                window.focus(&chat.read(cx).input.focus_handle(cx), cx);
+            }
         } else {
             window.focus(&self.settings_focus, cx);
         }
@@ -1482,6 +1658,7 @@ impl Bots {
             .roster
             .bots
             .iter()
+            .filter(|m| !m.is_minion())
             .filter(|m| project.as_ref().is_none_or(|p| m.works_on(p)))
             .cloned()
             .collect();
@@ -1572,7 +1749,8 @@ impl Bots {
                 let context = id.clone();
                 let drag = id.clone();
                 let slot = self.rail_bounds[&id].clone();
-                div()
+                let team = self.team_rail(&bot, liquid, cx);
+                let row = div()
                     .id(SharedString::from(format!("bot-rail-{id}")))
                     .debug_selector({
                         let id = id.clone();
@@ -1667,7 +1845,8 @@ impl Bots {
                             this.skip_click = false;
                             this.drag = Some((drag.clone(), event.position, None));
                         }),
-                    )
+                    );
+                div().child(row).child(team)
             }))
             // BotRailSection owns its menu and background dialog; the Bot
             // view paints them instead while it is open.
@@ -1737,8 +1916,10 @@ impl gpui::Render for Bots {
                     }),
             )
             .children(self.settings_modal(&bot, window, cx))
-            .when(!self.creating(), |d| d.children(self.picker_surface(cx)))
-            .children(self.options_surface(cx))
+            .when(!self.creating() && !bot.is_minion(), |d| {
+                d.children(self.picker_surface(cx))
+            })
+            .when(!bot.is_minion(), |d| d.children(self.options_surface(cx)))
             .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, _| {
                 if let Some((_, start, over)) = &mut this.drag
                     && (event.position - *start).magnitude() > 5.

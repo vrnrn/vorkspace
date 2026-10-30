@@ -801,6 +801,9 @@ impl Shell {
     /// Why a session belongs in the sidebar's activity: running, waiting on an
     /// approval, or finished unseen. Archived and deleting sessions never do.
     pub(super) fn sidebar_status(&self, id: i64, cx: &App) -> Option<Status> {
+        if self.team_histories.borrow().contains_key(&id) {
+            return None;
+        }
         let metadata = self.session_metadata(id, cx);
         if metadata.summary.archived || self.deleting.contains(&id) {
             return None;
@@ -888,3 +891,74 @@ impl Shell {
 #[cfg(test)]
 #[path = "live_agents_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod minion_history_tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use std::sync::{Arc, Mutex};
+    use vorkspace_core::{
+        bot::{Bot, MinionMetadata},
+        store::Store,
+    };
+
+    #[gpui::test]
+    fn restored_team_views_never_join_project_activity_trees(cx: &mut TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let session = store.create("codex", "/missing/team-project").unwrap();
+        let id = session.id;
+        let window = cx
+            .update(|cx| {
+                cx.open_window(Default::default(), |_, cx| {
+                    cx.new(|cx| {
+                        Shell::new(
+                            Arc::new(Mutex::new(store)),
+                            vec![session],
+                            "/missing/team-project".into(),
+                            None,
+                            cx,
+                        )
+                    })
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                let view = shell.bot_ensure_session(id, cx).unwrap();
+                view.update(cx, |view, _| view.busy = true);
+                shell.team_histories.borrow_mut().insert(
+                    id,
+                    crate::bots::TeamHistory {
+                        actor: Bot {
+                            id: "retired-member".into(),
+                            session_id: Some(id),
+                            minion: Some(MinionMetadata {
+                                parent_id: "parent".into(),
+                                role: "Reviewer".into(),
+                                retired: true,
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        },
+                        parent: None,
+                    },
+                );
+                shell.workspace.preferences.minions = false;
+                assert!(view.read(cx).user_read_only());
+                assert!(shell.sidebar_status(id, cx).is_none());
+                shell.sync_live_agents(cx);
+                assert!(
+                    !shell
+                        .live_agents
+                        .read(cx)
+                        .agents
+                        .iter()
+                        .any(|agent| agent.id == id)
+                );
+                view.update(cx, |view, _| view.busy = false);
+            })
+            .unwrap();
+    }
+}

@@ -755,6 +755,7 @@ impl Shell {
                         .roster
                         .bots
                         .iter()
+                        .filter(|bot| !bot.is_minion())
                         .map(|bot| {
                             let id = bot.id.clone();
                             let selected = manager.active.as_ref() == Some(&id);

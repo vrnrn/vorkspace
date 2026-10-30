@@ -10,6 +10,8 @@ pub mod habits;
 pub mod launch;
 pub mod memory;
 pub mod peers;
+mod teams;
+pub use teams::MinionMetadata;
 pub mod work;
 pub(crate) use desktop::codex_home;
 #[cfg(test)]
@@ -94,6 +96,10 @@ pub struct Bot {
     pub pending_reports: Vec<String>,
     pub habit_sessions: Vec<i64>,
     pub seen_rows: usize,
+    /// Persistent team membership. The actor owns its history and outbox;
+    /// its parent owns shared soul, memory, todos and project assignments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minion: Option<MinionMetadata>,
     /// Experimental helpers it spawned, sharing its memory.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub minions: Vec<Minion>,
@@ -137,6 +143,7 @@ impl Default for Bot {
             habit_sessions: Vec::new(),
             seen_rows: 0,
             minions: Vec::new(),
+            minion: None,
         }
     }
 }
@@ -217,7 +224,12 @@ impl Bot {
         }
     }
     pub fn normalize(&mut self) {
-        self.name = self.name.trim().chars().take(40).collect();
+        self.name = self
+            .name
+            .trim()
+            .chars()
+            .take(if self.is_minion() { 60 } else { 40 })
+            .collect();
         if !MASCOTS.contains(&self.mascot.as_str()) && !BOT_FACES.contains(&self.mascot.as_str()) {
             self.mascot = MASCOTS[0].into();
         }
@@ -446,7 +458,9 @@ fn merge_roster_value(
             return Ok(Some(Value::Array(result)));
         }
     }
-    Err(format!("Bot roster field {field} changed in another window; your changes were preserved in this window."))
+    Err(format!(
+        "Bot roster field {field} changed in another window; your changes were preserved in this window."
+    ))
 }
 
 // Apply understood changes back onto the original JSON, retaining fields
@@ -526,6 +540,8 @@ impl Roster {
         for bot in &mut roster.bots {
             bot.normalize();
         }
+        roster.migrate_minions();
+        roster.sanitize_team_queues();
         Ok(roster)
     }
     pub fn save(&self, store: &Store) -> Result<(), String> {
@@ -648,19 +664,20 @@ pub fn root(store: &Store) -> PathBuf {
         .join("bots")
 }
 pub fn load_files(root: &Path, bot: &Bot) -> Result<files::AgentFiles, String> {
-    let mut files = files::load(root, &bot.id, None)?;
+    let owner = bot.storage_id();
+    let mut files = files::load(root, owner, None)?;
     if files.soul.is_none() {
         let soul = bot
             .initial_configuration
             .as_ref()
             .and_then(|config| config.soul.as_deref())
             .unwrap_or(DEFAULT_SOUL);
-        match files::save(root, &bot.id, None, "SOUL.md", soul, Some(&files.soul_hash)) {
+        match files::save(root, owner, None, "SOUL.md", soul, Some(&files.soul_hash)) {
             Ok(hash) => {
                 files.soul = Some(soul.into());
                 files.soul_hash = hash;
             }
-            Err(error) if error == files::CONFLICT => files = files::load(root, &bot.id, None)?,
+            Err(error) if error == files::CONFLICT => files = files::load(root, owner, None)?,
             Err(error) => return Err(error),
         }
     }
@@ -677,7 +694,7 @@ pub fn minions_enabled() -> bool {
     MINIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-const MINIONS_GUIDE: &str = "Minions (experimental) are helpers you spawn with minions.spawn {prompt,name?,project?}. Each works in its own project session, shares your memory with you and your other minions, and reports back when it stops. Prefer them to sessions.start for parallel parts of a task. Whenever the user mentions a minion or minions, split the work across minions as you see fit, give each a short name and a self-contained prompt, then end your turn. minions.list shows them; message one with sessions.send.";
+const MINIONS_GUIDE: &str = "Minions are persistent team members with roles and specialties. Inspect minions.list and reuse useful members with bots.send {to,message,expectReply:true}; replies arrive automatically, so do not poll. Hire a missing role with minions.hire {name,role,specialties?}, then delegate through bots.send. A hire does not start a task. Inspect saved history before recovering failed tasks with minions.retry or minions.discard {minion,messageId}; never blindly replay uncertain work. Use minions.fire {minion} to retire an unhelpful member; its history stays saved. Do not create a new member for each task or every mention of Minions. Members share your soul, memory, todos and live project assignments. Their communication is limited to you and active siblings, directly or in team-only channels. Users cannot message them.";
 
 /// A minion's context: its parent's soul and memory, shared with the parent
 /// and its other minions.
@@ -702,6 +719,9 @@ pub fn minion_context(
 }
 
 pub fn context(bot: &Bot, files: &files::AgentFiles, executable: &Path) -> String {
+    if bot.minion.is_some() {
+        return teams::context(bot, files, executable);
+    }
     let cli = format!(
         "{} app",
         shlex::try_quote(&executable.to_string_lossy()).unwrap_or_default()

@@ -3,6 +3,7 @@ use gpui::{AppContext, Context, Entity, Render, TestAppContext, div};
 use std::{cell::Cell, cell::RefCell, collections::BTreeSet, rc::Rc};
 
 struct Avatars {
+    bot: Bot,
     status: &'static str,
     renders: Rc<Cell<usize>>,
     preview: bool,
@@ -11,21 +12,21 @@ struct Avatars {
 impl Render for Avatars {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders.set(self.renders.get() + 1);
-        let bot = Bot::default();
+        let bot = &self.bot;
         div()
             .size_full()
             .flex()
             .flex_col()
             .child(sidebar_cursor_tracker())
             .child(header_avatar(
-                BotLookConfig::from_bot(&bot),
+                BotLookConfig::from_bot(bot),
                 self.status,
                 64.,
                 true,
             ))
-            .child(bot_avatar(&bot, self.status, 24., false))
+            .child(bot_avatar(bot, self.status, 24., false))
             .when(self.preview, |d| {
-                d.child(settings_preview(&bot, 128., Default::default(), window, cx))
+                d.child(settings_preview(bot, 128., Default::default(), window, cx))
             })
     }
 }
@@ -42,6 +43,12 @@ fn open(
         cx.open_window(Default::default(), |window, cx| {
             window.activate_window();
             cx.new(|_| Avatars {
+                // Product identities persist across renders. Creating a fresh
+                // random Bot each frame also randomizes the animation schedule.
+                bot: Bot {
+                    id: "idle-avatar-fixture".into(),
+                    ..Default::default()
+                },
                 status: "idle",
                 renders: renders.clone(),
                 preview: true,
