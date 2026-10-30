@@ -1183,7 +1183,10 @@ mod continuing_prompt_tests {
     #[test]
     fn nothing_is_added_when_the_thread_already_has_it() {
         let prior = [row("user", "Earlier")];
-        assert_eq!(continuing_prompt(None, false, &prior, "next".into()), "next");
+        assert_eq!(
+            continuing_prompt(None, false, &prior, "next".into()),
+            "next"
+        );
         assert_eq!(continuing_prompt(None, true, &[], "first".into()), "first");
     }
 
