@@ -6,7 +6,7 @@ use crate::{right_panel::RightTab, workspace::SidebarTab};
 impl Shell {
     pub(super) fn classic_tool_tab(&self) -> Option<RightTab> {
         match self.workspace.sidebar_tab() {
-            SidebarTab::Sessions => None,
+            SidebarTab::Sessions | SidebarTab::Todos => None,
             SidebarTab::Files => Some(RightTab::Files),
             SidebarTab::Changes => Some(RightTab::Changes),
             SidebarTab::Graph => Some(RightTab::Graph),
@@ -42,6 +42,10 @@ impl Shell {
         self.sync_right_panel(cx);
         if tab == SidebarTab::Sessions {
             window.focus(&self.sidebar_focus, cx);
+        } else if tab == SidebarTab::Todos {
+            if let Some(board) = &self.project_todos {
+                window.focus(&board.focus_handle(cx), cx);
+            }
         } else if let Some(panel) = &self.right_panel {
             panel.update(cx, |panel, cx| panel.focus_pane(window, cx));
         }
@@ -212,6 +216,8 @@ impl Shell {
                         .child(self.sidebar_filter_button(cx)),
                 )
                 .child(self.virtual_sidebar(cx));
+        } else if tab == SidebarTab::Todos {
+            body = body.child(self.project_todo_board(cx));
         } else if let Some(panel) = &self.right_panel {
             if matches!(tab, SidebarTab::Changes | SidebarTab::Graph) {
                 body = body.child(

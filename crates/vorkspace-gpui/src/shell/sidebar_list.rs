@@ -383,6 +383,7 @@ impl Shell {
                     self.workspace.preferences.notes && self.workspace.sidebar_notes_visible
                 }
                 SidebarNavigation::Automations => self.workspace.sidebar_automations_visible,
+                SidebarNavigation::Todos => self.workspace.sidebar_todos_visible,
             })
             .collect()
     }
@@ -399,6 +400,7 @@ impl Shell {
                         .contains(provider.id()),
                     SidebarNavigation::Notes => self.workspace.sidebar_notes_visible,
                     SidebarNavigation::Automations => self.workspace.sidebar_automations_visible,
+                    SidebarNavigation::Todos => self.workspace.sidebar_todos_visible,
                 };
                 MenuAction::new(format!("sidebar-{}", item.id()), item.label())
                     .icon(item.icon())
@@ -490,6 +492,7 @@ impl Shell {
                     &mut self.workspace.sidebar_notes_visible
                 }
                 "sidebar-automations" => &mut self.workspace.sidebar_automations_visible,
+                "sidebar-todos" => &mut self.workspace.sidebar_todos_visible,
                 "sidebar-bots" => &mut self.workspace.preferences.bots,
                 "sidebar-subscriptions" => &mut self.workspace.sidebar_subscriptions_visible,
                 _ => return,
@@ -611,6 +614,7 @@ impl Shell {
                                 "Jira" => this.open_connector(Connector::Jira, window, cx),
                                 "Notes" => this.open_notes(window, cx),
                                 "Automations" => this.open_automations(window, cx),
+                                "To-dos" => this.open_todos(window, cx),
                                 _ => (),
                             }))
                             .on_hover(cx.listener(move |this, hovered, _, cx| {
@@ -933,7 +937,7 @@ mod tests {
             .update(visual, |shell, w, cx| {
                 assert_eq!(
                     shell.workspace.sidebar_navigation_order,
-                    ["automations", "github", "gitlab", "jira", "notes"]
+                    ["automations", "github", "gitlab", "jira", "notes", "todos"]
                 );
                 assert!(shell.workspace.sidebar_automations_visible);
                 assert!(shell.workspace.sidebar_hidden_connectors.is_empty());
@@ -1037,7 +1041,7 @@ mod tests {
                     );
                     assert_eq!(
                         shell.workspace.sidebar_navigation_order,
-                        ["automations", "github", "gitlab", "jira", "notes"]
+                        ["automations", "github", "gitlab", "jira", "notes", "todos"]
                     );
                     assert!(shell.workspace.sidebar_hidden_connectors.contains("github"));
                 })

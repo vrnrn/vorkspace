@@ -21,6 +21,10 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "notes.list" => "limit offset",
         "notes.read" => "id",
         "notes.write" => "id title body tags",
+        "todos.list" => "project",
+        "todos.add" => "title status project",
+        "todos.update" => "id title status before project",
+        "todos.remove" => "id project",
         "artifacts.list" => "kind limit offset",
         "artifacts.read" => "id",
         "artifacts.write" => "id kind title body summary",
@@ -153,6 +157,7 @@ pub fn is_read_only(action: &str) -> bool {
             | "folders.list"
             | "notes.list"
             | "notes.read"
+            | "todos.list"
             | "worktrees.list"
             | "artifacts.list"
             | "artifacts.read"

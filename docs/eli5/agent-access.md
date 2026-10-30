@@ -18,6 +18,7 @@ Once you type `/operator` in a thread, that agent can:
 - **Send follow-ups or drafts (`sessions.send`, `sessions.draft`)**: It can message an idle session or leave a draft message in its box for you to review before sending.
 - **Organize and clean up (`folders.move`, `sessions.stop`, `sessions.archive`, `sessions.delete`)**: It can tidy sessions into sidebar folders or stop/archive finished ones.
 - **Read and write your Notes (`notes.list`, `notes.read`, `notes.write`)**: It can look up your saved notes in Vorkspace or jot down a new note for you.
+- **Keep a to-do list (`todos.list`, `todos.add`, `todos.update`, `todos.remove`)**: It can add items to its board (or its project's board), move them between To do, In progress and Done, and tidy them up.
 
 ---
 

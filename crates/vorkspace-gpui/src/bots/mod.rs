@@ -99,6 +99,8 @@ pub(crate) struct Bots {
     notice_region: AnchorSlot,
     pub(crate) details: Entity<overview::Overview>,
     overview_tab: OverviewTab,
+    /// The current Bot's to-do board, behind its To-dos tab.
+    todo_board: Option<Entity<crate::todos::TodoBoardView>>,
     overview_reveal: Option<crate::project_tabs::TabReveal<OverviewTab>>,
     route: Option<Route>,
     settings: Option<SettingsSection>,
@@ -363,6 +365,7 @@ impl Bots {
             notice_region,
             details,
             overview_tab: OverviewTab::Sessions,
+            todo_board: None,
             overview_reveal: None,
             route: None,
             settings: None,
