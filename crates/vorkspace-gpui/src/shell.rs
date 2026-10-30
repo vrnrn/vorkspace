@@ -551,6 +551,8 @@ pub(crate) struct Shell {
     todos_page: Option<Entity<crate::todos::TodosPage>>,
     /// The project sidebar's board; it follows the current project.
     project_todos: Option<Entity<crate::todos::TodoBoardView>>,
+    /// Minion sessions' context and capability, shared with Bots.
+    minion_registry: crate::bots::MinionRegistry,
     inbox: Option<Entity<crate::inbox::Inbox>>,
     connector_pages: HashMap<crate::workspace::Connector, Entity<crate::inbox::Inbox>>,
     automations: Option<Entity<crate::automations::Automations>>,
@@ -895,6 +897,7 @@ impl Shell {
             notes: None,
             todos_page: None,
             project_todos: None,
+            minion_registry: Default::default(),
             inbox: None,
             connector_pages: HashMap::new(),
             automations: None,
@@ -1028,6 +1031,14 @@ impl Shell {
                 cx,
             )
         });
+        // Views opened before Bots existed regain their minion attachment.
+        this.minion_registry = bots.read(cx).minion_registry.clone();
+        for (id, attachment) in this.minion_registry.borrow().iter() {
+            if let Some(view) = this.sessions.get(id) {
+                let attachment = attachment.clone();
+                view.update(cx, |view, _| view.minion = Some(attachment));
+            }
+        }
         this.observations.push(
             cx.subscribe(&bots, |this, _, _: &crate::bots::Changed, cx| {
                 this.sync_bot_search(cx);
@@ -1201,6 +1212,7 @@ impl Shell {
             if let Some(bridge) = &self.app_bridge {
                 view.set_app_environment(bridge.environment(id));
             }
+            view.minion = self.minion_registry.borrow().get(&id).cloned();
             view.set_project_appearance(appearance, cx);
             view.transcript.update(cx, |transcript, cx| {
                 transcript.apply_preferences(&self.workspace.preferences, cx)
@@ -6001,8 +6013,15 @@ impl Shell {
             mark.update(cx, |mark, cx| mark.set_size(side, cx));
         }
         let work_item = self.work_item_badge(id, compact, cx);
+        // A Bot's minion is marked with its parent.
+        let minion = self
+            .minion_registry
+            .borrow()
+            .get(&id)
+            .map(|(context, _)| context.bot.label());
         let has_badges = work_item.is_some()
             || mode.is_some()
+            || minion.is_some()
             || self.automation_state.session_automations.contains_key(&id);
         let session = self.session_metadata(id, cx);
         let active = self.selected_sessions.contains(&id)
@@ -6127,6 +6146,26 @@ impl Shell {
             .gap_1()
             .flex_shrink_0()
             .children(work_item)
+            .when_some(minion, |d, parent| {
+                d.child(
+                    div()
+                        .id(("session-minion", id as usize))
+                        .debug_selector(move || format!("session-minion-{id}"))
+                        .role(Role::Image)
+                        .aria_label(SharedString::from(format!("Minion of {parent}")))
+                        .h(px(16.))
+                        .px_1()
+                        .flex()
+                        .items_center()
+                        .gap_0p5()
+                        .rounded_sm()
+                        .bg(content(0.06))
+                        .text_size(px(10.))
+                        .text_color(content(0.5))
+                        .child(icon("ghost", 10.).text_color(content(0.45)))
+                        .child(parent),
+                )
+            })
             .when(
                 self.automation_state.session_automations.contains_key(&id),
                 |row| row.child(icon("zap", 12.).text_color(content(0.35))),

@@ -77,7 +77,18 @@ struct RunningHabit {
     cards: Vec<serde_json::Value>,
     mailbox: Vec<String>,
 }
+/// A minion session's context and app environment.
+pub(crate) type MinionAttachment = (
+    vorkspace_core::agent::MinionContext,
+    std::collections::HashMap<String, String>,
+);
+/// Minion sessions by ID, shared with the shell so it can attach them to
+/// their views without reading `Bots`, which may be mid-update.
+pub(crate) type MinionRegistry =
+    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<i64, MinionAttachment>>>;
+
 pub(crate) struct Bots {
+    pub(crate) minion_registry: MinionRegistry,
     channels: channels::ChannelUi,
     parent_window: Option<gpui::AnyWindowHandle>,
     owner: WeakEntity<Shell>,
@@ -296,6 +307,7 @@ impl Bots {
         notice_region: AnchorSlot,
         cx: &mut Context<Self>,
     ) -> Self {
+        bot::set_minions_enabled(prefs.bots && prefs.minions);
         let (roster, root, roster_error) = match locked(&store) {
             Ok(db) => match Roster::load(&db) {
                 Ok(roster) => (roster, bot::root(&db), None),
@@ -364,6 +376,7 @@ impl Bots {
             error: roster_error.or(channel_error),
             notice_region,
             details,
+            minion_registry: Default::default(),
             overview_tab: OverviewTab::Sessions,
             todo_board: None,
             overview_reveal: None,
@@ -448,6 +461,7 @@ impl Bots {
             this.reload_files(&id, cx);
         }
         this.resume_peer_queues(cx);
+        this.sync_minions();
         this
     }
     pub(crate) fn is_bot_session(&self, id: i64) -> bool {
@@ -488,6 +502,10 @@ impl Bots {
             .is_some_and(|bot| bot.works_on(project))
     }
     pub(crate) fn hidden_session(&self, id: i64) -> bool {
+        // Minions always show under their project, like sessions.
+        if self.roster.of_minion(id).is_some() {
+            return false;
+        }
         self.is_bot_session(id)
             || self.roster.bots.iter().any(|m| {
                 !m.show_started_sessions_in_sidebar && m.launches.iter().any(|l| l.session_id == id)
@@ -500,6 +518,8 @@ impl Bots {
     ) {
         let was = self.prefs.bots;
         self.prefs = prefs;
+        bot::set_minions_enabled(self.prefs.bots && self.prefs.minions);
+        self.sync_minions();
         if was && !self.prefs.bots {
             self.active = None;
             self.creation = None;
@@ -605,6 +625,7 @@ impl Bots {
         cx.notify();
     }
     fn save(&mut self, cx: &mut Context<Self>) {
+        self.sync_minions();
         let live: HashSet<_> = self
             .roster
             .bots

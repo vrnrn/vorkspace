@@ -4381,3 +4381,136 @@ fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAp
             .unwrap()
     );
 }
+
+fn call_as(
+    s: &Setup,
+    session: i64,
+    request: &str,
+    action: &str,
+    input: Value,
+    cx: &mut TestAppContext,
+) -> Result<Value, String> {
+    let (reply, rx) = mpsc::channel();
+    let call = bot::bridge::Call {
+        session,
+        request_id: request.into(),
+        action: action.into(),
+        input,
+        reply,
+    };
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    handle
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.app_call(call, w, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    rx.try_recv().unwrap()
+}
+
+#[gpui::test]
+fn minions_share_their_parents_memory_and_stay_in_their_lane(cx: &mut TestAppContext) {
+    // A minion's first turn starts at once; it must not reach a real provider.
+    // SAFETY: GPUI tests run on one thread (`--test-threads=1`).
+    unsafe { std::env::set_var("VORKSPACE_CODEX_BINARY", "/usr/bin/false") };
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // SAFETY: as above.
+            unsafe { std::env::remove_var("VORKSPACE_CODEX_BINARY") };
+        }
+    }
+    let _restore = Restore;
+    let s = setup(cx);
+    let spawn = json!({"prompt":"Scout the repository layout","name":"Scout"});
+    // Experimental and off by default.
+    let refused = call_as(&s, s.session, "off", "minions.spawn", spawn.clone(), cx);
+    assert!(refused.unwrap_err().contains("Settings"));
+    s.manager.update(cx, |m, cx| {
+        let mut prefs = m.prefs.clone();
+        prefs.minions = true;
+        m.set_preferences(prefs, cx);
+    });
+    let spawned = call_as(&s, s.session, "spawn", "minions.spawn", spawn, cx).unwrap();
+    let minion = spawned["sessionId"].as_i64().unwrap();
+    assert_eq!(spawned["name"], "Scout");
+    cx.update(|cx| {
+        let m = s.manager.read(cx);
+        let bot = m.roster.get(&s.id).unwrap();
+        assert_eq!(bot.minions.len(), 1);
+        assert_eq!(bot.minions[0].session_id, minion);
+        assert_eq!(bot.minions[0].project, s.project);
+        // Its parent hears back when it stops.
+        assert!(
+            bot.launches
+                .iter()
+                .any(|l| l.session_id == minion && l.notify_on_complete)
+        );
+        // It shows under its project like a session.
+        assert!(!m.hidden_session(minion));
+        let view = m
+            .owner
+            .upgrade()
+            .unwrap()
+            .read(cx)
+            .bot_session_entity(minion)
+            .unwrap();
+        let attached = view.read(cx).minion.clone().unwrap();
+        assert_eq!(attached.0.name, "Scout");
+        assert_eq!(attached.0.bot.id, s.id);
+    });
+
+    // Memory written by the minion is its parent's.
+    call_as(
+        &s,
+        minion,
+        "remember",
+        "memory.add",
+        json!({"fact":"The build script lives in scripts/desktop"}),
+        cx,
+    )
+    .unwrap();
+    let memory = bot::files::load(&s.root, &s.id, None).unwrap().memory;
+    assert!(memory.contains("The build script lives in scripts/desktop"));
+    // So is the board.
+    call_as(
+        &s,
+        minion,
+        "todo",
+        "todos.add",
+        json!({"title":"Map crates"}),
+        cx,
+    )
+    .unwrap();
+    let board = vorkspace_core::todos::TodoBoard::Bot(s.id.clone());
+    assert_eq!(
+        locked(&s.store).unwrap().list_todos(&board).unwrap().len(),
+        1
+    );
+
+    // Minions cannot start work or spawn more minions.
+    for action in [
+        "sessions.start",
+        "minions.spawn",
+        "habits.add",
+        "soul.update",
+    ] {
+        let error = call_as(&s, minion, action, action, json!({"prompt":"x"}), cx).unwrap_err();
+        assert!(error.contains("Minions cannot"), "{action}: {error}");
+    }
+    let listed = call_as(&s, minion, "list", "minions.list", json!({}), cx).unwrap();
+    assert_eq!(listed[0]["name"], "Scout");
+    assert_eq!(listed[0]["sessionId"], minion);
+
+    // A second unnamed minion gets the next free name.
+    let second = call_as(
+        &s,
+        s.session,
+        "spawn-2",
+        "minions.spawn",
+        json!({"prompt":"Check the tests"}),
+        cx,
+    )
+    .unwrap();
+    assert_eq!(second["name"], "Minion 1");
+}

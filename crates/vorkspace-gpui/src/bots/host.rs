@@ -146,6 +146,20 @@ impl Bots {
             completed: false,
             dismissed: false,
         };
+        // Recorded before the view exists, so the shell attaches its context
+        // and capability before the first turn; withdrawn if the start fails.
+        let minion = (call.action == "minions.spawn").then(|| bot::Minion {
+            name: value["name"].as_str().unwrap_or("Minion").to_owned(),
+            session_id: start.summary.id,
+            project: start.summary.cwd.clone(),
+            created_at: vorkspace_core::time::now_ms(),
+        });
+        if let Some(minion) = &minion
+            && let Some(bot) = self.roster.get_mut(&bot_id)
+        {
+            bot.minions.push(minion.clone());
+            self.sync_minions();
+        }
         let owner = self.owner.clone();
         let manager = cx.entity().downgrade();
         let handle = window.window_handle();
@@ -161,9 +175,19 @@ impl Bots {
                 .and_then(|r| r.map_err(|e| e.to_string()))
                 .and_then(|r| r);
             let _ = manager.update(cx, |this, cx| {
+                if result.is_err()
+                    && let Some(minion) = &minion
+                    && let Some(bot) = this.roster.get_mut(&bot_id)
+                {
+                    bot.minions.retain(|m| m.session_id != minion.session_id);
+                    this.sync_minions();
+                }
                 let result = result.map(|id| {
                     if let Some(bot) = this.roster.get_mut(&bot_id) {
                         bot.launches.push(launch);
+                    }
+                    if minion.is_some() {
+                        this.save(cx);
                     }
                     this.group_launch(&bot_id, id, cx);
                     this.reload_files(&bot_id, cx);
@@ -192,12 +216,27 @@ impl Bots {
                 .and_then(|((_, bot), _)| self.roster.get(bot))
                 .cloned()
         });
+        // A minion acts with its parent's capability and memory.
+        let minion = self.roster.of_minion(call.session).map(|(_, m)| m.clone());
+        let bot = bot.or_else(|| self.roster.of_minion(call.session).map(|(b, _)| b.clone()));
         let Some(bot) = bot else {
             let _ = call.reply.send(Err(
                 "This Bot no longer owns an active app capability".into()
             ));
             return;
         };
+        if minion.is_some() && !minion_allowed(&call.action) {
+            let _ = call
+                .reply
+                .send(Err(format!("Minions cannot use {}", call.action)));
+            return;
+        }
+        if call.action == "minions.spawn" && !self.prefs.minions {
+            let _ = call.reply.send(Err(
+                "Minions are experimental; turn them on in Settings › Bots first".into(),
+            ));
+            return;
+        }
         if call.action.starts_with("habits.")
             && call.action != "habits.list"
             && self.running.contains_key(&call.session)
@@ -338,6 +377,7 @@ impl Bots {
         let project = if action.starts_with("sessions.")
             || action.starts_with("folders.")
             || action.starts_with("worktrees.")
+            || action == "minions.spawn"
         {
             match bot.project(input.get("project").and_then(Value::as_str)) {
                 Ok(p) => p,
@@ -365,6 +405,30 @@ impl Bots {
                     let mut store=locked(&store)?;
                     let summary=launch.create(&mut store,&project)?;
                     Ok((json!({"sessionId":summary.id,"accepted":true,"project":project}),Effect::Start(Box::new(crate::shell::AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
+                },cx);return;
+            }
+            "minions.list"=>{
+                let owner=self.owner.upgrade();
+                Ok(json!(bot.minions.iter().map(|m|{
+                    let view=owner.as_ref().and_then(|o|o.read(cx).bot_session_entity(m.session_id));
+                    json!({"name":m.name,"sessionId":m.session_id,"project":m.project,"working":view.is_some_and(|v|v.read(cx).busy)})
+                }).collect::<Vec<_>>()))
+            }
+            "minions.spawn"=>{
+                let placement=match self.owner.upgrade().ok_or_else(||"Workspace is unavailable".to_string()).and_then(|owner|owner.read(cx).app_placement(call.session,&project,&json!({}),cx)){Ok(placement)=>placement,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
+                let source_provider=source.as_ref().map(|v|v.read(cx).summary.provider.clone()).unwrap_or_else(||"codex".into());
+                let source_project=source.as_ref().map(|v|v.read(cx).summary.cwd.clone()).unwrap_or_else(||project.clone());
+                let settings=source.as_ref().map(|v|v.read(cx).bot_execution_settings()).unwrap_or_default();
+                let name=minion_name(&bot,input.get("name").and_then(Value::as_str));
+                // A minion is a session started like any other, titled with its name.
+                let mut launch_input=json!({"prompt":input.get("prompt").cloned().unwrap_or_default(),"project":project,"title":name});
+                for key in ["harness","model"]{if let Some(value)=input.get(key){launch_input[key]=value.clone();}}
+                let mut launch=match bot::launch::Launch::parse(&launch_input,&source_provider,&source_project,&project,settings,false){Ok(launch)=>launch,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
+                if launch.provider.id()!=source_provider { launch.settings.account=crate::accounts::get(cx).map(|center|center.read(cx).selected(launch.provider,&project)).unwrap_or_default(); }
+                self.call_work(call,target,move|store|{
+                    let mut store=locked(&store)?;
+                    let summary=launch.create(&mut store,&project)?;
+                    Ok((json!({"sessionId":summary.id,"name":name,"accepted":true,"project":project}),Effect::Start(Box::new(crate::shell::AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:false,reveal:false,placement,cleanup:launch.created_worktree}))))
                 },cx);return;
             }
             "sessions.list"|"sessions.read"=>{
@@ -610,6 +674,82 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                     if let Some(run)=this.running.get_mut(&source){run.mailbox.push(message);this.save(cx);this.habit_changed(source,cx);}else{this.enqueue(&id,message,Vec::new(),true,cx);this.ensure_chat(&id,cx);}
                 });
             }).detach();
+        }
+    }
+}
+
+/// What a minion may do with its parent's capability: share memory and the
+/// board, read, and take notes; never start work or change its parent.
+fn minion_allowed(action: &str) -> bool {
+    action.starts_with("memory.")
+        || action.starts_with("todos.")
+        || action.starts_with("notes.")
+        || matches!(
+            action,
+            "models.list"
+                | "soul.read"
+                | "sessions.list"
+                | "sessions.read"
+                | "worktrees.list"
+                | "minions.list"
+                | "artifacts.list"
+                | "artifacts.read"
+        )
+}
+
+/// The requested name, or the next free "Minion N".
+fn minion_name(bot: &Bot, requested: Option<&str>) -> String {
+    let requested: String = requested
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(60)
+        .collect();
+    if !requested.is_empty() {
+        return requested;
+    }
+    (1..)
+        .map(|n| format!("Minion {n}"))
+        .find(|name| !bot.minions.iter().any(|m| &m.name == name))
+        .unwrap()
+}
+
+impl Bots {
+    pub(super) fn minion_context(
+        &self,
+        bot: &Bot,
+        name: &str,
+    ) -> vorkspace_core::agent::MinionContext {
+        vorkspace_core::agent::MinionContext {
+            bot: bot.clone(),
+            name: name.into(),
+            root: self.root.clone(),
+            executable: std::env::current_exe().unwrap_or_default(),
+        }
+    }
+
+    /// Rebuilds the shared registry from the roster. Minion context and
+    /// capability are never saved, so views regain them from it.
+    pub(crate) fn sync_minions(&self) {
+        let mut registry = self.minion_registry.borrow_mut();
+        registry.clear();
+        if !(self.prefs.bots && self.prefs.minions) {
+            return;
+        }
+        for bot in &self.roster.bots {
+            for minion in &bot.minions {
+                let environment = self
+                    .bridge
+                    .as_ref()
+                    .map(|b| b.environment(minion.session_id))
+                    .unwrap_or_default();
+                registry.insert(
+                    minion.session_id,
+                    (self.minion_context(bot, &minion.name), environment),
+                );
+            }
         }
     }
 }

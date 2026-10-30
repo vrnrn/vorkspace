@@ -160,6 +160,9 @@ pub(crate) struct Conversation {
     reviewing_submission: bool,
     submission_recovery_epoch: u64,
     app_environment: std::collections::HashMap<String, String>,
+    /// A Bot's minion: its parent's context and capability, applied to every
+    /// turn instead of this session's own app environment. Never saved.
+    pub(crate) minion: Option<crate::bots::MinionAttachment>,
     planning_orchestration: bool,
     pub(crate) orchestration_plan: Option<vorkspace_core::orchestration::Plan>,
     orchestration_error: Option<String>,
@@ -612,6 +615,7 @@ impl Conversation {
             reviewing_submission: false,
             submission_recovery_epoch: 0,
             app_environment: Default::default(),
+            minion: None,
             planning_orchestration: false,
             orchestration_plan: None,
             orchestration_error: None,
@@ -1357,7 +1361,12 @@ impl Conversation {
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| !p.claude_hooks);
         settings.model = self.model.clone();
-        settings.environment.extend(self.app_environment.clone());
+        if let Some((context, environment)) = &self.minion {
+            settings.minion = Some(context.clone());
+            settings.environment.extend(environment.clone());
+        } else {
+            settings.environment.extend(self.app_environment.clone());
+        }
         if settings.bot.is_none()
             && settings.remote_action.as_ref().is_none_or(|action| {
                 (action["type"] == "send"

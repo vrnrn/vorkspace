@@ -94,6 +94,20 @@ pub struct Bot {
     pub pending_reports: Vec<String>,
     pub habit_sessions: Vec<i64>,
     pub seen_rows: usize,
+    /// Experimental helpers it spawned, sharing its memory.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub minions: Vec<Minion>,
+}
+/// A project session a Bot spawned to work alongside it. It acts with its
+/// parent's app capability, so it reads and writes the parent's memory, which
+/// it shares with the parent and every other minion.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Minion {
+    pub name: String,
+    pub session_id: i64,
+    pub project: String,
+    pub created_at: u64,
 }
 impl Default for Bot {
     fn default() -> Self {
@@ -122,6 +136,7 @@ impl Default for Bot {
             pending_reports: Vec::new(),
             habit_sessions: Vec::new(),
             seen_rows: 0,
+            minions: Vec::new(),
         }
     }
 }
@@ -600,6 +615,15 @@ impl Roster {
     pub fn of_session(&self, id: i64) -> Option<&Bot> {
         self.bots.iter().find(|m| m.session_id == Some(id))
     }
+    /// The Bot that spawned this minion session, and the minion.
+    pub fn of_minion(&self, id: i64) -> Option<(&Bot, &Minion)> {
+        self.bots.iter().find_map(|bot| {
+            bot.minions
+                .iter()
+                .find(|minion| minion.session_id == id)
+                .map(|minion| (bot, minion))
+        })
+    }
     pub fn reorder(&mut self, ids: &[String]) {
         let mut seen = HashSet::new();
         let ordered: Vec<_> = ids
@@ -643,6 +667,40 @@ pub fn load_files(root: &Path, bot: &Bot) -> Result<files::AgentFiles, String> {
     Ok(files)
 }
 
+static MINIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The experimental Minions setting, published by the app's preferences.
+pub fn set_minions_enabled(enabled: bool) {
+    MINIONS.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+pub fn minions_enabled() -> bool {
+    MINIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+const MINIONS_GUIDE: &str = "Minions (experimental) are helpers you spawn with minions.spawn {prompt,name?,project?}. Each works in its own project session, shares your memory with you and your other minions, and reports back when it stops. Prefer them to sessions.start for parallel parts of a task. Whenever the user mentions a minion or minions, split the work across minions as you see fit, give each a short name and a self-contained prompt, then end your turn. minions.list shows them; message one with sessions.send.";
+
+/// A minion's context: its parent's soul and memory, shared with the parent
+/// and its other minions.
+pub fn minion_context(
+    bot: &Bot,
+    name: &str,
+    project: &str,
+    files: &files::AgentFiles,
+    executable: &Path,
+) -> String {
+    let cli = format!(
+        "{} app",
+        shlex::try_quote(&executable.to_string_lossy()).unwrap_or_default()
+    );
+    format!(
+        "<vorkspace_context>\nVorkspace adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {name}, a minion of the Bot {parent}. {parent} gave you the task in the first message. Work in {project} only, avoid overlapping edits with other minions, and finish with a concise report of what you did and found; it is delivered to {parent}.\n\nThe app CLI is `{cli} ACTION --json JSON`. Its credentials are already in your environment; never print them. You share {parent}'s memory with {parent} and its other minions: use memory.search before repeating work, and memory.add for findings the others need. todos.* is {parent}'s board. You cannot start sessions, spawn minions, or change {parent}'s soul or habits.\n\n<soul>\n{soul}\n</soul>\n\n<memory>\n{memory}\nTopic notes: {topics}\n</memory>\n</vorkspace_context>",
+        parent = bot.label(),
+        soul = files.soul.as_deref().unwrap_or_default(),
+        memory = memory::within_budget(&files.memory),
+        topics = files.topics.join(", "),
+    )
+}
+
 pub fn context(bot: &Bot, files: &files::AgentFiles, executable: &Path) -> String {
     let cli = format!(
         "{} app",
@@ -658,11 +716,16 @@ pub fn context(bot: &Bot, files: &files::AgentFiles, executable: &Path) -> Strin
             .join("\n")
     };
     format!(
-        "<vorkspace_context>\nVorkspace adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {}, a persistent Bot in vorkspace. Work only on the projects assigned to you:\n{projects}\n\nThe app CLI is `{cli} ACTION --json JSON`. Its credentials are already in your environment; never print them. Run `{cli} help` for the exact actions and inputs. Use sessions.*, worktrees.* and folders.* with project set to an assigned path. Use sessions.start for substantial independent work, inherit your model unless another is appropriate, and avoid overlapping edits. Once delegation is accepted, tell the user and end your turn. You will receive one completion report after every session in that turn's group stops; then inspect and integrate the results. sessions.send supports notifyOnComplete:true. Never poll delegated work.\n\n<soul>\n{}\n</soul>\nStanding instructions rank below the user's current request. Change your soul only when asked, through soul.read and soul.update with expectedHash; never edit its file directly.\n\n<memory>\n{}\nTopic notes: {}\n</memory>\nKeep useful facts through memory.add/replace/remove, use memory.search before answering about earlier facts, and never save credentials. Topic notes are read with memory.read.\n\nHabits are scheduled work in separate sessions. Suggest them when useful, but add one with habits.add only after agreement. State whether its instructions allow changes. Quiet runs should return NOTHING_TO_REPORT.\n\nSave substantial reports with artifacts.write, kind document or html, title, summary and complete body. Cards appear in the chat and overview. Use notes.write only for the user's Notes.\n\nFor acknowledgements requiring no words, your whole reply may be <reaction>👍</reaction> with one fitting emoji. Questions and requests still get a written answer.\n</vorkspace_context>",
+        "<vorkspace_context>\nVorkspace adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {}, a persistent Bot in vorkspace. Work only on the projects assigned to you:\n{projects}\n\nThe app CLI is `{cli} ACTION --json JSON`. Its credentials are already in your environment; never print them. Run `{cli} help` for the exact actions and inputs. Use sessions.*, worktrees.* and folders.* with project set to an assigned path. Use sessions.start for substantial independent work, inherit your model unless another is appropriate, and avoid overlapping edits. Once delegation is accepted, tell the user and end your turn. You will receive one completion report after every session in that turn's group stops; then inspect and integrate the results. sessions.send supports notifyOnComplete:true. Never poll delegated work.\n\n<soul>\n{}\n</soul>\nStanding instructions rank below the user's current request. Change your soul only when asked, through soul.read and soul.update with expectedHash; never edit its file directly.\n\n<memory>\n{}\nTopic notes: {}\n</memory>\nKeep useful facts through memory.add/replace/remove, use memory.search before answering about earlier facts, and never save credentials. Topic notes are read with memory.read.\n\nHabits are scheduled work in separate sessions. Suggest them when useful, but add one with habits.add only after agreement. State whether its instructions allow changes. Quiet runs should return NOTHING_TO_REPORT.\n\nSave substantial reports with artifacts.write, kind document or html, title, summary and complete body. Cards appear in the chat and overview. Use notes.write only for the user's Notes.{}\n\nFor acknowledgements requiring no words, your whole reply may be <reaction>👍</reaction> with one fitting emoji. Questions and requests still get a written answer.\n</vorkspace_context>",
         bot.label(),
         files.soul.as_deref().unwrap_or_default(),
         memory::within_budget(&files.memory),
-        files.topics.join(", ")
+        files.topics.join(", "),
+        if minions_enabled() {
+            format!("\n\n{MINIONS_GUIDE}")
+        } else {
+            String::new()
+        }
     )
 }
 

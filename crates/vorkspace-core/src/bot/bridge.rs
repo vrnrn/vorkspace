@@ -34,6 +34,7 @@ folders.move {sessionId,folderId?,newFolderName?,project?}
 notes.list {limit?,offset?}; notes.read {id}; notes.write {id?,title,body,tags?}
 todos.list {project?}; todos.add {title,status?,project?}; todos.update {id,title?,status?,before?,project?}; todos.remove {id,project?}
 To-do statuses are todo, inProgress and done. Bots use their own board unless project names an assigned project's board.
+minions.spawn {prompt,name?,project?,harness?,model?}; minions.list {} (experimental; when Minions is on in Settings)
 artifacts.list {kind?,limit?,offset?}; artifacts.read {id}; artifacts.write {id?,kind,title,body,summary?}
 channels.list {}; channels.create {name,topic?,members:[Bot names]}; channels.read {channel,limit?}; channels.post {channel,message,to?:[Bot names]}
 soul.read {}; soul.update {text,expectedHash}

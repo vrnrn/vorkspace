@@ -114,6 +114,9 @@ pub struct Settings {
     pub environment: std::collections::HashMap<String, String>,
     #[serde(skip)]
     pub bot: Option<BotContext>,
+    /// A Bot's minion: its parent's context, without Bot chat behaviour.
+    #[serde(skip)]
+    pub minion: Option<MinionContext>,
     #[serde(skip)]
     pub bot_message_id: Option<String>,
     #[serde(skip)]
@@ -156,6 +159,14 @@ pub struct ProviderSwitch {
     pub skip_outgoing_recap: bool,
     pub account: crate::accounts::Profile,
     pub provider_id: Option<String>,
+}
+#[derive(Clone, Debug)]
+pub struct MinionContext {
+    /// The parent Bot.
+    pub bot: crate::bot::Bot,
+    pub name: String,
+    pub root: std::path::PathBuf,
+    pub executable: std::path::PathBuf,
 }
 #[derive(Clone, Debug)]
 pub struct BotContext {

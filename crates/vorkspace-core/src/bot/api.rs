@@ -25,6 +25,8 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "todos.add" => "title status project",
         "todos.update" => "id title status before project",
         "todos.remove" => "id project",
+        "minions.spawn" => "prompt name project harness model",
+        "minions.list" => "",
         "artifacts.list" => "kind limit offset",
         "artifacts.read" => "id",
         "artifacts.write" => "id kind title body summary",
@@ -158,6 +160,7 @@ pub fn is_read_only(action: &str) -> bool {
             | "notes.list"
             | "notes.read"
             | "todos.list"
+            | "minions.list"
             | "worktrees.list"
             | "artifacts.list"
             | "artifacts.read"

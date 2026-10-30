@@ -13,6 +13,7 @@ Type `/operator` at the start of a composer message to enable vorkspace access i
 - A successful Bot management action dismisses that Bot's monitoring of the target. Other Bots' monitoring is kept; an already queued completion message remains part of its saved outbox.
 - `notes.list` returns note IDs and titles; `notes.read` returns a full project note by ID; `notes.write` creates a note or updates an existing project note.
 - `todos.list`, `todos.add`, `todos.update` and `todos.remove` manage the caller's to-do board: an operator session's project board, or a Bot's own board unless `project` names one of its assigned projects. Statuses are `todo`, `inProgress` and `done`; `todos.update` can rename an item, change its status and place it `before` another item in its column.
+- `minions.spawn` and `minions.list` (experimental, Bots only, when Minions is on in Settings) start and list minions: project sessions that share their Bot's memory and board. A minion's own calls act for its parent with a narrower set of actions; see [Minions](minions.md).
 
 ## Mutation receipts
 

@@ -437,6 +437,36 @@ fn run_turn_using(
                 prompt
             };
             format!("{intro}\n\n{brief}\n\n{prompt}")
+        } else if let Some(minion) = &settings.minion {
+            // Its parent's soul and memory, re-sent whenever they change.
+            let files = vorkspace_core::bot::load_files(&minion.root, &minion.bot)?;
+            let added = vorkspace_core::bot::minion_context(
+                &minion.bot,
+                &minion.name,
+                &summary.cwd,
+                &files,
+                &minion.executable,
+            );
+            let fingerprint = vorkspace_core::bot::files::content_hash(&added);
+            bot_fingerprint = Some(fingerprint.clone());
+            let receipt = locked(&store)?.setting(&format!("bot-context:{}", summary.id))?;
+            let expected =
+                serde_json::json!({"provider":provider_id,"hash":fingerprint}).to_string();
+            let intro = if provider_id.is_none() || receipt.as_deref() != Some(&expected) {
+                added
+            } else {
+                String::new()
+            };
+            let prompt = if let Some(handoff) = &settings.handoff {
+                vorkspace_core::response::wrap_handoff_prompt(
+                    &handoff.from,
+                    &handoff.brief,
+                    &prompt,
+                )
+            } else {
+                prompt
+            };
+            format!("{intro}\n\n{prompt}")
         } else if let Some(handoff) = &settings.handoff {
             vorkspace_core::response::wrap_handoff_prompt(&handoff.from, &handoff.brief, &prompt)
         } else if provider_id.is_none() && turn_start > 0 {
