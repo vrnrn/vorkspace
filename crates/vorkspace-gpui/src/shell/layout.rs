@@ -63,7 +63,13 @@ impl Shell {
         let header = self.classic_workspace_header(cx);
         // Sessions, Explorer and Changes sit beside the rail or at the right edge.
         let left = !self.workspace.preferences.sidebar_right;
-        let sidebar_navigation_row = left && self.strip_lead(window) > 0.;
+        let sidebar_navigation_row = left && self.rail_overhang(window) > 0.;
+        // Its rule leaves the corner to the rail divider's curve.
+        let title_curve = if self.rail_meets_title_rule() {
+            crate::liquid::PANE_RADIUS
+        } else {
+            0.
+        };
         let sidebar = (sidebar_width > 0.).then(|| {
             div()
                 .id("sidebar-frame")
@@ -91,7 +97,19 @@ impl Shell {
                         // A collapsed rail leaves navigation over the left sidebar.
                         // Give it a row above the project switcher and its actions.
                         .when(sidebar_navigation_row, |d| {
-                            d.child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0())
+                            d.child(
+                                div()
+                                    .debug_selector(|| "sidebar-navigation-row".into())
+                                    .h(px(TITLE_BAR_HEIGHT))
+                                    .flex_shrink_0()
+                                    .pl(px(title_curve))
+                                    .child(
+                                        div()
+                                            .size_full()
+                                            .border_b_1()
+                                            .border_color(crate::right_panel::stroke()),
+                                    ),
+                            )
                         })
                         .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0().child(header))
                         .child(div().flex_1().min_h_0().child(self.sidebar_contents())),
@@ -1198,7 +1216,7 @@ mod navigation_fit_tests {
                 visual.debug_bounds("main-pane-frame")
             );
         }
-        // A left sidebar takes the rail's place beside the pane.
+        // A left sidebar takes the overhang, and the rule, in its own row.
         window
             .update(visual, |shell, _, cx| {
                 shell.set_sidebar_visible(true, cx);
@@ -1207,10 +1225,46 @@ mod navigation_fit_tests {
             })
             .unwrap();
         crate::clock::settle_animations(window, visual);
+        let rail = visual.debug_bounds("classic-project-rail").unwrap();
+        let row = visual.debug_bounds("sidebar-navigation-row").unwrap();
+        let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        let pane = visual.debug_bounds("main-pane-frame").unwrap();
+        assert_eq!(row.left(), rail.right());
+        assert_eq!(row.right(), sidebar.right());
+        assert_eq!(
+            lead_rule_left(visual),
+            rail.right().as_f32() + crate::liquid::PANE_RADIUS
+        );
+        // The pane's tabs start at its edge; navigation does not reach it.
+        // Inside the pane's own 1px border beside the sidebar.
+        let strip = visual.debug_bounds("title-tab-strip").unwrap();
+        assert_eq!(strip.left(), pane.left() + px(1.));
+    }
+
+    #[gpui::test]
+    fn the_sidebar_tabs_rise_from_their_line(cx: &mut TestAppContext) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, session) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1200.), px(800.)));
         window
-            .update(visual, |shell, _, _| {
-                assert!(!shell.rail_meets_title_rule())
+            .update(visual, |shell, w, cx| {
+                shell.open(session, w, cx);
+                shell.set_sidebar_visible(true, cx);
+                shell.invalidate_chrome(cx);
+                cx.notify();
             })
             .unwrap();
+        crate::clock::settle_animations(window, visual);
+        let selected = |visual: &mut gpui::VisualTestContext| {
+            window
+                .update(visual, |shell, _, _| shell.sidebar_tab_liquid.selected())
+                .unwrap()
+        };
+        assert_eq!(selected(visual).as_deref(), Some("sidebar-tab:Sessions"));
+        let changes = visual.debug_bounds("classic-tab-changes").unwrap();
+        visual.simulate_click(changes.center(), Default::default());
+        crate::clock::settle_animations(window, visual);
+        assert_eq!(selected(visual).as_deref(), Some("sidebar-tab:Changes"));
     }
 }

@@ -595,6 +595,8 @@ pub(crate) struct Shell {
     liquid: crate::liquid::Liquid,
     /// The title bar's tabs, rising from the line beneath them.
     tab_liquid: crate::liquid::Liquid,
+    /// Sessions, Explorer and Changes rise from the line under them.
+    sidebar_tab_liquid: crate::liquid::Liquid,
     /// Each project's working grid in the rail, by project path.
     project_marks: HashMap<String, Entity<crate::session_mark::ProjectMark>>,
 
@@ -930,6 +932,7 @@ impl Shell {
             background_card: AnchorSlot::default(),
             liquid: Default::default(),
             tab_liquid: crate::liquid::Liquid::below(crate::right_panel::stroke()),
+            sidebar_tab_liquid: crate::liquid::Liquid::below(crate::right_panel::stroke()),
             project_marks: HashMap::new(),
 
             project_anchor: AnchorSlot::default(),
@@ -4641,8 +4644,18 @@ impl Shell {
         let minimum = (minimum * scale).ceil() / scale;
         self.classic_rail_width().max(minimum)
     }
-    /// Room before the tabs where navigation overhangs the collapsed project rail.
+    /// Room before the tabs where navigation overhangs the pane.
     fn strip_lead(&self, window: &Window) -> f32 {
+        // A left sidebar takes the overhang in its own row (`classic_body`).
+        let sidebar = if self.workspace.preferences.sidebar_right {
+            0.
+        } else {
+            self.workspace.right_panel_width * self.sidebar_fraction
+        };
+        (self.rail_overhang(window) - sidebar).max(0.)
+    }
+    /// How far navigation reaches past the project rail.
+    fn rail_overhang(&self, window: &Window) -> f32 {
         (self.navigation_width(window) - self.classic_rail_width()).max(0.)
     }
     /// The traffic lights, sidebar toggle and visit arrows, spanning the
@@ -4893,7 +4906,9 @@ impl Shell {
                 // handler underneath its buttons (classic_body owns gestures).
                 // Where the rail's divider curves into it, the rule starts
                 // after the curve.
-                let curve = if self.rail_meets_title_rule() {
+                let curve = if self.rail_meets_title_rule()
+                    && (self.workspace.preferences.sidebar_right || self.sidebar_fraction <= 0.)
+                {
                     crate::liquid::PANE_RADIUS
                 } else {
                     0.

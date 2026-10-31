@@ -159,6 +159,8 @@ From back to front:
 - **Liquid is for the pane only.** A pill pours into the main pane (or rises
   from the tab strip's line) only for items that open something there: pages,
   Bots, channels, projects, sessions, tabs and the buttons that create them.
+  The workspace sidebar's Sessions / Explorer / Changes tabs are the one
+  exception: they rise from the line under them like title-bar tabs.
   Controls that open menus or popovers, such as Sidebar options, use an
   ordinary hover background instead.
 - **Shadows** belong to floating layers only; flat panes and cards have none.
