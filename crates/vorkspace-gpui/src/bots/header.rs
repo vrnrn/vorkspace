@@ -35,9 +35,29 @@ pub(crate) fn chat_surface(
     retained: &mut Option<Entity<ChatHeader>>,
     cx: &mut App,
 ) -> AnyElement {
+    chat_surface_with_look(
+        body,
+        bot,
+        avatar::BotLookConfig::from_bot(bot),
+        status,
+        animation,
+        retained,
+        cx,
+    )
+}
+
+pub(crate) fn chat_surface_with_look(
+    body: AnyElement,
+    bot: &Bot,
+    look: avatar::BotLookConfig,
+    status: &str,
+    animation: Option<bool>,
+    retained: &mut Option<Entity<ChatHeader>>,
+    cx: &mut App,
+) -> AnyElement {
     let header = animation.map(|animate| {
         let identity = Identity {
-            look: avatar::BotLookConfig::from_bot(bot),
+            look,
             name: bot.label(),
             status: status.into(),
             animate,

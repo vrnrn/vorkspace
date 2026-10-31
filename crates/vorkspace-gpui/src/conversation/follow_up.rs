@@ -48,6 +48,10 @@ impl Conversation {
         text: String,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if self.user_read_only() {
+            return Err("Users cannot message team members or team channels".into());
+        }
+
         self.execution_provider()?;
         let text = self.consume_mode_command(text, cx);
         let mode = if self.settings.orchestrator {
@@ -67,6 +71,10 @@ impl Conversation {
         mode: Option<String>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if self.user_read_only() {
+            return Err("Users cannot message team members or team channels".into());
+        }
+
         self.execution_provider()?;
         if self.history_partial {
             self.load(cx);
@@ -199,6 +207,10 @@ impl Conversation {
         mode: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         let attachments = std::mem::take(&mut self.attachments);
         let mut message = self.message(prompt, attachments, mode, cx);
         message.steer = cx
@@ -213,6 +225,10 @@ impl Conversation {
         self.save_follow_ups(cx);
     }
     pub(super) fn save_message_draft(&mut self, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if self.is_remote() {
             self.remote_save_draft(cx);
             return;
@@ -329,6 +345,10 @@ impl Conversation {
         cx.emit(SessionChanged);
     }
     pub(super) fn draft_action(&mut self, send: bool, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if self.is_remote() {
             self.remote_draft_action(send, cx);
             return;
@@ -436,6 +456,10 @@ impl Conversation {
         cancel: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if !self.transcript.read(cx).is_saved_draft_edit(id, edit_id) {
             return;
         }
@@ -626,6 +650,10 @@ impl Conversation {
         }
     }
     pub(super) fn pump_follow_ups(&mut self, cx: &mut Context<Self>) {
+        if self.user_read_only() {
+            return;
+        }
+
         if self.execution_provider().is_err() || self.editing_last_turn.pending() || self.stopping {
             return;
         }
@@ -745,6 +773,10 @@ impl Conversation {
         cx.notify();
     }
     fn resume_queue(&mut self, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if self.stopping {
             self.defer_history_action(|this, cx| this.resume_queue(cx), cx);
             return;
@@ -762,6 +794,10 @@ impl Conversation {
         cx.notify();
     }
     fn edit_queued(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if self.follow_ups.sending.as_ref() == Some(&id) {
             return;
         }
@@ -794,6 +830,10 @@ impl Conversation {
         cx.notify();
     }
     fn finish_queue_edit(&mut self, save: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         let Some(edit) = &self.follow_ups.edit else {
             return;
         };

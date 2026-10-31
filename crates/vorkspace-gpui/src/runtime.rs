@@ -437,25 +437,40 @@ fn run_turn_using(
                 prompt
             };
             format!("{intro}\n\n{brief}\n\n{prompt}")
-        } else if let Some(handoff) = &settings.handoff {
-            vorkspace_core::response::wrap_handoff_prompt(&handoff.from, &handoff.brief, &prompt)
-        } else if provider_id.is_none() && turn_start > 0 {
-            let mut history = String::new();
-            for row in transcript.rows[..turn_start]
-                .iter()
-                .rev()
-                .filter(|r| matches!(r.role.as_str(), "user" | "assistant"))
-            {
-                if history.len() + row.text.len() > 32_000 {
-                    break;
-                }
-                history = format!("{}: {}\n\n{history}", row.role, row.text);
-            }
-            format!(
-                "Continue this conversation, using the prior messages as context.\n\n{history}\nCurrent user message:\n{prompt}"
-            )
+        } else if let Some(minion) = &settings.minion {
+            // Its parent's soul and memory, re-sent whenever they change.
+            let files = vorkspace_core::bot::load_files(&minion.root, &minion.bot)?;
+            let added = vorkspace_core::bot::minion_context(
+                &minion.bot,
+                &minion.name,
+                &summary.cwd,
+                &files,
+                &minion.executable,
+            );
+            let fingerprint = vorkspace_core::bot::files::content_hash(&added);
+            bot_fingerprint = Some(fingerprint.clone());
+            let receipt = locked(&store)?.setting(&format!("bot-context:{}", summary.id))?;
+            let expected =
+                serde_json::json!({"provider":provider_id,"hash":fingerprint}).to_string();
+            let intro = if provider_id.is_none() || receipt.as_deref() != Some(&expected) {
+                added
+            } else {
+                String::new()
+            };
+            let prompt = continuing_prompt(
+                settings.handoff.as_ref(),
+                provider_id.is_none(),
+                &transcript.rows[..turn_start],
+                prompt,
+            );
+            format!("{intro}\n\n{prompt}")
         } else {
-            prompt
+            continuing_prompt(
+                settings.handoff.as_ref(),
+                provider_id.is_none(),
+                &transcript.rows[..turn_start],
+                prompt,
+            )
         };
         let cwd = settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd);
         if settings.bot.is_none()
@@ -1065,6 +1080,41 @@ fn run_turn_using(
 }
 
 /// checkpointEdits.ts's sessionEditPaths: files named by successful edit tools.
+/// A turn's prompt with whatever the provider's thread lacks: a handoff's
+/// brief, or a bounded recap of `prior` when a thread starts fresh mid-way,
+/// such as after a first turn failed before the provider assigned an ID.
+fn continuing_prompt(
+    handoff: Option<&vorkspace_core::agent::Handoff>,
+    fresh_thread: bool,
+    prior: &[Row],
+    prompt: String,
+) -> String {
+    if let Some(handoff) = handoff {
+        return vorkspace_core::response::wrap_handoff_prompt(
+            &handoff.from,
+            &handoff.brief,
+            &prompt,
+        );
+    }
+    if !fresh_thread || prior.is_empty() {
+        return prompt;
+    }
+    let mut history = String::new();
+    for row in prior
+        .iter()
+        .rev()
+        .filter(|r| matches!(r.role.as_str(), "user" | "assistant"))
+    {
+        if history.len() + row.text.len() > 32_000 {
+            break;
+        }
+        history = format!("{}: {}\n\n{history}", row.role, row.text);
+    }
+    format!(
+        "Continue this conversation, using the prior messages as context.\n\n{history}\nCurrent user message:\n{prompt}"
+    )
+}
+
 fn edited_paths(rows: &[Row]) -> Vec<String> {
     let mut paths = Vec::new();
     for row in rows.iter().filter(|r| r.role == "tool") {
@@ -1095,6 +1145,62 @@ fn shlex_quote(text: &str) -> String {
             .replace('$', "\\$")
             .replace('`', "\\`")
     )
+}
+
+#[cfg(test)]
+mod continuing_prompt_tests {
+    use super::*;
+
+    fn row(role: &str, text: &str) -> Row {
+        Row {
+            role: role.into(),
+            text: text.into(),
+            first: false,
+            sent_at: None,
+        }
+    }
+
+    #[test]
+    fn a_fresh_thread_recaps_the_saved_task_and_stays_bounded() {
+        // A first turn failed before the provider assigned a thread.
+        let prior = [
+            row("user", "Scout the repository layout"),
+            row("tool", "ignored"),
+            row("assistant", "The provider was unavailable"),
+        ];
+        let prompt = continuing_prompt(None, true, &prior, "try again".into());
+        assert!(prompt.contains("user: Scout the repository layout"));
+        assert!(prompt.contains("assistant: The provider was unavailable"));
+        assert!(prompt.ends_with("Current user message:\ntry again"));
+        assert!(!prompt.contains("ignored"));
+        // The newest messages are the ones kept.
+        let long = [row("user", &"old ".repeat(9_000)), row("user", "recent")];
+        let prompt = continuing_prompt(None, true, &long, "next".into());
+        assert!(prompt.contains("recent"));
+        assert!(!prompt.contains("old old"));
+    }
+
+    #[test]
+    fn nothing_is_added_when_the_thread_already_has_it() {
+        let prior = [row("user", "Earlier")];
+        assert_eq!(
+            continuing_prompt(None, false, &prior, "next".into()),
+            "next"
+        );
+        assert_eq!(continuing_prompt(None, true, &[], "first".into()), "first");
+    }
+
+    #[test]
+    fn a_handoff_takes_the_place_of_the_recap() {
+        let handoff = vorkspace_core::agent::Handoff {
+            from: "codex".into(),
+            brief: "The brief".into(),
+        };
+        let prior = [row("user", "Earlier")];
+        let prompt = continuing_prompt(Some(&handoff), true, &prior, "next".into());
+        assert!(prompt.contains("The brief"));
+        assert!(!prompt.contains("Earlier"));
+    }
 }
 
 #[cfg(test)]

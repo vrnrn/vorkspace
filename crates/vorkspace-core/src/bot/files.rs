@@ -57,7 +57,7 @@ pub struct AgentFile {
     pub hash: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentFiles {
     pub id: String,

@@ -1255,7 +1255,13 @@ impl Bots {
         }
         self.scheduling = true;
         let root = self.root.clone();
-        let ids: Vec<_> = self.roster.bots.iter().map(|m| m.id.clone()).collect();
+        let ids: Vec<_> = self
+            .roster
+            .bots
+            .iter()
+            .filter(|m| !m.is_minion())
+            .map(|m| m.id.clone())
+            .collect();
         let work = cx.background_executor().spawn(async move {
             for id in ids {
                 let claimed = habits::update(&root, &id, |all| {
@@ -1311,6 +1317,9 @@ impl Bots {
         .detach();
     }
     fn start_habit(&mut self, id: &str, habit: Habit, cx: &mut Context<Self>) {
+        if self.roster.get(id).is_none_or(Bot::is_minion) {
+            return;
+        }
         self.active_run = Some(-1);
         let Some(bot) = self.roster.get(id).cloned() else {
             return;

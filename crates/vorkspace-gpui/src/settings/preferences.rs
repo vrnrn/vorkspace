@@ -87,6 +87,8 @@ pub(crate) struct Preferences {
     pub rail_bots_pinned: bool,
     /// Experimental: show the Channels section in the project rail.
     pub channels: bool,
+    /// Experimental: Bots may spawn minions that share their memory.
+    pub minions: bool,
     pub bot_menu_bar_icon: bool,
     // Archive
     pub show_archived: bool,
@@ -185,6 +187,7 @@ impl Default for Preferences {
             bots: true,
             rail_bots_pinned: false,
             channels: false,
+            minions: false,
             bot_menu_bar_icon: true,
             show_archived: false,
             keybindings: HashMap::new(),

@@ -6,7 +6,7 @@ Start with [building](building.md), [architecture](architecture.md), and the [re
 - [Data selection and continuity](data-storage.md)
 - [Provider CLIs and accounts](providers.md)
 - [Remote access](remote-access.md)
-- [Vox](vox.md) and [Bot Channels](channels.md)
+- [Vox](vox.md), [Bot Channels](channels.md) and [Minions](minions.md)
 - [Agent app access](agent-access.md) and [visuals](visuals.md)
 - [Jira](jira.md)
 - [Testing](testing.md) and [macOS updates](updates.md)

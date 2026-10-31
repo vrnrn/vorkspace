@@ -999,6 +999,155 @@ impl LookEditor {
     }
 }
 impl Bots {
+    pub(super) fn team_rail(
+        &self,
+        parent: &Bot,
+        liquid: &crate::liquid::Liquid,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let members = self.team_members(&parent.id);
+        let retired = members.iter().filter(|m| m.is_retired()).count();
+        let expanded = self.retired_teams.contains(&parent.id);
+        let rows = members
+            .iter()
+            .filter(|m| !m.is_retired())
+            .map(|m| self.minion_rail_row(parent, m, liquid, cx))
+            .collect::<Vec<_>>();
+        let history = if expanded {
+            members
+                .iter()
+                .filter(|m| m.is_retired())
+                .map(|m| self.minion_rail_row(parent, m, liquid, cx))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let id = parent.id.clone();
+        div()
+            .debug_selector({
+                let id = id.clone();
+                move || format!("bot-team-{id}")
+            })
+            .children(rows)
+            .when(retired > 0, |d| {
+                d.child(
+                    crate::controls::button(
+                        SharedString::from(format!("team-history-{id}")),
+                        "Retired Minions",
+                        true,
+                    )
+                    .debug_selector({
+                        let id = id.clone();
+                        move || format!("team-history-{id}")
+                    })
+                    .flex()
+                    .items_center()
+                    .aria_expanded(expanded)
+                    .ml(px(24.))
+                    .h(px(28.))
+                    .px_2()
+                    .gap_1()
+                    .text_size(px(11.))
+                    .text_color(content(0.5))
+                    .child(icon(
+                        if expanded {
+                            "chevron-down"
+                        } else {
+                            "chevron-right"
+                        },
+                        12.,
+                    ))
+                    .child(format!("Retired ({retired})"))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.retired_teams.remove(&id) {
+                            this.retired_teams.insert(id.clone());
+                        }
+                        cx.notify();
+                    })),
+                )
+            })
+            .children(history)
+            .into_any_element()
+    }
+    fn minion_rail_row(
+        &self,
+        parent: &Bot,
+        member: &Bot,
+        liquid: &crate::liquid::Liquid,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = member.id.clone();
+        let active = self.active.as_ref() == Some(&id);
+        let status = self.member_status(&id, cx);
+        let meta = member.minion.as_ref().unwrap();
+        let details = if meta.specialties.is_empty() {
+            meta.role.clone()
+        } else {
+            format!("{} · {}", meta.role, meta.specialties.join(", "))
+        };
+        let state = if member.is_retired() {
+            "Retired"
+        } else {
+            match status {
+                "working" => "Working",
+                "needs-you" => "Needs attention",
+                _ => "Idle",
+            }
+        };
+        crate::controls::button(
+            SharedString::from(format!("minion-rail-{id}")),
+            SharedString::from(format!(
+                "{}, Minion of {}, {details}, {state}",
+                member.label(),
+                parent.label()
+            )),
+            true,
+        )
+        .debug_selector({
+            let id = id.clone();
+            move || format!("minion-rail-{id}")
+        })
+        .flex()
+        .items_center()
+        .aria_selected(active)
+        .h(px(40.))
+        .pl(px(24.))
+        .pr_2()
+        .gap_2()
+        .relative()
+        .child(liquid.row(format!("bot:{id}"), active))
+        .child(avatar::minion_avatar(parent, &id, status, 16., false))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(13.))
+                        .text_color(content(1.))
+                        .child(member.label()),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(content(0.5))
+                        .child(details),
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(content(0.5))
+                .child(state),
+        )
+        .on_click(cx.listener(move |this, _, window, cx| this.open(&id, window, cx)))
+        .into_any_element()
+    }
+
     fn open_settings_look(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(bot) = self.settings_bot(id).cloned() else {
             return;
@@ -1660,6 +1809,10 @@ impl Bots {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if bot.is_minion() {
+            return None;
+        }
+
         if self
             .creation
             .as_ref()
@@ -2334,6 +2487,9 @@ impl Bots {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.minion_read_only(id) {
+            return;
+        }
         let Some(bot) = self.roster.get(id).cloned() else {
             return;
         };
@@ -2663,6 +2819,9 @@ impl Bots {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.minion_read_only(id) {
+            return;
+        }
         if self.roster.get(id).is_none() {
             return;
         }
@@ -2734,5 +2893,118 @@ impl Bots {
                 self.save(cx);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod minion_ui_tests {
+    use super::*;
+    use gpui::{TestAppContext, VisualTestContext};
+    use std::sync::{Arc, Mutex};
+    use vorkspace_core::{bot::MinionMetadata, store::Store};
+
+    #[gpui::test]
+    fn minions_nest_under_parent_and_retired_history_stays_read_only_when_disabled(
+        cx: &mut TestAppContext,
+    ) {
+        crate::clock::use_test_clock(cx);
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(
+            Store::open(&directory.path().join("ui.sqlite")).unwrap(),
+        ));
+        let cwd = directory.path().to_string_lossy().to_string();
+        let (active, retired) = {
+            let db = locked(&store).unwrap();
+            (
+                db.create("codex", &cwd).unwrap(),
+                db.create("codex", &cwd).unwrap(),
+            )
+        };
+        let window = cx
+            .update(|cx| {
+                cx.open_window(Default::default(), |_, cx| {
+                    cx.new(|cx| {
+                        Shell::new(
+                            store,
+                            vec![active.clone(), retired.clone()],
+                            cwd.clone(),
+                            None,
+                            cx,
+                        )
+                    })
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let manager = window
+            .update(cx, |shell, _, _| shell.bot_manager())
+            .unwrap();
+        manager.update(cx, |bots, cx| {
+            let parent = Bot {
+                id: "team-parent".into(),
+                name: "Parent".into(),
+                projects: vec![cwd.clone()],
+                ..Default::default()
+            };
+            bots.roster.bots.push(parent);
+            for (id, summary, retired) in [
+                ("team-active", &active, false),
+                ("team-retired", &retired, true),
+            ] {
+                bots.roster.bots.push(Bot {
+                    id: id.into(),
+                    name: id.into(),
+                    session_id: Some(summary.id),
+                    minion: Some(MinionMetadata {
+                        parent_id: "team-parent".into(),
+                        role: "Reviewer".into(),
+                        specialties: vec!["Storage".into()],
+                        retired,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+            }
+            let mut prefs = bots.prefs.clone();
+            prefs.minions = false;
+            bots.set_preferences(prefs, cx);
+            bots.sync_team_histories(cx);
+            assert!(bots.session_user_read_only(active.id));
+            assert!(bots.session_user_read_only(retired.id));
+            assert!(bots.hidden_session(active.id) && bots.hidden_session(retired.id));
+            let _ = bots.rail(None, &crate::liquid::Liquid::default(), cx);
+            assert_eq!(bots.rail_ids, vec!["team-parent"]);
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                // Materialize a legacy project pane before selecting the Bot row.
+                let legacy = shell.bot_ensure_session(retired.id, cx).unwrap();
+                assert!(legacy.read(cx).user_read_only());
+                manager.update(cx, |bots, cx| bots.open("team-retired", window, cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        manager.read_with(cx, |bots, cx| {
+            let chat = bots.chat().unwrap();
+            let legacy = bots
+                .owner
+                .upgrade()
+                .unwrap()
+                .read(cx)
+                .bot_session_entity(retired.id)
+                .unwrap();
+            assert_eq!(
+                chat.entity_id(),
+                legacy.entity_id(),
+                "history and restored pane share one view"
+            );
+            assert!(chat.read(cx).user_read_only());
+            assert!(bots.retired_teams.contains("team-parent"));
+            assert!(bots.settings.is_none());
+        });
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("team-read-only-history").is_some());
+        assert!(visual.debug_bounds("team-history-attribution").is_some());
     }
 }

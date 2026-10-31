@@ -21,6 +21,7 @@ mod response_menu;
 mod responsive_toolbar;
 #[cfg(test)]
 mod submission_tests;
+mod team_history;
 mod ticket_context;
 mod title;
 use crate::clock::Instant;
@@ -160,6 +161,13 @@ pub(crate) struct Conversation {
     reviewing_submission: bool,
     submission_recovery_epoch: u64,
     app_environment: std::collections::HashMap<String, String>,
+    /// Bots' minion sessions. A minion's turns take its parent's context
+    /// and capability from here as each turn starts, so turning Minions on
+    /// or off reaches sessions that are already open. Never saved.
+    pub(crate) minions: Option<crate::bots::MinionRegistry>,
+    pub(crate) team_histories: Option<crate::bots::TeamHistories>,
+    team_dispatch: bool,
+    team_look: Option<(crate::bots::avatar::BotLookConfig, String)>,
     planning_orchestration: bool,
     pub(crate) orchestration_plan: Option<vorkspace_core::orchestration::Plan>,
     orchestration_error: Option<String>,
@@ -612,6 +620,10 @@ impl Conversation {
             reviewing_submission: false,
             submission_recovery_epoch: 0,
             app_environment: Default::default(),
+            minions: None,
+            team_histories: None,
+            team_dispatch: false,
+            team_look: None,
             planning_orchestration: false,
             orchestration_plan: None,
             orchestration_error: None,
@@ -984,6 +996,9 @@ impl Conversation {
         settings: Settings,
         cx: &mut Context<Self>,
     ) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
         if self.editing_last_turn.pending() {
             self.defer_edit_transfer(settings, Some(prompt), cx);
             return;
@@ -1018,6 +1033,9 @@ impl Conversation {
         })
     }
     fn send(&mut self, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
         if let Err(error) = self.execution_provider() {
             self.status = error;
             cx.notify();
@@ -1257,6 +1275,9 @@ impl Conversation {
         }
     }
     fn launch_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
+        if !self.team_dispatch && self.reject_user_entry(cx) {
+            return;
+        }
         let kind = match self.execution_provider() {
             Ok(kind) => kind,
             Err(error) => {
@@ -1357,7 +1378,7 @@ impl Conversation {
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| !p.claude_hooks);
         settings.model = self.model.clone();
-        settings.environment.extend(self.app_environment.clone());
+        self.prepare_app_environment(&mut settings);
         if settings.bot.is_none()
             && settings.remote_action.as_ref().is_none_or(|action| {
                 (action["type"] == "send"
@@ -1923,6 +1944,9 @@ impl Conversation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.user_read_only() && !matches!(request, ResponseRequest::SaveNote { .. }) {
+            return;
+        }
         if self.history_partial && !matches!(request, ResponseRequest::QuoteSelection { .. }) {
             self.status = "Loading complete history; please retry the action".into();
             self.load(cx);
@@ -2314,6 +2338,10 @@ impl Conversation {
             .detach();
     }
     fn menu_choice(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if let Some(choice) = id.strip_prefix("recent-model:") {
             if let Ok((provider, model)) = serde_json::from_str::<(String, Option<String>)>(choice)
                 && let Some(kind) = Kind::parse(&provider)
@@ -2682,6 +2710,10 @@ impl Conversation {
         cx.notify();
     }
     fn toggle_menu(&mut self, kind: ComposerMenu, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if kind == ComposerMenu::Model
             && cx
                 .try_global::<crate::settings::Preferences>()
@@ -3088,6 +3120,10 @@ impl Conversation {
     /// The model trigger: the composer's model menu.
     #[cfg(test)]
     pub(crate) fn toggle_model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if self.settings.bot.is_some() {
             self.toggle_bot_models(window, cx);
             return;
@@ -3097,6 +3133,10 @@ impl Conversation {
     /// `App: Switch Model` (Cmd+.): toggles the recent models, as ModelPicker's
     /// hotkey does.
     pub(crate) fn toggle_recent_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         self.bot_ui.models = None;
         self.toggle_menu(ComposerMenu::Recent, window, cx);
     }
@@ -4777,6 +4817,9 @@ impl Render for Conversation {
                     this.response_request(request, window, cx)
                 },
             ));
+        }
+        if self.user_read_only() {
+            return self.render_team_history(window, cx);
         }
         if self.settings.bot.is_some() {
             return self.render_bot(window, cx);

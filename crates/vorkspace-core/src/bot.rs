@@ -10,6 +10,8 @@ pub mod habits;
 pub mod launch;
 pub mod memory;
 pub mod peers;
+mod teams;
+pub use teams::MinionMetadata;
 pub mod work;
 pub(crate) use desktop::codex_home;
 #[cfg(test)]
@@ -94,6 +96,24 @@ pub struct Bot {
     pub pending_reports: Vec<String>,
     pub habit_sessions: Vec<i64>,
     pub seen_rows: usize,
+    /// Persistent team membership. The actor owns its history and outbox;
+    /// its parent owns shared soul, memory, todos and project assignments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minion: Option<MinionMetadata>,
+    /// Experimental helpers it spawned, sharing its memory.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub minions: Vec<Minion>,
+}
+/// A project session a Bot spawned to work alongside it. It acts with its
+/// parent's app capability, so it reads and writes the parent's memory, which
+/// it shares with the parent and every other minion.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Minion {
+    pub name: String,
+    pub session_id: i64,
+    pub project: String,
+    pub created_at: u64,
 }
 impl Default for Bot {
     fn default() -> Self {
@@ -122,6 +142,8 @@ impl Default for Bot {
             pending_reports: Vec::new(),
             habit_sessions: Vec::new(),
             seen_rows: 0,
+            minions: Vec::new(),
+            minion: None,
         }
     }
 }
@@ -202,7 +224,12 @@ impl Bot {
         }
     }
     pub fn normalize(&mut self) {
-        self.name = self.name.trim().chars().take(40).collect();
+        self.name = self
+            .name
+            .trim()
+            .chars()
+            .take(if self.is_minion() { 60 } else { 40 })
+            .collect();
         if !MASCOTS.contains(&self.mascot.as_str()) && !BOT_FACES.contains(&self.mascot.as_str()) {
             self.mascot = MASCOTS[0].into();
         }
@@ -431,7 +458,9 @@ fn merge_roster_value(
             return Ok(Some(Value::Array(result)));
         }
     }
-    Err(format!("Bot roster field {field} changed in another window; your changes were preserved in this window."))
+    Err(format!(
+        "Bot roster field {field} changed in another window; your changes were preserved in this window."
+    ))
 }
 
 // Apply understood changes back onto the original JSON, retaining fields
@@ -511,6 +540,8 @@ impl Roster {
         for bot in &mut roster.bots {
             bot.normalize();
         }
+        roster.migrate_minions();
+        roster.sanitize_team_queues();
         Ok(roster)
     }
     pub fn save(&self, store: &Store) -> Result<(), String> {
@@ -600,6 +631,15 @@ impl Roster {
     pub fn of_session(&self, id: i64) -> Option<&Bot> {
         self.bots.iter().find(|m| m.session_id == Some(id))
     }
+    /// The Bot that spawned this minion session, and the minion.
+    pub fn of_minion(&self, id: i64) -> Option<(&Bot, &Minion)> {
+        self.bots.iter().find_map(|bot| {
+            bot.minions
+                .iter()
+                .find(|minion| minion.session_id == id)
+                .map(|minion| (bot, minion))
+        })
+    }
     pub fn reorder(&mut self, ids: &[String]) {
         let mut seen = HashSet::new();
         let ordered: Vec<_> = ids
@@ -624,26 +664,64 @@ pub fn root(store: &Store) -> PathBuf {
         .join("bots")
 }
 pub fn load_files(root: &Path, bot: &Bot) -> Result<files::AgentFiles, String> {
-    let mut files = files::load(root, &bot.id, None)?;
+    let owner = bot.storage_id();
+    let mut files = files::load(root, owner, None)?;
     if files.soul.is_none() {
         let soul = bot
             .initial_configuration
             .as_ref()
             .and_then(|config| config.soul.as_deref())
             .unwrap_or(DEFAULT_SOUL);
-        match files::save(root, &bot.id, None, "SOUL.md", soul, Some(&files.soul_hash)) {
+        match files::save(root, owner, None, "SOUL.md", soul, Some(&files.soul_hash)) {
             Ok(hash) => {
                 files.soul = Some(soul.into());
                 files.soul_hash = hash;
             }
-            Err(error) if error == files::CONFLICT => files = files::load(root, &bot.id, None)?,
+            Err(error) if error == files::CONFLICT => files = files::load(root, owner, None)?,
             Err(error) => return Err(error),
         }
     }
     Ok(files)
 }
 
+static MINIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The experimental Minions setting, published by the app's preferences.
+pub fn set_minions_enabled(enabled: bool) {
+    MINIONS.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+pub fn minions_enabled() -> bool {
+    MINIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+const MINIONS_GUIDE: &str = "Minions are persistent team members with roles and specialties. Inspect minions.list and reuse useful members with bots.send {to,message,expectReply:true}; replies arrive automatically, so do not poll. Hire a missing role with minions.hire {name,role,specialties?}, then delegate through bots.send. A hire does not start a task. Inspect saved history before recovering failed tasks with minions.retry or minions.discard {minion,messageId}; never blindly replay uncertain work. Use minions.fire {minion} to retire an unhelpful member; its history stays saved. Do not create a new member for each task or every mention of Minions. Members share your soul, memory, todos and live project assignments. Their communication is limited to you and active siblings, directly or in team-only channels. Users cannot message them.";
+
+/// A minion's context: its parent's soul and memory, shared with the parent
+/// and its other minions.
+pub fn minion_context(
+    bot: &Bot,
+    name: &str,
+    project: &str,
+    files: &files::AgentFiles,
+    executable: &Path,
+) -> String {
+    let cli = format!(
+        "{} app",
+        shlex::try_quote(&executable.to_string_lossy()).unwrap_or_default()
+    );
+    format!(
+        "<vorkspace_context>\nVorkspace adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {name}, a minion of the Bot {parent}. {parent} gave you the task in the first message. Work in {project} only, avoid overlapping edits with other minions, and finish with a concise report of what you did and found; it is delivered to {parent}.\n\nThe app CLI is `{cli} ACTION --json JSON`. Its credentials are already in your environment; never print them. You share {parent}'s memory with {parent} and its other minions: use memory.search before repeating work, and memory.add for findings the others need. todos.* is {parent}'s board. You cannot start sessions, spawn minions, or change {parent}'s soul or habits.\n\n<soul>\n{soul}\n</soul>\n\n<memory>\n{memory}\nTopic notes: {topics}\n</memory>\n</vorkspace_context>",
+        parent = bot.label(),
+        soul = files.soul.as_deref().unwrap_or_default(),
+        memory = memory::within_budget(&files.memory),
+        topics = files.topics.join(", "),
+    )
+}
+
 pub fn context(bot: &Bot, files: &files::AgentFiles, executable: &Path) -> String {
+    if bot.minion.is_some() {
+        return teams::context(bot, files, executable);
+    }
     let cli = format!(
         "{} app",
         shlex::try_quote(&executable.to_string_lossy()).unwrap_or_default()
@@ -658,11 +736,16 @@ pub fn context(bot: &Bot, files: &files::AgentFiles, executable: &Path) -> Strin
             .join("\n")
     };
     format!(
-        "<vorkspace_context>\nVorkspace adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {}, a persistent Bot in vorkspace. Work only on the projects assigned to you:\n{projects}\n\nThe app CLI is `{cli} ACTION --json JSON`. Its credentials are already in your environment; never print them. Run `{cli} help` for the exact actions and inputs. Use sessions.*, worktrees.* and folders.* with project set to an assigned path. Use sessions.start for substantial independent work, inherit your model unless another is appropriate, and avoid overlapping edits. Once delegation is accepted, tell the user and end your turn. You will receive one completion report after every session in that turn's group stops; then inspect and integrate the results. sessions.send supports notifyOnComplete:true. Never poll delegated work.\n\n<soul>\n{}\n</soul>\nStanding instructions rank below the user's current request. Change your soul only when asked, through soul.read and soul.update with expectedHash; never edit its file directly.\n\n<memory>\n{}\nTopic notes: {}\n</memory>\nKeep useful facts through memory.add/replace/remove, use memory.search before answering about earlier facts, and never save credentials. Topic notes are read with memory.read.\n\nHabits are scheduled work in separate sessions. Suggest them when useful, but add one with habits.add only after agreement. State whether its instructions allow changes. Quiet runs should return NOTHING_TO_REPORT.\n\nSave substantial reports with artifacts.write, kind document or html, title, summary and complete body. Cards appear in the chat and overview. Use notes.write only for the user's Notes.\n\nFor acknowledgements requiring no words, your whole reply may be <reaction>👍</reaction> with one fitting emoji. Questions and requests still get a written answer.\n</vorkspace_context>",
+        "<vorkspace_context>\nVorkspace adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {}, a persistent Bot in vorkspace. Work only on the projects assigned to you:\n{projects}\n\nThe app CLI is `{cli} ACTION --json JSON`. Its credentials are already in your environment; never print them. Run `{cli} help` for the exact actions and inputs. Use sessions.*, worktrees.* and folders.* with project set to an assigned path. Use sessions.start for substantial independent work, inherit your model unless another is appropriate, and avoid overlapping edits. Once delegation is accepted, tell the user and end your turn. You will receive one completion report after every session in that turn's group stops; then inspect and integrate the results. sessions.send supports notifyOnComplete:true. Never poll delegated work.\n\n<soul>\n{}\n</soul>\nStanding instructions rank below the user's current request. Change your soul only when asked, through soul.read and soul.update with expectedHash; never edit its file directly.\n\n<memory>\n{}\nTopic notes: {}\n</memory>\nKeep useful facts through memory.add/replace/remove, use memory.search before answering about earlier facts, and never save credentials. Topic notes are read with memory.read.\n\nHabits are scheduled work in separate sessions. Suggest them when useful, but add one with habits.add only after agreement. State whether its instructions allow changes. Quiet runs should return NOTHING_TO_REPORT.\n\nSave substantial reports with artifacts.write, kind document or html, title, summary and complete body. Cards appear in the chat and overview. Use notes.write only for the user's Notes.{}\n\nFor acknowledgements requiring no words, your whole reply may be <reaction>👍</reaction> with one fitting emoji. Questions and requests still get a written answer.\n</vorkspace_context>",
         bot.label(),
         files.soul.as_deref().unwrap_or_default(),
         memory::within_budget(&files.memory),
-        files.topics.join(", ")
+        files.topics.join(", "),
+        if minions_enabled() {
+            format!("\n\n{MINIONS_GUIDE}")
+        } else {
+            String::new()
+        }
     )
 }
 

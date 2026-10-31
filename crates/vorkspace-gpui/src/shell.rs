@@ -551,6 +551,10 @@ pub(crate) struct Shell {
     todos_page: Option<Entity<crate::todos::TodosPage>>,
     /// The project sidebar's board; it follows the current project.
     project_todos: Option<Entity<crate::todos::TodoBoardView>>,
+    /// Minion sessions' context and capability, shared with Bots.
+    minion_registry: crate::bots::MinionRegistry,
+    team_histories: crate::bots::TeamHistories,
+    bot_conversations: crate::bots::BotConversations,
     inbox: Option<Entity<crate::inbox::Inbox>>,
     connector_pages: HashMap<crate::workspace::Connector, Entity<crate::inbox::Inbox>>,
     automations: Option<Entity<crate::automations::Automations>>,
@@ -895,6 +899,9 @@ impl Shell {
             notes: None,
             todos_page: None,
             project_todos: None,
+            minion_registry: Default::default(),
+            team_histories: Default::default(),
+            bot_conversations: Default::default(),
             inbox: None,
             connector_pages: HashMap::new(),
             automations: None,
@@ -1028,8 +1035,29 @@ impl Shell {
                 cx,
             )
         });
+        // Views opened before Bots existed share its registry too.
+        this.minion_registry = bots.read(cx).minion_registry.clone();
+        this.team_histories = bots.read(cx).team_histories.clone();
+        this.bot_conversations = bots.read(cx).conversation_views.clone();
+        for view in this.sessions.values() {
+            let registry = this.minion_registry.clone();
+            view.update(cx, |view, cx| {
+                view.minions = Some(registry);
+                view.team_histories = Some(this.team_histories.clone());
+                view.refresh_team_history(cx);
+            });
+        }
         this.observations.push(
             cx.subscribe(&bots, |this, _, _: &crate::bots::Changed, cx| {
+                // Restored legacy panes share the durable classification even
+                // when their original project-session view is still cached.
+                for view in this.sessions.values() {
+                    if view.read(cx).user_read_only() {
+                        view.update(cx, |view, cx| {
+                            view.refresh_team_history(cx);
+                        });
+                    }
+                }
                 this.sync_bot_search(cx);
                 this.update_usage_provider(cx);
                 this.invalidate_chrome(cx);
@@ -1192,7 +1220,13 @@ impl Shell {
             .insert(id, cx.new(|_| SessionMark::tab(summary.provider.clone())));
         let appearance = self.appearance(&summary.cwd);
         let worktree = self.session_worktrees.get(&id).cloned().flatten();
-        let view = cx.new(|cx| Conversation::new(summary, self.store.clone(), cx));
+        let existing = self
+            .bot_conversations
+            .borrow()
+            .get(&id)
+            .and_then(|view| view.upgrade());
+        let view = existing
+            .unwrap_or_else(|| cx.new(|cx| Conversation::new(summary, self.store.clone(), cx)));
         view.update(cx, |view, cx| {
             // Events may arrive before the first asynchronous agent load. Seed
             // the indexed working directory so those events cannot erase it.
@@ -1201,6 +1235,9 @@ impl Shell {
             if let Some(bridge) = &self.app_bridge {
                 view.set_app_environment(bridge.environment(id));
             }
+            view.minions = Some(self.minion_registry.clone());
+            view.team_histories = Some(self.team_histories.clone());
+            view.refresh_team_history(cx);
             view.set_project_appearance(appearance, cx);
             view.transcript.update(cx, |transcript, cx| {
                 transcript.apply_preferences(&self.workspace.preferences, cx)
@@ -6001,8 +6038,15 @@ impl Shell {
             mark.update(cx, |mark, cx| mark.set_size(side, cx));
         }
         let work_item = self.work_item_badge(id, compact, cx);
+        // A Bot's minion is marked with its parent.
+        let minion = self
+            .minion_registry
+            .borrow()
+            .get(&id)
+            .map(|(context, _)| context.bot.label());
         let has_badges = work_item.is_some()
             || mode.is_some()
+            || minion.is_some()
             || self.automation_state.session_automations.contains_key(&id);
         let session = self.session_metadata(id, cx);
         let active = self.selected_sessions.contains(&id)
@@ -6127,6 +6171,26 @@ impl Shell {
             .gap_1()
             .flex_shrink_0()
             .children(work_item)
+            .when_some(minion, |d, parent| {
+                d.child(
+                    div()
+                        .id(("session-minion", id as usize))
+                        .debug_selector(move || format!("session-minion-{id}"))
+                        .role(Role::Image)
+                        .aria_label(SharedString::from(format!("Minion of {parent}")))
+                        .h(px(16.))
+                        .px_1()
+                        .flex()
+                        .items_center()
+                        .gap_0p5()
+                        .rounded_sm()
+                        .bg(content(0.06))
+                        .text_size(px(10.))
+                        .text_color(content(0.5))
+                        .child(icon("ghost", 10.).text_color(content(0.45)))
+                        .child(parent),
+                )
+            })
             .when(
                 self.automation_state.session_automations.contains_key(&id),
                 |row| row.child(icon("zap", 12.).text_color(content(0.35))),
@@ -7661,7 +7725,11 @@ impl Render for Shell {
             && let Some(view) = self.sessions.get(&id)
         {
             self.review_focused = false;
-            window.focus(&view.read(cx).input.focus_handle(cx), cx);
+            if view.read(cx).user_read_only() {
+                window.focus(&self.focus, cx);
+            } else {
+                window.focus(&view.read(cx).input.focus_handle(cx), cx);
+            }
         }
         if let Some(m) = &self.bots {
             m.read(cx).hide_html(cx);

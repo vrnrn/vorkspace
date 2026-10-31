@@ -184,6 +184,10 @@ impl Conversation {
         cx.notify();
     }
     pub(crate) fn resume_usage(&mut self, cx: &mut Context<Self>) {
+        if self.reject_user_entry(cx) {
+            return;
+        }
+
         if self.needs_history_restore() {
             self.defer_history_action(|this, cx| this.resume_usage(cx), cx);
             return;

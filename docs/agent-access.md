@@ -12,11 +12,40 @@ Type `/operator` at the start of a composer message to enable vorkspace access i
 - `sessions.stop`, `sessions.archive` and `sessions.delete` take a `sessionId` to manage another session in the project. Bots can select an assigned project with `project`. Stop cancels the current turn and pauses queued messages; archive stops and saves the conversation for later restoration; delete stops and permanently removes the conversation. Open files, terminals and worktrees are kept. These actions cannot target the caller, Bot chats, habit runs, channel workers, orchestration workers or protected internal hidden conversations. Ordinary delegated sessions remain controllable when a Bot hides them from the sidebar. Hidden sessions whose ownership cannot be verified remain protected. Ownership is checked against persisted records and again at the actual effect boundary, including deferred calls. A loading conversation is left untouched until its queue and draft are available.
 - A successful Bot management action dismisses that Bot's monitoring of the target. Other Bots' monitoring is kept; an already queued completion message remains part of its saved outbox.
 - `notes.list` returns note IDs and titles; `notes.read` returns a full project note by ID; `notes.write` creates a note or updates an existing project note.
-- `todos.list`, `todos.add`, `todos.update` and `todos.remove` manage the caller's to-do board: an operator session's project board, or a Bot's own board unless `project` names one of its assigned projects. Statuses are `todo`, `inProgress` and `done`; `todos.update` can rename an item, change its status and place it `before` another item in its column.
+- `todos.list`, `todos.add`, `todos.update` and `todos.remove` manage the caller's to-do board: an operator session's project board, a Bot's own board, or a Minion's parent board. `project` can select an assigned project board. Statuses are `todo`, `inProgress` and `done`; `todos.update` can rename an item, change its status and place it `before` another item in its column.
+
+## Persistent Bot teams
+
+Minions require **Settings › Bots › Minions**. A parent Bot hires persistent members with roles and specialties, reuses them for later tasks, and retires them when no longer useful. Hiring itself starts no task and requires no project. These are Bot actions, not additional `/operator` permissions:
+
+```text
+minions.hire {name,role,specialties?,project?}
+minions.list {}
+minions.fire {minion}
+minions.retry / minions.discard {minion,messageId}
+minions.spawn {prompt,name?,role?,specialties?,project?,harness?,model?}
+bots.list {}
+bots.read {bot,before?,limit?,maxChars?}
+bots.send {to,message,expectReply?}
+channels.list {}
+channels.create {name,topic?,members:[Bot names]}
+channels.read {channel,limit?}
+channels.post {channel,message,to?:[Bot names]}
+```
+
+`specialties` is an array of short strings. Optional `project` validates an assigned parent project without restricting the member to that project; execution uses the parent's live project scope. `minions.spawn` is compatibility hire plus an initial peer task. Its `harness` and `model` fields are not accepted by `minions.hire`. `minions.list` includes stable identity, role, specialties, retirement state, backing session and activity. `minions.fire` accepts an owned member's ID or unambiguous name and preserves its history.
+
+Use `bots.send` for repeated delegation, rather than `sessions.send`. `expectReply` defaults to true, and the app returns the member's final reply automatically while the autonomous-hop budget permits it. The sender should end its turn instead of polling. Channel workers post their final reply automatically. Direct and channel routes share a four-hop budget, including when a Bot creates or reuses a channel.
+
+A Minion's own ID remains the sender and conversation/outbox owner. Its parent ID owns shared soul, memory and default todos. Allowed Minion actions include shared memory/todo/notes operations, selected reads and team communication; they exclude hiring/firing, session control, worktree creation and soul/habit changes. Project-scoped reads use the parent's assignments. Peer reads, lists and sends involving a Minion are limited to its parent and siblings. Top-level Bots retain ordinary collaboration with other top-level Bots.
+
+A channel containing Minions must remain within one team. Membership and delivery checks enforce that boundary, including automatic replies and queued work. `channels.list` returns `teamParent` and `userReadOnly` for supervision surfaces. Users can inspect member and team-channel history but cannot send messages to either; user requests go through the parent Bot. Native member views are read-only, including composer, voice and retry/resume entry points.
+
+Retirement revokes active app admission, stops loaded execution views, clears the member's outbox, pauses saved follow-ups and cancels forbidden channel deliveries. Saved conversations remain available. Reopening validates membership and delivery receipts before resuming eligible peer work; retired work is not revived. Existing Minion project-session records migrate to protected Bot conversations while retaining their histories. See [Minions](minions.md) for the ownership and lifecycle reference.
 
 ## Mutation receipts
 
-Every mutating command reserves its caller-scoped request ID and a fingerprint of its action and input in SQLite before applying any effect. Drafts are flushed and submitted prompts enter the existing durable message queue before completion is acknowledged. A queued prompt retains its text, mode and message ID until provider admission; reopening the app keeps unaccepted work paused for explicit review. Completion is saved before acknowledgement. Repeating the same ID and input returns the saved result, including after an app restart; changing the action or input with that ID fails. Read queries return current state without writing receipts. If the app stops after admission and before it can save a result, that request stays unconfirmed: it may have executed, and the app never dispatches it again automatically. Inspect the affected state before deciding on a separate new command. Storage failures fail closed rather than authorizing a blind retry.
+Every mutating command reserves its caller-scoped request ID and a fingerprint of its action and input in SQLite before applying any effect. Drafts are flushed and submitted prompts enter the existing durable message queue before completion is acknowledged. A queued prompt retains its text, mode and message ID until provider admission. Ordinary reopened session follow-ups wait for explicit review; Bot peer queues resume eligible undelivered messages through their own membership and submission checks. Completion is saved before acknowledgement. Repeating the same ID and input returns the saved result, including after an app restart; changing the action or input with that ID fails. Read queries return current state without writing receipts. If the app stops after admission and before it can save a result, that request stays unconfirmed: it may have executed, and the app never dispatches it again automatically. Inspect the affected state before deciding on a separate new command. Storage failures fail closed rather than authorizing a blind retry.
 
 Failed launch installation cleans up its new session and view, and rolls back an unchanged local worktree still owned by that launch. Resources whose ownership changed are preserved and reported. No pane is published before its prompt or draft is durably accepted.
 

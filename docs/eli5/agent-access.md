@@ -20,6 +20,16 @@ Once you type `/operator` in a thread, that agent can:
 - **Read and write your Notes (`notes.list`, `notes.read`, `notes.write`)**: It can look up your saved notes in Vorkspace or jot down a new note for you.
 - **Keep a to-do list (`todos.list`, `todos.add`, `todos.update`, `todos.remove`)**: It can add items to its board (or its project's board), move them between To do, In progress and Done, and tidy them up.
 
+## How Bots Use Their Teams
+
+With **Settings › Bots › Minions** enabled, a parent Bot can hire lasting team members with `minions.hire`, giving each a name, role and optional specialties. Hiring does not start a job or require picking a project. The parent checks `minions.list`, then reuses a member with `bots.send` for each new job. Its replies normally return automatically. The older `minions.spawn` shortcut hires a member and sends a first job together. These team actions belong to Bots; typing `/operator` in an ordinary session does not grant them.
+
+Members keep their own conversations but share their parent's instructions, saved memory, to-do board and current project assignments. They can talk only with their parent and siblings, directly or in a channel containing just that team. Unrelated Bots cannot message them or read their conversations. Ordinary Bots can still collaborate with each other as usual.
+
+You can inspect a member's work and past conversations, but its conversation and team channels are read-only for you. Ask the parent Bot to send instructions. Minions cannot hire or fire other members, open more work sessions, or change their parent's personality or habits.
+
+When someone is no longer useful, the parent uses `minions.fire` to retire them. Their conversations stay saved, but they stop accepting work. Old queued messages do not restart after reopening the app. See [Minions](minions.md).
+
 ---
 
 ## How Vorkspace Keeps It Safe
@@ -31,5 +41,7 @@ Once you type `/operator` in a thread, that agent can:
 - **Your Draft Stays Yours**: A follow-up cannot replace text or files you are already preparing. Loading chats wait until their saved queue and draft are known.
 - **Launch Choices Matter**: New sessions use the requested permission mode, model settings, and project checkout. An unrelated folder or misspelled option is rejected before a session is created. It can also split beside an open chat to the right or below. If that chat closes while the new session is being prepared, the launch is rejected instead of appearing beside an unrelated chat.
 - **Failed Starts Clean Up**: A new chat appears only after its message is saved. If starting it fails, the app removes that unused chat and its unchanged new worktree. It keeps and reports anything that someone else has changed or taken over.
-- **Retries Remember What Happened**: Changes get a saved request ID before they start. New prompts are saved in the normal message queue before the agent receives an answer, so closing the app before a worker starts does not lose them. Reopened queued work waits for your review. Sending the same request again returns its saved answer instead of repeating the change. If the app closes before recording an answer, it says the result is uncertain and does not run it again. Check what happened before requesting a new change. Reading a list simply reads the current state.
+- **Retries Remember What Happened**: Changes get a saved request ID before they start. New prompts are saved before the agent receives an answer, so closing the app before a worker starts does not lose them. Ordinary reopened session queues wait for review. Saved Bot-to-Bot messages can resume after permission and delivery checks; retired members stay inactive. Sending the same request again returns its saved answer instead of repeating the change. If the app closes before recording an answer, it says the result is uncertain and does not run it again. Check what happened before requesting a new change. Reading a list simply reads the current state.
 - **Bot Reports Stay Scoped**: Managing a chat stops that Bot from watching it for a future completion report. Other Bots keep their own monitoring; an already queued message remains saved.
+
+If a direct task fails, later work waits. The parent can inspect what happened, then retry or discard that task. A retry starts a new attempt; it does not assume the earlier attempt did nothing.

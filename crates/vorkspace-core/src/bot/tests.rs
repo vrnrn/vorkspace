@@ -634,3 +634,59 @@ fn roster_edits_retain_unknown_fields_in_existing_messages_and_bots() {
     assert_eq!(saved["bots"][0]["outbox"][0]["futureMessage"]["opaque"], 3);
     assert_eq!(saved["bots"][0]["outbox"][0]["text"], "edited");
 }
+
+#[test]
+fn minions_resolve_to_their_parent_and_share_its_context() {
+    let mut roster = Roster::default();
+    let mut parent = Bot {
+        name: "Oppy".into(),
+        projects: vec!["/work".into()],
+        ..Default::default()
+    };
+    parent.minions.push(Minion {
+        name: "Scout".into(),
+        session_id: 42,
+        project: "/work".into(),
+        created_at: 1,
+    });
+    roster.bots.push(parent.clone());
+    let (found, minion) = roster.of_minion(42).unwrap();
+    assert_eq!(found.id, parent.id);
+    assert_eq!(minion.name, "Scout");
+    assert!(roster.of_minion(7).is_none());
+    // Minions persist with the roster, and an empty list is omitted.
+    let saved = serde_json::to_value(&parent).unwrap();
+    assert_eq!(saved["minions"][0]["sessionId"], 42);
+    assert!(serde_json::to_value(Bot::default())
+        .unwrap()
+        .get("minions")
+        .is_none());
+
+    let files = files::AgentFiles {
+        soul: Some("Be brief.".into()),
+        memory: "- Uses cargo".into(),
+        ..Default::default()
+    };
+    let context = minion_context(&parent, "Scout", "/work", &files, Path::new("/bin/v"));
+    assert!(context.contains("You are Scout, a minion of the Bot Oppy"));
+    assert!(context.contains("Be brief."));
+    assert!(context.contains("- Uses cargo"));
+    assert!(context.contains("Work in /work only"));
+}
+
+#[test]
+fn the_minion_guide_follows_the_setting() {
+    let files = files::AgentFiles::default();
+    let bot = Bot {
+        name: "Oppy".into(),
+        ..Default::default()
+    };
+    set_minions_enabled(false);
+    assert!(!context(&bot, &files, Path::new("/bin/v")).contains("minions.hire"));
+    set_minions_enabled(true);
+    let enabled = context(&bot, &files, Path::new("/bin/v"));
+    set_minions_enabled(false);
+    assert!(enabled.contains("minions.hire"));
+    assert!(enabled.contains("reuse useful members"));
+    assert!(enabled.contains("minions.fire"));
+}

@@ -1035,6 +1035,10 @@ impl Conversation {
         })
     }
     pub(super) fn open_btw(&mut self, text: String, draft: bool, cx: &mut Context<Self>) -> bool {
+        if self.reject_user_entry(cx) {
+            return false;
+        }
+
         if self.attaching || !self.attachments.is_empty() || self.input.read(cx).is_composing() {
             return false;
         }

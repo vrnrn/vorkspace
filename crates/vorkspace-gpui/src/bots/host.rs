@@ -77,12 +77,29 @@ impl Bots {
     fn call_work(
         &mut self,
         call: Call,
+        actor_id: &str,
         bot_id: String,
         work: impl FnOnce(Database) -> Result<(Value, Effect), String> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
+        let permit = if self.roster.get(actor_id).is_some_and(Bot::is_minion) {
+            match self.minion_effects.permit(actor_id) {
+                Ok(permit) => Some(permit),
+                Err(error) => {
+                    self.finish_call(call, Err(error), cx);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let store = self.store.clone();
-        let work = cx.background_executor().spawn(async move { work(store) });
+        let work = cx.background_executor().spawn(async move {
+            match permit {
+                Some(permit) => permit.run(|| work(store)),
+                None => work(store),
+            }
+        });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -192,12 +209,31 @@ impl Bots {
                 .and_then(|((_, bot), _)| self.roster.get(bot))
                 .cloned()
         });
-        let Some(bot) = bot else {
+        let Some(actor) = bot
+            .and_then(|b| self.roster.effective_bot(&b.id))
+            .filter(|b| {
+                self.roster.is_active(&b.id)
+                    && (!b.is_minion() || (self.prefs.bots && self.prefs.minions))
+            })
+        else {
             let _ = call.reply.send(Err(
                 "This Bot no longer owns an active app capability".into()
             ));
             return;
         };
+        let bot = self.roster.storage_owner(&actor.id).unwrap().clone();
+        if actor.is_minion() && !minion_allowed(&call.action) {
+            let _ = call
+                .reply
+                .send(Err(format!("Minions cannot use {}", call.action)));
+            return;
+        }
+        if matches!(call.action.as_str(), "minions.spawn" | "minions.hire") && !self.prefs.minions {
+            let _ = call.reply.send(Err(
+                "Minions are experimental; turn them on in Settings › Bots first".into(),
+            ));
+            return;
+        }
         if call.action.starts_with("habits.")
             && call.action != "habits.list"
             && self.running.contains_key(&call.session)
@@ -259,21 +295,24 @@ impl Bots {
             }
         }
         if call.action == "bots.read" {
-            let target = bot::channels::resolve(
-                &self.roster,
-                call.input["bot"].as_str().unwrap_or_default(),
-            )
-            .and_then(|target| {
-                if target.id == bot.id {
-                    return Err("Use your own conversation history".into());
-                }
-                Ok((
-                    target
-                        .session_id
-                        .ok_or("That Bot's conversation is unavailable")?,
-                    json!({"id":target.id,"name":target.label()}),
-                ))
-            });
+            let target = self
+                .roster
+                .resolve_peer(
+                    &actor.id,
+                    call.input["bot"].as_str().unwrap_or_default(),
+                    true,
+                )
+                .and_then(|target| {
+                    if target.id == actor.id {
+                        return Err("Use your own conversation history".into());
+                    }
+                    Ok((
+                        target
+                            .session_id
+                            .ok_or("That Bot's conversation is unavailable")?,
+                        json!({"id":target.id,"name":target.label()}),
+                    ))
+                });
             let (session, target) = match target {
                 Ok(target) => target,
                 Err(error) => {
@@ -289,6 +328,7 @@ impl Bots {
                 .clamp(100, 100_000) as usize;
             self.call_work(
                 call,
+                &actor.id,
                 bot.id.clone(),
                 move |store| {
                     let mut page = locked(&store)?.peer_history(session, before, limit, max)?;
@@ -300,7 +340,7 @@ impl Bots {
             return;
         }
         if call.action.starts_with("bots.") {
-            let result = self.peer_action(&call, &bot.id, cx);
+            let result = self.peer_action(&call, &actor.id, cx);
             self.finish_call(call, result, cx);
             return;
         }
@@ -323,7 +363,7 @@ impl Bots {
             let result = self.channel_action_with_hop(
                 &call.action,
                 &call.input,
-                Some(&bot),
+                Some(&actor),
                 &call.request_id,
                 hop,
                 cx,
@@ -361,14 +401,91 @@ impl Bots {
                 let settings=source.as_ref().map(|v|v.read(cx).bot_execution_settings()).unwrap_or_default();
                 let mut launch=match bot::launch::Launch::parse(&input,&source_provider,&source_project,&project,settings,false){Ok(launch)=>launch,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
                 if launch.provider.id()!=source_provider { launch.settings.account=crate::accounts::get(cx).map(|center|center.read(cx).selected(launch.provider,&project)).unwrap_or_default(); }
-                self.call_work(call,target,move|store|{
+                self.call_work(call,&actor.id,target,move|store|{
                     let mut store=locked(&store)?;
                     let summary=launch.create(&mut store,&project)?;
                     Ok((json!({"sessionId":summary.id,"accepted":true,"project":project}),Effect::Start(Box::new(crate::shell::AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
                 },cx);return;
             }
+            "minions.list"=>{
+                Ok(json!(self.roster.team(&bot.id).filter(|b|b.is_minion()).map(|b|self.minion_value(b,cx)).collect::<Vec<_>>()))
+            }
+            "minions.hire"|"minions.spawn"=>{
+                let name=if action=="minions.hire" {match text(&input,"name",240){Ok(v)=>v,Err(e)=>{self.finish_call(call,Err(e),cx);return;}}} else {input.get("name").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(||self.next_minion_name(&bot.id))};
+                let role=if action=="minions.hire" {match text(&input,"role",1024){Ok(v)=>v,Err(e)=>{self.finish_call(call,Err(e),cx);return;}}} else {input.get("role").and_then(Value::as_str).unwrap_or("Team helper").into()};
+                let specialties=input.get("specialties").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+                let prompt=if action=="minions.spawn" {match text(&input,"prompt",65536){Ok(p)=>Some(p),Err(e)=>{self.finish_call(call,Err(e),cx);return;}}} else {None};
+                let member=match self.roster.hire_minion(&actor.id,&name,&role,specialties,input.get("project").and_then(Value::as_str)){Ok(id)=>id,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
+                // Keep execution choices without allocating a conversation for an idle hire.
+                if let Some(source)=source.as_ref() {
+                    let provider=source.read(cx).summary.provider.clone();
+                    let settings=source.read(cx).bot_execution_settings();
+                    let mut choices=json!({"prompt":"Team configuration"});
+                    for key in ["harness","model"] {if let Some(value)=input.get(key){choices[key]=value.clone();}}
+                    match bot::launch::Launch::parse(&choices,&provider,"","",settings,false) {
+                        Ok(mut launch)=>{
+                            launch.settings.worktree_cwd=None;
+                            if launch.provider.id()!=provider {launch.settings.account=crate::accounts::get(cx).map(|c|c.read(cx).selected(launch.provider,"")).unwrap_or_default();}
+                            self.roster.get_mut(&member).unwrap().initial_configuration=Some(Box::new(bot::InitialConfiguration{provider:launch.provider.id().into(),settings:launch.settings,soul:None}));
+                        }
+                        Err(error)=>{self.roster.bots.retain(|b|b.id!=member);self.finish_call(call,Err(error),cx);return;}
+                    }
+                }
+                let hop=self.collaboration_hop(call.session,cx);
+                let start_task=prompt.is_some();
+                if let Some(prompt)=prompt
+                    && let Err(error)=bot::peers::enqueue(&mut self.roster,&actor.id,&member,&prompt,&format!("{}:{}",call.session,call.request_id),hop,true) {
+                    self.roster.bots.retain(|b|b.id!=member);self.finish_call(call,Err(error),cx);return;
+                }
+                let value=self.minion_value(self.roster.get(&member).unwrap(),cx);
+                self.save(cx);
+                if start_task {self.ensure_chat(&member,cx);}
+                Ok(value)
+            }
+            "minions.fire"=>{
+                let query=match text(&input,"minion",160){Ok(v)=>v,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
+                let member=match self.roster.resolve_peer(&actor.id,&query,true){Ok(b)=>b.id.clone(),Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
+                let fences=self.minion_effects.fences(&member);
+                match self.roster.retire_minion(&actor.id,&member) {
+                    Err(e)=>Err(e),
+                    Ok(())=>{
+                        if let Some(view)=self.chats.get(&member){view.update(cx,|v,cx|{v.bot_stop(cx);let _=v.app_stop(cx);});}
+                        let keys=self.channels.views.keys().filter(|(_,b)|b==&member).cloned().collect::<Vec<_>>();
+                        for key in keys {if let Some(view)=self.channels.views.get(&key){view.update(cx,|v,cx|{v.bot_stop(cx);let _=v.app_stop(cx);});}}
+                        let sessions=self.minion_sessions(&member);
+                        self.quarantine_channel_work(cx);
+                        let value=self.minion_value(self.roster.get(&member).unwrap(),cx);
+                        self.save(cx);
+                        self.call_work(call,&actor.id,target,move|store|{
+                            for fence in fences {fence.wait()?;}
+                            let store=locked(&store)?;
+                            for session in sessions {
+                                let mut queue=store.follow_ups(session)?;
+                                queue.paused=true;
+                                queue.revision+=1;
+                                store.accept_follow_ups(session,&queue)?;
+                            }
+                            Ok((value,Effect::None))
+                        },cx);return;
+                    }
+                }
+            }
+            "minions.retry"|"minions.discard"=>{
+                let query=match text(&input,"minion",160){Ok(v)=>v,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
+                let message=match text(&input,"messageId",256){Ok(v)=>v,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
+                let member=match self.roster.resolve_peer(&actor.id,&query,true){Ok(b)=>b.id.clone(),Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
+                let allowed=self.roster.get(&member).is_some_and(|b|b.minion.as_ref().is_some_and(|m|m.parent_id==actor.id && !m.retired));
+                if !allowed {Err("Only the active Minion's parent can recover its work".into())}
+                else if !self.roster.get(&member).is_some_and(|b|b.outbox.iter().any(|m|m.id==message && m.peer.is_some() && m.error.is_some())) {Err("Choose a failed peer message from minions.list".into())}
+                else if self.inflight.get(&member).is_some_and(|m|m.id==message) {Err("Wait for the current task to stop before recovering it".into())}
+                else {
+                    self.ensure_chat(&member,cx);
+                    self.recover_queue(&member,&message,action=="minions.discard",cx);
+                    Ok(self.minion_value(self.roster.get(&member).unwrap(),cx))
+                }
+            }
             "sessions.list"|"sessions.read"=>{
-                self.call_work(call,target,move|store|{let db=locked(&store)?;let all=db.sessions()?;let sessions:Vec<_>=all.iter().filter(|s|!hidden.contains(&s.id)&&vorkspace_core::files::path_key(&s.cwd)==vorkspace_core::files::path_key(&project)).collect();
+                self.call_work(call,&actor.id,target,move|store|{let db=locked(&store)?;let all=db.sessions()?;let sessions:Vec<_>=all.iter().filter(|s|!hidden.contains(&s.id)&&vorkspace_core::files::path_key(&s.cwd)==vorkspace_core::files::path_key(&project)).collect();
                     let value=if action=="sessions.list"{json!(sessions.iter().map(|s|json!({"sessionId":s.id,"title":s.title,"harness":s.provider,"project":s.cwd,"archived":s.archived})).collect::<Vec<_>>())}else{let session=id(&input,"sessionId")?;if !sessions.iter().any(|s|s.id==session){return Err("Session is outside the assigned project".into());}let rows=db.load(session)?.rows;let end=input.get("before").and_then(Value::as_u64).unwrap_or(rows.len() as u64).min(rows.len() as u64) as usize;let limit=input.get("limit").and_then(Value::as_u64).unwrap_or(40).clamp(1,200) as usize;let start=end.saturating_sub(limit);let max=input.get("maxChars").and_then(Value::as_u64).unwrap_or(24000).clamp(100,200000) as usize;json!({"sessionId":session,"messages":rows[start..end].iter().map(|r|json!({"role":r.role,"text":vorkspace_core::response::limit(&r.text,max/limit.max(1))})).collect::<Vec<_>>(),"before":start,"hasMore":start>0})};Ok((value,Effect::None))},cx);return;
             }
             "sessions.stop"|"sessions.archive"|"sessions.delete"=>{
@@ -421,7 +538,7 @@ impl Bots {
                 let mut groups=self.owner.upgrade().map(|o|o.read(cx).bot_groups(&project)).unwrap_or_default();
                 if let Some(name)=input.get("newFolderName").and_then(Value::as_str){if let Some(folder)=groups.create_folder(&[session],bot::new_id()){groups.rename_folder(&folder,name);}}
                 else if let Some(folder)=input.get("folderId").and_then(Value::as_str){if groups.folder(folder).is_none(){self.finish_call(call,Err("Folder not found".into()),cx);return;}groups.add_to_folder(folder,session);}else{groups.remove_sessions(&[session]);}
-                self.call_work(call,target,move|store|{locked(&store)?.save_groups(&project,&groups)?;Ok((json!({"moved":true}),Effect::Groups(project,groups)))},cx);return;
+                self.call_work(call,&actor.id,target,move|store|{locked(&store)?.save_groups(&project,&groups)?;Ok((json!({"moved":true}),Effect::Groups(project,groups)))},cx);return;
             }
             "artifacts.list"=>Ok(json!(bot.documents.iter().filter(|d|input.get("kind").and_then(Value::as_str).is_none_or(|k|k==d.kind)).skip(input.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize).take(input.get("limit").and_then(Value::as_u64).unwrap_or(50).min(200) as usize).collect::<Vec<_>>())),
             "artifacts.read"=>input.get("id").and_then(Value::as_str).and_then(|id|bot.documents.iter().find(|d|d.id==id)).map(|d|json!(d)).ok_or("Document not found".into()),
@@ -436,7 +553,7 @@ impl Bots {
                 }
                 if card["type"]=="pr"{
                     let cwd=bot.projects.first().cloned().unwrap_or_else(||std::env::var("HOME").unwrap_or_else(|_|".".into()));
-                    self.call_work(call,target,move|_|{let metadata=bot::cards::pull_request(&cwd,card["repo"].as_str(),card["number"].as_u64().unwrap())?;for key in ["title","state","url","isDraft","additions","deletions"]{card[key]=metadata[key].clone();}Ok((card.clone(),Effect::Card(card)))},cx);return;
+                    self.call_work(call,&actor.id,target,move|_|{let metadata=bot::cards::pull_request(&cwd,card["repo"].as_str(),card["number"].as_u64().unwrap())?;for key in ["title","state","url","isDraft","additions","deletions"]{card[key]=metadata[key].clone();}Ok((card.clone(),Effect::Card(card)))},cx);return;
                 }
                 self.hold_card(call.session,&bot.id,card.clone());self.save(cx);Ok(card)
             }
@@ -455,11 +572,11 @@ impl Bots {
                     None=>vorkspace_core::todos::TodoBoard::Bot(bot.id.clone()),
                 };
                 let effect=if action=="todos.list"{Effect::None}else{Effect::Todos};
-                self.call_work(call,target,move|store|Ok((locked(&store)?.todo_action(&board,&action,&input)?,effect)),cx);return;
+                self.call_work(call,&actor.id,target,move|store|Ok((locked(&store)?.todo_action(&board,&action,&input)?,effect)),cx);return;
             }
             "soul.read"|"soul.update"|"memory.read"|"memory.search"|"memory.add"|"memory.replace"|"memory.remove"|"habits.list"|"habits.add"|"habits.update"|"habits.run"|"habits.remove"|"notes.list"|"notes.read"|"notes.write"|"worktrees.list"|"worktrees.create"=>{
                 let caller=call.session;let projects=bot.projects.clone();
-                self.call_work(call,target.clone(),move|store|{
+                self.call_work(call,&actor.id,target.clone(),move|store|{
                     let value=match action.as_str(){
                         "soul.read"=>json!(files::read(&root,&target,None,"SOUL.md")?),
                         "soul.update"=>{let body=input.get("text").and_then(Value::as_str).filter(|t|t.len()<=128*1024).ok_or("Provide text")?;let expected=text(&input,"expectedHash",128)?;json!({"hash":files::save(&root,&target,None,"SOUL.md",body,Some(&expected))?})},
@@ -611,5 +728,91 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                 });
             }).detach();
         }
+    }
+}
+
+/// What a minion may do with its parent's capability: share memory and the
+/// board, read, and take notes; never start work or change its parent.
+fn minion_allowed(action: &str) -> bool {
+    action.starts_with("memory.")
+        || action.starts_with("todos.")
+        || action.starts_with("notes.")
+        || matches!(
+            action,
+            "bots.list"
+                | "bots.read"
+                | "bots.send"
+                | "channels.list"
+                | "channels.read"
+                | "channels.create"
+                | "channels.post"
+                | "models.list"
+                | "soul.read"
+                | "sessions.list"
+                | "sessions.read"
+                | "worktrees.list"
+                | "minions.list"
+                | "artifacts.list"
+                | "artifacts.read"
+        )
+}
+
+impl Bots {
+    pub(super) fn member_status(&self, id: &str, cx: &App) -> &'static str {
+        let mut working = false;
+        for view in self.chats.get(id).into_iter().chain(
+            self.channels
+                .views
+                .iter()
+                .filter(|((_, member), _)| member == id)
+                .map(|(_, view)| view),
+        ) {
+            match view.read(cx).bot_status() {
+                "needs-you" => return "needs-you",
+                "working" => working = true,
+                _ => (),
+            }
+        }
+        if working { "working" } else { "idle" }
+    }
+    fn minion_sessions(&self, id: &str) -> HashSet<i64> {
+        let mut sessions = self
+            .channels
+            .state
+            .channels
+            .iter()
+            .filter_map(|c| c.member_sessions.get(id).copied())
+            .collect::<HashSet<_>>();
+        sessions.extend(self.roster.get(id).and_then(|b| b.session_id));
+        sessions
+    }
+    pub(crate) fn minion_value(&self, member: &Bot, cx: &App) -> Value {
+        let metadata = member.minion.as_ref().unwrap();
+        let owner = self.roster.storage_owner(&member.id);
+        let working = self.chats.get(&member.id).is_some_and(|v| v.read(cx).busy)
+            || self
+                .channels
+                .views
+                .iter()
+                .any(|((_, id), v)| id == &member.id && v.read(cx).busy);
+        json!({"id":member.id,"name":member.label(),"parentId":metadata.parent_id,"role":metadata.role,"specialties":metadata.specialties,"retired":metadata.retired,"createdAt":metadata.created_at,"sessionId":member.session_id,"working":working,"status":if metadata.retired {"retired"} else {self.member_status(&member.id,cx)},"pendingMessages":member.outbox.iter().map(|m|json!({"id":m.id,"error":m.error})).collect::<Vec<_>>(),"projects":owner.map(|p|&p.projects),"accepted":true})
+    }
+    fn next_minion_name(&self, parent: &str) -> String {
+        (1..)
+            .map(|n| format!("Minion {n}"))
+            .find(|name| {
+                !self
+                    .roster
+                    .active_minions(parent)
+                    .any(|m| m.label() == *name)
+            })
+            .unwrap()
+    }
+    /// Kept as the Shell's shared attachment registry for source compatibility.
+    /// Persistent members now receive Bot context through their own executor.
+    pub(crate) fn sync_minions(&mut self) {
+        self.minion_effects
+            .reconcile(&self.roster, self.prefs.bots && self.prefs.minions);
+        self.minion_registry.borrow_mut().clear();
     }
 }

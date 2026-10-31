@@ -6,6 +6,11 @@ use std::sync::Arc;
 
 impl Bots {
     pub(in crate::bots) fn send_channel_message(&mut self, channel: &str, cx: &mut Context<Self>) {
+        if self.channel_user_read_only(channel) {
+            self.error = Some("Users cannot message Minion team channels".into());
+            cx.notify();
+            return;
+        }
         let key = format!("channel-draft:{channel}");
         let Some(input) = self.fields.get(&key).cloned() else {
             return;
@@ -168,6 +173,7 @@ impl Bots {
                 .unwrap_or_default()
         };
         let input = self.field(&draft_key, "Message the channel", draft, true, cx);
+        let read_only = self.channel_user_read_only(&id);
         let bot_mentions = members
             .iter()
             .filter_map(|id| self.roster.get(id))
@@ -233,33 +239,35 @@ impl Bots {
                     members
                         .iter()
                         .take(4)
-                        .filter_map(|id| self.roster.get(id))
-                        .map(|bot| avatar::bot_avatar(bot, "idle", 20., true)),
+                        .filter_map(|id| self.presentation_bot(id))
+                        .map(|bot| avatar::bot_avatar(&bot, "idle", 20., true)),
                 ),
             )
-            .child(
-                icon_button("channel-settings", "Channel settings", "settings")
-                    .debug_selector(|| "channel-settings".into())
-                    .child(self.channels.settings_anchor.probe())
-                    .aria_expanded(self.channels.editing)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.channels.editing {
-                            this.dismiss_channel_settings(window, cx);
-                            return;
-                        }
-                        this.channels.editing = true;
-                        let channel = this
-                            .channels
-                            .state
-                            .get(this.channels.selected.as_deref().unwrap())
-                            .unwrap();
-                        let key = format!("channel-edit:{}:name", channel.id);
-                        let name = channel.name.clone();
-                        let input = this.field(&key, "Channel name", name, false, cx);
-                        window.focus(&input.focus_handle(cx), cx);
-                        cx.notify();
-                    })),
-            );
+            .when(!read_only, |d| {
+                d.child(
+                    icon_button("channel-settings", "Channel settings", "settings")
+                        .debug_selector(|| "channel-settings".into())
+                        .child(self.channels.settings_anchor.probe())
+                        .aria_expanded(self.channels.editing)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.channels.editing {
+                                this.dismiss_channel_settings(window, cx);
+                                return;
+                            }
+                            this.channels.editing = true;
+                            let channel = this
+                                .channels
+                                .state
+                                .get(this.channels.selected.as_deref().unwrap())
+                                .unwrap();
+                            let key = format!("channel-edit:{}:name", channel.id);
+                            let name = channel.name.clone();
+                            let input = this.field(&key, "Channel name", name, false, cx);
+                            window.focus(&input.focus_handle(cx), cx);
+                            cx.notify();
+                        })),
+                )
+            });
         let mut list = div()
             .id("channel-messages")
             .debug_selector(|| "channel-messages".into())
@@ -296,8 +304,11 @@ impl Bots {
             );
         }
         for (key, author, time, rows) in messages {
-            let bot = author["botId"].as_str().and_then(|id| self.roster.get(id));
+            let bot = author["botId"]
+                .as_str()
+                .and_then(|id| self.presentation_bot(id));
             let label = bot
+                .as_ref()
                 .map(|b| b.label())
                 .unwrap_or_else(|| author["name"].as_str().unwrap_or("You").to_owned());
             let mut heading = div()
@@ -307,7 +318,7 @@ impl Bots {
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM);
             if let Some(bot) = bot {
-                heading = heading.child(avatar::bot_avatar(bot, "idle", 20., true));
+                heading = heading.child(avatar::bot_avatar(&bot, "idle", 20., true));
             }
             heading = heading.child(label).when_some(time, |d, time| {
                 d.child(
@@ -528,10 +539,20 @@ impl Bots {
                     .child(error.clone()),
             );
         }
+        let footer = if read_only {
+            footer.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(content(0.5))
+                    .child("Team conversation · Only Bots can send messages"),
+            )
+        } else {
+            footer.child(composer)
+        };
         let surface = surface
             .child(header)
             .child(list)
-            .child(footer.child(composer))
+            .child(footer)
             .children(self.options_surface(cx));
         if self.channels.editing {
             let form = self.channel_form(cx);
@@ -567,6 +588,15 @@ impl Bots {
         let existing = editing
             .as_deref()
             .and_then(|id| self.channels.state.get(id));
+        if existing.is_some_and(|c| c.user_read_only(&self.roster)) {
+            return div()
+                .px_3()
+                .py_2()
+                .text_size(px(12.))
+                .text_color(content(0.7))
+                .child("Team channels are managed by their Bots.")
+                .into_any_element();
+        }
         let name = existing.map(|c| c.name.clone()).unwrap_or_default();
         let topic = existing.map(|c| c.topic.clone()).unwrap_or_default();
         let members = existing
@@ -587,7 +617,7 @@ impl Bots {
         let valid = !name.read(cx).content.trim().is_empty()
             && !self.channels.form_members[&prefix].is_empty();
         let mut bots = div().w_full().flex().flex_col().gap_1();
-        for bot in &self.roster.bots {
+        for bot in self.roster.bots.iter().filter(|b| !b.is_minion()) {
             let chosen = self.channels.form_members[&prefix].contains(&bot.id);
             let member = bot.id.clone();
             let key = prefix.clone();
@@ -622,7 +652,7 @@ impl Bots {
                     })),
             );
         }
-        if self.roster.bots.is_empty() {
+        if !self.roster.bots.iter().any(|b| !b.is_minion()) {
             bots = bots.child(
                 div()
                     .text_color(content(0.5))
@@ -648,12 +678,19 @@ impl Bots {
             if !valid {
                 return;
             }
+            if selected
+                .as_deref()
+                .is_some_and(|id| this.channel_user_read_only(id))
+            {
+                return;
+            }
             let name = this.fields[&save_name].read(cx).content.clone();
             let topic = this.fields[&save_topic].read(cx).content.clone();
             let members = this
                 .roster
                 .bots
                 .iter()
+                .filter(|bot| !bot.is_minion())
                 .filter(|bot| {
                     this.channels
                         .form_members
@@ -669,7 +706,15 @@ impl Bots {
             } else {
                 next.create(&name, &topic, members, &this.roster)
             };
-            match result.and_then(|id| this.commit_channels(next, cx).map(|_| id)) {
+            match result.and_then(|id| {
+                if next
+                    .get(&id)
+                    .is_some_and(|c| c.user_read_only(&this.roster))
+                {
+                    return Err("Minion team channels are managed by their Bots".into());
+                }
+                this.commit_channels(next, cx).map(|_| id)
+            }) {
                 Ok(id) => {
                     this.channels.selected = Some(id);
                     this.channels.editing = false;
@@ -766,6 +811,9 @@ impl Bots {
         let Some(id) = self.channels.selected.clone() else {
             return;
         };
+        if self.channel_user_read_only(&id) {
+            return;
+        }
         let key = format!("channel-draft:{id}");
         let draft = locked(&self.store)
             .ok()
