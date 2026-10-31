@@ -21,6 +21,10 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "notes.list" => "limit offset",
         "notes.read" => "id",
         "notes.write" => "id title body tags",
+        "todos.list" => "project",
+        "todos.add" => "title status project",
+        "todos.update" => "id title status before project",
+        "todos.remove" => "id project",
         "artifacts.list" => "kind limit offset",
         "artifacts.read" => "id",
         "artifacts.write" => "id kind title body summary",
@@ -40,6 +44,8 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         if !fields.split_whitespace().any(|f| f == key) {
             return Err(format!("{action} does not take {key}"));
         }
+        // `before` is a to-do's ID here and a page cursor everywhere else.
+        let todo_before = action == "todos.update" && key == "before";
         if [
             "draft",
             "reveal",
@@ -53,34 +59,36 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         {
             return Err(format!("{key} must be true or false"));
         }
-        if ["before", "limit", "offset", "maxChars", "number"].contains(&key.as_str())
+        if !todo_before
+            && ["before", "limit", "offset", "maxChars", "number"].contains(&key.as_str())
             && value.as_u64().is_none()
         {
             return Err(format!("{key} must be a non-negative integer"));
         }
-        if ![
-            "draft",
-            "reveal",
-            "notifyOnComplete",
-            "existing",
-            "enabled",
-            "expectReply",
-            "before",
-            "limit",
-            "offset",
-            "maxChars",
-            "number",
-            "id",
-            "sessionId",
-            "besideSessionId",
-            "modelSettings",
-            "schedule",
-            "tags",
-            "options",
-            "members",
-            "to",
-        ]
-        .contains(&key.as_str())
+        if (todo_before
+            || ![
+                "draft",
+                "reveal",
+                "notifyOnComplete",
+                "existing",
+                "enabled",
+                "expectReply",
+                "before",
+                "limit",
+                "offset",
+                "maxChars",
+                "number",
+                "id",
+                "sessionId",
+                "besideSessionId",
+                "modelSettings",
+                "schedule",
+                "tags",
+                "options",
+                "members",
+                "to",
+            ]
+            .contains(&key.as_str()))
             && !value.is_string()
         {
             return Err(format!("{key} must be text"));
@@ -153,6 +161,7 @@ pub fn is_read_only(action: &str) -> bool {
             | "folders.list"
             | "notes.list"
             | "notes.read"
+            | "todos.list"
             | "worktrees.list"
             | "artifacts.list"
             | "artifacts.read"
@@ -189,5 +198,13 @@ mod tests {
             &json!({"prompt":"x","project":"/code","draft":true})
         )
         .is_ok());
+    }
+    #[test]
+    fn before_is_a_todo_id_or_a_page_cursor_by_action() {
+        assert!(validate("todos.update", &json!({"id":"a","before":"b"})).is_ok());
+        assert!(validate("todos.update", &json!({"id":"a","before":3})).is_err());
+        assert!(validate("bots.read", &json!({"bot":"b","before":3})).is_ok());
+        assert!(validate("bots.read", &json!({"bot":"b","before":"3"})).is_err());
+        assert!(validate("sessions.read", &json!({"sessionId":1,"before":"3"})).is_err());
     }
 }

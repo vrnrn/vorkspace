@@ -14,6 +14,7 @@ pub(super) enum OverviewTab {
     Habits,
     Documents,
     Changes,
+    Todos,
 }
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum SettingsSection {
@@ -1179,6 +1180,12 @@ impl Bots {
                 "file-diff",
                 self.project_changes.count(&bot.id),
             ),
+            (
+                OverviewTab::Todos,
+                "To-dos",
+                "check-circle",
+                self.open_todos(&bot.id, cx),
+            ),
         ];
         div()
             .id("bot-overview-tabs")
@@ -1205,6 +1212,7 @@ impl Bots {
                     OverviewTab::Documents => "bot-overview-Documents",
                     OverviewTab::Habits => "bot-overview-Habits",
                     OverviewTab::Changes => "bot-overview-Changes",
+                    OverviewTab::Todos => "bot-overview-Todos",
                 };
                 crate::project_tabs::tab_button(
                     id,
@@ -1248,6 +1256,7 @@ impl Bots {
             OverviewTab::Habits => self.habits_list(bot, cx),
             OverviewTab::Documents => self.document_list(bot, cx),
             OverviewTab::Changes => self.changes_list(bot, cx),
+            OverviewTab::Todos => self.todo_list(bot, cx),
         };
         div()
             .size_full()
@@ -1255,6 +1264,49 @@ impl Bots {
             .min_h_0()
             .child(body)
             .into_any_element()
+    }
+    /// Open items on the Bot's board: its open board's, which shows changes
+    /// at once, or else the stored count.
+    pub(super) fn open_todos(&self, id: &str, cx: &App) -> usize {
+        let key = vorkspace_core::todos::TodoBoard::Bot(id.into());
+        self.todo_board
+            .as_ref()
+            .map(|board| board.read(cx))
+            .filter(|board| board.board() == Some(&key))
+            .and_then(|board| board.open_count())
+            .or_else(|| self.todo_counts.get(&key.key()).copied())
+            .unwrap_or(0)
+    }
+    pub(super) fn load_todo_counts(&mut self, cx: &mut Context<Self>) {
+        self.todo_counts_generation += 1;
+        let generation = self.todo_counts_generation;
+        let store = self.store.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { locked(&store)?.open_todo_counts() });
+        cx.spawn(async move |this, cx| {
+            let counts = work.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.todo_counts_generation != generation {
+                    return;
+                }
+                if let Ok(counts) = counts {
+                    this.todo_counts = counts;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+    fn todo_list(&mut self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
+        let store = self.store.clone();
+        let board = self
+            .todo_board
+            .get_or_insert_with(|| cx.new(|cx| crate::todos::TodoBoardView::new(store, false, cx)))
+            .clone();
+        let key = vorkspace_core::todos::TodoBoard::Bot(bot.id.clone());
+        board.update(cx, |board, cx| board.set_board(Some(key), cx));
+        div().size_full().child(board).into_any_element()
     }
     fn session_list(&mut self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
         let filter = self.field(

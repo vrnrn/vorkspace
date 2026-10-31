@@ -98,6 +98,7 @@ impl Shell {
                 .cloned()
                 .map(IntoElement::into_any_element),
             AppView::Automations => self.automations.clone().map(IntoElement::into_any_element),
+            AppView::Todos => self.todos_page.clone().map(IntoElement::into_any_element),
         }
     }
     pub(super) fn focus_app_view(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -117,6 +118,7 @@ impl Shell {
             Some(AppView::Automations) => {
                 self.automations.as_ref().map(|view| view.focus_handle(cx))
             }
+            Some(AppView::Todos) => self.todos_page.as_ref().map(|view| view.focus_handle(cx)),
             None => return false,
         };
         if let Some(focus) = focus {
@@ -149,6 +151,68 @@ impl Shell {
             });
         }
         self.show_app_view(AppView::Notes, window, cx);
+    }
+
+    pub(super) fn open_todos(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.prepare_app_view(window, cx);
+        if self.todos_page.is_none() {
+            let view = cx.new(|cx| crate::todos::TodosPage::new(self.store.clone(), cx));
+            self.app_view_events.push(cx.subscribe_in(
+                &view,
+                window,
+                |this, _, event: &crate::todos::PageEvent, window, cx| match event {
+                    crate::todos::PageEvent::Close => this.close_app_view(window, cx),
+                },
+            ));
+            self.todos_page = Some(view);
+        }
+        let choices = self.todo_board_choices(cx);
+        if let Some(page) = &self.todos_page {
+            page.update(cx, |page, cx| page.set_choices(choices, cx));
+        }
+        self.show_app_view(AppView::Todos, window, cx);
+    }
+
+    /// Every project's and Bot's board, for the To-dos page's picker.
+    fn todo_board_choices(&self, cx: &App) -> Vec<crate::todos::BoardChoice> {
+        use vorkspace_core::todos::TodoBoard;
+        let projects = self
+            .workspace
+            .projects
+            .iter()
+            .map(|path| crate::todos::BoardChoice {
+                board: TodoBoard::Project(path.clone()),
+                label: vorkspace_core::files::leaf_name(path),
+            });
+        let bots: Vec<_> = self
+            .bots
+            .as_ref()
+            .filter(|_| self.workspace.preferences.bots)
+            .map(|bots| {
+                bots.read(cx)
+                    .roster
+                    .bots
+                    .iter()
+                    .map(|bot| crate::todos::BoardChoice {
+                        board: TodoBoard::Bot(bot.id.clone()),
+                        label: bot.name.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        projects.chain(bots).collect()
+    }
+
+    /// The project sidebar's To-dos tab, pointed at the current project.
+    pub(super) fn project_todo_board(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let store = self.store.clone();
+        let board = self
+            .project_todos
+            .get_or_insert_with(|| cx.new(|cx| crate::todos::TodoBoardView::new(store, false, cx)))
+            .clone();
+        let project = vorkspace_core::todos::TodoBoard::Project(self.workspace.project.clone());
+        board.update(cx, |board, cx| board.set_board(Some(project), cx));
+        div().flex_1().min_h_0().child(board).into_any_element()
     }
 
     pub(super) fn open_inbox(&mut self, window: &mut Window, cx: &mut Context<Self>) {

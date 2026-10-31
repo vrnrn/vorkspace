@@ -4381,3 +4381,41 @@ fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAp
             .unwrap()
     );
 }
+
+#[gpui::test]
+fn todo_badge_counts_without_opening_the_board(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let board = vorkspace_core::todos::TodoBoard::Bot(s.id.clone());
+    locked(&s.store)
+        .unwrap()
+        .add_todo(&board, "Persisted", vorkspace_core::todos::TodoStatus::Todo)
+        .unwrap();
+    // A restart opens straight to the Sessions tab.
+    let (owner, prefs) = s
+        .manager
+        .read_with(cx, |m, _| (m.owner.clone(), m.prefs.clone()));
+    let restored = cx.new(|cx| {
+        Bots::new(
+            s.store.clone(),
+            owner,
+            prefs,
+            Some(s.id.clone()),
+            AnchorSlot::default(),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    restored.read_with(cx, |m, cx| {
+        assert!(m.overview_tab == OverviewTab::Sessions);
+        assert!(m.todo_board.is_none());
+        assert_eq!(m.open_todos(&s.id, cx), 1);
+    });
+    // A task the Bot adds while another tab is selected counts too.
+    locked(&s.store)
+        .unwrap()
+        .add_todo(&board, "Added", vorkspace_core::todos::TodoStatus::Todo)
+        .unwrap();
+    cx.update(crate::todos::changed);
+    cx.run_until_parked();
+    restored.read_with(cx, |m, cx| assert_eq!(m.open_todos(&s.id, cx), 2));
+}

@@ -72,6 +72,7 @@ mod tab_label;
 mod tab_motion;
 mod terminal;
 mod theme;
+mod todos;
 mod traffic_lights;
 mod transcript;
 mod updater;

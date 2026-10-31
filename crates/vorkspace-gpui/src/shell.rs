@@ -548,6 +548,9 @@ pub(crate) struct Shell {
     pending_folder: Option<(i64, AnchorSlot)>,
     _session_clock: gpui::Task<()>,
     notes: Option<Entity<Notes>>,
+    todos_page: Option<Entity<crate::todos::TodosPage>>,
+    /// The project sidebar's board; it follows the current project.
+    project_todos: Option<Entity<crate::todos::TodoBoardView>>,
     inbox: Option<Entity<crate::inbox::Inbox>>,
     connector_pages: HashMap<crate::workspace::Connector, Entity<crate::inbox::Inbox>>,
     automations: Option<Entity<crate::automations::Automations>>,
@@ -890,6 +893,8 @@ impl Shell {
             pending_folder: None,
             _session_clock: session_clock,
             notes: None,
+            todos_page: None,
+            project_todos: None,
             inbox: None,
             connector_pages: HashMap::new(),
             automations: None,

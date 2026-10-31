@@ -7,6 +7,8 @@ use vorkspace_core::{session_groups::Groups, time::now_ms};
 enum Effect {
     Card(Value),
     None,
+    /// A board changed; open views reload.
+    Todos,
     Start(Box<crate::shell::AppStart>),
     Groups(String, Groups),
 }
@@ -94,6 +96,7 @@ impl Bots {
                 let result = result.map(|(value, effect)| {
                     match effect {
                         Effect::None => (),
+                        Effect::Todos => crate::todos::changed(cx),
                         Effect::Card(value) => {
                             this.hold_card(call.session, &bot_id, value);
                             this.save(cx);
@@ -444,6 +447,15 @@ impl Bots {
                     if let Some(m)=self.roster.get_mut(&bot.id){if let Some(old)=m.documents.iter_mut().find(|d|d.id==id){*old=document.clone();}else{m.documents.push(document.clone());}}
                     self.documents.remove(&id);self.html_documents.remove(&id);self.hold_card(call.session,&bot.id,json!({"id":bot::new_id(),"type":"document","documentId":id,"title":document.title,"summary":document.summary}));self.save(cx);Ok(json!(document))
                 }}}
+            }
+            "todos.list"|"todos.add"|"todos.update"|"todos.remove"=>{
+                // Its own board, or an assigned project's.
+                let board=match input.get("project").and_then(Value::as_str){
+                    Some(path)=>match bot.project(Some(path)){Ok(p)=>vorkspace_core::todos::TodoBoard::Project(p),Err(e)=>{self.finish_call(call,Err(e),cx);return;}},
+                    None=>vorkspace_core::todos::TodoBoard::Bot(bot.id.clone()),
+                };
+                let effect=if action=="todos.list"{Effect::None}else{Effect::Todos};
+                self.call_work(call,target,move|store|Ok((locked(&store)?.todo_action(&board,&action,&input)?,effect)),cx);return;
             }
             "soul.read"|"soul.update"|"memory.read"|"memory.search"|"memory.add"|"memory.replace"|"memory.remove"|"habits.list"|"habits.add"|"habits.update"|"habits.run"|"habits.remove"|"notes.list"|"notes.read"|"notes.write"|"worktrees.list"|"worktrees.create"=>{
                 let caller=call.session;let projects=bot.projects.clone();

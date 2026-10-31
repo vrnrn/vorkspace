@@ -964,6 +964,7 @@ impl Shell {
                                     "Jira" => this.open_connector(Connector::Jira, window, cx),
                                     "Notes" => this.open_notes(window, cx),
                                     "Automations" => this.open_automations(window, cx),
+                                    "To-dos" => this.open_todos(window, cx),
                                     _ => (),
                                 },
                             ))

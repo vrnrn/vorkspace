@@ -28,6 +28,7 @@ pub mod session_title;
 pub mod store;
 pub mod ticket_context;
 pub mod time;
+pub mod todos;
 pub mod tool;
 pub mod transcript;
 pub mod usage;

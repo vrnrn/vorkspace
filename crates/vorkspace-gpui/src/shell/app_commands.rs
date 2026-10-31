@@ -17,6 +17,8 @@ pub(crate) struct AppStart {
 }
 enum Effect {
     None,
+    /// A board changed; open views reload.
+    Todos,
     Start(Box<AppStart>),
     Groups(String, vorkspace_core::session_groups::Groups),
 }
@@ -333,6 +335,7 @@ impl Shell {
                 let result = result.and_then(|(result, effect)| {
                     match effect {
                         Effect::None => (),
+                        Effect::Todos => crate::todos::changed(cx),
                         Effect::Start(start) => {
                             this.app_install_start(caller, *start, window, cx)?;
                         }
@@ -372,6 +375,7 @@ impl Shell {
                     | "folders.list"
                     | "notes.list"
                     | "notes.read"
+                    | "todos.list"
                     | "worktrees.list"
             )
         {
@@ -496,6 +500,11 @@ impl Shell {
                     Ok((result, Effect::None))
                 }, cx); return;
             }
+            "todos.list" | "todos.add" | "todos.update" | "todos.remove" => {
+                let board = vorkspace_core::todos::TodoBoard::Project(project.clone());
+                let effect = if action == "todos.list" { Effect::None } else { Effect::Todos };
+                self.app_background(call, move |store| Ok((locked(&store)?.todo_action(&board, &action, &input)?, effect)), cx); return;
+            }
             "folders.move" => {
                 let id = match session_id(&input, &self.store) { Ok(id) => id, Err(e) => { self.finish_app_call(call, Err(e)); return; } };
                 if !self.session_summaries.contains_key(&id) || self.session_metadata(id, cx).summary.cwd != project { self.finish_app_call(call, Err("Session is outside this project.".into())); return; }
@@ -518,7 +527,7 @@ impl Shell {
                     Ok((json!({"path":tree.path,"branch":tree.branch}),Effect::None))
                 },cx);return;
             }
-            _ => Err("Unknown Operator action. Supported: models.list, sessions.list/read/start/send/draft/stop/archive/delete, folders.list/move, notes.list/read/write, worktrees.list/create.".into()),
+            _ => Err("Unknown Operator action. Supported: models.list, sessions.list/read/start/send/draft/stop/archive/delete, folders.list/move, notes.list/read/write, todos.list/add/update/remove, worktrees.list/create.".into()),
         };
         self.finish_app_call(call, result);
         let _ = window;
@@ -1731,5 +1740,63 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+    #[gpui::test]
+    fn operators_manage_their_project_board_and_open_views_reload(cx: &mut TestAppContext) {
+        let (window, caller, root) = command_window(cx);
+        let project = root.path().to_string_lossy().into_owned();
+        let board = vorkspace_core::todos::TodoBoard::Project(project.clone());
+        // An open project board, which must pick up the change.
+        let view = window
+            .update(cx, |shell, _, cx| {
+                let store = shell.store.clone();
+                let view = cx.new(|cx| crate::todos::TodoBoardView::new(store, false, cx));
+                view.update(cx, |view, cx| view.set_board(Some(board.clone()), cx));
+                view
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let added = command(
+            window,
+            caller,
+            "todo-add",
+            "todos.add",
+            json!({"title":"Review the board"}),
+            cx,
+        )
+        .unwrap();
+        assert_eq!(added["status"], "todo");
+        view.read_with(cx, |view, _| assert_eq!(view.items().len(), 1));
+        let id = added["id"].as_str().unwrap();
+        command(
+            window,
+            caller,
+            "todo-done",
+            "todos.update",
+            json!({"id":id,"status":"done"}),
+            cx,
+        )
+        .unwrap();
+        let listed = command(window, caller, "todo-list", "todos.list", json!({}), cx).unwrap();
+        assert_eq!(listed["board"], board.key());
+        assert_eq!(listed["items"][0]["status"], "done");
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.items()[0].status,
+                vorkspace_core::todos::TodoStatus::Done
+            )
+        });
+        // Another project's board is out of reach.
+        assert!(
+            command(
+                window,
+                caller,
+                "todo-elsewhere",
+                "todos.list",
+                json!({"project":"/elsewhere"}),
+                cx,
+            )
+            .is_err()
+        );
     }
 }

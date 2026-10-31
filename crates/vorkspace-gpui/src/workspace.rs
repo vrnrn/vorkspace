@@ -48,6 +48,7 @@ pub(crate) enum AppView {
     Connector(Connector),
     Notes,
     Automations,
+    Todos,
 }
 impl AppView {
     pub fn label(self) -> &'static str {
@@ -56,6 +57,7 @@ impl AppView {
             Self::Connector(provider) => provider.label(),
             Self::Notes => "Notes",
             Self::Automations => "Automations",
+            Self::Todos => "To-dos",
         }
     }
 }
@@ -67,20 +69,23 @@ pub(crate) enum SidebarNavigation {
     Connector(Connector),
     Notes,
     Automations,
+    Todos,
 }
 impl SidebarNavigation {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Connector(Connector::Github),
         Self::Connector(Connector::Gitlab),
         Self::Connector(Connector::Jira),
         Self::Notes,
         Self::Automations,
+        Self::Todos,
     ];
     pub fn id(self) -> &'static str {
         match self {
             Self::Connector(provider) => provider.id(),
             Self::Notes => "notes",
             Self::Automations => "automations",
+            Self::Todos => "todos",
         }
     }
     pub fn from_id(id: &str) -> Option<Self> {
@@ -91,6 +96,7 @@ impl SidebarNavigation {
             Self::Connector(provider) => provider.label(),
             Self::Notes => "Notes",
             Self::Automations => "Automations",
+            Self::Todos => "To-dos",
         }
     }
     pub fn icon(self) -> &'static str {
@@ -98,6 +104,7 @@ impl SidebarNavigation {
             Self::Connector(provider) => provider.icon(),
             Self::Notes => "note",
             Self::Automations => "zap",
+            Self::Todos => "check-circle",
         }
     }
     pub fn normalize(order: &[String]) -> Vec<Self> {
@@ -161,13 +168,14 @@ pub(crate) enum SidebarTab {
     Files,
     Changes,
     Graph,
+    Todos,
 }
 impl SidebarTab {
     pub fn normalize(order: &[Self]) -> Vec<Self> {
         let mut tabs = Vec::new();
         for tab in order
             .iter()
-            .chain(&[Self::Sessions, Self::Files, Self::Changes])
+            .chain(&[Self::Sessions, Self::Files, Self::Changes, Self::Todos])
         {
             if *tab != Self::Graph && !tabs.contains(tab) {
                 tabs.push(*tab);
@@ -181,6 +189,7 @@ impl SidebarTab {
             Self::Files => "Explorer",
             Self::Changes => "Changes",
             Self::Graph => "History",
+            Self::Todos => "To-dos",
         }
     }
     pub fn icon(self) -> &'static str {
@@ -189,6 +198,7 @@ impl SidebarTab {
             Self::Files => "folder",
             Self::Changes => "git-compare",
             Self::Graph => "git-branch",
+            Self::Todos => "check-circle",
         }
     }
 }
@@ -317,6 +327,7 @@ pub(crate) struct Workspace {
     pub compact_session_cards: bool,
     pub sidebar_notes_visible: bool,
     pub sidebar_automations_visible: bool,
+    pub sidebar_todos_visible: bool,
     pub sidebar_inbox_visible: bool,
     /// Show qualifying running and unseen finished sessions in the project rail.
     pub sidebar_activity_visible: bool,
@@ -505,6 +516,7 @@ impl Default for Workspace {
             compact_session_cards: true,
             sidebar_notes_visible: true,
             sidebar_automations_visible: true,
+            sidebar_todos_visible: true,
             sidebar_inbox_visible: true,
             sidebar_activity_visible: true,
             sidebar_subscriptions_visible: true,
@@ -1444,7 +1456,7 @@ mod tests {
         let mut state = Workspace::restore(Some(&saved.to_string()), &[], "/work");
         assert_eq!(
             state.sidebar_navigation_order,
-            ["notes", "github", "automations", "gitlab", "jira"]
+            ["notes", "github", "automations", "gitlab", "jira", "todos"]
         );
         use SidebarNavigation::{Automations, Connector as Provider, Notes};
         let available = [
@@ -1461,7 +1473,7 @@ mod tests {
         ));
         assert_eq!(
             state.sidebar_navigation_order,
-            ["jira", "notes", "github", "gitlab", "automations"]
+            ["jira", "notes", "github", "gitlab", "automations", "todos"]
         );
         // GitLab's slot survives its absence; hidden GitHub is still reorderable.
         assert!(state.reorder_sidebar_navigation(
@@ -1472,7 +1484,7 @@ mod tests {
         ));
         assert_eq!(
             state.sidebar_navigation_order,
-            ["jira", "notes", "automations", "gitlab", "github"]
+            ["jira", "notes", "automations", "gitlab", "github", "todos"]
         );
         assert!(!state.reorder_sidebar_navigation(
             Provider(Connector::Gitlab),
@@ -1501,7 +1513,7 @@ mod tests {
         ));
         assert_eq!(
             state.sidebar_navigation_order,
-            ["jira", "gitlab", "notes", "automations", "github"]
+            ["jira", "gitlab", "notes", "automations", "github", "todos"]
         );
     }
 
@@ -1612,7 +1624,12 @@ mod tests {
     fn sidebar_tools_keep_per_project_selection_and_normalize_main_tab_order() {
         assert_eq!(
             SidebarTab::normalize(&[SidebarTab::Changes, SidebarTab::Graph, SidebarTab::Changes]),
-            [SidebarTab::Changes, SidebarTab::Sessions, SidebarTab::Files]
+            [
+                SidebarTab::Changes,
+                SidebarTab::Sessions,
+                SidebarTab::Files,
+                SidebarTab::Todos
+            ]
         );
         let saved = serde_json::json!({
             "project":"/work",
@@ -1627,7 +1644,12 @@ mod tests {
         assert_eq!(state.project_rail_width, 360.);
         assert_eq!(
             state.sidebar_tab_order,
-            [SidebarTab::Changes, SidebarTab::Sessions, SidebarTab::Files]
+            [
+                SidebarTab::Changes,
+                SidebarTab::Sessions,
+                SidebarTab::Files,
+                SidebarTab::Todos
+            ]
         );
         state.project = "/other".into();
         assert_eq!(state.sidebar_tab(), SidebarTab::Files);

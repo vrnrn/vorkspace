@@ -167,6 +167,7 @@ impl Shell {
                 }
                 app_views::AppView::Notes => self.open_notes(window, cx),
                 app_views::AppView::Automations => self.open_automations(window, cx),
+                app_views::AppView::Todos => self.open_todos(window, cx),
             },
             TitleTab::Session(id) => {
                 let focus = self.workspace.tab_focus(*id);

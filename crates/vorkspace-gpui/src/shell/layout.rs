@@ -1267,4 +1267,71 @@ mod navigation_fit_tests {
         crate::clock::settle_animations(window, visual);
         assert_eq!(selected(visual).as_deref(), Some("sidebar-tab:Changes"));
     }
+
+    #[gpui::test]
+    fn to_dos_open_from_the_sidebar_and_the_project_switcher(cx: &mut TestAppContext) {
+        use vorkspace_core::todos::TodoBoard;
+        crate::clock::use_test_clock(cx);
+        let (window, _, session) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1200.), px(800.)));
+        window
+            .update(visual, |shell, w, cx| {
+                shell.workspace.project_rail_open = true;
+                shell.open(session, w, cx);
+                shell.set_sidebar_visible(true, cx);
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            })
+            .unwrap();
+        crate::clock::settle_animations(window, visual);
+        // The project's switcher has a To-dos tab for the current project.
+        let tab = visual.debug_bounds("classic-tab-to-dos").unwrap();
+        visual.simulate_click(tab.center(), Default::default());
+        crate::clock::settle_animations(window, visual);
+        assert!(visual.debug_bounds("todo-board").is_some());
+        window
+            .update(visual, |shell, _, cx| {
+                let board = shell
+                    .project_todos
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .board()
+                    .cloned();
+                assert_eq!(
+                    board,
+                    Some(TodoBoard::Project(shell.workspace.project.clone()))
+                );
+            })
+            .unwrap();
+        // The left sidebar's To-dos page starts on the personal board.
+        let entry = visual.debug_bounds("sidebar-navigation-To-dos").unwrap();
+        visual.simulate_click(entry.center(), Default::default());
+        crate::clock::settle_animations(window, visual);
+        assert!(visual.debug_bounds("todos-page").is_some());
+        window
+            .update(visual, |shell, _, cx| {
+                assert_eq!(
+                    shell.active_app_view,
+                    Some(crate::workspace::AppView::Todos)
+                );
+                let page = shell.todos_page.as_ref().unwrap().read(cx);
+                assert_eq!(page.selected(cx), Some(TodoBoard::Personal));
+            })
+            .unwrap();
+        // Its picker lists the project.
+        let picker = visual.debug_bounds("todo-board-picker-button").unwrap();
+        visual.simulate_click(picker.center(), Default::default());
+        crate::clock::settle_animations(window, visual);
+        let project = visual.debug_bounds("todo-board-choice-1").unwrap();
+        visual.simulate_click(project.center(), Default::default());
+        crate::clock::settle_animations(window, visual);
+        window
+            .update(visual, |shell, _, cx| {
+                let page = shell.todos_page.as_ref().unwrap().read(cx);
+                assert!(matches!(page.selected(cx), Some(TodoBoard::Project(_))));
+            })
+            .unwrap();
+    }
 }

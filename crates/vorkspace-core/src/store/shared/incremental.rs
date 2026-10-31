@@ -264,6 +264,7 @@ impl Store {
         // work before a whole-database schema version guards active history.
         sql(super::super::local_submissions::ensure_table(&tx))?;
         sql(super::super::notes::ensure_notes_table(&tx))?;
+        sql(super::super::todos::ensure_schema(&tx))?;
         // Prepare automation DDL only; its service still owns run/claim backfill.
         sql(crate::automations::ensure_schema(&tx))?;
         sql(tx.execute_batch(

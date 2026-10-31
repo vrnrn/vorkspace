@@ -27,6 +27,7 @@ mod edit;
 mod shared;
 pub use shared::{IndexedHistoryCursor, IndexedHistoryPage};
 mod side_threads;
+pub(crate) mod todos;
 use crate::transcript::{Row, Transcript};
 pub use edit::EditSnapshot;
 use rusqlite::{params, Connection};
