@@ -96,12 +96,16 @@ pub(crate) fn shutdown(cx: &mut gpui::App) -> gpui::Task<()> {
     })
 }
 impl Vox {
+    fn in_call(&self) -> bool {
+        self.running() || self.active.load(Ordering::Relaxed)
+    }
+
     pub(super) fn toggle_call(&mut self, window: &Window, cx: &mut Context<Self>) {
         if !self.enabled {
             self.stop(cx);
             return;
         }
-        if self.running() || self.active.load(Ordering::Relaxed) {
+        if self.in_call() {
             self.stop(cx);
         } else {
             self.notch.reopen(native::Geometry::read());

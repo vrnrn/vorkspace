@@ -173,6 +173,98 @@ fn silent_reply_stays_below_the_notch_and_survives_status_updates(cx: &mut TestA
 }
 
 #[gpui::test]
+fn hovering_the_status_dot_turns_it_into_the_call_control(cx: &mut TestAppContext) {
+    let window = window(cx);
+    crate::clock::settle_animations(window, cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    let dot = visual.debug_bounds("vox-dot").unwrap();
+    assert!(visual.debug_bounds("vox-square").is_none());
+    let gap = visual.debug_bounds("vox-notch-gap").unwrap();
+    assert!(dot.left() >= gap.right());
+
+    visual.simulate_mouse_move(dot.center(), None, Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("vox-dot").is_none());
+    assert!(visual.debug_bounds("vox-square").is_some());
+    window
+        .update(visual, |voice, _, cx| {
+            voice.active.store(false, Ordering::Relaxed);
+            voice.state = "idle".into();
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("vox-square").is_none());
+    assert!(visual.debug_bounds("vox-play").is_some());
+    window
+        .update(visual, |voice, _, cx| {
+            voice.active.store(true, Ordering::Relaxed);
+            voice.state = "live".into();
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+
+    visual.simulate_click(dot.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |voice, _, _| {
+            assert!(!voice.active.load(Ordering::Relaxed));
+            assert!(voice.notch.closing);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn moving_away_from_the_status_control_restores_the_dot(cx: &mut TestAppContext) {
+    let window = window(cx);
+    crate::clock::settle_animations(window, cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    let dot = visual.debug_bounds("vox-dot").unwrap();
+    visual.simulate_mouse_move(dot.center(), None, Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("vox-square").is_some());
+    visual.simulate_mouse_move(gpui::point(px(900.), px(600.)), None, Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("vox-dot").is_some());
+    assert!(visual.debug_bounds("vox-square").is_none());
+}
+
+#[gpui::test]
+fn leaving_the_window_from_the_status_control_stays_left(cx: &mut TestAppContext) {
+    let window = window(cx);
+    crate::clock::settle_animations(window, cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    let dot = visual.debug_bounds("vox-dot").unwrap();
+    visual.simulate_mouse_move(dot.center(), None, Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("vox-square").is_some());
+
+    // AppKit sends no final move here, so a repaint must not revive the
+    // hover from the pointer's last position inside the window.
+    visual.simulate_event(gpui::MouseExitEvent {
+        position: gpui::point(dot.center().x, px(600.)),
+        pressed_button: None,
+        modifiers: Default::default(),
+    });
+    visual.run_until_parked();
+    window
+        .update(visual, |_, window, cx| {
+            cx.notify();
+            window.refresh();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("vox-square").is_none());
+    assert!(visual.debug_bounds("vox-dot").is_some());
+    window
+        .update(visual, |voice, _, _| {
+            assert!(!voice.notch.hovered, "a departed pointer cannot pause idle");
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn an_old_idle_deadline_cannot_stop_a_new_call(cx: &mut TestAppContext) {
     let window = window(cx);
     window

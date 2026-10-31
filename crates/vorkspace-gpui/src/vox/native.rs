@@ -2,7 +2,9 @@
 use gpui::Window;
 use objc2::{MainThreadMarker, msg_send, runtime::NSObjectProtocol, sel};
 use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_app_kit::{NSColor, NSScreen, NSStatusWindowLevel, NSView, NSWindowCollectionBehavior};
+use objc2_app_kit::{
+    NSColor, NSScreen, NSStatusWindowLevel, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+};
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSString};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -11,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-pub(super) const WING_WIDTH: f32 = 128.;
+pub(super) const WING_WIDTH: f32 = 54.;
 
 #[derive(Clone, Default)]
 pub(super) struct Placement {
@@ -169,6 +171,12 @@ pub(super) fn place(
             {
                 return;
             }
+            // GPUI panels are titled, and AppKit keeps titled windows below
+            // the menu bar, which would hang this surface under the notch.
+            let style = NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel;
+            if native.styleMask() != style {
+                native.setStyleMask(style);
+            }
             native.setCanHide(false);
             native.setHidesOnDeactivate(false);
             native.setHasShadow(false);
@@ -210,6 +218,7 @@ pub(super) fn snapshot(window: &Window) -> serde_json::Value {
     let frame = native.frame();
     serde_json::json!({
         "frame":{"x":frame.origin.x,"y":frame.origin.y,"width":frame.size.width,"height":frame.size.height},
+        "top":frame.origin.y + frame.size.height,
         "canHide":native.canHide(),"hidesOnDeactivate":native.hidesOnDeactivate(),
         "isVisible":native.isVisible(),"isKey":native.isKeyWindow(),"level":native.level(),"spaces":native.collectionBehavior().bits(),
     })

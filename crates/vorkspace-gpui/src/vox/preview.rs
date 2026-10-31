@@ -64,6 +64,8 @@ pub(crate) fn run() {
                     cx.background_executor().timer(Duration::from_millis(500)).await;
                     if let Ok(snapshot) = panel.update(cx, |_, window, _| native::snapshot(window)) {
                         eprintln!("{phase}: {snapshot}");
+                        let top = snapshot["top"].as_f64().expect("native panel frame");
+                        assert!((top - geometry.top).abs() < 1., "{phase}: detached from the screen top");
                     }
                 }
                 cx.background_executor().timer(Duration::from_secs(9)).await;
