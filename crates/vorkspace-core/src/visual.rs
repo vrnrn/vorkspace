@@ -18,12 +18,17 @@ pub const MEMORY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 const TREE_BYTES: usize = 1024 * 1024;
 const CALL_DEADLINE: Duration = Duration::from_millis(60);
 
+/// The deadline's time source. `Instant::now` bills a program for any stall of
+/// its thread, so only tests of the deadline itself may run on it unchanged.
+type Clock = fn() -> Instant;
+
 /// An isolated program. Keep it alive to preserve state between native events.
 /// Field order ensures all persistent JS values are dropped before their VM.
 pub struct VisualRuntime {
     controller: Persistent<Object<'static>>,
     context: Context,
     _runtime: Runtime,
+    clock: Clock,
     deadline: Rc<Cell<Instant>>,
     interrupted: Rc<Cell<bool>>,
     stopped: bool,
@@ -32,16 +37,20 @@ pub struct VisualRuntime {
 
 impl VisualRuntime {
     pub fn new(source: &str) -> Result<Self, String> {
+        Self::with_clock(source, Instant::now)
+    }
+
+    fn with_clock(source: &str, clock: Clock) -> Result<Self, String> {
         validate_source(source)?;
         let runtime = Runtime::new().map_err(|e| format!("Could not start visual runtime: {e}"))?;
         runtime.set_memory_limit(MEMORY_LIMIT_BYTES);
         runtime.set_max_stack_size(256 * 1024);
-        let deadline = Rc::new(Cell::new(Instant::now() + CALL_DEADLINE));
+        let deadline = Rc::new(Cell::new(clock() + CALL_DEADLINE));
         let interrupted = Rc::new(Cell::new(false));
         let interrupt_deadline = deadline.clone();
         let interrupt_flag = interrupted.clone();
         runtime.set_interrupt_handler(Some(Box::new(move || {
-            let expired = Instant::now() >= interrupt_deadline.get();
+            let expired = clock() >= interrupt_deadline.get();
             if expired {
                 interrupt_flag.set(true);
             }
@@ -62,6 +71,7 @@ impl VisualRuntime {
             controller,
             context,
             _runtime: runtime,
+            clock,
             deadline,
             interrupted,
             stopped: false,
@@ -95,7 +105,7 @@ impl VisualRuntime {
         if self.stopped {
             return Err("Visual stopped after an execution error; reload it to continue".into());
         }
-        self.deadline.set(Instant::now() + CALL_DEADLINE);
+        self.deadline.set((self.clock)() + CALL_DEADLINE);
         self.interrupted.set(false);
         let result = self.context.with(|ctx| {
             let result = (|| -> rquickjs::Result<String> {
@@ -169,11 +179,15 @@ fn validate_event(node: &Node, id: &str, value: &serde_json::Value) -> Option<Re
 /// Validate the initial view and a bounded sample of its interactive controls.
 /// Each event runs in a fresh VM so checking never changes the published state.
 pub fn check(source: &str) -> Result<Node, String> {
-    let initial = VisualRuntime::new(source)?.render()?;
+    check_with_clock(source, Instant::now)
+}
+
+fn check_with_clock(source: &str, clock: Clock) -> Result<Node, String> {
+    let initial = VisualRuntime::with_clock(source, clock)?.render()?;
     let mut probes = Vec::new();
     collect_probes(&initial, &mut probes);
     for (handler, value) in probes.into_iter().take(8) {
-        let mut probe = VisualRuntime::new(source)?;
+        let mut probe = VisualRuntime::with_clock(source, clock)?;
         probe.render()?;
         probe
             .dispatch(&handler, value)
