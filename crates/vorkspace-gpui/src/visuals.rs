@@ -769,6 +769,29 @@ impl VisualView {
                 height,
                 shapes,
             } => drawing(*width, *height, shapes.clone()),
+            Node::Svg { markup, title }
+            | Node::Mermaid {
+                source: markup,
+                title,
+            } => {
+                let kind = if matches!(node, Node::Svg { .. }) {
+                    crate::diagrams::DiagramKind::Svg
+                } else {
+                    crate::diagrams::DiagramKind::Mermaid
+                };
+                crate::diagrams::diagram(
+                    kind,
+                    markup.clone().into(),
+                    title.clone().map(Into::into),
+                    || {
+                        div()
+                            .text_size(px(12.))
+                            .text_color(content(0.5))
+                            .child("This diagram could not be drawn")
+                            .into_any_element()
+                    },
+                )
+            }
             Node::Scene {
                 width: _,
                 height,

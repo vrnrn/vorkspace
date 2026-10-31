@@ -112,13 +112,58 @@ fn sandbox(body: &str) -> String {
     let surface = if light { "#eeeeee" } else { "#222222" };
     let border = if light { "#d4d4d4" } else { "#383838" };
     let source = format!(
-        "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; worker-src blob:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'\"><meta name=viewport content=\"width=device-width,initial-scale=1\"><style>:root{{--background:{background};--foreground:{foreground};--muted:{muted};--surface:{surface};--border:{border};--accent:{accent};--link:{accent};--positive:#10b981;--negative:#f43f5e;--chart-1:{accent};--chart-2:#10b981;--chart-3:#f59e0b;--chart-4:#f43f5e;--chart-5:#a78bfa;--chart-6:#22d3ee;--font-sans:system-ui;--font-bot:ui-monospace,monospace;--radius:10px;color-scheme:{scheme}}}body{{font:14px var(--font-sans);margin:20px;color:var(--foreground);background:var(--background)}}a{{color:var(--link)}}</style>{body}",
-        scheme = if light { "light" } else { "dark" }
+        "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; worker-src blob:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'\"><meta name=viewport content=\"width=device-width,initial-scale=1\"><style>:root{{--background:{background};--foreground:{foreground};--muted:{muted};--surface:{surface};--border:{border};--accent:{accent};--link:{accent};--positive:#10b981;--negative:#f43f5e;--chart-1:{accent};--chart-2:#10b981;--chart-3:#f59e0b;--chart-4:#f43f5e;--chart-5:#a78bfa;--chart-6:#22d3ee;--font-sans:system-ui;--font-bot:ui-monospace,monospace;--radius:10px;color-scheme:{scheme}}}body{{font:14px var(--font-sans);margin:20px;color:var(--foreground);background:var(--background)}}a{{color:var(--link)}}</style>{body}{diagrams}",
+        scheme = if light { "light" } else { "dark" },
+        diagrams = mermaid_support(body),
     );
     format!(
         "<!doctype html><style>html,body,iframe{{margin:0;border:0;width:100%;height:100%;overflow:hidden;background:{background}}}</style><iframe sandbox=\"allow-scripts\" referrerpolicy=\"no-referrer\" srcdoc=\"{}\"></iframe>",
         escape(&source)
     )
+}
+/// Pele draws `<pre class="mermaid">` and ```mermaid code blocks in the
+/// document's own sandbox, themed by its variables. Only documents that use
+/// Mermaid carry the renderer.
+fn mermaid_support(body: &str) -> String {
+    if !uses_mermaid_class(body) {
+        return String::new();
+    }
+    format!(
+        "<style>.pele{{--pele-bg:var(--background);--pele-fg:var(--foreground);--pele-muted:var(--muted);--pele-line:var(--muted);--pele-surface:var(--surface);--pele-surface-alt:var(--border);--pele-border:var(--border);--pele-accent:var(--accent);--pele-font:var(--font-sans)}}</style><script>{}</script><script>for(const el of document.querySelectorAll('pre.mermaid,code.language-mermaid')){{const host=el.tagName==='CODE'&&el.parentElement&&el.parentElement.tagName==='PRE'?el.parentElement:el;try{{pele.mount(host,el.textContent)}}catch(e){{}}}}</script>",
+        include_str!("../../assets/pele.global.js")
+    )
+}
+/// Whether any `class` attribute holds a `mermaid` or `language-mermaid`
+/// token, in any quote style or order. The mount script's selectors then
+/// decide what is drawn.
+fn uses_mermaid_class(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    let mut rest = lower.as_str();
+    while let Some(at) = rest.find("class") {
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + "class".len()..].trim_start();
+        rest = &rest[at + "class".len()..];
+        if !before.is_some_and(char::is_whitespace) {
+            continue;
+        }
+        let Some(value) = after.strip_prefix('=').map(str::trim_start) else {
+            continue;
+        };
+        let value = match value.chars().next() {
+            Some(quote @ ('"' | '\'')) => value[1..].split(quote).next().unwrap_or_default(),
+            _ => value
+                .split(|c: char| c.is_whitespace() || c == '>')
+                .next()
+                .unwrap_or_default(),
+        };
+        if value
+            .split_whitespace()
+            .any(|token| matches!(token, "mermaid" | "language-mermaid"))
+        {
+            return true;
+        }
+    }
+    false
 }
 impl Html {
     pub(super) fn new(body: String) -> Self {
@@ -294,5 +339,31 @@ mod tests {
         assert!(!html.contains("allow-same-origin"));
         assert!(html.contains("connect-src 'none'"));
         assert!(html.contains("&lt;script&gt;"));
+    }
+    #[test]
+    fn only_mermaid_documents_carry_pele() {
+        assert!(!sandbox("<p>No diagrams</p>").contains("pele.mount"));
+        let html = sandbox("<pre class=\"mermaid\">flowchart LR\n A --> B</pre>");
+        assert!(html.contains("pele.mount"));
+        assert!(html.contains("--pele-bg:var(--background)"));
+        // Still inside the opaque iframe's escaped source.
+        assert!(!html.contains("<script>"));
+        // Any quote style or class order.
+        for body in [
+            "<pre class='mermaid'>flowchart LR\n A --> B</pre>",
+            "<pre class=\"diagram mermaid\">flowchart LR\n A --> B</pre>",
+            "<PRE CLASS = mermaid>flowchart LR\n A --> B</PRE>",
+            "<pre><code class=\"hljs language-mermaid\">flowchart LR</code></pre>",
+        ] {
+            assert!(sandbox(body).contains("pele.mount"), "{body}");
+        }
+        // Mentions and lookalike classes carry nothing.
+        for body in [
+            "<p>Mermaid diagrams are supported.</p>",
+            "<pre class=\"mermaid-like\">x</pre>",
+            "<pre data-class=\"mermaid\">x</pre>",
+        ] {
+            assert!(!sandbox(body).contains("pele.mount"), "{body}");
+        }
     }
 }

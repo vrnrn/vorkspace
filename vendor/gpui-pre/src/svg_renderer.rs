@@ -92,6 +92,9 @@ pub struct RenderSvgParams {
 pub struct SvgRenderer {
     asset_source: Arc<dyn AssetSource>,
     usvg_options: Arc<usvg::Options<'static>>,
+    /// As `usvg_options`, but `<image>` references resolve only inline
+    /// `data:` URIs, never files.
+    untrusted_options: Arc<usvg::Options<'static>>,
 }
 
 /// A parsed SVG document that can be rasterized at any scale.
@@ -122,17 +125,37 @@ impl From<f32> for SvgSize {
 impl SvgRenderer {
     /// Creates a new SVG renderer with the provided asset source.
     pub fn new(asset_source: Arc<dyn AssetSource>) -> Self {
-        static SYSTEM_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
-            let mut db = usvg::fontdb::Database::new();
-            db.load_system_fonts();
-            Arc::new(db)
-        });
-
         // Build the enriched font DB lazily on first SVG render rather than
         // eagerly at construction time. This avoids the expensive deep-clone
         // of the system font database for code paths that never render SVGs
         // (e.g. tests).
         let enriched_fontdb: Arc<OnceLock<Arc<usvg::fontdb::Database>>> = Arc::new(OnceLock::new());
+
+        let options = |image_href_resolver: usvg::ImageHrefResolver<'static>| {
+            Self::options(asset_source.clone(), enriched_fontdb.clone(), image_href_resolver)
+        };
+        let usvg_options = Arc::new(options(usvg::ImageHrefResolver::default()));
+        let untrusted_options = Arc::new(options(usvg::ImageHrefResolver {
+            resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+            resolve_string: Box::new(|_, _| None),
+        }));
+        Self {
+            asset_source,
+            usvg_options,
+            untrusted_options,
+        }
+    }
+
+    fn options(
+        asset_source: Arc<dyn AssetSource>,
+        enriched_fontdb: Arc<OnceLock<Arc<usvg::fontdb::Database>>>,
+        image_href_resolver: usvg::ImageHrefResolver<'static>,
+    ) -> usvg::Options<'static> {
+        static SYSTEM_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
+            let mut db = usvg::fontdb::Database::new();
+            db.load_system_fonts();
+            Arc::new(db)
+        });
 
         let default_font_resolver = usvg::FontResolver::default_font_selector();
         let font_resolver = Box::new({
@@ -173,22 +196,25 @@ impl SvgRenderer {
                 default_fallback_selection(ch, fonts, db)
             },
         );
-        let options = usvg::Options {
+        usvg::Options {
             font_resolver: usvg::FontResolver {
                 select_font: font_resolver,
                 select_fallback: fallback_selection,
             },
+            image_href_resolver,
             ..Default::default()
-        };
-        Self {
-            asset_source,
-            usvg_options: Arc::new(options),
         }
     }
 
     /// Parses SVG data into a [`ParsedSvg`] that can be rasterized at any scale.
     pub fn parse_svg(&self, bytes: &[u8]) -> Result<ParsedSvg, usvg::Error> {
         usvg::Tree::from_data(bytes, &self.usvg_options).map(ParsedSvg)
+    }
+
+    /// Parses SVG data from an untrusted source: `<image>` elements, nested
+    /// SVGs included, may embed inline `data:` URIs but never read files.
+    pub fn parse_untrusted_svg(&self, bytes: &[u8]) -> Result<ParsedSvg, usvg::Error> {
+        usvg::Tree::from_data(bytes, &self.untrusted_options).map(ParsedSvg)
     }
 
     /// Rasterizes a previously parsed SVG into an image buffer.

@@ -288,3 +288,20 @@ fn document_metadata_and_primitive_mesh_are_validated() {
     assert!(check("return () => visual.scene([visual.object({kind:'mesh',vertices:[[0,0,0],[1,0,0],[0,1,0]],indices:[[0,1,2]]})]);").is_ok());
     assert!(check("return () => visual.canvas([visual.rect(0,0,10,10),visual.circle(20,20,3),visual.line(0,0,20,20),visual.polyline([[0,0],[2,2]]),visual.label(2,3,'hello')]);").is_ok());
 }
+
+#[test]
+fn diagrams_are_validated_static_markup() {
+    let node = check("return () => visual.column([visual.mermaid('flowchart LR\\n A --> B', {title: 'Flow'}), visual.svg('<svg viewBox=\"0 0 4 4\"><rect width=\"4\" height=\"4\"/></svg>')]);").unwrap();
+    let Node::Column { children, .. } = &node else {
+        panic!()
+    };
+    assert!(matches!(&children[0], Node::Mermaid { title: Some(t), .. } if t == "Flow"));
+    assert!(matches!(&children[1], Node::Svg { .. }));
+    for bad in [
+        "visual.svg('<svg><script>x()</script></svg>')",
+        "visual.svg('<div>not svg</div>')",
+        "visual.mermaid('')",
+    ] {
+        assert!(check(&format!("return () => {bad};")).is_err(), "{bad}");
+    }
+}

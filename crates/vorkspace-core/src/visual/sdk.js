@@ -129,6 +129,16 @@
       return {geometry, position: o.position ?? [0, 0, 0], rotation: o.rotation ?? [0, 0, 0],
         scale: o.scale ?? [1, 1, 1], color: color(o)};
     },
+    svg(markup, o) {
+      o = options(o, ["title"]);
+      assert(typeof markup === "string", "SVG markup must be a string");
+      return {kind: "svg", markup, title: o.title == null ? null : text(o.title)};
+    },
+    mermaid(source, o) {
+      o = options(o, ["title"]);
+      assert(typeof source === "string", "Mermaid source must be a string");
+      return {kind: "mermaid", source, title: o.title == null ? null : text(o.title)};
+    },
     scene(objects, o) {
       o = options(o, ["width", "height", "camera"]);
       assert(Array.isArray(objects), "Scene objects must be an array");

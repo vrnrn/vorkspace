@@ -41,6 +41,9 @@ pub(crate) enum Block {
     CodeBlock {
         language: Option<String>,
         code: String,
+        /// False for a fence still open at the end of the text, such as one
+        /// arriving in a streamed reply.
+        closed: bool,
     },
     List {
         ordered_start: Option<u64>,
@@ -281,6 +284,10 @@ pub(crate) fn parse_full_hard_breaks(text: &str) -> BlockTree {
 }
 
 fn parse_with_breaks(text: &str, hard_breaks: bool) -> BlockTree {
+    // Whether each code block, in document order, is complete. Nesting
+    // mirrors `blocks`, which skips blocks 32 containers deep.
+    let mut complete = Vec::new();
+    let mut depth = 0usize;
     let mut events = Parser::new_ext(
         text,
         Options::ENABLE_TABLES
@@ -288,7 +295,17 @@ fn parse_with_breaks(text: &str, hard_breaks: bool) -> BlockTree {
             | Options::ENABLE_TASKLISTS
             | Options::ENABLE_MATH,
     )
-    .map(|event| {
+    .into_offset_iter()
+    .map(|(event, range)| {
+        match &event {
+            Event::Start(Tag::BlockQuote(_) | Tag::Item) => depth += 1,
+            Event::End(TagEnd::BlockQuote(_) | TagEnd::Item) => depth = depth.saturating_sub(1),
+            Event::Start(Tag::CodeBlock(kind)) if depth < 32 => complete.push(match kind {
+                CodeBlockKind::Fenced(_) => fence_complete(text, range),
+                CodeBlockKind::Indented => true,
+            }),
+            _ => {}
+        }
         if hard_breaks && matches!(event, Event::SoftBreak) {
             Event::HardBreak
         } else {
@@ -298,13 +315,49 @@ fn parse_with_breaks(text: &str, hard_breaks: bool) -> BlockTree {
     .collect::<Vec<_>>()
     .into_iter()
     .peekable();
+    let mut blocks = blocks(&mut events, None, 0);
+    mark_complete(&mut blocks, &mut complete.into_iter());
     BlockTree {
-        blocks: blocks(&mut events, None, 0)
+        blocks: blocks
             .into_iter()
             .map(|block| Arc::new(TopBlock { block }))
             .collect(),
     }
 }
+/// pulldown-cmark closes a fence at the end of the text, so a fence that
+/// reaches the end may still be arriving: only its closing fence line proves
+/// it complete. One that ends earlier, closed by its fence or by the end of
+/// its list item or quote, can't grow.
+fn fence_complete(text: &str, range: std::ops::Range<usize>) -> bool {
+    let end = text.trim_end().len();
+    if range.end < end {
+        return true;
+    }
+    let source = text[range.start..end.max(range.start)].trim_end();
+    let mut lines = source.lines();
+    lines.next();
+    lines.last().is_some_and(|last| {
+        // Inside a quote, the line carries its markers.
+        let last = last.trim_start_matches(|c: char| c == '>' || c.is_whitespace());
+        last.len() >= 3 && (last.chars().all(|c| c == '`') || last.chars().all(|c| c == '~'))
+    })
+}
+
+fn mark_complete(blocks: &mut [Block], complete: &mut impl Iterator<Item = bool>) {
+    for block in blocks {
+        match block {
+            Block::CodeBlock { closed, .. } => *closed = complete.next().unwrap_or(true),
+            Block::BlockQuote { children } => mark_complete(children, complete),
+            Block::List { items, .. } => {
+                for item in items {
+                    mark_complete(item, complete);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<Block> {
     let mut out = Vec::new();
     while let Some(event) = events.next() {
@@ -341,7 +394,11 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
                             _ => {}
                         }
                     }
-                    out.push(Block::CodeBlock { language, code });
+                    out.push(Block::CodeBlock {
+                        language,
+                        code,
+                        closed: true,
+                    });
                 }
                 Tag::BlockQuote(kind) => out.push(Block::BlockQuote {
                     children: blocks(events, Some(TagEnd::BlockQuote(kind)), depth + 1),
