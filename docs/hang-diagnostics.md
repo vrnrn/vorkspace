@@ -27,7 +27,9 @@ Each is capped at **1,048,576 logical bytes**, including newlines. Rotation
 happens before an append would exceed that cap, deleting only the oldest
 reserved generation. The three files together cannot exceed **3,145,728 logical
 bytes** under this writer. A zero-byte `hang.lock` prevents concurrent app
-instances from writing the same directory. Other filenames are untouched.
+instances from writing the same directory. The writer unlocks it explicitly on
+close, because closing alone leaves the lock held while a child process being
+spawned shares the descriptor. Other filenames are untouched.
 There is no age-based retention. Existing oversized reserved files disable
 capture instead of being truncated. An incomplete final line from an interrupted
 write is preserved in an archive before further appends; readers should skip

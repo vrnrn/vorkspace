@@ -281,6 +281,18 @@ fn concurrent_writer_fails_open_and_restart_releases_lock() {
 }
 
 #[test]
+fn closed_writer_releases_lock_while_a_spawning_child_shares_it() {
+    let root = temporary();
+    let path = log_path(&root);
+    let log = storage::Log::open(&path).unwrap();
+    // dup shares the open-file description, as a descriptor copied by fork does.
+    let inherited = log.duplicate_lock().unwrap();
+    drop(log);
+    assert!(storage::Log::open(&path).is_ok());
+    drop(inherited);
+}
+
+#[test]
 fn unsafe_destinations_are_rejected_without_touching_targets() {
     for name in ["hang-0.jsonl", "hang-1.jsonl", "hang-2.jsonl", "hang.lock"] {
         let root = temporary();

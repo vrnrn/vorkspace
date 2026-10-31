@@ -20,6 +20,9 @@ contain older ones. Each can hold at most 1 MiB, so the notebook holds at most
 3 MiB of file contents. Filesystem bookkeeping uses additional space. Only these
 reserved files rotate; other files are left alone. Old records disappear as new
 ones fill the notebook. An interrupted final line may remain in an older file.
+Only one copy of the app writes at a time. The app releases the notebook
+explicitly when it finishes, so a helper program that is just starting cannot
+keep it looking busy.
 
 A record can say “this foreground task took ten seconds,” give its source
 location, or identify an action/view type and slow drawing phase. It records
