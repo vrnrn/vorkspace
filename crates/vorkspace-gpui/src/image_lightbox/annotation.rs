@@ -385,9 +385,10 @@ mod tests {
             color: 0x000000,
             text: "Wi".into(),
         };
-        let saved = image::load_from_memory(&png(&original, &[], &[text.clone()]).unwrap())
-            .unwrap()
-            .into_rgba8();
+        let saved =
+            image::load_from_memory(&png(&original, &[], std::slice::from_ref(&text)).unwrap())
+                .unwrap()
+                .into_rgba8();
         assert!(saved.pixels().any(|pixel| pixel[0] < 200));
         let colored = TextBox {
             position: (0.1, 0.2),
@@ -446,10 +447,11 @@ mod tests {
             width: 0.02,
             points: vec![(0.7, 0.7)],
         };
-        let flattened =
-            image::load_from_memory(&png(&original, &[stroke], &[text.clone()]).unwrap())
-                .unwrap()
-                .into_rgba8();
+        let flattened = image::load_from_memory(
+            &png(&original, &[stroke], std::slice::from_ref(&text)).unwrap(),
+        )
+        .unwrap()
+        .into_rgba8();
         assert_eq!(flattened.get_pixel(280, 112).0, [255, 59, 48, 255]);
         assert!(flattened.pixels().any(|p| p[2] > p[0] && p[2] > p[1]));
         assert_eq!(original.get_pixel(280, 112).0, [255, 255, 255, 255]);
