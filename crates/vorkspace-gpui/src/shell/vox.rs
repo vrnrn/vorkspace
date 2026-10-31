@@ -1,6 +1,55 @@
 use super::*;
 use serde_json::{Value, json};
 impl Shell {
+    pub(crate) fn toggle_vox(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.workspace.preferences.vox_enabled {
+            self.open_settings(crate::settings::Section::Vox, window, cx);
+            return;
+        }
+        if let Some(voice) = self.vox.clone() {
+            voice.update(cx, |voice, _| {
+                voice.set_project(self.workspace.project.clone())
+            });
+            crate::vox::toggle(voice, cx);
+        }
+    }
+
+    pub(super) fn vox_launcher(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
+        let active = self
+            .vox
+            .as_ref()
+            .is_some_and(|voice| voice.read(cx).running());
+        let label = if active {
+            "End Vox call"
+        } else if self.workspace.preferences.vox_enabled {
+            "Start Vox"
+        } else {
+            "Enable Vox"
+        };
+        crate::controls::button("vox-launcher", label, true)
+            .tooltip(move |_, cx| cx.new(|_| crate::controls::Tooltip(label.into())).into())
+            .debug_selector(|| "vox-launcher".into())
+            .h(px(32.))
+            .min_w_0()
+            .rounded_md()
+            .flex()
+            .items_center()
+            .gap_2()
+            .when(compact, |d| d.w(px(32.)).justify_center())
+            .when(!compact, |d| d.w_full().px_2())
+            .text_color(content(if active { 1. } else { 0.65 }))
+            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+            .child(icon("mic", 14.))
+            .when(!compact, |d| {
+                d.child(div().text_size(px(12.)).flex_1().child("Vox"))
+            })
+            .when(active, |d| {
+                d.child(div().size(px(4.)).rounded_full().bg(content(0.7)))
+            })
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_vox(window, cx)))
+            .into_any_element()
+    }
+
     pub(crate) fn vox_action(
         &mut self,
         action: &str,
@@ -347,6 +396,73 @@ fn validate_voice_input(action: &str, input: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn moving_vox_to_its_own_window_preserves_workspace_action_ownership(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (workspace, _, _) = crate::shell::tests::window(cx);
+        let (voice, owner) = workspace
+            .update(cx, |shell, _, cx| {
+                (shell.vox.clone().unwrap(), cx.weak_entity())
+            })
+            .unwrap();
+        let panel = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, _| voice.clone())
+                .unwrap()
+        });
+        cx.run_until_parked();
+        let voice_window = voice
+            .downgrade()
+            .update_in(cx, |_, window, _| window.window_handle().window_id())
+            .unwrap();
+        let workspace_window = owner
+            .update_in(cx, |_, window, _| window.window_handle().window_id())
+            .unwrap();
+        assert_eq!(voice_window, panel.window_id());
+        assert_eq!(workspace_window, workspace.window_id());
+        assert_ne!(voice_window, workspace_window);
+    }
+
+    #[gpui::test]
+    fn vox_launcher_sits_above_subscriptions_and_disabled_vox_opens_settings(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        crate::clock::use_test_clock(cx);
+        let (window, _, _) = crate::shell::tests::window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(1400.), px(900.)));
+        for expanded in [true, false] {
+            window
+                .update(visual, |shell, _, cx| {
+                    shell.workspace.project_rail_open = expanded;
+                    shell.workspace.sidebar_subscriptions_visible = true;
+                    shell.workspace.preferences.vox_enabled = false;
+                    shell.invalidate_chrome(cx);
+                    cx.notify();
+                })
+                .unwrap();
+            visual.run_until_parked();
+            let vox = visual.debug_bounds("vox-launcher").unwrap();
+            let subscriptions = visual.debug_bounds("subscriptions").unwrap();
+            assert!(vox.bottom() <= subscriptions.top(), "expanded={expanded}");
+        }
+        let button = visual.debug_bounds("vox-launcher").unwrap();
+        visual.simulate_click(button.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                assert!(shell.settings.is_some());
+                assert!(!shell.vox.as_ref().unwrap().read(cx).running());
+                assert_eq!(
+                    cx.windows().len(),
+                    1,
+                    "enabling Vox never starts microphone capture"
+                );
+            })
+            .unwrap();
+    }
+
     #[test]
     fn documented_voice_flags_are_validated_before_effects() {
         for (action, input) in [

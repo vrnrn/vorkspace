@@ -165,6 +165,11 @@ fn launch_bounds(cx: &App) -> WindowBounds {
 }
 
 fn main() {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("VORKSPACE_VOX_PREVIEW").is_some() {
+        vox::preview::run();
+        return;
+    }
     if let Some(code) = vorkspace_core::remote::ssh_askpass::maybe_run() {
         std::process::exit(code);
     }

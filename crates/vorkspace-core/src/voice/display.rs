@@ -6,13 +6,14 @@ pub(super) struct Display {
     truncated: bool,
     serial: u64,
     thinking: bool,
+    hearing: Option<String>,
     speaking: Option<String>,
     at: i64,
     pub mood: String,
 }
 impl Display {
     pub fn snapshot(&self) -> Value {
-        json!({"activity":if self.speaking.is_some(){"replying"}else if self.thinking{"thinking"}else{"listening"},"mood":self.mood,"lines":if self.text.is_empty(){vec![]}else{vec![json!({"id":format!("reply-{}",self.serial),"text":self.text,"truncated":self.truncated})]}})
+        json!({"hearing":self.hearing.is_some(),"activity":if self.speaking.is_some(){"replying"}else if self.thinking{"thinking"}else{"listening"},"mood":self.mood,"lines":if self.text.is_empty(){vec![]}else{vec![json!({"id":format!("reply-{}",self.serial),"text":self.text,"truncated":self.truncated})]}})
     }
     pub fn realtime(&mut self, event: &Value) -> bool {
         let before = self.snapshot();
@@ -36,10 +37,12 @@ impl Display {
                     Some("user") => {
                         if kind == "turn.created" {
                             self.speaking = None;
+                            self.hearing = Some(id.into());
                             self.thinking = false;
                             self.mood.clear()
-                        } else {
-                            self.thinking = true
+                        } else if self.hearing.as_deref().is_none_or(|hearing| hearing == id) {
+                            self.hearing = None;
+                            self.thinking = true;
                         }
                     }
                     Some("assistant") if end >= self.at => {

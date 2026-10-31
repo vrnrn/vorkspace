@@ -65,6 +65,7 @@ impl Shell {
             }
         }
         SettingsContext {
+            vox_error: crate::vox::shortcut_error(cx),
             vox_devices: self
                 .vox
                 .as_ref()

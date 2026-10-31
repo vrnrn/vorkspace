@@ -65,6 +65,7 @@ pub(crate) struct SettingsContext {
     /// The desktop's shared remote connection and SSH setup service.
     pub remote: Option<std::sync::Arc<vorkspace_core::remote::Connections>>,
     pub bots: Vec<BotSetting>,
+    pub vox_error: Option<String>,
     pub vox_devices: Vec<(String, String)>,
     /// The selected project, or empty outside one.
     pub cwd: String,
@@ -92,7 +93,8 @@ impl PartialEq for SettingsContext {
             (None, Some(_)) | (Some(_), None) => return false,
             _ => {}
         }
-        self.vox_devices == other.vox_devices
+        self.vox_error == other.vox_error
+            && self.vox_devices == other.vox_devices
             && self.bots == other.bots
             && self.cwd == other.cwd
             && self.project_label == other.project_label
