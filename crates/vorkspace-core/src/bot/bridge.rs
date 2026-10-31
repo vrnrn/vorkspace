@@ -137,6 +137,10 @@ fn serve(
     secret: &str,
     tx: &async_channel::Sender<Call>,
 ) -> Result<(), String> {
+    // On macOS an accepted socket inherits the listener's non-blocking mode,
+    // which would turn a client's first write arriving after accept into a
+    // WouldBlock read and drop the connection.
+    stream.set_nonblocking(false).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|e| e.to_string())?;
@@ -277,9 +281,18 @@ mod capability_tests {
         session: i64,
         credential: String,
     ) -> std::thread::JoinHandle<Option<Value>> {
+        send_after(server, session, credential, Duration::ZERO)
+    }
+    fn send_after(
+        server: &Server,
+        session: i64,
+        credential: String,
+        delay: Duration,
+    ) -> std::thread::JoinHandle<Option<Value>> {
         let endpoint = server.endpoint.clone();
         std::thread::spawn(move || {
             let mut stream = TcpStream::connect(endpoint).unwrap();
+            std::thread::sleep(delay);
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
@@ -296,6 +309,19 @@ mod capability_tests {
             serde_json::from_str(&result).ok()
         })
     }
+    fn dispatched(rx: &async_channel::Receiver<Call>) -> Call {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Ok(call) = rx.try_recv() {
+                break call;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "authenticated request was not dispatched"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     #[test]
     fn capability_is_bound_to_its_session_and_only_authenticated_calls_reach_the_app() {
         let (server, rx) = Server::start().unwrap();
@@ -307,18 +333,18 @@ mod capability_tests {
             .is_none());
         assert!(rx.try_recv().is_err());
         let request = send(&server, 7, credential);
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        let call = loop {
-            if let Ok(call) = rx.try_recv() {
-                break call;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "authenticated request was not dispatched"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        };
+        let call = dispatched(&rx);
         assert_eq!(call.session, 7);
+        call.reply.send(Ok(json!({"models":[]}))).unwrap();
+        assert_eq!(request.join().unwrap().unwrap()["ok"], true);
+    }
+    #[test]
+    fn a_client_that_writes_after_it_is_accepted_is_still_served() {
+        let (server, rx) = Server::start().unwrap();
+        let credential = server.environment(7)["VORKSPACE_APP_TOKEN"].clone();
+        // Longer than the accept poll, so the server reads before the request.
+        let request = send_after(&server, 7, credential, Duration::from_millis(100));
+        let call = dispatched(&rx);
         call.reply.send(Ok(json!({"models":[]}))).unwrap();
         assert_eq!(request.join().unwrap().unwrap()["ok"], true);
     }
