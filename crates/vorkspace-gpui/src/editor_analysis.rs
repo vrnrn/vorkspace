@@ -4,7 +4,6 @@
 use gpui::SharedString;
 use rquickjs::{Context, Function, Promise, Runtime};
 use serde::Deserialize;
-use std::time::Instant;
 use std::{ops::Range, time::Duration};
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -82,12 +81,25 @@ fn byte(source: &str, offset: usize) -> usize {
 fn utf16(source: &str, at: usize) -> usize {
     source[..at].encode_utf16().count()
 }
+/// CPU time used by this thread. These interpreters run to completion on the
+/// calling thread and cannot block, so limiting this bounds their work exactly
+/// as a wall clock would, without charging them for time a busy machine gave to
+/// other processes.
+fn thread_cpu_time() -> Duration {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: a valid out-pointer for a clock id that every Unix target provides.
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+    Duration::new(time.tv_sec as u64, time.tv_nsec as u32)
+}
 fn runtime() -> Result<(Runtime, Context), String> {
     let runtime = Runtime::new().map_err(|e| e.to_string())?;
     runtime.set_memory_limit(256 * 1024 * 1024);
     runtime.set_max_stack_size(4 * 1024 * 1024);
-    let deadline = Instant::now() + Duration::from_secs(3);
-    runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline)));
+    let deadline = thread_cpu_time() + Duration::from_secs(3);
+    runtime.set_interrupt_handler(Some(Box::new(move || thread_cpu_time() > deadline)));
     let context = Context::full(&runtime).map_err(|e| e.to_string())?;
     Ok((runtime, context))
 }
@@ -354,9 +366,6 @@ pub(crate) fn analyze(
     source: &str,
     original: Option<&str>,
 ) -> Result<Analysis, String> {
-    let runtime = Runtime::new().map_err(|e| e.to_string())?;
-    runtime.set_memory_limit(64 * 1024 * 1024);
-    runtime.set_max_stack_size(2 * 1024 * 1024);
     // A headless worker must finish parsing the whole document. A fixed two
     // seconds interrupts large TSX files (and their diff baseline) before the
     // complete tree can be published. Keep small requests short and all work
@@ -367,8 +376,20 @@ pub(crate) fn analyze(
             .map_or(0, str::len),
     );
     let budget = Duration::from_secs(bytes.div_ceil(64 * 1024).clamp(2, 30) as u64);
-    let deadline = Instant::now() + budget;
-    runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline)));
+    analyze_within(path, source, original, budget)
+}
+
+fn analyze_within(
+    path: &str,
+    source: &str,
+    original: Option<&str>,
+    budget: Duration,
+) -> Result<Analysis, String> {
+    let runtime = Runtime::new().map_err(|e| e.to_string())?;
+    runtime.set_memory_limit(64 * 1024 * 1024);
+    runtime.set_max_stack_size(2 * 1024 * 1024);
+    let deadline = thread_cpu_time() + budget;
+    runtime.set_interrupt_handler(Some(Box::new(move || thread_cpu_time() > deadline)));
     let context = Context::full(&runtime).map_err(|e| e.to_string())?;
     let json = context
         .with(|ctx| -> rquickjs::Result<String> {
@@ -378,7 +399,15 @@ pub(crate) fn analyze(
                 .call::<_, Promise>((path, source, original))?
                 .finish()
         })
-        .map_err(|e| e.to_string())?;
+        // An interrupted job leaves the async call pending forever, which
+        // rquickjs reports as a dead lock. Name the real cause.
+        .map_err(|e| {
+            if thread_cpu_time() > deadline {
+                format!("analysis exceeded its {budget:?} budget")
+            } else {
+                e.to_string()
+            }
+        })?;
     let mut analysis: Analysis = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     // CodeMirror offsets are UTF-16, while native selection/IME uses UTF-8.
     let offsets = byte_offsets(source);
@@ -580,6 +609,17 @@ mod parity_tests {
                 .iter()
                 .any(|fold| fold.to > source.len() - 1_024)
         );
+    }
+    #[test]
+    fn analysis_past_its_budget_reports_the_overrun() {
+        let error = analyze_within("a.ts", "const x = 1;\n", None, Duration::ZERO).unwrap_err();
+        assert_eq!(error, "analysis exceeded its 0ns budget");
+    }
+    #[test]
+    fn analysis_budget_is_not_charged_for_time_off_the_cpu() {
+        let before = thread_cpu_time();
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(thread_cpu_time() - before < Duration::from_millis(50));
     }
     #[test]
     fn hunk_actions_preserve_eof_newlines_and_selected_line_scope() {

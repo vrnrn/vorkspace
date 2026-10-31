@@ -23,6 +23,8 @@ It needs local OpenSSH `sshd`, creates temporary keys/configuration, and exercis
 
 GPUI tests marked ignored require their named platform resource or an explicit benchmark run. Inspect them with `cargo test -p vorkspace-gpui --profile native-dev -- --list`. A frame benchmark measures the specified CPU path; it does not prove GPU presentation rate.
 
+Every Cargo profile compiles QuickJS with full optimization. Editor, diagram, and visual deadlines assume the shipped interpreter, and an unoptimized one is about five times slower, which fails work that a release build finishes in budget.
+
 Interactive validation should use a temporary `VORKSPACE_NATIVE_DATA_DIR`: open fixtures, edit/save/reopen, exercise approvals and Stop, and quit during active work. Physical microphone capture, provider authentication, and installing signed updates require their real devices or credentials. A compile, mock provider, or signature inspection alone does not prove those flows.
 
 ## Installed application updates

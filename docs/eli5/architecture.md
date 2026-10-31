@@ -12,7 +12,7 @@ Clipboard history keeps at most 50 items in memory and disappears when you quit.
 
 The app checks whether the clipboard changed twice a second. It makes small image previews in the background, one at a time, and never saves a clipboard history file.
 
-Rust controls Vox calls and translates desktop Copilot requests. Small JavaScript helpers handle editor language tools, voice audio, and remote machines. Empty conversations show the composer, and session titles stay still. A remote machine keeps its own agents running and history saved even when your desktop disconnects. Voice and HTML previews use a limited browser surface inside the native app.
+Rust controls Vox calls and translates desktop Copilot requests. Small JavaScript helpers handle editor language tools, voice audio, and remote machines. The editor helpers get a limited amount of working time, and time spent waiting while other apps keep the computer busy does not count against it. Empty conversations show the composer, and session titles stay still. A remote machine keeps its own agents running and history saved even when your desktop disconnects. Voice and HTML previews use a limited browser surface inside the native app.
 
 The [repository map](repository.md) shows where each part lives. Embedded helper code has its own folder; the scripts folder contains developer tools.
 
