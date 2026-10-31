@@ -864,9 +864,7 @@ impl Render for ImageLightbox {
                                 .update(cx, |input, _| input.set_annotation_metrics(font_size));
                             div()
                                 .id(("annotation-text-box", index))
-                                .debug_selector(move || {
-                                    format!("annotation-text-box-{index}").into()
-                                })
+                                .debug_selector(move || format!("annotation-text-box-{index}"))
                                 .absolute()
                                 .left(bounds.size.width * text.position.0)
                                 .top(bounds.size.height * text.position.1)
@@ -1202,7 +1200,7 @@ mod tests {
                             white(0.6),
                             cx,
                         );
-                        input.set_text(text.text.clone().into(), cx);
+                        input.set_text(text.text.clone(), cx);
                         input
                     });
                     let change =
@@ -1262,7 +1260,9 @@ mod tests {
                         if (-1..=1).any(|dy| {
                             (-1..=1).any(|dx| {
                                 let (x, y) = (x + dx, y + dy);
-                                x >= 0 && x < 320 && y >= 0 && y < 120 && to[(y * 320 + x) as usize]
+                                (0..320).contains(&x)
+                                    && (0..120).contains(&y)
+                                    && to[(y * 320 + x) as usize]
                             })
                         }) {
                             matched += 1;
