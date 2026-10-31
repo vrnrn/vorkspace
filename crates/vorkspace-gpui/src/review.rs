@@ -151,6 +151,7 @@ struct Loaded {
     version: Option<FileDiffVersion>,
     diff: Arc<FileDiff>,
     unified: Option<Arc<Vec<diff::Block>>>,
+    chunks: Arc<Vec<diff::Change>>,
     additions: u32,
     deletions: u32,
     error: Option<String>,
@@ -1119,6 +1120,11 @@ impl ReviewPane {
                                             version,
                                             additions: unified.as_ref().map_or(0, |u| u.additions),
                                             deletions: unified.as_ref().map_or(0, |u| u.deletions),
+                                            chunks: Arc::new(
+                                                unified
+                                                    .as_ref()
+                                                    .map_or_else(Vec::new, |u| u.chunks.clone()),
+                                            ),
                                             unified: unified.map(|u| Arc::new(u.blocks)),
                                             diff: Arc::new(diff),
                                             error: None,
@@ -1128,6 +1134,7 @@ impl ReviewPane {
                                         version: None,
                                         diff: Arc::new(FileDiff::default()),
                                         unified: None,
+                                        chunks: Arc::default(),
                                         additions: 0,
                                         deletions: 0,
                                         error: Some(error),
@@ -1385,11 +1392,10 @@ impl ReviewPane {
                     return;
                 };
                 // The same diff the view showed, so the same hunk is staged.
-                let Some(next) =
-                    diff::stage_chunk(&loaded.diff.original, &loaded.diff.current, *chunk)
-                else {
+                let Some(range) = loaded.chunks.get(*chunk).copied() else {
                     return;
                 };
+                let next = diff::stage_chunk(&loaded.diff.original, &loaded.diff.current, range);
                 (
                     id.clone(),
                     Box::new(move || scm::stage_contents(&cwd, &relative, next.as_bytes())),
@@ -2181,6 +2187,7 @@ mod tests {
                         ..Default::default()
                     }),
                     unified: None,
+                    chunks: Arc::default(),
                     additions: 0,
                     deletions: 0,
                     error: None,

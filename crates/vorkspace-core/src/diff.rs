@@ -7,7 +7,9 @@ use similar::{capture_diff_deadline, Algorithm, DiffOp};
 use std::time::{Duration, Instant};
 
 pub const CONTEXT_DEFAULT: usize = 3;
-/// lineDiff.ts's line pass budget.
+/// lineDiff.ts's line pass budget. Past it, Myers replaces whatever range it
+/// has not finished as a whole: still a valid diff, but coarser, and a matter
+/// of wall-clock timing. Chunks are therefore kept, never derived twice.
 const LINE_PASS_TIMEOUT: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -54,10 +56,22 @@ pub struct UnifiedFile {
     pub deletions: u32,
     pub lines: Vec<Line>,
     pub blocks: Vec<Block>,
+    /// The ranges `Line::chunk` indexes, for `stage_chunk`.
+    pub chunks: Vec<Change>,
 }
 
 pub fn build_unified_file(original: &str, current: &str, context: usize) -> UnifiedFile {
-    let lines = unified_lines(original, current);
+    let deadline = Instant::now() + LINE_PASS_TIMEOUT;
+    unified_file(original, current, context, Some(deadline))
+}
+
+fn unified_file(
+    original: &str,
+    current: &str,
+    context: usize,
+    deadline: Option<Instant>,
+) -> UnifiedFile {
+    let (lines, chunks) = unified_lines(original, current, deadline);
     let additions = lines.iter().filter(|l| l.kind == LineKind::Add).count() as u32;
     let deletions = lines.iter().filter(|l| l.kind == LineKind::Del).count() as u32;
     let blocks = fold_unified_lines(&lines, context);
@@ -66,6 +80,7 @@ pub fn build_unified_file(original: &str, current: &str, context: usize) -> Unif
         deletions,
         lines,
         blocks,
+        chunks,
     }
 }
 
@@ -121,11 +136,12 @@ pub fn fold_unified_lines(lines: &[Line], context: usize) -> Vec<Block> {
     blocks
 }
 
-/// stageChunkText: `original` with only that chunk of `current` applied.
-pub fn stage_chunk(original: &str, current: &str, chunk: usize) -> Option<String> {
+/// stageChunkText: `original` with only that chunk of `current` applied. The
+/// chunk is one the view showed for these texts; diffing again here could
+/// miss the line pass budget and resolve its index to a different range.
+pub fn stage_chunk(original: &str, current: &str, range: Change) -> String {
     let old = Doc::new(original);
     let new = Doc::new(current);
-    let range = chunks(&old, &new).into_iter().nth(chunk)?;
     // applySide: the chunk's lines without their last newline, plus one
     // when the replaced range ends inside the original.
     let mut insert = new.slice(range.from_b, range.from_b.max(range.to_b.saturating_sub(1)));
@@ -134,12 +150,7 @@ pub fn stage_chunk(original: &str, current: &str, chunk: usize) -> Option<String
     }
     let from = old.byte(range.from_a);
     let to = old.byte(range.to_a.min(old.len));
-    Some(format!(
-        "{}{}{}",
-        &original[..from],
-        insert,
-        &original[to..]
-    ))
+    format!("{}{}{}", &original[..from], insert, &original[to..])
 }
 
 /// diffComment.ts's `diffCommentLocation`: `path:line`.
@@ -271,7 +282,7 @@ fn utf16_len(text: &str) -> usize {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Change {
+pub struct Change {
     from_a: usize,
     to_a: usize,
     from_b: usize,
@@ -280,7 +291,7 @@ struct Change {
 
 /// lineDiff.ts: each line with its newline is one symbol; the result maps
 /// back to UTF-16 offsets.
-fn line_changes(old: &Doc, new: &Doc) -> Vec<Change> {
+fn line_changes(old: &Doc, new: &Doc, deadline: Option<Instant>) -> Vec<Change> {
     fn tokens(source: &str) -> Vec<&str> {
         source.split_inclusive('\n').collect()
     }
@@ -296,15 +307,7 @@ fn line_changes(old: &Doc, new: &Doc) -> Vec<Change> {
     }
     let (a, b) = (tokens(old.source), tokens(new.source));
     let (oa, ob) = (offsets(&a), offsets(&b));
-    let deadline = Instant::now() + LINE_PASS_TIMEOUT;
-    let ops = capture_diff_deadline(
-        Algorithm::Myers,
-        &a,
-        0..a.len(),
-        &b,
-        0..b.len(),
-        Some(deadline),
-    );
+    let ops = capture_diff_deadline(Algorithm::Myers, &a, 0..a.len(), &b, 0..b.len(), deadline);
     let mut changes: Vec<Change> = Vec::new();
     for op in ops {
         let (old_range, new_range) = match op {
@@ -366,8 +369,8 @@ fn merge_adjacent(changes: &mut Vec<Change>, min_gap: usize) {
 }
 
 /// `toChunks`: changes widened to whole lines, merging those that touch.
-fn chunks(old: &Doc, new: &Doc) -> Vec<Change> {
-    let mut changes = line_changes(old, new);
+fn chunks(old: &Doc, new: &Doc, deadline: Option<Instant>) -> Vec<Change> {
+    let mut changes = line_changes(old, new, deadline);
     merge_adjacent(&mut changes, 3);
     let from_line = |fa: usize, fb: usize| {
         let (la, lb) = (old.line_at(fa), new.line_at(fb));
@@ -412,7 +415,11 @@ fn chunks(old: &Doc, new: &Doc) -> Vec<Change> {
 }
 
 /// unifiedLinesFromTexts.
-fn unified_lines(original: &str, current: &str) -> Vec<Line> {
+fn unified_lines(
+    original: &str,
+    current: &str,
+    deadline: Option<Instant>,
+) -> (Vec<Line>, Vec<Change>) {
     let old = Doc::new(original);
     let new = Doc::new(current);
     let context = |from_b: usize, to_b: usize, from_a: usize| -> Vec<Line> {
@@ -434,11 +441,11 @@ fn unified_lines(original: &str, current: &str) -> Vec<Line> {
             .collect()
     };
     if original == current {
-        return context(0, new.len, 0);
+        return (context(0, new.len, 0), Vec::new());
     }
-    let chunks = chunks(&old, &new);
+    let chunks = chunks(&old, &new, deadline);
     if chunks.is_empty() {
-        return context(0, new.len, 0);
+        return (context(0, new.len, 0), chunks);
     }
     let mut lines = Vec::new();
     let (mut old_pos, mut new_pos) = (0, 0);
@@ -470,12 +477,25 @@ fn unified_lines(original: &str, current: &str) -> Vec<Line> {
     if new_pos < new.len {
         lines.extend(context(new_pos, new.len, old_pos));
     }
-    lines
+    (lines, chunks)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn stage(original: &str, current: &str, chunk: usize) -> Option<String> {
+        let file = build_unified_file(original, current, 3);
+        let range = *file.chunks.get(chunk)?;
+        Some(stage_chunk(original, current, range))
+    }
+    fn large_edited_file() -> (String, String) {
+        let original: String = (0..50_000).map(|i| format!("line {i}\n")).collect();
+        let mut current_lines: Vec<String> = (0..50_000).map(|i| format!("line {i}")).collect();
+        for i in (0..50_000).step_by(5_000) {
+            current_lines[i] = format!("edited {i}");
+        }
+        (original, current_lines.join("\n") + "\n")
+    }
     fn changed(file: &UnifiedFile) -> Vec<(LineKind, &str, Option<u32>, Option<u32>)> {
         file.lines
             .iter()
@@ -598,29 +618,23 @@ mod tests {
         let original = "one\ntwo\nthree\nfour\nfive\nsix\n";
         let current = "ONE\ntwo\nthree\nfour\nfive\nSIX\n";
         assert_eq!(
-            stage_chunk(original, current, 0).as_deref(),
+            stage(original, current, 0).as_deref(),
             Some("ONE\ntwo\nthree\nfour\nfive\nsix\n")
         );
         assert_eq!(
-            stage_chunk(original, current, 1).as_deref(),
+            stage(original, current, 1).as_deref(),
             Some("one\ntwo\nthree\nfour\nfive\nSIX\n")
         );
-        assert_eq!(stage_chunk(original, current, 2), None);
+        assert_eq!(stage(original, current, 2), None);
         // Insertions, deletions and a new final line without a newline.
         assert_eq!(
-            stage_chunk("a\nc\n", "a\nb\nc\n", 0).as_deref(),
+            stage("a\nc\n", "a\nb\nc\n", 0).as_deref(),
             Some("a\nb\nc\n")
         );
-        assert_eq!(
-            stage_chunk("a\nb\nc\n", "a\nc\n", 0).as_deref(),
-            Some("a\nc\n")
-        );
-        assert_eq!(stage_chunk("a\n", "a\nz", 0).as_deref(), Some("a\nz"));
-        assert_eq!(stage_chunk("", "x\ny\n", 0).as_deref(), Some("x\ny\n"));
-        assert_eq!(
-            stage_chunk("é\nb\n", "é\nB\n", 0).as_deref(),
-            Some("é\nB\n")
-        );
+        assert_eq!(stage("a\nb\nc\n", "a\nc\n", 0).as_deref(), Some("a\nc\n"));
+        assert_eq!(stage("a\n", "a\nz", 0).as_deref(), Some("a\nz"));
+        assert_eq!(stage("", "x\ny\n", 0).as_deref(), Some("x\ny\n"));
+        assert_eq!(stage("é\nb\n", "é\nB\n", 0).as_deref(), Some("é\nB\n"));
     }
     #[test]
     fn comments_quote_the_line() {
@@ -646,14 +660,10 @@ mod tests {
     }
     #[test]
     fn large_files_diff_quickly_with_local_chunks() {
-        let original: String = (0..50_000).map(|i| format!("line {i}\n")).collect();
-        let mut current_lines: Vec<String> = (0..50_000).map(|i| format!("line {i}")).collect();
-        for i in (0..50_000).step_by(5_000) {
-            current_lines[i] = format!("edited {i}");
-        }
-        let current = current_lines.join("\n") + "\n";
+        let (original, current) = large_edited_file();
         let start = Instant::now();
-        let diff = build_unified_file(&original, &current, 3);
+        // The budget's outcome depends on the scheduler; the chunks must not.
+        let diff = unified_file(&original, &current, 3, None);
         assert!(
             start.elapsed() < Duration::from_secs(2),
             "{:?}",
@@ -667,5 +677,24 @@ mod tests {
                 .count(),
             10
         );
+    }
+    #[test]
+    fn a_missed_budget_coarsens_the_diff_without_losing_changes() {
+        let (original, current) = large_edited_file();
+        let expired = Instant::now();
+        let diff = unified_file(&original, &current, 3, Some(expired));
+        // Only the common prefix and suffix survive: "line 0" to "edited 45000".
+        assert_eq!((diff.additions, diff.deletions), (45_001, 45_001));
+        assert_eq!(diff.chunks.len(), 1);
+        assert_eq!(stage_chunk(&original, &current, diff.chunks[0]), current);
+    }
+    #[test]
+    fn staging_applies_the_chunk_the_view_showed_whatever_the_budget() {
+        let (original, current) = large_edited_file();
+        let shown = unified_file(&original, &current, 3, None);
+        let expected = original.replace("line 25000\n", "edited 25000\n");
+        assert_eq!(stage_chunk(&original, &current, shown.chunks[5]), expected);
+        let coarse = unified_file(&original, &current, 3, Some(Instant::now()));
+        assert_ne!(coarse.chunks.get(5), shown.chunks.get(5));
     }
 }

@@ -1,8 +1,21 @@
 use super::*;
 use serde_json::json;
+use std::sync::LazyLock;
 
+/// Advances once per read, so a call's budget counts interrupt polls and a
+/// stalled test thread cannot spend it. Runaway scripts still stop eventually.
+fn poll_clock() -> Instant {
+    static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+    thread_local!(static READS: Cell<u32> = const { Cell::new(0) });
+    let reads = READS.replace(READS.get() + 1);
+    *START + Duration::from_micros(reads.into())
+}
+/// A program that loops forever or misses the budget uses the real clock below.
 fn runtime(source: &str) -> VisualRuntime {
-    VisualRuntime::new(source).unwrap()
+    VisualRuntime::with_clock(source, poll_clock).unwrap()
+}
+fn check(source: &str) -> Result<Node, String> {
+    check_with_clock(source, poll_clock)
 }
 fn button(node: &Node) -> &str {
     match node {
@@ -174,7 +187,7 @@ fn native_blocking_primitives_are_unavailable() {
 #[test]
 fn exception_message_accessors_share_the_execution_deadline() {
     let started = Instant::now();
-    let error = check(
+    let error = super::check(
         "const e=new Error();Object.defineProperty(e,'message',{get(){while(true){}}});throw e;",
     )
     .unwrap_err();
@@ -191,15 +204,31 @@ fn runaway_initialization_render_and_handler_are_interrupted() {
             .unwrap()
             .contains("time budget")
     );
-    assert!(check("return () => {while(true){} };")
+    assert!(super::check("return () => {while(true){} };")
         .unwrap_err()
         .contains("time budget"));
     assert!(
-        check("return () => visual.button('Loop',()=>{while(true){}});")
+        super::check("return () => visual.button('Loop',()=>{while(true){}});")
             .unwrap_err()
             .contains("time budget")
     );
     assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+/// The deadline is wall-clock time: a stalled thread spends it without running
+/// any script, which is why the other tests must not read the real clock.
+#[test]
+fn a_stall_between_interrupt_polls_spends_the_budget_of_a_trivial_program() {
+    fn stalling_clock() -> Instant {
+        static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+        thread_local!(static READS: Cell<u32> = const { Cell::new(0) });
+        let reads = READS.replace(READS.get() + 1);
+        *START + CALL_DEADLINE * reads
+    }
+    let error = VisualRuntime::with_clock("return () => visual.text('ok');", stalling_clock)
+        .and_then(|mut vm| vm.render())
+        .unwrap_err();
+    assert_eq!(error, "Visual execution exceeded its 60 ms time budget");
 }
 
 #[test]
