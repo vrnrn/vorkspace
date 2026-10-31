@@ -6,6 +6,22 @@ use std::time::Duration;
 
 pub(super) const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const DONE_TIME: Duration = Duration::from_secs(3);
+/// Inset of the black body from the window's edge, left for its concave ears.
+const SHOULDER: f32 = 6.;
+
+/// The ink and pulse speed, in radians per second, of each status. The notch
+/// is black in every theme, so these are always the dark status colors.
+fn indicator(status: &str, hearing: bool) -> (u32, f32) {
+    match status {
+        "Try again" => (0xf87171, 0.),
+        "Done" => (0x10b981, 0.),
+        "Thinking" => (0xfbbf24, 3.),
+        "Speaking" | "Writing" => (0x60a5fa, 4.),
+        "Connecting" | "Saving" => (0xffffff, 3.),
+        _ if hearing => (0x10b981, 6.),
+        _ => (0x10b981, 1.5),
+    }
+}
 
 pub(super) struct Presentation {
     pub geometry: native::Geometry,
@@ -15,9 +31,11 @@ pub(super) struct Presentation {
     height_motion: Option<PaneSlide>,
     pub closing: bool,
     pub hovered: bool,
+    status_hovered: bool,
     pub hearing: bool,
     pub activity: String,
     pub touched: Instant,
+    opened: Instant,
     pub completed: Option<Instant>,
     placed: Option<(f32, f32)>,
     pub placement: native::Placement,
@@ -34,9 +52,11 @@ impl Default for Presentation {
             height_motion: None,
             closing: false,
             hovered: false,
+            status_hovered: false,
             hearing: false,
             activity: "listening".into(),
             touched: Instant::now(),
+            opened: Instant::now(),
             completed: None,
             placed: None,
             placement: native::Placement::default(),
@@ -291,22 +311,24 @@ impl Vox {
         }
         let wing = ((width - geometry.notch_width) / 2.).max(0.);
         let reveal = (wing / native::WING_WIDTH).clamp(0., 1.);
+        let slot = native::WING_WIDTH - SHOULDER;
         let status = self.status();
-        let pulsing = !self.notch.closing
-            && (self.notch.hearing || matches!(status, "Thinking" | "Connecting" | "Speaking"));
-        let pulse = if pulsing {
+        let (ink, speed) = indicator(status, self.notch.hearing);
+        let showing_control = self.notch.status_hovered;
+        let pulse = if speed > 0. && !self.notch.closing && !showing_control {
             if !crate::clock::suppress_endless_animation_frames() {
                 window.request_animation_frame();
             }
-            0.55 + 0.4
-                * ((now.duration_since(self.notch.touched).as_secs_f32() * 4.).sin() * 0.5 + 0.5)
+            // Timed from opening: pointer movement resets `touched`.
+            let phase = now.duration_since(self.notch.opened).as_secs_f32() * speed;
+            0.75 + 0.25 * (phase.sin() * 0.5 + 0.5)
         } else {
-            0.8
+            1.
         };
-        let color = if self.error.is_some() {
-            gpui::rgb(0xffb86b).into()
+        let (control, control_label) = if self.in_call() {
+            ("square", "End Vox call")
         } else {
-            white(pulse)
+            ("play", "Start Vox call")
         };
         let mut root = div()
             .id("vox-notch")
@@ -339,7 +361,7 @@ impl Vox {
                         let y = bounds.top();
                         let w = bounds.size.width;
                         let h = bounds.size.height;
-                        let top = px(6.);
+                        let top = px(SHOULDER);
                         let bottom = px(14.).min(h / 2.);
                         let mut shape = PathBuilder::fill();
                         shape.move_to(point(x, y));
@@ -376,11 +398,11 @@ impl Vox {
                             .overflow_hidden()
                             .flex()
                             .items_center()
-                            .justify_center()
+                            .justify_end()
                             .child(
                                 crate::controls::button("vox-toggle", "Start or end Vox", true)
                                     .debug_selector(|| "vox-toggle".into())
-                                    .w(px(56.))
+                                    .w(px(slot))
                                     .h_full()
                                     .flex_shrink_0()
                                     .flex()
@@ -412,24 +434,36 @@ impl Vox {
                             .overflow_hidden()
                             .flex()
                             .items_center()
-                            .px_2()
-                            .gap_1p5()
                             .opacity(reveal)
-                            .child(div().size(px(5.)).rounded_full().bg(color).flex_shrink_0())
                             .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(status),
-                            )
-                            .child(
-                                crate::controls::icon_button("vox-stop", "End Vox call", true)
-                                    .text_color(white(0.65))
-                                    .hover(|s| s.bg(white(0.1)).text_color(white(1.)))
-                                    .child(icon("close", 12.))
-                                    .on_click(cx.listener(|voice, _, _, cx| voice.stop(cx))),
+                                crate::controls::button("vox-call", control_label, true)
+                                    .w(px(slot))
+                                    .h_full()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .focus_visible(|s| s.bg(white(0.15)))
+                                    .child(if showing_control {
+                                        icon(control, 14.)
+                                            .debug_selector(move || format!("vox-{control}"))
+                                            .text_color(white(0.9))
+                                            .into_any_element()
+                                    } else {
+                                        div()
+                                            .debug_selector(|| "vox-dot".into())
+                                            .size(px(6.))
+                                            .rounded_full()
+                                            .bg(gpui::Hsla::from(gpui::rgb(ink)).opacity(pulse))
+                                            .into_any_element()
+                                    })
+                                    .on_hover(cx.listener(|voice, hovered: &bool, _, cx| {
+                                        voice.notch.status_hovered = *hovered;
+                                        cx.notify();
+                                    }))
+                                    .on_click(cx.listener(|voice, _, window, cx| {
+                                        voice.toggle_call(window, cx)
+                                    })),
                             ),
                     ),
             );
