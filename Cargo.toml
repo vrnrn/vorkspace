@@ -22,6 +22,11 @@ gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
 gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 
+# QuickJS deadlines assume the shipped interpreter. An unoptimized one is about
+# five times slower, so it fails work that a release build finishes in budget.
+[profile.dev.package.rquickjs-sys]
+opt-level = 3
+
 [profile.native-dev]
 inherits = "dev"
 debug = 0

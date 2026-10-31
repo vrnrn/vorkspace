@@ -14,10 +14,22 @@ pub(super) const FILE_BYTES: u64 = 1024 * 1024;
 pub(super) const FILE_NAMES: [&CStr; 3] = [c"hang-0.jsonl", c"hang-1.jsonl", c"hang-2.jsonl"];
 const LOCK: &CStr = c"hang.lock";
 
+struct Lock(File);
+impl Drop for Lock {
+    fn drop(&mut self) {
+        // A concurrent fork may retain this open-file description until exec.
+        // Unlock explicitly so that copy cannot keep a closed log owning the
+        // directory and turn the next writer away.
+        // SAFETY: live file descriptor owned by this value.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 pub(super) struct Log {
     directory: File,
-    _lock: File,
     active: Option<File>,
+    // Last, so ownership ends only after the log files are closed.
+    _lock: Lock,
 }
 impl Log {
     pub(super) fn open(path: &Path) -> io::Result<Self> {
@@ -54,8 +66,8 @@ impl Log {
         }
         let mut log = Self {
             directory,
-            _lock: lock,
             active: None,
+            _lock: Lock(lock),
         };
         log.validate()?;
         let mut active = open_file(&log.directory, FILE_NAMES[0])?;
@@ -143,6 +155,11 @@ impl Log {
             active.sync_data()?;
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn duplicate_lock(&self) -> io::Result<File> {
+        self._lock.0.try_clone()
     }
 }
 

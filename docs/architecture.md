@@ -36,7 +36,7 @@ Interface scale is limited to 60%–160% and uses a per-window GPUI transform, s
 
 ## JavaScript boundaries
 
-- Editor analysis and formatting run committed bundles in bounded QuickJS interpreters. Rust owns files, edits, and saves.
+- Editor analysis and formatting run committed bundles in bounded QuickJS interpreters. Their time limits count the interpreter thread's CPU time, so a busy machine cannot interrupt them. Rust owns files, edits, and saves.
 - Vox runs a Rust controller that owns its Codex app-server child, bounded tool receipts, saved conversation identity, memory, and shutdown. An ephemeral WebKit WebRTC page handles microphone and audio only. Window-scoped GPUI handlers admit actions through existing session and Bot owners.
 - Claude sessions routed through Copilot use a Rust loopback gateway. The supervised Claude process owns its gateway across parked turns; terminating that process releases the listener and connected clients. The remote Node host retains its JavaScript gateway. Other provider transports remain Rust-owned local CLI processes.
 - The remote Node host owns its own database and provider processes. SSH carries authenticated RPC through a private forward; local windows consume revisioned remote snapshots.
