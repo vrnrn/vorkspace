@@ -17,10 +17,19 @@ const CONNECT_ATTEMPTS: usize = 60;
 const CONNECT_DELAY: Duration = Duration::from_millis(50);
 const RETRY_DELAY: Duration = Duration::from_millis(500);
 const REFUSED_DELAY: Duration = Duration::from_secs(2);
+const FAILED_START_DELAY: Duration = Duration::from_secs(5);
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Command {
-    Configure { recording: bool, icon: bool },
+    Configure {
+        recording: bool,
+        icon: bool,
+    },
+    /// How to reopen this exact app, including the data it was started with.
+    Relaunch {
+        program: String,
+        arguments: Vec<String>,
+    },
     Clear,
     Toggle,
     Shutdown,
@@ -99,6 +108,31 @@ pub fn socket_path(helper: &Path) -> PathBuf {
     std::env::temp_dir().join(format!("vorkspace-clipboard-{hash:016x}.sock"))
 }
 
+/// A bundle reopens through Launch Services; a bare Cargo binary runs directly.
+pub fn relaunch_command(app: &Path, arguments: Vec<String>) -> Command {
+    let bundle = app
+        .ancestors()
+        .nth(3)
+        .filter(|path| path.extension().is_some_and(|extension| extension == "app"));
+    match bundle {
+        Some(bundle) => {
+            let mut open = vec![bundle.to_string_lossy().into_owned()];
+            if !arguments.is_empty() {
+                open.push("--args".into());
+                open.extend(arguments);
+            }
+            Command::Relaunch {
+                program: "/usr/bin/open".into(),
+                arguments: open,
+            }
+        }
+        None => Command::Relaunch {
+            program: app.to_string_lossy().into_owned(),
+            arguments,
+        },
+    }
+}
+
 #[derive(Clone, Copy, Default, PartialEq)]
 struct Desired {
     recording: bool,
@@ -109,6 +143,7 @@ struct Shared {
     desired: Mutex<Desired>,
     wake: Condvar,
     stream: Mutex<Option<UnixStream>>,
+    clear_pending: Mutex<bool>,
 }
 
 /// The app's side: keeps one helper running and configured while it is wanted,
@@ -122,6 +157,7 @@ impl Supervisor {
     pub fn start(
         helper: PathBuf,
         socket: PathBuf,
+        relaunch: Command,
         notify: impl Fn(Notice) + Send + 'static,
     ) -> Self {
         let shared = Arc::new(Shared::default());
@@ -130,7 +166,7 @@ impl Supervisor {
             .name("clipboard-helper".into())
             .spawn({
                 let socket = socket.clone();
-                move || supervise(&owned, &helper, &socket, notify)
+                move || supervise(&owned, &helper, &socket, &relaunch, notify)
             })
             .expect("start the clipboard helper supervisor");
         Self { shared, socket }
@@ -139,8 +175,12 @@ impl Supervisor {
     pub fn configure(&self, recording: bool, icon: bool) {
         *self.shared.desired.lock().unwrap() = Desired { recording, icon };
         self.shared.wake.notify_all();
+        if !recording {
+            // Stopping recording drops the history a queued clear was aimed at.
+            *self.shared.clear_pending.lock().unwrap() = false;
+        }
         let command = Command::Configure { recording, icon };
-        if !self.send(command) && !recording {
+        if !self.send(command.clone()) && !recording {
             let shared = self.shared.clone();
             let socket = self.socket.clone();
             std::thread::spawn(move || retire(&shared, &socket, command));
@@ -154,6 +194,17 @@ impl Supervisor {
             .unwrap()
             .as_ref()
             .is_some_and(|stream| send(stream, &command).is_ok())
+    }
+
+    /// Clearing is a promise to the user, so it waits out a reconnect.
+    pub fn clear(&self) {
+        let stream = self.shared.stream.lock().unwrap();
+        if !stream
+            .as_ref()
+            .is_some_and(|stream| send(stream, &Command::Clear).is_ok())
+        {
+            *self.shared.clear_pending.lock().unwrap() = true;
+        }
     }
 
     pub fn connected(&self) -> bool {
@@ -181,7 +232,13 @@ fn retire(shared: &Shared, socket: &Path, command: Command) {
     }
 }
 
-fn supervise(shared: &Shared, helper: &Path, socket: &Path, notify: impl Fn(Notice)) {
+fn supervise(
+    shared: &Shared,
+    helper: &Path,
+    socket: &Path,
+    relaunch: &Command,
+    notify: impl Fn(Notice),
+) {
     loop {
         drop(
             shared
@@ -193,7 +250,7 @@ fn supervise(shared: &Shared, helper: &Path, socket: &Path, notify: impl Fn(Noti
             notify(Notice::Error(Some(
                 "The clipboard helper did not start.".into(),
             )));
-            std::thread::sleep(RETRY_DELAY);
+            std::thread::sleep(FAILED_START_DELAY);
             continue;
         };
         let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
@@ -209,7 +266,12 @@ fn supervise(shared: &Shared, helper: &Path, socket: &Path, notify: impl Fn(Noti
         };
         if protocol != PROTOCOL || built != modified(helper) {
             let _ = send(&stream, &Command::Shutdown);
-            while receive::<Notice>(&mut reader).is_some() {}
+            // A panel action may already be on its way. It outlives the old helper.
+            while let Some(notice) = receive(&mut reader) {
+                if matches!(notice, Notice::Action(_)) {
+                    notify(notice);
+                }
+            }
             continue;
         }
         {
@@ -217,8 +279,14 @@ fn supervise(shared: &Shared, helper: &Path, socket: &Path, notify: impl Fn(Noti
             // sent here, or sees the stream and sends itself.
             let mut published = shared.stream.lock().unwrap();
             let Desired { recording, icon } = *shared.desired.lock().unwrap();
-            if send(&stream, &Command::Configure { recording, icon }).is_ok() {
+            if send(&stream, &Command::Configure { recording, icon }).is_ok()
+                && send(&stream, relaunch).is_ok()
+            {
                 *published = stream.try_clone().ok();
+                let mut clear = shared.clear_pending.lock().unwrap();
+                if *clear && send(&stream, &Command::Clear).is_ok() {
+                    *clear = false;
+                }
             }
         }
         notify(Notice::Error(None));
@@ -240,6 +308,8 @@ fn connect(helper: &Path, socket: &Path) -> Option<UnixStream> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        // It outlives this app, so the runner's stdin hook can't apply to a relaunch.
+        .env_remove("VORKSPACE_DEV_RELOAD")
         // Its own group keeps it alive when the app's terminal group is signalled.
         .process_group(0)
         .spawn()
@@ -368,6 +438,36 @@ mod tests {
         assert_eq!(
             helper_executable(&app),
             nested.join("vorkspace-clipboard").canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_relaunch_keeps_the_arguments_the_app_started_with() {
+        let arguments = vec!["--vorkspace-db".to_owned(), "/data/store.db".to_owned()];
+        assert_eq!(
+            relaunch_command(
+                Path::new("/Applications/vorkspace.app/Contents/MacOS/vorkspace-gpui"),
+                arguments.clone()
+            ),
+            Command::Relaunch {
+                program: "/usr/bin/open".into(),
+                arguments: vec![
+                    "/Applications/vorkspace.app".into(),
+                    "--args".into(),
+                    "--vorkspace-db".into(),
+                    "/data/store.db".into(),
+                ],
+            }
+        );
+        assert_eq!(
+            relaunch_command(
+                Path::new("/Users/me/project/target/native-dev/vorkspace-gpui"),
+                arguments.clone()
+            ),
+            Command::Relaunch {
+                program: "/Users/me/project/target/native-dev/vorkspace-gpui".into(),
+                arguments,
+            }
         );
     }
 

@@ -6,7 +6,7 @@ Run checks from the repository root with current stable Rust and Node.js 24+:
 npm ci
 npm run check
 npm run assets
-cargo build --locked -p vorkspace-gpui --profile native-dev
+cargo build --locked -p vorkspace-gpui -p vorkspace-clipboard --profile native-dev
 bash scripts/desktop/bundle-native-macos.sh native-dev target "$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')" dev-data
 ```
 

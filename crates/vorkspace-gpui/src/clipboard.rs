@@ -61,7 +61,12 @@ impl Service {
         let helper = vorkspace_clipboard::helper_executable(&app);
         let socket = vorkspace_clipboard::socket_path(&helper);
         let (notices, received) = async_channel::unbounded();
-        self.supervisor = Some(Supervisor::start(helper, socket, move |notice| {
+        let arguments = std::env::args_os()
+            .skip(1)
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        let relaunch = vorkspace_clipboard::relaunch_command(&app, arguments);
+        self.supervisor = Some(Supervisor::start(helper, socket, relaunch, move |notice| {
             let _ = notices.try_send(notice);
         }));
         self._notices = Some(cx.spawn(async move |this, cx| {
@@ -82,6 +87,13 @@ impl Service {
             self.status = vorkspace_macos::status_menu::Status::new(std::rc::Rc::new(move || {
                 app.borrow_mut().update(|cx| cx.dispatch_action(&Reopen));
             }));
+        }
+    }
+
+    fn clear(&self) {
+        #[cfg(not(test))]
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.clear();
         }
     }
 
@@ -111,7 +123,7 @@ impl Service {
 }
 pub(crate) fn clear(cx: &mut App) {
     if let Some(s) = get(cx) {
-        s.read(cx).send(Command::Clear);
+        s.read(cx).clear();
     }
 }
 pub(crate) fn toggle(cx: &mut App) {
@@ -145,7 +157,12 @@ pub(crate) fn app_quitting(cx: &mut App) {
     if let Some(s) = get(cx) {
         let s = s.read(cx);
         if s.stop_helper_on_quit {
-            s.send(Command::Shutdown);
+            // Through the desired state, so that the supervisor can't start a
+            // replacement during the app's own slower shutdown.
+            #[cfg(not(test))]
+            if let Some(supervisor) = &s.supervisor {
+                supervisor.configure(false, false);
+            }
         }
     }
 }

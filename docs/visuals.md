@@ -117,4 +117,4 @@ To seed them into an isolated development conversation:
 cargo run --manifest-path Cargo.toml --locked -p vorkspace-gpui --profile native-dev -- --dev-data --visual-fixture
 ```
 
-The fixture cannot be written into the production database.
+The fixture cannot be written into the production database. `cargo run` builds only the app, so to include clipboard history, run `cargo build --locked -p vorkspace-clipboard --profile native-dev` first. Without it, Settings reports that the clipboard helper did not start.

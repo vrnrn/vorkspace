@@ -45,6 +45,7 @@ struct Helper {
     #[cfg(not(test))]
     status: Option<vorkspace_macos::status_menu::Status>,
     reported_error: Option<String>,
+    relaunch: Option<(String, Vec<String>)>,
 }
 impl Global for Helper {}
 
@@ -86,8 +87,9 @@ fn accept(listener: UnixListener, events: async_channel::Sender<Event>) {
             while let Some(command) = receive(&mut reader) {
                 let _ = events.send_blocking(Event::Command(command));
             }
-            occupied.store(false, Ordering::SeqCst);
+            // In this order, so a replacement's Connected always follows this.
             let _ = events.send_blocking(Event::Disconnected);
+            occupied.store(false, Ordering::SeqCst);
         });
     }
 }
@@ -96,10 +98,8 @@ fn run(step: Option<Step>, cx: &mut App) {
     match step {
         Some(Step::Deliver(action)) => notify(&Notice::Action(action), cx),
         Some(Step::LaunchApp) => {
-            let app = std::env::current_exe().ok();
-            // <app>/Contents/Helpers/<helper>/Contents/MacOS/<executable>
-            if let Some(bundle) = app.as_ref().and_then(|path| path.ancestors().nth(6)) {
-                let _ = Process::new("/usr/bin/open").arg(bundle).spawn();
+            if let Some((program, arguments)) = &cx.global::<Helper>().relaunch {
+                let _ = Process::new(program).args(arguments).spawn();
             }
         }
         Some(Step::Exit) => cx.quit(),
@@ -202,6 +202,9 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             sync_status(icon, cx);
             report_error(cx);
             run(step, cx);
+        }
+        Event::Command(Command::Relaunch { program, arguments }) => {
+            cx.global_mut::<Helper>().relaunch = Some((program, arguments));
         }
         Event::Command(Command::Clear) => service::clear(cx),
         Event::Command(Command::Toggle) => toggle(false, cx),
