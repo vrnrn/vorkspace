@@ -89,21 +89,12 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
     if pid == std::process::id() {
         return true;
     }
-    #[cfg(unix)]
-    {
-        if pid == 0 || pid > i32::MAX as u32 {
-            return false;
-        }
-        unsafe {
-            libc::kill(pid as i32, 0) == 0
-                || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-        }
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
     }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        // An unavailable liveness probe never proves a previous owner died.
-        true
+    unsafe {
+        libc::kill(pid as i32, 0) == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
 }
 

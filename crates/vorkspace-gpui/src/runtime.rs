@@ -11,7 +11,7 @@ use vorkspace_core::{
 };
 mod activity;
 pub(crate) mod card_persistence;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod follow_up_tests;
 mod handoff;
 mod persistence;
@@ -20,7 +20,7 @@ mod submissions;
 #[cfg(test)]
 mod ticket_context_tests;
 mod visual_discovery;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod visual_tests;
 use persistence::PendingSave;
 pub(crate) type Database = Arc<Mutex<Store>>;

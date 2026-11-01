@@ -29,12 +29,9 @@ pub(super) struct State {
     mode: Option<&'static str>,
 }
 
-pub(super) fn configure(command: &mut Command, request: &Request) -> Result<(), String> {
+pub(super) fn configure(request: &Request) -> Result<(), String> {
     if request.kind != Kind::Antigravity {
         return Err("ACP is available only for Antigravity".into());
-    }
-    if cfg!(target_os = "linux") {
-        command.arg("--uid=");
     }
     Ok(())
 }

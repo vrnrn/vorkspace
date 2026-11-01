@@ -271,7 +271,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn running_process_waits_for_turn_readiness_and_streams_after_steering() {
         use std::os::unix::fs::PermissionsExt;

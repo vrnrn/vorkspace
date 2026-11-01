@@ -440,16 +440,7 @@ pub fn open_path_with_default_app(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err(missing(&path));
     }
-    #[cfg(target_os = "macos")]
     let mut command = Command::new("open");
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("rundll32.exe");
-        command.arg("url.dll,FileProtocolHandler");
-        command
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let mut command = Command::new("xdg-open");
     command.arg(&path);
     crate::process::configure_child(&mut command);
     let output = command.output().map_err(|error| error.to_string())?;
@@ -475,46 +466,15 @@ pub fn reveal_path(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err(missing(&path));
     }
-    #[cfg(target_os = "macos")]
-    {
-        let path_str = path.to_str().ok_or_else(|| "Invalid path".to_string())?;
-        let mut command = Command::new("open");
-        command.args(["-R", path_str]);
-        crate::process::configure_child(&mut command);
-        let status = command.status().map_err(|e| e.to_string())?;
-        if !status.success() {
-            return Err("Could not reveal in Finder.".into());
-        }
-        Ok(())
+    let path_str = path.to_str().ok_or_else(|| "Invalid path".to_string())?;
+    let mut command = Command::new("open");
+    command.args(["-R", path_str]);
+    crate::process::configure_child(&mut command);
+    let status = command.status().map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err("Could not reveal in Finder.".into());
     }
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        // explorer.exe returns 1 even when it opened the folder.
-        let path_str = path.to_string_lossy().replace('/', "\\");
-        // Only the path may be quoted: explorer ignores a quoted `/select,` switch.
-        let mut command = Command::new("explorer");
-        command.raw_arg(format!("/select,\"{path_str}\""));
-        crate::process::configure_child(&mut command);
-        command.spawn().map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let parent = path
-            .parent()
-            .ok_or_else(|| "File has no parent directory.".to_string())?;
-        let mut command = Command::new("xdg-open");
-        command.arg(parent);
-        crate::process::configure_child(&mut command);
-        let status = command.status().map_err(|e| e.to_string())?;
-        if !status.success() {
-            return Err("Could not open the containing folder.".into());
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
 fn same_entry(a: &Path, b: &Path) -> bool {
@@ -527,19 +487,8 @@ fn same_entry(a: &Path, b: &Path) -> bool {
     let Ok(b_meta) = std::fs::metadata(b) else {
         return false;
     };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        a_meta.dev() == b_meta.dev() && a_meta.ino() == b_meta.ino()
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (a_meta, b_meta);
-        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-            (Ok(left), Ok(right)) => left == right,
-            _ => false,
-        }
-    }
+    use std::os::unix::fs::MetadataExt;
+    a_meta.dev() == b_meta.dev() && a_meta.ino() == b_meta.ino()
 }
 
 fn split_stem_ext(name: &str) -> (&str, &str) {
@@ -705,7 +654,6 @@ mod tests {
             .ends_with("is not a folder"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn copy_rejects_paste_into_self_through_a_symlink_alias() {
         let dir = tmp();

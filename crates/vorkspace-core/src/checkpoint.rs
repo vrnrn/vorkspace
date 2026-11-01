@@ -437,7 +437,6 @@ impl Store {
         root: &Path,
         except: &str,
     ) -> Result<Vec<(PathBuf, TurnReview)>, String> {
-        let root = review_comparison_path(root);
         let mut active = Vec::new();
         if !self.root.exists() {
             return Ok(active);
@@ -448,9 +447,8 @@ impl Store {
                 continue;
             }
             if let Some(review) = read_review(&entry.path())? {
-                let other = review_comparison_path(Path::new(&review.cwd));
-                if review.active.is_some() && (root.starts_with(&other) || other.starts_with(&root))
-                {
+                let other = Path::new(&review.cwd);
+                if review.active.is_some() && (root.starts_with(other) || other.starts_with(root)) {
                     active.push((entry.path(), review));
                 }
             }
@@ -661,16 +659,6 @@ impl Store {
     }
 }
 
-fn review_comparison_path(path: &Path) -> PathBuf {
-    // path_to_js replaces Windows separators, including in canonical verbatim
-    // paths. Restore native separators before comparing path components.
-    if cfg!(windows) {
-        PathBuf::from(path.to_string_lossy().replace('/', "\\"))
-    } else {
-        path.to_path_buf()
-    }
-}
-
 fn completed_turn(review: &TurnReview) -> Result<&RecordedTurn, String> {
     let turn = review
         .active
@@ -774,11 +762,6 @@ fn resolve_edit_path(workspace: &Path, root: &Path, path: &str) -> Result<String
 
 fn git_command(root: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("git");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
     command
         .args(["--no-pager", "-C"])
         .arg(root)
@@ -1087,7 +1070,6 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     file.sync_all().map_err(|e| e.to_string())?;
     drop(file);
     std::fs::rename(tmp, path).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
     std::fs::File::open(parent)
         .and_then(|dir| dir.sync_all())
         .map_err(|e| e.to_string())?;
@@ -1140,18 +1122,12 @@ fn path_contains_symlink(root: &Path, relative: &str) -> bool {
     false
 }
 
-#[cfg(unix)]
 fn file_mode(path: &Path) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::symlink_metadata(path)
         .ok()
         .filter(|meta| meta.is_file() && !meta.file_type().is_symlink())
         .map(|meta| meta.permissions().mode() & 0o777)
-}
-
-#[cfg(not(unix))]
-fn file_mode(_path: &Path) -> Option<u32> {
-    None
 }
 
 fn state_is_binary(state: &FileState) -> bool {

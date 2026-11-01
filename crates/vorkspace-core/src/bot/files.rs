@@ -128,11 +128,8 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     let temp = path.with_extension(format!("{}.tmp", crate::bot::new_id()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
     let mut file = options
         .open(&temp)
         .map_err(|e| format!("{}: {e}", temp.display()))?;
@@ -141,7 +138,6 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
         file.sync_all()?;
         drop(file);
         std::fs::rename(&temp, path)?;
-        #[cfg(unix)]
         std::fs::File::open(path.parent().unwrap_or(Path::new(".")))?.sync_all()?;
         Ok::<_, std::io::Error>(())
     })();
@@ -361,7 +357,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn writes_private_files_without_reusing_a_leftover_public_temp_file() {
         use std::os::unix::fs::PermissionsExt;
@@ -454,7 +449,6 @@ mod tests {
         }
         std::fs::remove_dir_all(root).unwrap();
     }
-    #[cfg(unix)]
     #[test]
     fn atomic_memory_write_never_follows_an_old_temporary_symlink() {
         let root = temp_root();

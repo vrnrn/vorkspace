@@ -53,11 +53,8 @@ impl Drop for TemporaryMedia {
 fn private_temporary(path: &Path) -> Result<std::fs::File, String> {
     let mut options = std::fs::OpenOptions::new();
     options.create_new(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
     options.open(path).map_err(|error| error.to_string())
 }
 
@@ -395,14 +392,11 @@ mod tests {
         let path = directory.path().join("private.tmp");
         let mut file = private_temporary(&path).unwrap();
         file.write_all(b"unfinished private document").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert!(private_temporary(&path).is_err());
         assert_eq!(
             std::fs::read(&path).unwrap(),
@@ -444,11 +438,8 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("source.rs");
         std::fs::write(&path, b"\xef\xbb\xbffn main() {}\r\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         let Document::Text(mut doc) = read_document(&path).unwrap() else {
             panic!()
         };
@@ -458,14 +449,10 @@ mod tests {
             std::fs::read(&path).unwrap(),
             "\u{feff}// 🙂\r\n".as_bytes()
         );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o755
-            );
-        }
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
         std::fs::write(&path, "external").unwrap();
         assert!(save_document(&path, &doc, "draft")
             .unwrap_err()

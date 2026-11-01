@@ -511,7 +511,7 @@ pub(super) fn discard_session(request: &Request) {
     drop(retired);
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

@@ -126,7 +126,6 @@ mod tests {
         assert!(p.claude_usage_limit.is_none());
     }
 
-    #[cfg(unix)]
     #[test]
     fn claude_transport_delivers_the_limit_before_returning_its_terminal_error() {
         use std::os::unix::fs::PermissionsExt;

@@ -33,12 +33,9 @@ impl Drop for CallLock {
         // until exec. Explicitly unlock so that copy cannot keep a finished call
         // owning Vox after the controller has joined and released its own FD.
         let file = &self.0;
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-            unsafe {
-                libc::flock(file.as_raw_fd(), libc::LOCK_UN);
-            }
+        use std::os::fd::AsRawFd;
+        unsafe {
+            libc::flock(file.as_raw_fd(), libc::LOCK_UN);
         }
         let _ = file;
     }
@@ -63,7 +60,6 @@ impl Host {
         lock_path: &Path,
         binary: &Path,
     ) -> Result<(Self, async_channel::Receiver<Value>), String> {
-        #[cfg(unix)]
         let lock = {
             use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
             let file = std::fs::OpenOptions::new()
@@ -79,11 +75,6 @@ impl Host {
                 return Err("Vox is already active in another window".into());
             }
             Some(CallLock(file))
-        };
-        #[cfg(not(unix))]
-        let lock: Option<CallLock> = {
-            let _ = lock_path;
-            None
         };
         let mut command = Command::new(binary);
         command

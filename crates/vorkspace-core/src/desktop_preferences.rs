@@ -3,7 +3,6 @@ mod session_defaults;
 mod workspace_preferences;
 mod workspace_snapshot;
 
-#[cfg(any(target_os = "macos", test))]
 use rusqlite::{types::ValueRef, Connection, OpenFlags};
 use serde_json::{json, Map, Value};
 use std::{
@@ -48,7 +47,6 @@ impl DesktopPreferences {
         {
             return Self::default();
         }
-        #[cfg(target_os = "macos")]
         if let Some(home) = crate::accounts::home() {
             return Self::load_webkit(
                 &home
@@ -75,7 +73,6 @@ impl DesktopPreferences {
         serde_json::from_str(self.get(key)?).ok()
     }
 
-    #[cfg(any(target_os = "macos", test))]
     fn load_webkit(root: &Path) -> Self {
         // WebKit stores origins under two opaque directory components. Do not
         // merge localhost development origins or Inspector storage into the app.
@@ -109,7 +106,6 @@ impl DesktopPreferences {
             .unwrap_or_default()
     }
 
-    #[cfg(any(target_os = "macos", test))]
     fn read_database(path: &Path) -> Result<Self, String> {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|e| e.to_string())?;
@@ -590,7 +586,6 @@ fn merge_projects(old: Option<&Value>, current: &Value, source: &Value) -> Value
     }
     Value::Array(merged)
 }
-#[cfg(any(target_os = "macos", test))]
 fn decode_webkit_value(bytes: &[u8]) -> Option<String> {
     let (pairs, remainder) = bytes.as_chunks::<2>();
     if !remainder.is_empty() {
@@ -605,7 +600,6 @@ fn decode_webkit_value(bytes: &[u8]) -> Option<String> {
     )
     .ok()
 }
-#[cfg(any(target_os = "macos", test))]
 fn desktop_origin(mut bytes: &[u8]) -> bool {
     fn string(bytes: &mut &[u8]) -> Option<String> {
         let length = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?) as usize;

@@ -29,7 +29,6 @@ mod git_picker;
 mod git_status;
 #[cfg(not(test))]
 mod global_hotkey;
-#[cfg(target_os = "macos")]
 mod hang_diagnostics;
 mod history;
 mod image_lightbox;
@@ -392,14 +391,12 @@ fn main() {
     }
     let sidebar_metadata = db.session_sidebar_metadata(&projects);
     let db = Arc::new(Mutex::new(db));
-    #[cfg(target_os = "macos")]
     let diagnostics_path = std::path::absolute(&database)
         .ok()
         .and_then(|path| path.parent().map(|root| root.join("diagnostics")));
     gpui::Application::with_platform(std::rc::Rc::new(gpui_macos::MacPlatform::new(false)))
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
-            #[cfg(target_os = "macos")]
             if let Some(path) = diagnostics_path {
                 hang_diagnostics::start(cx, path);
             }

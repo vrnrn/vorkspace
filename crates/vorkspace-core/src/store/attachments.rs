@@ -52,20 +52,12 @@ fn pid_alive(pid: u32) -> bool {
     if pid == std::process::id() {
         return true;
     }
-    #[cfg(unix)]
-    {
-        if pid == 0 || pid > i32::MAX as u32 {
-            return false;
-        }
-        unsafe {
-            libc::kill(pid as i32, 0) == 0
-                || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-        }
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
     }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        true
+    unsafe {
+        libc::kill(pid as i32, 0) == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
 }
 fn cache_attachment(root: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
@@ -81,12 +73,9 @@ fn cache_attachment(root: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, St
     {
         return Err("Attachment cache must not be a symlink".into());
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
-            .map_err(|e| e.to_string())?;
-    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| e.to_string())?;
     let basename = name.rsplit(['/', '\\']).next().unwrap_or("attachment");
     let mut size = 0;
     let name: String = basename
@@ -105,22 +94,16 @@ fn cache_attachment(root: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, St
     let path = directory.join(format!("{}-{name}", uuid::Uuid::new_v4()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
     let result = (|| {
         let mut file = options.open(&path)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        #[cfg(unix)]
-        {
-            // A durable path needs both the file contents and its directory
-            // entry, including first creation of the cache directory itself.
-            std::fs::File::open(&directory)?.sync_all()?;
-            std::fs::File::open(root)?.sync_all()?;
-        }
+        // A durable path needs both the file contents and its directory
+        // entry, including first creation of the cache directory itself.
+        std::fs::File::open(&directory)?.sync_all()?;
+        std::fs::File::open(root)?.sync_all()?;
         Ok::<_, std::io::Error>(())
     })();
     if let Err(error) = result {
@@ -574,22 +557,19 @@ mod tests {
             path.parent().unwrap(),
             fixture.directory.path().join(ATTACHMENT_DIRECTORY)
         );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-            assert_eq!(
-                std::fs::metadata(path.parent().unwrap())
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o700
-            );
-        }
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
     }
     #[test]
     fn collector_scans_all_sql_owners_and_raw_sidecar_then_removes_only_old_orphans() {
@@ -714,7 +694,6 @@ mod tests {
         );
         assert!(file.exists());
     }
-    #[cfg(unix)]
     #[test]
     fn symlink_files_and_a_symlink_cache_root_are_never_collected_or_written_through() {
         use std::os::unix::fs::symlink;

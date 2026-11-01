@@ -105,11 +105,7 @@ fn review_index_revalidates_closed_views_and_subdirectories() {
     assert!(init_git_commit(root, &[("src/a.txt", "base\n")]));
     std::fs::write(root.join("src/a.txt"), "edit\n").unwrap();
     let before = diff_files(root).unwrap();
-    let added_name = if cfg!(windows) {
-        " new file.txt"
-    } else {
-        " new\tfile.txt"
-    };
+    let added_name = " new\tfile.txt";
     std::fs::write(root.join("src").join(added_name), "new\n").unwrap();
     let next = review_index(root, Some(&before)).unwrap();
     assert_eq!(next.files.len(), 2);
@@ -479,7 +475,6 @@ fn stage_and_unstage_directory() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn stage_and_unstage_literal_directory_names() {
     for folder in ["*", "folder?", "[ab]", ":(glob)*"] {

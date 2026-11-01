@@ -568,11 +568,8 @@ fn with_temp_markdown<T>(
     let path = std::env::temp_dir().join(format!("vorkspace-comment-{stamp}.md"));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
     let mut file = options.open(&path).map_err(|error| error.to_string())?;
     let written = file.write_all(body.as_bytes());
     drop(file);
@@ -1885,14 +1882,11 @@ mod comment_tests {
         let result: Result<(), String> = with_temp_markdown("private\nbody\n", |path| {
             file_path = path.to_owned();
             assert_eq!(std::fs::read_to_string(path).unwrap(), "private\nbody\n");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                assert_eq!(
-                    std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                    0o600
-                );
-            }
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
             Err("fixture command failed".into())
         });
         assert_eq!(result.unwrap_err(), "fixture command failed");

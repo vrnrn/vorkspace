@@ -632,7 +632,6 @@ mod tests {
         assert!(check_bots(&roster, "/project", &[]).is_err());
         assert!(check_bots(&roster, "/other", &[]).is_ok());
     }
-    #[cfg(unix)]
     #[test]
     fn symlink_alias_to_project_is_refused() {
         let dir = tempfile::tempdir().unwrap();

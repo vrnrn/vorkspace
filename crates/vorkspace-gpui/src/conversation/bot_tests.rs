@@ -759,7 +759,6 @@ fn restart_consumes_only_the_composer_revision_that_became_a_saved_bot_draft(
     }
 }
 
-#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "Requires Metal and VORKSPACE_BOT_DRAFT_CAPTURE_DIR"]
 fn native_bot_draft_and_add_menu_capture() {

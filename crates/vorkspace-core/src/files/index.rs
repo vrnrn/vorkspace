@@ -385,9 +385,6 @@ fn is_private_dir(path: &Path) -> bool {
     if path.extension().is_some_and(|ext| ext == "app") {
         return true;
     }
-    if !cfg!(target_os = "macos") {
-        return false;
-    }
     let guarded = [
         dirs_home().map(|home| PathBuf::from(home).join("Library")),
         dirs_home().map(|home| PathBuf::from(home).join(".Trash")),

@@ -4486,7 +4486,6 @@ mod composer_motion_tests {
             .unwrap();
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "Requires Metal and VORKSPACE_COMPOSER_CAPTURE_DIR"]
     fn native_narrow_composer_capture() {

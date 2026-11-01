@@ -9,21 +9,7 @@ fn expand_home(path: &str) -> PathBuf {
 }
 
 fn claude_desktop_config(home: &Path) -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        home.join("Library/Application Support/Claude/claude_desktop_config.json")
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join("AppData/Roaming"))
-            .join("Claude/claude_desktop_config.json")
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        home.join(".config/Claude/claude_desktop_config.json")
-    }
+    home.join("Library/Application Support/Claude/claude_desktop_config.json")
 }
 
 fn server_from_json(provider: &str, name: &str, config: &str) -> Result<(String, Value), String> {
@@ -169,11 +155,8 @@ fn write_json_config(
         use std::io::Write;
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
         let mut file = options.open(&temporary)?;
         file.write_all(&encoded)?;
         file.sync_all()?;
@@ -688,7 +671,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn replacing_config_restricts_permissions() {
         use std::os::unix::fs::PermissionsExt;

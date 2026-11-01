@@ -48,7 +48,7 @@ mod questions;
 mod rewind;
 mod tasks;
 pub use rewind::{rewind_last_turn, supports_rewind, RewindError};
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod text_tests;
 pub use kind::Kind;
 
@@ -174,8 +174,6 @@ pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
             });
             candidates.extend(versions.into_iter().rev());
         }
-        #[cfg(windows)]
-        candidates.push(home.join("AppData/Roaming/npm").join(kind.binary_name()));
     }
     for dir in [
         "/opt/homebrew/bin",
@@ -193,16 +191,9 @@ pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
             .collect();
         candidates.extend(paths);
     }
-    candidates.into_iter().find_map(|p| {
-        #[cfg(windows)]
-        for ext in ["exe", "cmd", "bat", "com"] {
-            let candidate = p.with_extension(ext);
-            if executable(&candidate) && discovery::matches(kind, &candidate) {
-                return Some(candidate);
-            }
-        }
-        (executable(&p) && discovery::matches(kind, &p)).then_some(p)
-    })
+    candidates
+        .into_iter()
+        .find_map(|p| (executable(&p) && discovery::matches(kind, &p)).then_some(p))
 }
 fn executable(path: &Path) -> bool {
     let Ok(meta) = path.metadata() else {
@@ -211,15 +202,8 @@ fn executable(path: &Path) -> bool {
     if !meta.is_file() {
         return false;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
 }
 
 fn write_json(out: &mut impl Write, value: Value) -> Result<(), String> {
@@ -1352,7 +1336,6 @@ fn run_operation(
         && request.provider_id.is_none()
         && !request.settings.text_only)
         .then(lifecycle::claude_session_id);
-    #[cfg(unix)]
     if std::env::var_os("VORKSPACE_NATIVE_TRACE").is_some() {
         unsafe {
             let mut signals = std::mem::zeroed();
@@ -1490,7 +1473,7 @@ fn run_operation(
             }
         }
         kind if kind.is_pi() => pi::configure(&mut command, &request, probe || command_probe),
-        _ => acp::configure(&mut command, &request)?,
+        _ => acp::configure(&request)?,
     }
     command
         .current_dir(if request.kind == Kind::Antigravity {
@@ -2086,7 +2069,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod process_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

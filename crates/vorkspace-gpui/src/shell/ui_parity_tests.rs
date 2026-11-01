@@ -154,9 +154,7 @@ fn ui_parity_capture() {
             // Git status arrives from a worker thread that parking does not await.
             std::thread::sleep(std::time::Duration::from_millis(400));
             cx.run_until_parked();
-            window
-                .update(&mut cx, |shell, window, cx| open(shell, window, cx))
-                .unwrap();
+            window.update(&mut cx, open).unwrap();
             cx.run_until_parked();
             std::thread::sleep(std::time::Duration::from_millis(400));
             crate::clock::settle_headless_animations(window, &mut cx);

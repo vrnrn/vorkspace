@@ -210,11 +210,6 @@ fn command(target: &SshTarget, interactive: bool) -> Command {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
     command
 }
 
@@ -622,7 +617,6 @@ impl Tunnels {
 
 /// How this desktop appears in the host's device list.
 pub fn device_name() -> String {
-    #[cfg(not(windows))]
     let run = |program: &str, args: &[&str]| {
         Command::new(program)
             .args(args)
@@ -633,14 +627,7 @@ pub fn device_name() -> String {
             .filter(|output| output.status.success())
             .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
     };
-    #[cfg(target_os = "macos")]
     let name = run("scutil", &["--get", "ComputerName"]).or_else(|| run("hostname", &[]));
-    #[cfg(windows)]
-    let name = std::env::var("COMPUTERNAME").ok();
-    #[cfg(not(any(target_os = "macos", windows)))]
-    let name = std::fs::read_to_string("/etc/hostname")
-        .ok()
-        .or_else(|| run("hostname", &[]));
     let name: String = name
         .unwrap_or_default()
         .trim()
@@ -837,54 +824,6 @@ mod tests {
         assert!(script.contains("checksum mismatch"));
         assert!(script.contains("Protect-vorkspaceDirectory"));
         assert!(pairing_script(HostPlatform::Windows, "Nick's $PC").contains("'Nick''s $PC'"));
-    }
-    #[cfg(windows)]
-    #[test]
-    fn windows_shells_detect_the_platform_and_accept_utf8_scripts() {
-        for (program, args) in [
-            ("cmd.exe", vec!["/D", "/C"]),
-            (
-                "powershell.exe",
-                vec!["-NoProfile", "-NonInteractive", "-Command"],
-            ),
-        ] {
-            let output = Command::new(program)
-                .env_remove("PSModulePath")
-                .args(args)
-                .arg(PLATFORM_PROBE.join(" "))
-                .output()
-                .unwrap();
-            assert!(output.status.success());
-            assert_eq!(
-                parse_platform(&String::from_utf8_lossy(&output.stdout)).unwrap(),
-                HostPlatform::Windows
-            );
-        }
-        let mut child = Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-EncodedCommand",
-                &powershell_reader(),
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all("Write-Output '日本語 🖥'\n".as_bytes())
-            .unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "日本語 🖥");
     }
     #[test]
     fn device_names_are_bounded_single_lines() {

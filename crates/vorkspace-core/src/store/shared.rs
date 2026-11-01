@@ -214,11 +214,8 @@ fn lock_extras(path: &Path) -> Result<std::fs::File, String> {
     ));
     let mut options = std::fs::OpenOptions::new();
     options.read(true).write(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     let file = options.open(lock).map_err(|e| e.to_string())?;
     file.lock().map_err(|e| e.to_string())?;
     Ok(file)
@@ -236,17 +233,13 @@ fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<(), String>
         use std::io::Write;
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
         let mut file = options.open(&temporary).map_err(|e| e.to_string())?;
         file.write_all(encode(value)?.as_bytes())
             .map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
         std::fs::rename(&temporary, path).map_err(|e| e.to_string())?;
-        #[cfg(unix)]
         if let Some(parent) = path.parent() {
             std::fs::File::open(parent)
                 .and_then(|directory| directory.sync_all())

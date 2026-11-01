@@ -208,11 +208,8 @@ fn write(path: &Path, machines: &[StoredMachine]) -> Result<(), String> {
     let result = (|| -> Result<(), String> {
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
         let mut file = options.open(&temporary).map_err(|e| e.to_string())?;
         file.write_all(&serde_json::to_vec(machines).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
@@ -781,14 +778,11 @@ mod tests {
         connections.disconnect("old").unwrap();
         assert!(connections.list().unwrap().is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "[]");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]
