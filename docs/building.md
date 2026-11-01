@@ -1,6 +1,6 @@
 # Building vorkspace
 
-The root Cargo workspace owns the desktop and core. Use current stable Rust and Node.js 24+. macOS builds require Xcode with macOS platform components. Core builds on Linux also require D-Bus headers and pkg-config.
+The root Cargo workspace owns the desktop and core. Use current stable Rust and Node.js 24+. macOS builds require Xcode with macOS platform components. Rust tests run through [`cargo-nextest`](https://nexte.st), which `cargo install --locked cargo-nextest` provides.
 
 ## Development and release
 
@@ -13,7 +13,7 @@ Development defaults to the `release` Cargo profile and normal desktop data. Typ
 
 For the development profile with isolated data, use `npm run dev -- --native-dev --dev-data`; its macOS bundle is `target/native-dev/vorkspace.app`. The profile and data selection are independent: omit `--dev-data` or pass `--vorkspace-data` to use normal desktop data.
 
-The app provides **Restart vorkspace** in its application menu and Command Palette (`⌘⌥R` on macOS, `Ctrl+Alt+R` elsewhere). When developing from inside the installed app, run `npm run build`, confirm installation succeeded, then use Restart to load it. Restart prompts about unsaved file edits and uses the normal shutdown hooks for drafts, workspace state, voice, and provider processes. Its relaunch helper waits for the old process to exit before opening the successor. On macOS it prefers `/Applications/vorkspace.app`, so use the runner's `r` for a separate development bundle. Restart does not compile code; `cargo build` alone does not update the installed app bundle.
+The app provides **Restart vorkspace** in its application menu and Command Palette (`⌘⌥R`). When developing from inside the installed app, run `npm run build`, confirm installation succeeded, then use Restart to load it. Restart prompts about unsaved file edits and uses the normal shutdown hooks for drafts, workspace state, voice, and provider processes. Its relaunch helper waits for the old process to exit before opening the successor. On macOS it prefers `/Applications/vorkspace.app`, so use the runner's `r` for a separate development bundle. Restart does not compile code; `cargo build` alone does not update the installed app bundle.
 
 `CARGO_TARGET_DIR` and `CARGO_BUILD_TARGET` override output placement. `CARGO_BUILD_JOBS` controls build concurrency. `npm run build` packages and installs locally but does not launch the app or publish a release.
 
@@ -31,6 +31,6 @@ npm run check
 
 The editor and formatter bundles are committed under `crates/vorkspace-gpui/assets/`; the Vox audio bundle lives under `crates/vorkspace-core/assets/`. Their maintained sources live in `embedded/editor` and `embedded/vox`. These files are embedded, so Cargo can compile without installing JavaScript dependencies. `npm run assets` installs the separate editor generator dependencies and rebuilds these bundles. Root npm dependencies are build/test tools only.
 
-`npm run check` runs tooling, voice, host, formatting, Clippy, and workspace tests. `npm run test:rust` runs core tests before the serial GPUI suite. `npm run host:package` creates a self-contained remote host archive including Node.
+`npm run check` runs tooling, voice, host, formatting, Clippy, and workspace tests. `npm run test:rust` runs every Rust test in parallel, one process per test. `npm run host:package` creates a self-contained remote host archive including Node.
 
 See [verification](testing.md), [data selection](data-storage.md), and [signed update packaging](updates.md).

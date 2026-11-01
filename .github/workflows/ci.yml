@@ -23,11 +23,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - uses: taiki-e/install-action@nextest
       - run: npm ci
       - run: npm run assets
       - name: Verify generated assets
         run: git diff --exit-code -- crates/vorkspace-gpui/assets/ crates/vorkspace-core/assets/
       - run: npm run check
+        env:
+          NEXTEST_PROFILE: ci
       - run: cargo build --locked -p vorkspace-gpui --profile native-dev
       - name: Package and verify native app signature
         run: |

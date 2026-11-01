@@ -35,7 +35,7 @@ The macOS release bundle is `target/release/vorkspace.app`, which local macOS bu
 - Optional Vox calls controlled by Rust with a private WebRTC audio page; microphone access starts only with a call.
 - macOS app packaging with optional Sparkle signing and update configuration.
 
-macOS is the supported validation target. Linux and Windows platform code is retained; those GUI builds need platform-specific validation.
+vorkspace is a macOS app. Remote hosts can run on macOS or Linux.
 
 See the [repository map](docs/repository.md) for source ownership and the [documentation index](docs/README.md) for all guides.
 

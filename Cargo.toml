@@ -27,7 +27,7 @@ opt-level = 3
 [profile.native-dev]
 inherits = "dev"
 debug = 0
-incremental = false
+incremental = true
 
 [profile.native-dev.package."*"]
 opt-level = 1

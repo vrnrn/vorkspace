@@ -10,7 +10,7 @@ npm run dev -- --vorkspace-db /absolute/path/to/store.db
 
 `--check-data` opens the selected store read-only, prints its validation result, and exits. Fixture flags are allowed only with isolated development data.
 
-The default production location is `com.vorkspace.desktop/vorkspace.db` under macOS Application Support, Linux's XDG data directory, or Windows `%APPDATA%`. If it is absent, the core recognizes the earlier application's directory and database by their exact persisted identity fingerprints. It opens that database in place; it does not copy files, rename the user's data, or invent replacement sessions.
+The default production location is `com.vorkspace.desktop/vorkspace.db` under macOS Application Support. If it is absent, the core recognizes the earlier application's directory and database by their exact persisted identity fingerprints. It opens that database in place; it does not copy files, rename the user's data, or invent replacement sessions.
 
 The desktop schema remains readable without the former UI. Historical preferences are read from the matching WebKit store on macOS and normalized into current app keys. Native sidecar reads translate earlier Bot roster and viewport field names. Canonical keys take precedence when both versions exist. Existing Vox enabled, silent, and microphone preferences participate in the same read-time reconciliation, preserving later native choices. Transcript text, arbitrary document JSON, paths, and provider IDs remain untouched. Saving uses the current metadata names and atomic sidecar replacement.
 
