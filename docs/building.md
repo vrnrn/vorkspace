@@ -31,6 +31,8 @@ npm run check
 
 The editor and formatter bundles are committed under `crates/vorkspace-gpui/assets/`; the Vox audio bundle lives under `crates/vorkspace-core/assets/`. Their maintained sources live in `embedded/editor` and `embedded/vox`. These files are embedded, so Cargo can compile without installing JavaScript dependencies. `npm run assets` installs the separate editor generator dependencies and rebuilds these bundles. Root npm dependencies are build/test tools only.
 
+In a new linked worktree, run `npm run worktree:seed` before the first build. It clones the main checkout's `target/` with APFS copy-on-write, so the clone is instant and takes no extra disk, and only workspace and vendored crates rebuild.
+
 `npm run check` runs tooling, voice, host, formatting, Clippy, and workspace tests. `npm run test:rust` runs every Rust test in parallel, one process per test. `npm run host:package` creates a self-contained remote host archive including Node.
 
 See [verification](testing.md), [data selection](data-storage.md), and [signed update packaging](updates.md).

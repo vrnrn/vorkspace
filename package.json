@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "node scripts/desktop/dev-native.mjs",
     "build": "node scripts/desktop/build-native.mjs",
+    "worktree:seed": "bash scripts/desktop/seed-worktree.sh",
     "check": "npm run test:tooling && npm run test:voice && npm run test:host && cargo fmt --all --check && cargo clippy --locked --workspace --all-targets --profile native-dev -- -D warnings && npm run test:rust",
     "check:fast": "npm run test:tooling && npm run test:voice && cargo fmt --all --check && cargo clippy --locked --workspace --all-targets --profile native-dev -- -D warnings && cargo nextest run --locked --cargo-profile native-dev -p vorkspace-core",
     "test": "npm run test:tooling && npm run test:voice && npm run test:host && npm run test:rust",
