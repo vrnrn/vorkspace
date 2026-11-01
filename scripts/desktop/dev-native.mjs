@@ -41,7 +41,7 @@ export async function startDev({
   env = process.env,
   log = (message) => console.log(`[dev] ${message}`),
   debounce = 300,
-  profile = "release",
+  profile = "native-dev",
 } = {}) {
   // Cargo's built-in dev profile writes to debug; named profiles keep their name.
   const profileDirectory = profile === "dev" ? "debug" : profile;
@@ -190,14 +190,16 @@ export async function startDev({
 }
 
 export function parseDevArgs(argv) {
-  const options = { args: [], profile: "release" };
+  const options = { args: [], profile: "native-dev" };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === "--") {
       options.args.push(...argv.slice(index + 1));
       break;
     }
-    if (arg === "--native-dev") {
+    if (arg === "--release") {
+      options.profile = "release";
+    } else if (arg === "--native-dev") {
       options.profile = "native-dev";
     } else if (arg === "--profile" && index + 1 < argv.length) {
       options.profile = argv[++index];

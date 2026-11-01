@@ -8,10 +8,11 @@ import { test } from "node:test";
 import { parseDevArgs, startDev } from "./dev-native.mjs";
 
 test("forwards app options and rejects the retired runner flags", () => {
-  assert.deepEqual(parseDevArgs([]), { args: [], profile: "release" });
+  assert.deepEqual(parseDevArgs([]), { args: [], profile: "native-dev" });
+  assert.deepEqual(parseDevArgs(["--release"]), { args: [], profile: "release" });
   assert.deepEqual(parseDevArgs(["--vorkspace-data", "--cwd", "a project"]), {
     args: ["--vorkspace-data", "--cwd", "a project"],
-    profile: "release",
+    profile: "native-dev",
   });
   assert.deepEqual(parseDevArgs(["--native-dev", "--cwd", "a project"]), {
     args: ["--cwd", "a project"],
@@ -19,11 +20,11 @@ test("forwards app options and rejects the retired runner flags", () => {
   });
   assert.deepEqual(parseDevArgs(["--dev-data", "--cwd", "--watch", "--vorkspace-db", "--bundle"]), {
     args: ["--dev-data", "--cwd", "--watch", "--vorkspace-db", "--bundle"],
-    profile: "release",
+    profile: "native-dev",
   });
   assert.deepEqual(parseDevArgs(["--", "--cwd", "a project"]), {
     args: ["--cwd", "a project"],
-    profile: "release",
+    profile: "native-dev",
   });
   for (const arg of ["--watch", "--bundle"]) {
     assert.throws(() => parseDevArgs([arg]), /not supported.*rebuild and restart/);
@@ -72,6 +73,7 @@ async function fixture(t, env = {}, options = {}) {
     root,
     args: ["--dev-data", "--cwd", "a project with spaces"],
     debounce: 40,
+    profile: "release",
     installBundle: (source) => { installs.push(source); return false; },
     ...options,
     env: { ...process.env, ...env },

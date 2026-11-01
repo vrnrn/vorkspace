@@ -230,12 +230,10 @@ impl Platform for VisualTestPlatform {
         *self.clipboard.lock() = Some(item);
     }
 
-    #[cfg(target_os = "macos")]
     fn read_from_find_pasteboard(&self) -> Option<ClipboardItem> {
         self.find_pasteboard.lock().clone()
     }
 
-    #[cfg(target_os = "macos")]
     fn write_to_find_pasteboard(&self, item: ClipboardItem) {
         *self.find_pasteboard.lock() = Some(item);
     }

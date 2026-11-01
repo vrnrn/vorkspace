@@ -1,6 +1,6 @@
 # Building vorkspace
 
-Install Rust, Node.js 24 or newer, and Xcode on your Mac. Run `npm run dev` to build and open vorkspace with release performance and your normal saved data. Type `r` then Enter in its terminal to rebuild and reopen it. Both build profiles let the runner close the app normally before reopening it. If the new app cannot be installed, the runner opens the fresh build from its output folder. For a separate development copy with isolated data, run `npm run dev -- --native-dev --dev-data`.
+Install Rust, Node.js 24 or newer, and Xcode on your Mac. Run `npm run dev` to build and open vorkspace with your normal saved data. It uses a quick-to-rebuild version that runs a little slower than the real app and stays out of your Applications folder; add `--release` to get the real thing. Type `r` then Enter in its terminal to rebuild and reopen it. Both build profiles let the runner close the app normally before reopening it. With `--release`, if the new app cannot be installed, the runner opens the fresh build from its output folder. For a separate development copy with isolated data, run `npm run dev -- --native-dev --dev-data`.
 
 You can also use vorkspace to work on vorkspace itself: run `npm run build`, confirm it installed the new app, then choose **Restart vorkspace** or press `⌘⌥R`. Restart uses the app's normal shutdown and saved state, and waits for the old app to exit before opening the new one. It does not rebuild the code. Use the terminal's `r` for a separate development copy, because Restart prefers the installed app on a Mac.
 
@@ -13,3 +13,7 @@ The small voice audio helper is embedded in the core library. Rust runs the voic
 Developer tools live under `scripts/`. The small JavaScript components that ship inside the app have their own `embedded/` folder.
 
 The **Mac release** workflow is started manually from `main`. It picks a free version, numbers the build, includes that version's release notes, runs checks, signs the downloads, and publishes only after those steps succeed. Normal code pushes do not publish anything. The app can show its included notes offline and announces a newly installed version once. If you open notes that were not included in the app, it tries to read that exact version's published notes without blocking the window.
+
+Restart always reopens the copy of the app you are using, so a development build stays a development build even if an older app sits in your Applications folder.
+
+Starting a new worktree? Run `npm run worktree:seed` first. It borrows the finished build from your main checkout without using extra disk, so the first build takes about half as long.

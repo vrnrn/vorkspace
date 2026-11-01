@@ -739,7 +739,6 @@ impl Boundary {
 mod tests {
     use super::*;
     use crate::{Font, FontFeatures, FontStyle, FontWeight, TestAppContext, TestDispatcher, font};
-    #[cfg(target_os = "macos")]
     use crate::{TextRun, WindowTextSystem, WrapBoundary};
 
     fn build_wrapper() -> LineWrapper {
@@ -1276,11 +1275,9 @@ mod tests {
     }
 
     // For compatibility with the test macro
-    #[cfg(target_os = "macos")]
     use crate as gpui;
 
     // These seem to vary wildly based on the text system.
-    #[cfg(target_os = "macos")]
     #[crate::test]
     fn test_wrap_shaped_line(cx: &mut TestAppContext) {
         cx.update(|cx| {

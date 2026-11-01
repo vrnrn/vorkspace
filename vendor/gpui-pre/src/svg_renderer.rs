@@ -10,27 +10,10 @@ use std::{
     sync::{Arc, LazyLock, OnceLock},
 };
 
-#[cfg(target_os = "macos")]
 const EMOJI_FONT_FAMILIES: &[&str] = &["Apple Color Emoji", ".AppleColorEmojiUI"];
 
-#[cfg(target_os = "windows")]
-const EMOJI_FONT_FAMILIES: &[&str] = &["Segoe UI Emoji", "Segoe UI Symbol"];
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
-const EMOJI_FONT_FAMILIES: &[&str] = &[
-    "Noto Color Emoji",
-    "Emoji One",
-    "Twitter Color Emoji",
-    "JoyPixels",
-];
 
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "windows",
-    target_os = "linux",
-    target_os = "freebsd",
-)))]
-const EMOJI_FONT_FAMILIES: &[&str] = &[];
 
 fn is_emoji_presentation(c: char) -> bool {
     static EMOJI_PRESENTATION_REGEX: LazyLock<regex::Regex> =

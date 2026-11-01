@@ -40,9 +40,6 @@ use std::{cell::Cell, ffi::c_void, mem, mem::MaybeUninit, ops::Range, ptr, slice
 // Exported to metal
 pub(crate) type PointF = gpui::Point<f32>;
 
-#[cfg(not(feature = "runtime_shaders"))]
-const SHADERS_METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders.metallib"));
-#[cfg(feature = "runtime_shaders")]
 const SHADERS_SOURCE_FILE: &str = include_str!(concat!(env!("OUT_DIR"), "/stitched_shaders.metal"));
 // Use 4x MSAA, all devices support it.
 // https://developer.apple.com/documentation/metal/mtldevice/1433355-supportstexturesamplecount
@@ -214,7 +211,6 @@ impl MetalRenderer {
         objc2_layer.setNeedsDisplayOnBoundsChange(true);
         // UIKit sizes a view's backing layer itself; only AppKit-hosted
         // layers need to track their superlayer's bounds.
-        #[cfg(target_os = "macos")]
         objc2_layer.setAutoresizingMask(
             objc2_quartz_core::CAAutoresizingMask::LayerWidthSizable
                 | objc2_quartz_core::CAAutoresizingMask::LayerHeightSizable,
@@ -231,7 +227,6 @@ impl MetalRenderer {
         Self::new_internal(device, None, true, instance_buffer_pool)
     }
 
-    #[cfg(target_os = "macos")]
     fn create_device() -> metal::Device {
         // Prefer low‐power integrated GPUs on Intel Mac. On Apple
         // Silicon, there is only ever one GPU, so this is equivalent to
@@ -251,10 +246,6 @@ impl MetalRenderer {
         }
     }
 
-    #[cfg(target_os = "ios")]
-    fn create_device() -> metal::Device {
-        Self::system_default_device()
-    }
 
     fn system_default_device() -> metal::Device {
         metal::Device::system_default().unwrap_or_else(|| {
@@ -269,13 +260,8 @@ impl MetalRenderer {
         opaque: bool,
         instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
     ) -> Self {
-        #[cfg(feature = "runtime_shaders")]
         let library = device
             .new_library_with_source(&SHADERS_SOURCE_FILE, &metal::CompileOptions::new())
-            .expect("error building metal library");
-        #[cfg(not(feature = "runtime_shaders"))]
-        let library = device
-            .new_library_with_data(SHADERS_METALLIB)
             .expect("error building metal library");
 
         fn to_float2_bits(point: PointF) -> u64 {

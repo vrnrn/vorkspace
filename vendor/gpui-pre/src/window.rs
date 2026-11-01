@@ -36,9 +36,7 @@ use gpui_util::post_inc;
 use gpui_util::{ResultExt, measure};
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 use objc2_core_foundation::CFRetained;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 use objc2_core_video::CVPixelBuffer;
 use parking_lot::RwLock;
 use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
@@ -72,7 +70,6 @@ mod prompts;
 pub use a11y::A11ySubtreeBuilder;
 
 use self::a11y::A11y;
-#[cfg(not(target_family = "wasm"))]
 use self::a11y::ROOT_NODE_ID;
 use crate::util::{
     atomic_incr_if_not_zero, ceil_to_device_pixel, floor_to_device_pixel, round_half_toward_zero,
@@ -1600,7 +1597,6 @@ impl Window {
                 allow(unused_variables)
             )]
             icon,
-            #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
             tabbing_identifier,
         } = options;
 
@@ -1625,7 +1621,6 @@ impl Window {
                 window_min_size,
                 app_id: app_id.clone(),
                 icon,
-                #[cfg(target_os = "macos")]
                 tabbing_identifier,
             },
         )?;
@@ -1679,7 +1674,6 @@ impl Window {
         let accessibility_force_disabled = cx.accessibility_force_disabled;
         let a11y_active_flag = Arc::new(AtomicBool::new(false));
 
-        #[cfg(not(target_family = "wasm"))]
         if !accessibility_force_disabled {
             let mut initial_root_node = accesskit::Node::new(accesskit::Role::Window);
             if let Some(title) = &initial_window_title {
@@ -2508,14 +2502,6 @@ impl Window {
         self.platform_window.set_exclusive_zone(zone);
     }
 
-    /// Set which anchored edge a layer-shell surface's exclusive zone applies to.
-    /// This is only needed to disambiguate a corner-anchored surface; otherwise the
-    /// edge is deduced from the anchor. The edge must be a single edge the surface
-    /// is anchored to, or it is ignored. (Wayland layer-shell windows only)
-    #[cfg(all(target_os = "linux", feature = "wayland"))]
-    pub fn set_exclusive_edge(&self, edge: crate::layer_shell::Anchor) {
-        self.platform_window.set_exclusive_edge(edge);
-    }
 
     /// Start an interactive window resize operation if this window is resizable.
     pub fn start_window_resize(&self, edge: ResizeEdge) {
@@ -3005,15 +2991,7 @@ impl Window {
     /// that currently owns the mouse cursor.
     /// On mac, this is equivalent to `is_window_active`.
     pub fn is_window_hovered(&self) -> bool {
-        if cfg!(any(
-            target_os = "windows",
-            target_os = "linux",
-            target_os = "freebsd"
-        )) {
-            self.hovered.get()
-        } else {
-            self.is_window_active()
-        }
+        self.is_window_active()
     }
 
     /// Toggle zoom on the window.
@@ -3074,7 +3052,6 @@ impl Window {
     }
 
     /// Sets the position of the macOS traffic light buttons.
-    #[cfg(target_os = "macos")]
     pub fn set_traffic_light_position(&self, position: Point<Pixels>) {
         self.platform_window.set_traffic_light_position(position);
     }
@@ -5280,7 +5257,6 @@ impl Window {
     /// Paint a surface into the scene for the next frame at the current z-index.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn paint_surface(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -7241,7 +7217,6 @@ impl Window {
             .push((action, Box::new(listener)));
     }
 
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn handle_a11y_action(&mut self, request: accesskit::ActionRequest, cx: &mut App) {
         // Take listeners out temporarily so the closures can borrow Window
         // mutably, then restore them afterward.
