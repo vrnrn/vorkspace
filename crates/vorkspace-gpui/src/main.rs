@@ -13,6 +13,7 @@ mod controls;
 mod conversation;
 mod dev_reload;
 mod diagrams;
+mod file_link;
 mod file_tools;
 mod fixtures;
 mod git_status;

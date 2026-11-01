@@ -33,6 +33,33 @@ function withoutTests(source) {
   return (kept + source.slice(index)).replace(/\/\/[^\n]*/g, "");
 }
 
+// Each top-level name after `crate::`, reading whole `use` trees so a nested group
+// doesn't end the one around it.
+function crateModules(source) {
+  const names = [];
+  for (const match of source.matchAll(/crate::(\{|\w+)/g)) {
+    if (match[1] !== "{") {
+      names.push(match[1]);
+      continue;
+    }
+    let depth = 1;
+    let item = "";
+    for (let index = match.index + match[0].length; depth; index += 1) {
+      const character = source[index];
+      if (character === "{") depth += 1;
+      if (character === "}") depth -= 1;
+      if (depth === 1 && character === ",") {
+        names.push(item.trim().split(/\W/)[0]);
+        item = "";
+      } else if (depth) {
+        item += character;
+      }
+    }
+    names.push(item.trim().split(/\W/)[0]);
+  }
+  return names;
+}
+
 function moduleGraph(root) {
   const modules = new Set(readdirSync(root)
     .filter((name) => !["main.rs", "lib.rs"].includes(name))
@@ -42,13 +69,8 @@ function moduleGraph(root) {
     if (/tests?\.rs$/.test(path)) continue;
     const owner = basename(relative(root, path).split("/")[0], ".rs");
     if (!modules.has(owner)) continue;
-    for (const match of withoutTests(readFileSync(path, "utf8")).matchAll(/crate::(\{[^}]*\}|\w+)/g)) {
-      const targets = match[1].startsWith("{")
-        ? match[1].slice(1, -1).split(",").map((item) => item.trim().split("::")[0])
-        : [match[1]];
-      for (const target of targets) {
-        if (target !== owner && modules.has(target)) edges.get(owner).add(target);
-      }
+    for (const target of crateModules(withoutTests(readFileSync(path, "utf8")))) {
+      if (target !== owner && modules.has(target)) edges.get(owner).add(target);
     }
   }
   return edges;
@@ -85,4 +107,11 @@ test("top-level modules depend on each other in one direction", () => {
     const found = cycles(moduleGraph(join(crates, crate, "src")));
     assert.deepEqual(found.filter((cycle) => !allowed.includes(cycle)), [], crate);
   }
+});
+
+test("imports after a nested group still count", () => {
+  assert.deepEqual(
+    crateModules("use crate::{a::{self, B}, c::D, e};"),
+    ["a", "c", "e"],
+  );
 });

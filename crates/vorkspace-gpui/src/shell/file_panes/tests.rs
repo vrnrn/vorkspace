@@ -39,9 +39,7 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
     window
         .update(visual, |_, w, cx| {
             w.dispatch_action(
-                Box::new(crate::file_tools::file_editor::OpenPath(format!(
-                    "{path}:2:3"
-                ))),
+                Box::new(crate::file_link::OpenPath(format!("{path}:2:3"))),
                 cx,
             );
         })
@@ -101,10 +99,7 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
                 "Keep my Bot draft"
             );
             assert!(restored.read(cx).input.focus_handle(cx).is_focused(w));
-            w.dispatch_action(
-                Box::new(crate::file_tools::file_editor::OpenPath(path.clone())),
-                cx,
-            );
+            w.dispatch_action(Box::new(crate::file_link::OpenPath(path.clone())), cx);
         })
         .unwrap();
     visual.run_until_parked();
