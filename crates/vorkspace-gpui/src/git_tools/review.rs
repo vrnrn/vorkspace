@@ -1049,7 +1049,11 @@ impl ReviewPane {
                         if counter.load(Ordering::SeqCst) != generation {
                             return;
                         }
-                        let Some((id, staged, file)) = queue.lock().unwrap().next() else {
+                        let Some((id, staged, file)) = queue
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .next()
+                        else {
                             return;
                         };
                         let previous = this

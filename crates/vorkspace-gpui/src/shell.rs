@@ -23,6 +23,8 @@ mod layout;
 mod live_agents;
 mod notifications;
 mod orchestration;
+#[cfg(test)]
+mod perf_tests;
 mod picker_preferences;
 mod project_delete;
 mod project_settings;
