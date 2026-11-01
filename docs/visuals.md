@@ -103,7 +103,7 @@ This renderer supports bounded geometry rather than arbitrary GPU shaders, exter
 
 Visual source is saved as a dedicated transcript message, including programs split across storage chunks. Its native row remains outside folded tool activity. A loaded transcript keeps at most eight visual interpreters, discarding the least recently painted views as needed. Reopening a discarded view or restarting the app recreates the program's initial state; control state is not written into the conversation.
 
-Each interpreter has a 16 MiB memory budget and a 60 ms execution deadline per call. Source is limited to 64 KiB, trees to 512 components and 16 nesting levels. Tables, chart series, drawing commands, text, and mesh geometry have additional validated limits. Invalid or interrupted programs show an error in their own view and can be reset.
+Each interpreter has a 16 MiB memory budget and a 60 ms budget of its thread's CPU time per call, so a runaway script is stopped but a busy machine cannot fail a valid one. Source is limited to 64 KiB, trees to 512 components and 16 nesting levels. Tables, chart series, drawing commands, text, and mesh geometry have additional validated limits. Invalid or interrupted programs show an error in their own view and can be reset.
 
 Programs have no filesystem, network, process, DOM, module loading, or timer bindings. Controls change only their visual's local state. Publication is scoped to the calling session and requires an active turn; it cannot target another conversation.
 
