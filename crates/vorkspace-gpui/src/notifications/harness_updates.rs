@@ -1,12 +1,12 @@
 //! Native counterpart of HarnessUpdateNotice.tsx. The parent positions this
 //! entity in the shared top-right notification stack.
-use crate::theme::*;
 use gpui::{AnimationExt, Context, EventEmitter, Render, Role, Window, div, prelude::*, px};
 use std::collections::HashMap;
 use vorkspace_core::{
     harness_updates::{self, Update},
     provider::Kind,
 };
+use vorkspace_ui::theme::*;
 
 pub(crate) enum HarnessUpdatesEvent {
     Changed,

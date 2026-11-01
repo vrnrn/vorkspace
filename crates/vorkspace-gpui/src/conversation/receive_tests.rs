@@ -2,8 +2,8 @@ use super::*;
 use gpui::{TestAppContext, WindowHandle};
 use vorkspace_core::{store::Store, transcript::Row};
 
-fn update(index: usize, finished: bool) -> crate::runtime::Update {
-    crate::runtime::Update {
+fn update(index: usize, finished: bool) -> vorkspace_runtime::runtime::Update {
+    vorkspace_runtime::runtime::Update {
         source_len: None,
         activity: None,
         worktree_cwd: None,
@@ -58,7 +58,7 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
 
 fn start_receiver(
     window: WindowHandle<Conversation>,
-    rx: async_channel::Receiver<crate::runtime::Update>,
+    rx: async_channel::Receiver<vorkspace_runtime::runtime::Update>,
     cx: &mut TestAppContext,
 ) {
     window
@@ -221,7 +221,7 @@ impl Conversation {
     pub(crate) fn sidebar_test_receiver(
         &mut self,
         cx: &mut Context<Self>,
-    ) -> async_channel::Sender<crate::runtime::Update> {
+    ) -> async_channel::Sender<vorkspace_runtime::runtime::Update> {
         self.begin_turn(cx);
         let (tx, rx) = async_channel::bounded(8);
         self.receive_turn_updates(
@@ -237,7 +237,7 @@ impl Conversation {
     }
 }
 
-pub(crate) fn sidebar_tool_update(label: Option<&str>) -> crate::runtime::Update {
+pub(crate) fn sidebar_tool_update(label: Option<&str>) -> vorkspace_runtime::runtime::Update {
     let mut update = update(0, false);
     update.rows.clear();
     update.activity = label.map(str::to_owned);

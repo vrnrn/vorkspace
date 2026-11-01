@@ -7,7 +7,6 @@ use crate::{
     input::{self, Input},
     popover::{Align, Anchor, AnchorSlot, popover},
     project_background::ProjectBackground,
-    theme::*,
 };
 use gpui::{
     AnyElement, App, Context, Corners, Entity, EventEmitter, FocusHandle, Focusable, MouseButton,
@@ -19,6 +18,7 @@ use vorkspace_core::project_appearance::{
     Background, BotAnimState, COLORS, Effect, ProjectAppearance, Scope, TEXTURE_PALETTES,
     default_foreground_color, import_image,
 };
+use vorkspace_ui::theme::*;
 
 pub(crate) enum Event {
     Changed(ProjectAppearance),

@@ -1,5 +1,4 @@
 //! Session visuals are a bounded native component tree, with no browser surface.
-use crate::theme::{accent_color, content};
 use gpui::{
     AnyElement, Bounds, ClipboardItem, Context, Div, EventEmitter, FontWeight, Hsla, IntoElement,
     MouseButton, PathBuilder, Pixels, Point, Render, Role, SharedString, Stateful, Window, canvas,
@@ -15,6 +14,7 @@ use vorkspace_core::visual::{
     Camera, ChartKind, Node, SceneObject, Series, Shape, TextSize, ThemeColor, VisualDocument,
     VisualRuntime,
 };
+use vorkspace_ui::theme::{accent_color, content};
 
 mod scene;
 mod source;
@@ -155,7 +155,7 @@ fn action_button(
         .focus(|s| s.bg(content(0.1)))
         .tooltip(move |_, cx| cx.new(|_| crate::controls::Tooltip(label.into())).into())
         .child(
-            crate::theme::icon(glyph, 14.)
+            vorkspace_ui::theme::icon(glyph, 14.)
                 .text_color(if active {
                     accent_color()
                 } else {

@@ -2,7 +2,7 @@
 
 What if your laptop is small or slow, and your real code lives on a powerful desktop, a cloud server, or a Mac mini in another room?
 
-**Remote Access** lets you use Vorkspace on your laptop while the AI agents, files, and Git branches actually run on that other computer over **SSH**.
+**Remote Access** lets you use Vorkspace on your laptop while the AI agents, files, and Git branches actually run on that other computer over **SSH**. That computer can be a Mac or a Linux machine. Windows machines are not supported, and Vorkspace tells you so when you try to add one.
 
 For the full technical guide and manual commands, see [Remote access](../remote-access.md).
 
@@ -31,7 +31,7 @@ When you click **Remove** on a connection in Settings, you get two choices:
 - **Revoke access and remove**: Tells the remote computer to cancel your laptop's digital key first, then removes the connection.
 If you ever want to completely remove the background helper from the remote computer, run `vorkspace-host service uninstall` on that machine.
 
-The remote host is maintained in JavaScript and includes Node in packaged archives. Building an archive does not publish it; automatic SSH installation needs archives for the exact desktop version.
+The remote host is maintained in JavaScript and includes Node in packaged archives. Building an archive does not publish it; automatic SSH installation needs archives for the exact desktop version. Each release publishes one for Mac and Linux, on both Intel-style and ARM chips.
 
 The source for the remote host lives under `host/`. Its connection test is `scripts/checks/test-remote-ssh.py` and uses a temporary local server.
 

@@ -1,14 +1,12 @@
 //! AppearancePage, ChatBackgroundCard, workspace themes and AccentColorPicker.
 use crate::popover::{Align, Anchor, Side, popover};
-use crate::settings::{
-    SettingsEvent, SettingsView, SliderKind, preferences::UI_SCALE_PERCENTS,
-    widgets::secondary_button,
-};
-use crate::theme::*;
+use crate::settings::{SettingsEvent, SettingsView, SliderKind, widgets::secondary_button};
 use gpui::{
     AnyElement, Context, Focusable, Role, SharedString, Window, div, linear_color_stop,
     linear_gradient, prelude::*, px, rgb,
 };
+use vorkspace_ui::preferences::UI_SCALE_PERCENTS;
+use vorkspace_ui::theme::*;
 
 /// ACCENT_COLOR_PRESETS, after the Default swatch.
 const ACCENTS: [(u32, &str); 6] = [
@@ -107,7 +105,7 @@ impl SettingsView {
                 |this, v, cx| this.update(cx, |p| p.theme = v.into()),
             )],
         )];
-        let options = crate::settings::palettes::PALETTES
+        let options = vorkspace_ui::palettes::PALETTES
             .iter()
             .map(|&(id, label, dark, pale)| {
                 let palette = if light { pale } else { dark };

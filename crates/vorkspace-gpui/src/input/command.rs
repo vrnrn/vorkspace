@@ -42,9 +42,9 @@ impl Command {
     }
     pub(crate) fn color(self) -> Hsla {
         if self == Self::Draft {
-            return crate::theme::content(0.6);
+            return vorkspace_ui::theme::content(0.6);
         }
-        let dark = crate::theme::content(1.).l > 0.5;
+        let dark = vorkspace_ui::theme::content(1.).l > 0.5;
         let mut color: Hsla = rgb(match (self, dark) {
             (Self::Draft, _) => unreachable!(),
             (Self::Plan, true) => 0xfff085,

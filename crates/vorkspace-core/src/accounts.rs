@@ -108,12 +108,9 @@ impl Profile {
         };
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("Could not create the account directory: {e}"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-                .map_err(|e| e.to_string())?;
-        }
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| e.to_string())?;
         match kind {
             Kind::Claude => {
                 command
@@ -144,7 +141,6 @@ impl Profile {
         let dir = self
             .directory(kind)?
             .ok_or("The default provider account cannot be removed")?;
-        #[cfg(target_os = "macos")]
         if kind == Kind::Claude {
             crate::usage::claude::delete_keychain(&dir)?;
         }
@@ -319,9 +315,5 @@ fn project_key(project: &str) -> String {
     let key = project.trim().replace('\\', "/");
     let key = key.trim_end_matches('/');
     let key = if key.is_empty() { "~" } else { key };
-    if cfg!(windows) {
-        key.to_lowercase()
-    } else {
-        key.into()
-    }
+    key.into()
 }

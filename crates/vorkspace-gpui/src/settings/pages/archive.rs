@@ -1,11 +1,9 @@
-use crate::{
-    settings::{
-        SettingsEvent, SettingsView,
-        widgets::{note, secondary_button},
-    },
-    theme::*,
+use crate::settings::{
+    SettingsEvent, SettingsView,
+    widgets::{note, secondary_button},
 };
 use gpui::{AnyElement, Context, Role, SharedString, div, prelude::*, px};
+use vorkspace_ui::theme::*;
 impl SettingsView {
     pub(super) fn archive_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut rows = vec![self.row(

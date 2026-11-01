@@ -8,20 +8,18 @@ import { installAppBundle } from "./build-native.mjs";
 
 const workspace = fileURLToPath(new URL("../../", import.meta.url));
 
-export function resolveNativeEnv(base = process.env, platform = process.platform) {
+export function resolveNativeEnv(base = process.env) {
   const env = { ...base };
   const home = homedir();
   const cargoBin = join(home, ".cargo", "bin");
   if (existsSync(cargoBin) && (!env.PATH || !env.PATH.includes(cargoBin))) {
     env.PATH = `${cargoBin}${delimiter}${env.PATH || ""}`;
   }
-  if (platform === "darwin") {
-    const rustLib = join(home, ".rustup", "toolchains", "stable-aarch64-apple-darwin", "lib");
-    if (existsSync(rustLib) && (!env.DYLD_FALLBACK_LIBRARY_PATH || !env.DYLD_FALLBACK_LIBRARY_PATH.includes(rustLib))) {
-      env.DYLD_FALLBACK_LIBRARY_PATH = env.DYLD_FALLBACK_LIBRARY_PATH
-        ? `${rustLib}${delimiter}${env.DYLD_FALLBACK_LIBRARY_PATH}`
-        : rustLib;
-    }
+  const rustLib = join(home, ".rustup", "toolchains", "stable-aarch64-apple-darwin", "lib");
+  if (existsSync(rustLib) && (!env.DYLD_FALLBACK_LIBRARY_PATH || !env.DYLD_FALLBACK_LIBRARY_PATH.includes(rustLib))) {
+    env.DYLD_FALLBACK_LIBRARY_PATH = env.DYLD_FALLBACK_LIBRARY_PATH
+      ? `${rustLib}${delimiter}${env.DYLD_FALLBACK_LIBRARY_PATH}`
+      : rustLib;
   }
   return env;
 }
@@ -38,7 +36,6 @@ function track(child) {
 export async function startDev({
   root = workspace,
   args = [],
-  platform = process.platform,
   spawnProcess = spawn,
   installBundle = installAppBundle,
   env = process.env,
@@ -46,10 +43,9 @@ export async function startDev({
   debounce = 300,
   profile = "release",
 } = {}) {
-  const bundle = platform === "darwin";
   // Cargo's built-in dev profile writes to debug; named profiles keep their name.
   const profileDirectory = profile === "dev" ? "debug" : profile;
-  const buildEnv = resolveNativeEnv(env, platform);
+  const buildEnv = resolveNativeEnv(env);
   const launch = (command, argv, options = {}) => track(spawnProcess(command, argv, {
     cwd: root, env: buildEnv, stdio: "inherit", ...options,
   }));
@@ -116,26 +112,23 @@ export async function startDev({
         }
         // Another restart request during compilation gets a fresh build first.
         if (builtRevision !== revision) continue;
-        let executable = join(target, profileDirectory, platform === "win32" ? "vorkspace-gpui.exe" : "vorkspace-gpui");
-        if (bundle) {
-          const dataMode = args.reduce((mode, arg, index) => {
-            if (["--cwd", "--vorkspace-db"].includes(args[index - 1])) return mode;
-            if (arg === "--dev-data") return "dev-data";
-            if (arg === "--vorkspace-data") return "vorkspace-data";
-            return mode;
-          }, "vorkspace-data");
-          const packaged = await run("bash", ["scripts/desktop/bundle-native-macos.sh", profileDirectory, target, pkg.version, dataMode]);
-          if (closing) return;
-          if (packaged.code !== 0) {
-            log("App packaging failed. Fix the error, then type r to retry.");
-            continue;
-          }
-          const bundledApp = join(target, profileDirectory, "vorkspace.app");
-          executable = join(bundledApp, "Contents", "MacOS", "vorkspace-gpui");
-          if (profile === "release" && !buildEnv.CI && buildEnv.VORKSPACE_NO_INSTALL !== "1"
-            && installBundle(bundledApp)) {
-            executable = "/Applications/vorkspace.app/Contents/MacOS/vorkspace-gpui";
-          }
+        const dataMode = args.reduce((mode, arg, index) => {
+          if (["--cwd", "--vorkspace-db"].includes(args[index - 1])) return mode;
+          if (arg === "--dev-data") return "dev-data";
+          if (arg === "--vorkspace-data") return "vorkspace-data";
+          return mode;
+        }, "vorkspace-data");
+        const packaged = await run("bash", ["scripts/desktop/bundle-native-macos.sh", profileDirectory, target, pkg.version, dataMode]);
+        if (closing) return;
+        if (packaged.code !== 0) {
+          log("App packaging failed. Fix the error, then type r to retry.");
+          continue;
+        }
+        const bundledApp = join(target, profileDirectory, "vorkspace.app");
+        let executable = join(bundledApp, "Contents", "MacOS", "vorkspace-gpui");
+        if (profile === "release" && !buildEnv.CI && buildEnv.VORKSPACE_NO_INSTALL !== "1"
+          && installBundle(bundledApp)) {
+          executable = "/Applications/vorkspace.app/Contents/MacOS/vorkspace-gpui";
         }
         if (builtRevision !== revision) continue;
         await stopApp();
@@ -145,7 +138,7 @@ export async function startDev({
           env: { ...buildEnv, VORKSPACE_DEV_RELOAD: "1" },
           stdio: ["pipe", "inherit", "inherit"],
           // Ctrl+C reaches the runner, which lets the app run its quit hooks.
-          detached: platform !== "win32",
+          detached: true,
         });
         // An app that exits while a restart is being requested may close its pipe first.
         next.stdin.on("error", () => {});

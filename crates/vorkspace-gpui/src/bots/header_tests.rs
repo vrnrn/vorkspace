@@ -14,7 +14,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
     let cwd = directory.path().to_string_lossy().to_string();
     let session = locked(&store).unwrap().create("codex", &cwd).unwrap().id;
     let window = cx.update(|cx| {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         input::bind(cx);
         cx.open_window(Default::default(), |window, cx| {
             window.activate_window();
@@ -203,7 +203,7 @@ fn bot_header_passes_selection_clicks_and_scroll_to_overlapped_chat(cx: &mut Tes
         }
     }
     let window = cx.update(|cx| {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         input::bind(cx);
         cx.open_window(Default::default(), |window, cx| {
             window.activate_window();
@@ -306,7 +306,7 @@ fn native_bot_header_three_state_capture() {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             div()
                 .size_full()
-                .font_family(crate::fonts::UI)
+                .font_family(vorkspace_ui::fonts::UI)
                 .text_color(content(1.))
                 .bg(rgb(if self.light { 0xf3dce8 } else { 0x45243c }))
                 .relative()
@@ -380,10 +380,10 @@ fn native_bot_header_three_state_capture() {
             )))
         },
     );
-    crate::clock::use_test_clock(&cx);
+    vorkspace_ui::clock::use_test_clock(&cx);
     for light in [false, true] {
         let theme = if light { "light" } else { "dark" };
-        crate::theme::configure(
+        vorkspace_ui::theme::configure(
             &crate::settings::Preferences {
                 theme: theme.into(),
                 ..Default::default()
@@ -432,7 +432,7 @@ fn native_bot_header_three_state_capture() {
                 })
                 .unwrap();
                 cx.run_until_parked();
-                crate::clock::settle_headless_animations(window, &mut cx);
+                vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
                 cx.capture_screenshot(window.into())
                     .unwrap()
                     .save(output.join(format!("{status}-{theme}-{width:.0}x{height:.0}.png")))
@@ -442,5 +442,5 @@ fn native_bot_header_three_state_capture() {
             }
         }
     }
-    crate::theme::configure(&crate::settings::Preferences::default(), false, true);
+    vorkspace_ui::theme::configure(&crate::settings::Preferences::default(), false, true);
 }

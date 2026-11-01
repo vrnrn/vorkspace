@@ -160,7 +160,7 @@ impl gpui::Render for TeamAvatars {
 
 #[gpui::test]
 fn minion_team_shares_existing_bounded_wakes_and_still_idle_sleeps(cx: &mut gpui::TestAppContext) {
-    let _clock = crate::clock::use_test_clock_with_endless_frames(cx);
+    let _clock = vorkspace_ui::clock::use_test_clock_with_endless_frames(cx);
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |window, cx| {
             window.activate_window();

@@ -1,12 +1,11 @@
 //! Sidebar.tsx's inset `RightPanel`: the project tools beside the card, with
 //! reorderable Explorer / Changes / History tabs in the title bar.
 use crate::{
-    changes::Changes,
-    explorer::Explorer,
-    git_status::{GitChanged, ProjectGit},
-    history::History,
+    file_tools::explorer::Explorer,
+    git_tools::changes::Changes,
+    git_tools::git_status::{GitChanged, ProjectGit},
+    git_tools::history::History,
     project_tabs::{TabLabel, TabReveal, tab_button},
-    theme::*,
 };
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, FontFeatures,
@@ -15,6 +14,7 @@ use gpui::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use vorkspace_ui::theme::*;
 
 pub(crate) const WIDTH_MIN: f32 = 220.;
 pub(crate) const WIDTH_MAX: f32 = 640.;

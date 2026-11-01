@@ -1,5 +1,5 @@
 use super::*;
-use crate::status_menu::Action;
+use vorkspace_macos::status_menu::Action;
 
 impl Shell {
     #[cfg(not(test))]
@@ -29,7 +29,7 @@ impl Shell {
                 .detach();
             });
         });
-        self.status_menu = crate::status_menu::Status::new(run);
+        self.status_menu = vorkspace_macos::status_menu::Status::new(run);
     }
 
     pub(crate) fn status_menu_action(
@@ -44,7 +44,7 @@ impl Shell {
             Action::Settings => {
                 cx.activate(true);
                 window.activate_window();
-                crate::traffic_lights::show(window);
+                vorkspace_ui::traffic_lights::show(window);
                 self.open_settings(crate::settings::Section::General, window, cx);
             }
             // Keep the application action's unsaved-file and shutdown guards.

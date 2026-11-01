@@ -1,10 +1,8 @@
 // Project terminal dock, tab actions and resize interactions.
-use super::{MenuTarget, Shell, TabShift};
-use crate::clock::Instant;
+use super::*;
 use crate::{
     popover::{Anchor, MenuAction, MenuItem, MenuStyle},
     terminal::Terminal,
-    theme::*,
     workspace::{DockSide, TerminalDock},
 };
 use gpui::{
@@ -12,6 +10,8 @@ use gpui::{
     MouseMoveEvent, Pixels, Role, SharedString, Window, div, point, prelude::*, px,
 };
 use std::collections::HashMap;
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::theme::*;
 
 /// useAnimatedReorder's drag of one dock tab along the strip.
 pub(super) struct DockTabDrag {
@@ -351,7 +351,7 @@ impl Shell {
             .collect();
         let (slots, opening) =
             self.dock_tab_motion
-                .sync(keyed, animate, crate::clock::Instant::now());
+                .sync(keyed, animate, vorkspace_ui::clock::Instant::now());
         if moving || opening {
             window.request_animation_frame();
         }
@@ -543,14 +543,14 @@ impl Shell {
                                 .w(px(224. * open))
                                 .min_w_0()
                                 .flex_shrink(1.)
-                                .mr(px(-crate::tab_motion::GAP * (1. - open)))
+                                .mr(px(-vorkspace_ui::tab_motion::GAP * (1. - open)))
                                 .overflow_hidden()
                                 .flex()
                         };
                         slots
                             .into_iter()
                             .filter_map(move |s| match s {
-                                crate::tab_motion::Slot::Live { key, open } => {
+                                vorkspace_ui::tab_motion::Slot::Live { key, open } => {
                                     let ix = ids.iter().position(|id| *id == key)?;
                                     let tab = tabs.get_mut(ix)?.take()?;
                                     Some(if open >= 1. {
@@ -559,37 +559,42 @@ impl Shell {
                                         slot(open).child(tab).into_any_element()
                                     })
                                 }
-                                crate::tab_motion::Slot::Closing { ghost, open, .. } => Some(
-                                    slot(open)
-                                        .child(
-                                            div()
-                                                .w(px(224.))
-                                                .h_full()
-                                                .flex_shrink_0()
-                                                .flex()
-                                                .items_center()
-                                                .child(
-                                                    div()
-                                                        .h(px(TAB_PLATE_HEIGHT))
-                                                        .w_full()
-                                                        .flex()
-                                                        .items_center()
-                                                        .gap(px(6.))
-                                                        .px_2()
-                                                        .rounded_md()
-                                                        .text_size(px(13.))
-                                                        .text_color(content(0.5))
-                                                        .child(
-                                                            icon("terminal", 14.)
-                                                                .text_color(content(0.5)),
-                                                        )
-                                                        .child(
-                                                            div().min_w_0().truncate().child(ghost),
-                                                        ),
-                                                ),
-                                        )
-                                        .into_any_element(),
-                                ),
+                                vorkspace_ui::tab_motion::Slot::Closing { ghost, open, .. } => {
+                                    Some(
+                                        slot(open)
+                                            .child(
+                                                div()
+                                                    .w(px(224.))
+                                                    .h_full()
+                                                    .flex_shrink_0()
+                                                    .flex()
+                                                    .items_center()
+                                                    .child(
+                                                        div()
+                                                            .h(px(TAB_PLATE_HEIGHT))
+                                                            .w_full()
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap(px(6.))
+                                                            .px_2()
+                                                            .rounded_md()
+                                                            .text_size(px(13.))
+                                                            .text_color(content(0.5))
+                                                            .child(
+                                                                icon("terminal", 14.)
+                                                                    .text_color(content(0.5)),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .min_w_0()
+                                                                    .truncate()
+                                                                    .child(ghost),
+                                                            ),
+                                                    ),
+                                            )
+                                            .into_any_element(),
+                                    )
+                                }
                             })
                             .collect::<Vec<_>>()
                     }),
@@ -651,3 +656,429 @@ impl Shell {
 
 const NEW_TERMINAL_LABEL: &str = "New Terminal (⌘`)";
 const HIDE_TERMINAL_LABEL: &str = "Hide Terminal (⌘J)";
+
+impl Shell {
+    /// newTerminalCwd: the focused session's worktree, else its folder, else
+    /// the project.
+    pub(super) fn terminal_cwd(&self, cx: &App) -> String {
+        self.workspace
+            .active
+            .and_then(|id| self.sessions.get(&id))
+            .map(|view| {
+                let view = view.read(cx);
+                view.settings
+                    .worktree_cwd
+                    .clone()
+                    .unwrap_or_else(|| view.summary.cwd.clone())
+            })
+            .unwrap_or_else(|| self.working_copy().to_owned())
+    }
+    pub(super) fn spawn_terminal(
+        &mut self,
+        cwd: String,
+        cx: &mut Context<Self>,
+    ) -> Entity<Terminal> {
+        let terminal = cx.new(|cx| Terminal::new(cwd, cx));
+        self.observations
+            .push(cx.subscribe(&terminal, |_, _, _: &TerminalEvent, cx| cx.notify()));
+        terminal
+    }
+    /// A restored dock reopens its tabs as fresh shells once it is shown.
+    pub(super) fn ensure_terminals(&mut self, project: &str, cx: &mut Context<Self>) {
+        if project.starts_with("remote://") {
+            return;
+        }
+        let Some(dock) = self.workspace.docks.get(project) else {
+            return;
+        };
+        let wanted = dock.terminals.clone();
+        let have = self.terminals.get(project).map_or(0, Vec::len);
+        for cwd in wanted.into_iter().skip(have) {
+            let terminal = self.spawn_terminal(cwd, cx);
+            self.terminals
+                .entry(project.to_owned())
+                .or_default()
+                .push(terminal);
+        }
+    }
+    /// The focused terminal of the current project's dock.
+    pub(super) fn dock_focused(&self, window: &Window, cx: &App) -> Option<usize> {
+        self.terminals
+            .get(&self.workspace.project)?
+            .iter()
+            .position(|t| t.focus_handle(cx).contains_focused(window, cx))
+    }
+    pub(super) fn focus_terminal(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let project = &self.workspace.project;
+        if let Some(dock) = self.workspace.docks.get(project)
+            && let Some(terminal) = self.terminals.get(project).and_then(|t| t.get(dock.active))
+        {
+            let focus = terminal.focus_handle(cx);
+            window.focus(&focus, cx);
+        }
+    }
+    pub(super) fn slide_dock(&mut self, open: bool) {
+        let project = self.workspace.project.clone();
+        let Some(size) = self.workspace.docks.get(&project).map(|d| d.size) else {
+            return;
+        };
+        let to = if open { 1. } else { 0. };
+        self.dock_slide = Some((
+            project.clone(),
+            match self.dock_slide.take() {
+                Some((p, slide)) if p == project => {
+                    slide.retarget(to, vorkspace_ui::clock::Instant::now())
+                }
+                _ => PaneSlide::new(1. - to, to, size),
+            },
+        ));
+    }
+    /// Terminal: New (cmd-`): another terminal in the project's dock, which
+    /// opens if it was hidden.
+    pub(super) fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_terminal_tab.is_some() {
+            self.close_app_view(window, cx);
+        }
+        if self.workspace.project.starts_with("remote://") {
+            self.error = Some("Terminals are not available on remote projects.".into());
+            cx.notify();
+            return;
+        }
+        if self.app_view_open() {
+            return;
+        }
+        let project = self.workspace.project.clone();
+        let cwd = self.terminal_cwd(cx);
+        let was_open = self
+            .workspace
+            .docks
+            .get(&project)
+            .is_some_and(|d| d.open && !d.terminals.is_empty());
+        self.ensure_terminals(&project, cx);
+        let viewport = self.viewport();
+        let dock = self.workspace.docks.entry(project.clone()).or_default();
+        dock.size = dock.side.clamp(dock.size, viewport);
+        let added = dock.add(cwd.clone());
+        self.dock_tab_scroll.scroll_to_item(added);
+        let terminal = self.spawn_terminal(cwd, cx);
+        self.terminals.entry(project).or_default().push(terminal);
+        if !was_open {
+            self.slide_dock(true);
+        }
+        self.focus_terminal(window, cx);
+        self.fit_sidebar(cx);
+        self.persist(cx);
+        cx.notify();
+    }
+    /// Terminal: Toggle (cmd-j).
+    pub(super) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_terminal_tab.is_some() {
+            self.close_app_view(window, cx);
+        }
+        if self.workspace.project.starts_with("remote://") {
+            self.error = Some("Terminals are not available on remote projects.".into());
+            cx.notify();
+            return;
+        }
+        let project = self.workspace.project.clone();
+        let Some(dock) = self
+            .workspace
+            .docks
+            .get_mut(&project)
+            .filter(|d| !d.terminals.is_empty())
+        else {
+            self.new_terminal(window, cx);
+            return;
+        };
+        dock.open = !dock.open;
+        let open = dock.open;
+        self.slide_dock(open);
+        if open {
+            self.ensure_terminals(&project, cx);
+            self.focus_terminal(window, cx);
+        } else if self.dock_focused(window, cx).is_some() {
+            self.focus_active(window, cx);
+        }
+        self.fit_sidebar(cx);
+        self.persist(cx);
+        cx.notify();
+    }
+    pub(super) fn select_terminal(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(dock) = self.workspace.docks.get_mut(&self.workspace.project) {
+            dock.active = ix.min(dock.terminals.len().saturating_sub(1));
+            self.dock_tab_scroll.scroll_to_item(dock.active);
+        }
+        self.focus_terminal(window, cx);
+        self.persist(cx);
+        cx.notify();
+    }
+    /// confirmCloseTerminal: a terminal running something asks first.
+    pub(super) fn close_terminal(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let project = self.workspace.project.clone();
+        let Some(terminal) = self
+            .terminals
+            .get(&project)
+            .and_then(|t| t.get(ix))
+            .cloned()
+        else {
+            return;
+        };
+        let (process, label) = {
+            let t = terminal.read(cx);
+            (t.foreground.clone(), project_name(&t.cwd))
+        };
+        let Some(process) = process else {
+            self.remove_terminal(&project, ix, window, cx);
+            return;
+        };
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            &format!("\"{process}\" is still running in {label}. Close this terminal anyway?"),
+            None,
+            &["Close", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    if let Some(ix) = this
+                        .terminals
+                        .get(&project)
+                        .and_then(|t| t.iter().position(|e| *e == terminal))
+                    {
+                        this.remove_terminal(&project, ix, window, cx);
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+    pub(super) fn remove_terminal(
+        &mut self,
+        project: &str,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let had_focus = self.dock_focused(window, cx).is_some();
+        if let Some(live) = self.terminals.get_mut(project)
+            && ix < live.len()
+        {
+            live.remove(ix);
+        }
+        let Some(dock) = self.workspace.docks.get_mut(project) else {
+            return;
+        };
+        if !dock.close(ix) {
+            // The last terminal closes the dock; it slides shut empty.
+            dock.open = false;
+            self.slide_dock(false);
+            if had_focus {
+                self.focus_active(window, cx);
+            }
+            self.fit_sidebar(cx);
+        } else if had_focus {
+            self.focus_terminal(window, cx);
+        }
+        self.persist(cx);
+        cx.notify();
+    }
+    pub(super) fn set_dock_side(&mut self, side: DockSide, cx: &mut Context<Self>) {
+        let viewport = self.viewport();
+        if let Some(dock) = self.workspace.docks.get_mut(&self.workspace.project) {
+            dock.set_side(side);
+            dock.size = side.clamp(dock.size, viewport);
+        }
+        self.dock_slide = None;
+        self.fit_sidebar(cx);
+        self.persist(cx);
+        cx.notify();
+    }
+    pub(super) fn viewport(&self) -> (f32, f32) {
+        (self.viewport_width, self.viewport_height)
+    }
+    pub(super) fn drag_dock(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some((start, size)) = self.dock_resize else {
+            return;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.release_resizes(cx);
+            return;
+        }
+        let Some(dock) = self.workspace.docks.get(&self.workspace.project) else {
+            return;
+        };
+        let at = if dock.side.vertical() {
+            event.position.y.as_f32()
+        } else {
+            event.position.x.as_f32()
+        };
+        let delta = at - start;
+        let signed = if matches!(dock.side, DockSide::Bottom | DockSide::Right) {
+            -delta
+        } else {
+            delta
+        };
+        let target = ResizeTarget::Dock(self.workspace.project.clone());
+        self.drag_resize(target, size + signed, cx);
+    }
+    /// App.tsx's dock grid: the project's terminal dock on its side of the
+    /// workspace. Opening or closing slides the track while the terminal
+    /// keeps its full size and rides the moving edge, so it fits once.
+    pub(super) fn with_dock(
+        &mut self,
+        body: AnyElement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let project = self.workspace.project.clone();
+        // Other projects' docks stop polling for their foreground commands.
+        // A hidden dock keeps polling for the footer's running-terminal chip.
+        for (path, live) in &self.terminals {
+            let shown = *path == project && !self.app_view_open();
+            for terminal in live {
+                terminal.update(cx, |t, _| t.visible = shown);
+            }
+        }
+        let Some(dock) = self.workspace.docks.get(&project).cloned() else {
+            return body;
+        };
+        let progress = match self.dock_slide.as_ref().filter(|(p, _)| *p == project) {
+            Some((_, slide)) => {
+                let (t, done) = slide.at(vorkspace_ui::clock::Instant::now());
+                if done {
+                    self.dock_slide = None;
+                    None
+                } else {
+                    window.request_animation_frame();
+                    Some(t)
+                }
+            }
+            None => None,
+        };
+        let shown = (dock.open || progress.is_some()) && !self.app_view_open();
+        if !shown {
+            return body;
+        }
+        self.ensure_terminals(&project, cx);
+        let size = dock.size;
+        let track = size * progress.unwrap_or(1.);
+        let vertical = dock.side.vertical();
+        let leading = matches!(dock.side, DockSide::Top | DockSide::Left);
+        let surface = div()
+            .absolute()
+            .flex()
+            .flex_col()
+            .map(|d| {
+                if vertical {
+                    d.left_0().w_full().h(px(size))
+                } else {
+                    d.top_0().h_full().w(px(size))
+                }
+            })
+            .map(|d| match dock.side {
+                DockSide::Top => d.bottom_0(),
+                DockSide::Left => d.right_0(),
+                DockSide::Bottom => d.top_0(),
+                DockSide::Right => d.left_0(),
+            })
+            .child(self.dock_header(&dock, window, cx))
+            .child(
+                div().flex_1().min_h_0().min_w_0().children(
+                    self.terminals
+                        .get(&project)
+                        .and_then(|t| t.get(dock.active))
+                        .cloned(),
+                ),
+            );
+        let sash = div()
+            .id("terminal-dock-sash")
+            .debug_selector(|| "terminal-dock-sash".into())
+            .group("resize-handle")
+            .role(Role::Splitter)
+            .aria_label("Resize terminal")
+            .absolute()
+            .child(resize_border(!vertical, self.dock_resize.is_some()))
+            .map(|d| match dock.side {
+                DockSide::Bottom => d.bottom(px(track - 3.5)).left_0().right_0().h(px(6.)),
+                DockSide::Top => d.top(px(track - 3.5)).left_0().right_0().h(px(6.)),
+                DockSide::Left => d.left(px(track - 3.5)).top_0().bottom_0().w(px(6.)),
+                DockSide::Right => d.right(px(track - 3.5)).top_0().bottom_0().w(px(6.)),
+            })
+            .cursor(if vertical {
+                CursorStyle::ResizeUpDown
+            } else {
+                CursorStyle::ResizeLeftRight
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    // A double click restores the side's default size.
+                    if event.click_count == 2 {
+                        if let Some(dock) = this.workspace.docks.get_mut(&this.workspace.project) {
+                            dock.size = dock.side.default_size();
+                        }
+                        this.persist(cx);
+                        cx.notify();
+                        return;
+                    }
+                    let at = if vertical {
+                        event.position.y.as_f32()
+                    } else {
+                        event.position.x.as_f32()
+                    };
+                    this.dock_resize = Some((at, size));
+                }),
+            );
+        let frame = div()
+            .id("terminal-dock")
+            .debug_selector(|| "terminal-dock".into())
+            .role(Role::Region)
+            .aria_label("Terminal")
+            .relative()
+            .flex_shrink_0()
+            .overflow_hidden()
+            .border_color(crate::right_panel::stroke())
+            .map(|d| match dock.side {
+                DockSide::Bottom => d.border_t_1(),
+                DockSide::Top => d.border_b_1(),
+                DockSide::Left => d.border_r_1(),
+                DockSide::Right => d.border_l_1(),
+            })
+            .map(|d| {
+                if vertical {
+                    d.w_full().h(px(track))
+                } else {
+                    d.h_full().w(px(track))
+                }
+            })
+            .child(surface);
+        let main = div().flex_1().min_w_0().min_h_0().child(body);
+        div()
+            .size_full()
+            .relative()
+            .flex()
+            .when(vertical, |d| d.flex_col())
+            .map(|d| {
+                if leading {
+                    d.child(frame).child(main)
+                } else {
+                    d.child(main).child(frame)
+                }
+            })
+            // Paint the full hit area above both surfaces, outside the dock's clip.
+            .when(progress.is_none(), |d| d.child(sash))
+            .into_any_element()
+    }
+}

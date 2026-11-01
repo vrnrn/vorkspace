@@ -39,17 +39,8 @@ pub fn stop_processes(kind: Kind, profile: &Profile) {
         if identity.is_some() && crate::resources::identity(pid) != identity {
             continue;
         }
-        #[cfg(unix)]
         unsafe {
             libc::kill(-(pid as i32), libc::SIGKILL);
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            let _ = std::process::Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .creation_flags(0x0800_0000)
-                .status();
         }
     }
     let deadline = Instant::now() + Duration::from_secs(2);

@@ -138,7 +138,7 @@ impl Shell {
                         Target::File { path, location } => {
                             let cwd = this.working_copy().to_owned();
                             this.open_review(
-                                crate::review::ReviewTab::File {
+                                crate::git_tools::review::ReviewTab::File {
                                     cwd,
                                     path: path.clone(),
                                 },
@@ -280,7 +280,7 @@ mod tests {
         cx.update(|cx| {
             input::bind(cx);
             super::super::bind_keys(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         let (window, a, b) = crate::shell::tests::window(cx);
         window

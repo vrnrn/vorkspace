@@ -1,8 +1,6 @@
 //! GPUI port of AgentMarkdown.tsx and its .agent-markdown CSS.
 mod search;
-use crate::markdown_model::{Block, InlineRun, TableAlign};
 use crate::syntax::HighlightedDocument;
-use crate::theme::*;
 use crate::transcript::selection::TextSelection;
 use gpui::Window;
 use gpui::{
@@ -11,6 +9,8 @@ use gpui::{
     prelude::*, px, rgb,
 };
 pub(crate) use search::{mark_row, mark_styles, row_text};
+use vorkspace_model::markdown_model::{Block, InlineRun, TableAlign};
+use vorkspace_ui::theme::*;
 
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
 #[action(namespace = markdown, no_json)]
@@ -34,12 +34,12 @@ fn activate_link(event: &ClickEvent, selection: Option<&TextSelection>) -> bool 
         && !event.modifiers().shift
         && !selection.is_some_and(TextSelection::has_selection)
 }
-use crate::clock::Instant;
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     ops::Range,
     sync::Arc,
 };
+use vorkspace_ui::clock::Instant;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Tone {
@@ -436,7 +436,8 @@ fn inline_selected(
             for piece in run.text.split_inclusive(char::is_whitespace) {
                 let mut highlight = highlight;
                 if !piece.trim().is_empty() {
-                    let alpha = crate::reveal::word_opacity(fade.and_then(|f| f.get(word)), now);
+                    let alpha =
+                        vorkspace_ui::reveal::word_opacity(fade.and_then(|f| f.get(word)), now);
                     highlight.fade_out = Some(1. - (1. - highlight.fade_out.unwrap_or(0.)) * alpha);
                     word += 1;
                 }
@@ -585,7 +586,8 @@ fn rich_inline(
                 let alpha = if style.link.is_some() || style.math {
                     1.
                 } else {
-                    let value = crate::reveal::word_opacity(fade.and_then(|f| f.get(word)), now);
+                    let value =
+                        vorkspace_ui::reveal::word_opacity(fade.and_then(|f| f.get(word)), now);
                     word += 1;
                     value
                 };
@@ -696,7 +698,7 @@ pub(crate) fn resolve_file_links(row: &mut MarkdownRow, base: &str) {
                 && !target.starts_with("mailto:")
                 && (!target.contains("://") || target.starts_with("file://"))
             {
-                let (path, location) = crate::file_editor::file_location(&target, base);
+                let (path, location) = crate::file_tools::file_editor::file_location(&target, base);
                 run.style.link = Some(location.map_or_else(
                     || path.clone(),
                     |(line, col)| format!("{path}:{line}:{col}"),
@@ -719,7 +721,10 @@ fn open_link(url: &str, window: &mut Window, cx: &mut App) {
     if url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:") {
         cx.open_url(url);
     } else if !url.starts_with('#') && (!url.contains("://") || url.starts_with("file://")) {
-        window.dispatch_action(Box::new(crate::file_editor::OpenPath(url.into())), cx);
+        window.dispatch_action(
+            Box::new(crate::file_tools::file_editor::OpenPath(url.into())),
+            cx,
+        );
     }
 }
 
@@ -1050,7 +1055,7 @@ pub(crate) fn selection_text(row: &MarkdownRow) -> String {
 #[cfg(test)]
 mod file_link_tests {
     use super::*;
-    use crate::markdown_model::InlineStyle;
+    use vorkspace_model::markdown_model::InlineStyle;
     #[test]
     fn preview_links_keep_their_document_base_and_display_text() {
         let runs = vec![
@@ -1109,7 +1114,7 @@ mod file_link_tests {
                     "row-1".into(),
                     Tone::Normal,
                     None,
-                    crate::clock::Instant::now(),
+                    vorkspace_ui::clock::Instant::now(),
                 ))
             }
         }
@@ -1175,7 +1180,8 @@ mod file_link_tests {
 #[cfg(test)]
 mod diagram_tests {
     use super::*;
-    use crate::{diagrams::DiagramKind, markdown_model::parse_full};
+    use crate::diagrams::DiagramKind;
+    use vorkspace_model::markdown_model::parse_full;
 
     fn parts(text: &str) -> Vec<Part> {
         parse_full(text)

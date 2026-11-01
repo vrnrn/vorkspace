@@ -125,7 +125,6 @@ mod tests {
             .contains("4 MiB"));
         assert!(body(&[0xff][..]).is_err());
     }
-    #[cfg(unix)]
     #[test]
     fn cli_bounds_stdout_and_stderr_and_reaps_noisy_children() {
         for redirect in ["", " >&2"] {

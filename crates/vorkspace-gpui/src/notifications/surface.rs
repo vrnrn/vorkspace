@@ -1,6 +1,6 @@
 //! Stationary notification glass, matching GlassBackdrop and the native popover.
-use crate::theme::*;
 use gpui::{Div, canvas, div, prelude::*, px};
+use vorkspace_ui::theme::*;
 
 pub(crate) fn backdrop(radius: f32) -> impl IntoElement {
     canvas(

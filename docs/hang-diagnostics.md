@@ -161,8 +161,8 @@ detector, and verify local JSONL timing/type attribution without sleeping throug
 a real hang or launching the installed app:
 
 ```
-env -u CODEX_SQLITE_HOME CARGO_TARGET_DIR="$PWD/target/hang-diagnostics" CARGO_BUILD_JOBS=2 cargo clippy -p vorkspace-gpui --tests --profile native-dev -- -D warnings
-env -u CODEX_SQLITE_HOME CARGO_TARGET_DIR="$PWD/target/hang-diagnostics" CARGO_BUILD_JOBS=2 cargo test -p vorkspace-gpui --profile native-dev hang_diagnostics:: -- --test-threads=1
+env -u CODEX_SQLITE_HOME CARGO_TARGET_DIR="$PWD/target/hang-diagnostics" CARGO_BUILD_JOBS=2 cargo clippy -p vorkspace-macos --tests --profile native-dev -- -D warnings
+env -u CODEX_SQLITE_HOME CARGO_TARGET_DIR="$PWD/target/hang-diagnostics" CARGO_BUILD_JOBS=2 cargo test -p vorkspace-macos --profile native-dev hang_diagnostics:: -- --test-threads=1
 env -u CODEX_SQLITE_HOME CARGO_TARGET_DIR="$PWD/target/hang-diagnostics" CARGO_BUILD_JOBS=2 cargo build -p vorkspace-gpui --profile native-dev
 ```
 

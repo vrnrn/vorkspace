@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -233,11 +234,12 @@ test("stamps all manifests and native build metadata without changing updater id
       readFileSync(join(root, "Cargo.toml"), "utf8"),
       new RegExp(`version = "${target.replaceAll(".", "\\.")}"`),
     );
-    assert(
-      readFileSync(join(root, "Cargo.lock"), "utf8").includes(
-        `name = "vorkspace-gpui"\nversion = "${target}"`,
-      ),
-    );
+    const lock = readFileSync(join(root, "Cargo.lock"), "utf8");
+    for (const crate of readdirSync(join(source, "crates")))
+      assert(
+        lock.includes(`name = "${crate}"\nversion = "${target}"`),
+        `${crate} keeps a stale lock version`,
+      );
     assert.deepEqual(json("build/native-release.json"), { version: target, build: "42.1" });
     // Stamping an explicit version or retry does not fail on unchanged versions.
     stampMacRelease(root, { ...plan(), version: target, build: "42.2" });

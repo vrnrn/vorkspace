@@ -595,7 +595,7 @@ async function main() {
   const index = args.indexOf("--settings");
   if (index < 0) args.push("--settings", JSON.stringify(settings));
   else args[index + 1] = JSON.stringify(settings);
-  const child = spawn(command, args, { stdio: "inherit", windowsHide: true });
+  const child = spawn(command, args, { stdio: "inherit" });
   for (const signal of ["SIGINT", "SIGTERM"])
     process.on(signal, () => child.kill(signal));
   child.on("error", (error) => {

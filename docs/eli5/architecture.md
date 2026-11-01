@@ -1,6 +1,6 @@
 # Architecture
 
-The desktop app window is drawn by GPUI. Rust keeps track of conversations, files, Bots, and running agents in the same desktop process. Saved history lives in SQLite, with extra window settings beside it.
+The desktop app window is drawn by GPUI. Rust keeps track of conversations, files, Bots, and running agents in the same desktop process. The code is split into several crates, which are smaller building blocks with one job each, such as colors and animation timing or understanding code in the editor. Splitting them changes how the code is organized, not how the app runs: they are all still one app. Saved history lives in SQLite, with extra window settings beside it.
 
 A Bot's face and name stay at the top of its chat as messages scroll. Its face shows whether it is idle, working or needs you, without following the mouse. Idle faces now and then glance around or blink, all at the same moments, then hold still, so a quiet chat redraws the window only a few times every few seconds instead of thirty times a second. Each window’s sidebar faces and its settings preview follow the mouse when it moves; working and attention faces keep animating. Old face pictures stay in graphics memory while a window still uses them and are removed afterward. On Mac, messages fade gently around the face to reveal the chat's own background colors and picture. You can still select, click and scroll the chat there, and the fade stays above the typing box. Hidden or covered faces stop animating, and an empty chat shows help instead of a second face.
 

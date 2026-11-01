@@ -3,10 +3,7 @@ mod masked;
 pub(crate) mod resets;
 mod signin;
 pub(crate) mod ui;
-use crate::{
-    input::{self, Input},
-    runtime::{Database, locked},
-};
+use crate::input::{self, Input};
 use gpui::{
     App, Context, Entity, EventEmitter, Focusable, Global, Subscription, Task, Window, prelude::*,
 };
@@ -24,6 +21,7 @@ use vorkspace_core::{
     provider::Kind,
     usage::{self, FetchError, Snapshot},
 };
+use vorkspace_runtime::runtime::{Database, locked};
 
 pub(crate) struct Shared(pub Entity<Accounts>);
 impl Global for Shared {}
@@ -574,7 +572,7 @@ impl Accounts {
                     kind.label()
                 ),
                 "Work or Personal",
-                crate::theme::content(0.25),
+                vorkspace_ui::theme::content(0.25),
                 cx,
             );
             input.set_font_size(12.);

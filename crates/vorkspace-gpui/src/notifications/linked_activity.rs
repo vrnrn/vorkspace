@@ -1,7 +1,7 @@
 //! LinkedWorkItemUpdateNotice: shell-local card on the active session surface.
 use super::github_activity::Card;
-use crate::theme::*;
 use gpui::{Context, EventEmitter, Render, Role, Window, div, prelude::*, px};
+use vorkspace_ui::theme::*;
 #[derive(Clone)]
 pub(crate) enum LinkedActivityEvent {
     Acknowledge(i64),

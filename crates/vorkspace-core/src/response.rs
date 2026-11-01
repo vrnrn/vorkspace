@@ -28,15 +28,12 @@ pub struct Note {
 }
 pub use crate::time::now_ms;
 pub fn local_clock(epoch_ms: u64) -> String {
-    #[cfg(unix)]
-    {
-        let time = (epoch_ms / 1000) as libc::time_t;
-        let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
-        // localtime_r writes the caller-owned buffer and doesn't share tm storage.
-        if !unsafe { libc::localtime_r(&time, local.as_mut_ptr()) }.is_null() {
-            let local = unsafe { local.assume_init() };
-            return format!("{:02}:{:02}", local.tm_hour, local.tm_min);
-        }
+    let time = (epoch_ms / 1000) as libc::time_t;
+    let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
+    // localtime_r writes the caller-owned buffer and doesn't share tm storage.
+    if !unsafe { libc::localtime_r(&time, local.as_mut_ptr()) }.is_null() {
+        let local = unsafe { local.assume_init() };
+        return format!("{:02}:{:02}", local.tm_hour, local.tm_min);
     }
     let minutes = epoch_ms / 60_000;
     format!("{:02}:{:02}", (minutes / 60) % 24, minutes % 60)

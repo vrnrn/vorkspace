@@ -4,11 +4,6 @@ import { appendFileSync, closeSync, existsSync, openSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
-import {
-  runPowerShell,
-  windowsTaskScript,
-  windowsUninstallScript,
-} from "./windows.js";
 const exec = promisify(execFile);
 const LABEL = "com.vorkspace.host";
 export async function connectionInfo(directory) {
@@ -186,11 +181,7 @@ export async function uninstallService(system = {}) {
       `Lingering is still enabled for ${user.username}; other user services may rely on it. To turn it off: loginctl disable-linger ${user.username}`,
     ];
   }
-  if (platform === "win32") {
-    await (system.powershell ?? runPowerShell)(windowsUninstallScript());
-    return [];
-  }
-  throw new Error("vorkspace Host supports Windows, Linux and macOS");
+  throw new Error("vorkspace Host supports Linux and macOS");
 }
 export async function installService(options) {
   // Never replace a running host: connecting must not interrupt agent turns.
@@ -274,10 +265,8 @@ export async function installService(options) {
       ["--user", "enable", "--now", "vorkspace-host.service"],
       env,
     );
-  } else if (process.platform === "win32") {
-    await runPowerShell(windowsTaskScript(options, process.env.PATH ?? ""));
   } else {
-    throw new Error("vorkspace Host supports Windows, Linux and macOS");
+    throw new Error("vorkspace Host supports Linux and macOS");
   }
   for (let attempt = 0; attempt < 50; attempt++) {
     try {
@@ -288,10 +277,8 @@ export async function installService(options) {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   throw new Error(
-    process.platform === "win32"
-      ? `The host task did not start. Sign in to the Windows desktop as the SSH user and keep that account signed in (locking is fine), then reconnect. Check Task Scheduler and ${join(options.directory, "host.log")}.`
-      : process.platform === "linux" && !systemdBooted()
-        ? `The host did not start. Check ${join(options.directory, "host.log")}.`
-        : `The host service was installed but did not start. Check ${join(options.directory, "host.log")}.`,
+    process.platform === "linux" && !systemdBooted()
+      ? `The host did not start. Check ${join(options.directory, "host.log")}.`
+      : `The host service was installed but did not start. Check ${join(options.directory, "host.log")}.`,
   );
 }

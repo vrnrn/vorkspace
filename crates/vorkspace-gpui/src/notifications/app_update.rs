@@ -1,13 +1,11 @@
 //! Installed-update card and bundled What's new content. The app updater itself
 //! is a separate backend concern; observing a new version records its notice.
-use crate::clock::Instant;
-use crate::{
-    markdown::{self, MarkdownRow, Tone},
-    markdown_model,
-    theme::*,
-};
+use crate::markdown::{self, MarkdownRow, Tone};
 use gpui::{Context, EventEmitter, FontWeight, Render, Role, Window, div, img, prelude::*, px};
 use vorkspace_core::store::Store;
+use vorkspace_model::markdown_model;
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::theme::*;
 const MARKER: &str = "vorkspace.installedUpdate";
 const VERSION: &str = "vorkspace.lastSeenAppVersion";
 

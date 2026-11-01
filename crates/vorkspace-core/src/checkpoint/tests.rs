@@ -252,13 +252,7 @@ fn shared_turns_with_different_edits_do_not_claim_each_others_files() {
     f.store.begin_turn("a", f.cwd(), "first").unwrap();
     f.store.begin_turn("b", f.cwd(), "second").unwrap();
     f.write("a.txt", "edited by a\n");
-    // Windows strips trailing spaces from file names, so only the leading
-    // space can be exercised there.
-    let literal = if cfg!(windows) {
-        " literal name .txt"
-    } else {
-        " literal name .txt "
-    };
+    let literal = " literal name .txt ";
     f.write(literal, "edited by b\n");
     f.store.capture("a", f.cwd(), &["a.txt".into()]).unwrap();
     f.store
@@ -412,11 +406,7 @@ fn records_empty_binary_and_unusual_paths_without_the_old_file_limit() {
         f.write(&format!("new/{index}.txt"), "");
     }
     f.write("binary.bin", "\0binary");
-    let path = if cfg!(windows) {
-        "café name.txt"
-    } else {
-        "café\tname\n.txt"
-    };
+    let path = "café\tname\n.txt";
     f.write(path, "new\n");
     f.store.finish_turn("session", f.cwd(), "first").unwrap();
     let status = f.store.status("session", f.cwd()).unwrap();
@@ -714,7 +704,6 @@ fn linked_worktrees_have_independent_recordings_and_indexes() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn preserves_literal_paths_and_records_modes_and_symlinks_safely() {
     use std::os::unix::fs::{symlink, PermissionsExt};

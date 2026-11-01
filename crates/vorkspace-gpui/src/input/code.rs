@@ -1,12 +1,10 @@
 //! The editor shares native selection/IME handling with Input and retains glyph
 //! runs for visible lines. Scroll position is independent of the caret.
 use super::*;
-use crate::{
-    editor_analysis::Analysis,
-    editor_scrollbar::{Metrics, WIDTH},
-};
+use crate::file_tools::editor_scrollbar::{Metrics, WIDTH};
 use gpui::{AnyElement, Task};
 use std::{cell::Cell, sync::Arc};
+use vorkspace_editor::editor_analysis::Analysis;
 
 const TOP_PADDING: f32 = 8.;
 const BOTTOM_PADDING: f32 = 32.;
@@ -24,13 +22,19 @@ pub(super) struct Code {
     can_stage: bool,
     suppress_completion: bool,
     diff: bool,
-    deleted_rows: Vec<(f32, f32, String, usize, Vec<crate::editor_analysis::Token>)>,
+    deleted_rows: Vec<(
+        f32,
+        f32,
+        String,
+        usize,
+        Vec<vorkspace_editor::editor_analysis::Token>,
+    )>,
     path: String,
-    completions: Vec<crate::editor_analysis::Completion>,
+    completions: Vec<vorkspace_editor::editor_analysis::Completion>,
     completion_index: usize,
     completion_task: Option<Task<()>>,
     completion_source: Option<(SharedString, usize)>,
-    folded: Vec<crate::editor_analysis::Fold>,
+    folded: Vec<vorkspace_editor::editor_analysis::Fold>,
     search_matches: Vec<Range<usize>>,
     offsets: Vec<usize>,
     visible: Vec<(usize, WrappedLine)>,
@@ -90,7 +94,7 @@ impl Code {
             .partition_point(|start| *start <= offset)
             .saturating_sub(1)
     }
-    fn fold_at(&self, row: usize) -> Option<&crate::editor_analysis::Fold> {
+    fn fold_at(&self, row: usize) -> Option<&vorkspace_editor::editor_analysis::Fold> {
         self.folded.iter().find(|f| self.row(f.from) == row)
     }
     fn hidden(&self, row: usize) -> bool {
@@ -272,7 +276,9 @@ impl Input {
             let text = source.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { crate::editor_analysis::complete(&path, &text, at, explicit) })
+                .spawn(async move {
+                    vorkspace_editor::editor_analysis::complete(&path, &text, at, explicit)
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.content == source
@@ -380,7 +386,7 @@ impl Input {
             let text = source.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { crate::editor_analysis::emmet(&path, &text, at) })
+                .spawn(async move { vorkspace_editor::editor_analysis::emmet(&path, &text, at) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.content == source && this.cursor() == at && !this.is_composing() {
@@ -434,8 +440,8 @@ impl Input {
                 .w(px(width))
                 .rounded(px(6.))
                 .border_1()
-                .border_color(crate::theme::content(0.12))
-                .bg(crate::theme::shell_fill().opacity(1.))
+                .border_color(vorkspace_ui::theme::content(0.12))
+                .bg(vorkspace_ui::theme::shell_fill().opacity(1.))
                 .shadow_md()
                 .overflow_hidden()
                 .py_1()
@@ -456,11 +462,11 @@ impl Input {
                                 .items_center()
                                 .gap_2()
                                 .text_size(px(12.))
-                                .text_color(crate::theme::content(1.))
+                                .text_color(vorkspace_ui::theme::content(1.))
                                 .when(n == code.completion_index, |d| {
-                                    d.bg(crate::theme::accent_color().opacity(0.25))
+                                    d.bg(vorkspace_ui::theme::accent_color().opacity(0.25))
                                 })
-                                .child(div().text_color(crate::theme::content(0.5)).child(
+                                .child(div().text_color(vorkspace_ui::theme::content(0.5)).child(
                                     match option.kind.as_str() {
                                         "function" => "ƒ",
                                         "keyword" => "k",
@@ -472,7 +478,7 @@ impl Input {
                                 .child(div().flex_1())
                                 .child(
                                     div()
-                                        .text_color(crate::theme::content(0.5))
+                                        .text_color(vorkspace_ui::theme::content(0.5))
                                         .child(option.detail.clone()),
                                 )
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -722,7 +728,9 @@ impl Input {
             // Carry the last results through the edit until fresh analysis
             // lands; clearing them would flash the whole buffer uncoloured.
             let previous = std::mem::replace(&mut code.text, self.content.clone());
-            if let Some(edit) = crate::editor_analysis::Edit::between(&previous, &self.content) {
+            if let Some(edit) =
+                vorkspace_editor::editor_analysis::Edit::between(&previous, &self.content)
+            {
                 code.analysis = Arc::new(code.analysis.remapped(edit));
             }
             code.markers.clear();
@@ -1103,8 +1111,8 @@ impl Input {
                 .overflow_hidden()
                 .rounded(px(4.))
                 .border_1()
-                .border_color(crate::theme::content(0.14))
-                .bg(crate::theme::shell_fill().opacity(0.92))
+                .border_color(vorkspace_ui::theme::content(0.14))
+                .bg(vorkspace_ui::theme::shell_fill().opacity(0.92))
                 .shadow_md()
                 .when(code.can_stage, |d| {
                     d.child(
@@ -1149,11 +1157,11 @@ impl Input {
                 .px_2()
                 .py_1()
                 .rounded_md()
-                .bg(crate::theme::pane_fill())
+                .bg(vorkspace_ui::theme::pane_fill())
                 .border_1()
-                .border_color(crate::theme::content(0.14))
+                .border_color(vorkspace_ui::theme::content(0.14))
                 .text_size(px(12.))
-                .text_color(crate::theme::content(1.))
+                .text_color(vorkspace_ui::theme::content(1.))
                 .child(marker.message.clone())
                 .into_any_element(),
         )
@@ -1189,7 +1197,7 @@ fn paint_rail(
     w.with_content_mask(Some(ContentMask { bounds: rail }), |w| {
         w.paint_quad(fill(
             Bounds::new(rail.origin, size(px(1.), rail.size.height)),
-            crate::theme::content(0.07),
+            vorkspace_ui::theme::content(0.07),
         ));
         if metrics.scrollable {
             w.paint_quad(
@@ -1198,7 +1206,7 @@ fn paint_rail(
                         rail.origin + point(px(3.), px(metrics.thumb_top)),
                         size(px(WIDTH - 6.), px(metrics.thumb_height)),
                     ),
-                    crate::theme::content(if code.hovered || code.drag_offset.is_some() {
+                    vorkspace_ui::theme::content(if code.hovered || code.drag_offset.is_some() {
                         0.38 * 0.88
                     } else {
                         0.30 * 0.72
@@ -1232,7 +1240,7 @@ fn paint_rail(
                 _ => 0x969696,
             };
             let ink = if diagnostic.severity == "hint" {
-                crate::theme::content(0.48)
+                vorkspace_ui::theme::content(0.48)
             } else {
                 rgb(color).into()
             };
@@ -1245,7 +1253,7 @@ fn paint_rail(
             });
         }
         let cursor_y = code.row(i.cursor()) as f32 / code.offsets.len().max(1) as f32 * height;
-        let mut cursor_color = crate::theme::accent_color();
+        let mut cursor_color = vorkspace_ui::theme::accent_color();
         cursor_color.a *= if i.focus.is_focused(w) { 1. } else { 0.6 };
         w.paint_quad(fill(
             Bounds::new(
@@ -1254,7 +1262,7 @@ fn paint_rail(
             ),
             cursor_color,
         ));
-        let (add, del) = crate::editor_scrollbar::diff_colors(cx);
+        let (add, del) = crate::file_tools::editor_scrollbar::diff_colors(cx);
         // Git's layer is above the cursor/diagnostic layer in editorGit.ts.
         for change in &code.analysis.changes {
             let row = code.row(change.from);
@@ -1349,7 +1357,7 @@ fn plain_line(
 }
 fn token_line(
     text: &str,
-    tokens: &[crate::editor_analysis::Token],
+    tokens: &[vorkspace_editor::editor_analysis::Token],
     width: Option<Pixels>,
     font_size: f32,
     w: &mut Window,
@@ -1357,7 +1365,7 @@ fn token_line(
     let base = TextRun {
         len: 0,
         font: gpui::font(crate::markdown::FIXED_FONT),
-        color: crate::theme::content(1.),
+        color: vorkspace_ui::theme::content(1.),
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -1373,7 +1381,7 @@ fn token_line(
         }
         runs.push(TextRun {
             len: token.to - token.from,
-            color: crate::theme::syntax_color(&token.kind),
+            color: vorkspace_ui::theme::syntax_color(&token.kind),
             ..base.clone()
         });
         at = token.to;
@@ -1406,7 +1414,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
     let base = TextRun {
         len: text.len(),
         font: gpui::font(crate::markdown::FIXED_FONT),
-        color: crate::theme::content(1.),
+        color: vorkspace_ui::theme::content(1.),
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -1418,7 +1426,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
     for token in tokens.iter().skip(first).take_while(|t| t.from < end) {
         let from = token.from.max(start);
         let to = token.to.min(end);
-        let color = crate::theme::syntax_color(&token.kind);
+        let color = vorkspace_ui::theme::syntax_color(&token.kind);
         if let Some(fold) = code.fold_at(row) {
             if from < fold.from {
                 spans.push((from - start, to.min(fold.from) - start, color));
@@ -1438,7 +1446,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
         spans.push((
             fold.from - start,
             fold.from - start + "…".len(),
-            crate::theme::content(0.4),
+            vorkspace_ui::theme::content(0.4),
         ));
     }
     spans.sort_by_key(|s| s.0);
@@ -1606,7 +1614,7 @@ impl Element for CodeElement {
                     &[TextRun {
                         len: 1,
                         font: gpui::font(crate::markdown::FIXED_FONT),
-                        color: crate::theme::content(1.),
+                        color: vorkspace_ui::theme::content(1.),
                         background_color: None,
                         underline: None,
                         strikethrough: None,
@@ -1638,7 +1646,7 @@ impl Element for CodeElement {
                                     .tokens
                                     .iter()
                                     .filter(|t| t.to > offset && t.from < offset + text.len())
-                                    .map(|t| crate::editor_analysis::Token {
+                                    .map(|t| vorkspace_editor::editor_analysis::Token {
                                         from: t.from.saturating_sub(offset),
                                         to: t.to.min(offset + text.len()) - offset,
                                         kind: t.kind.clone(),
@@ -1815,21 +1823,21 @@ impl Element for CodeElement {
                             point(bounds.left(), y),
                             size(bounds.size.width - px(WIDTH), line.size(lh).height),
                         ),
-                        crate::theme::diff_background(false, false),
+                        vorkspace_ui::theme::diff_background(false, false),
                     ));
                     w.paint_quad(fill(
                         Bounds::new(
                             point(bounds.left(), y),
                             size(px(code.gutter() - 22.), line.size(lh).height),
                         ),
-                        crate::theme::diff_background(false, true),
+                        vorkspace_ui::theme::diff_background(false, true),
                     ));
                     let number = plain_line(
                         &number.to_string(),
                         None,
                         11.,
                         w,
-                        crate::theme::diff_foreground(false),
+                        vorkspace_ui::theme::diff_foreground(false),
                     );
                     let _ = number.paint(
                         point(state.text_bounds.left() - px(26.) - number.width(), y),
@@ -1839,7 +1847,13 @@ impl Element for CodeElement {
                         w,
                         cx,
                     );
-                    let minus = plain_line("−", None, 12., w, crate::theme::diff_foreground(false));
+                    let minus = plain_line(
+                        "−",
+                        None,
+                        12.,
+                        w,
+                        vorkspace_ui::theme::diff_foreground(false),
+                    );
                     let _ = minus.paint(
                         point(state.text_bounds.left() - px(12.), y),
                         lh,
@@ -1863,10 +1877,15 @@ impl Element for CodeElement {
                                 point(bounds.left(), y),
                                 size(bounds.size.width - px(WIDTH), line.size(lh).height),
                             ),
-                            crate::theme::diff_background(true, false),
+                            vorkspace_ui::theme::diff_background(true, false),
                         ));
-                        let plus =
-                            plain_line("+", None, 12., w, crate::theme::diff_foreground(true));
+                        let plus = plain_line(
+                            "+",
+                            None,
+                            12.,
+                            w,
+                            vorkspace_ui::theme::diff_foreground(true),
+                        );
                         let _ = plus.paint(
                             point(state.text_bounds.left() - px(12.), y),
                             lh,
@@ -1896,7 +1915,7 @@ impl Element for CodeElement {
                                 "⌄".len()
                             },
                             font: gpui::font(crate::markdown::FIXED_FONT),
-                            color: crate::theme::content(0.45),
+                            color: vorkspace_ui::theme::content(0.45),
                             background_color: None,
                             underline: None,
                             strikethrough: None,
@@ -1924,7 +1943,7 @@ impl Element for CodeElement {
                     &[TextRun {
                         len,
                         font: gpui::font(crate::markdown::FIXED_FONT),
-                        color: crate::theme::content(0.3),
+                        color: vorkspace_ui::theme::content(0.3),
                         background_color: None,
                         underline: None,
                         strikethrough: None,
@@ -1971,7 +1990,7 @@ impl Element for CodeElement {
                                 point(state.text_bounds.left(), y),
                                 size(state.text_bounds.size.width, line.size(lh).height),
                             ),
-                            crate::theme::content(0.1),
+                            vorkspace_ui::theme::content(0.1),
                         ));
                     }
                     for range in &code.search_matches {
@@ -2012,7 +2031,7 @@ impl Element for CodeElement {
                                     point(x + left, y + sy),
                                     size((right - left).max(px(2.)), lh),
                                 ),
-                                crate::theme::text_selection(),
+                                vorkspace_ui::theme::text_selection(),
                             ));
                             sy += lh;
                         }
@@ -2031,7 +2050,7 @@ impl Element for CodeElement {
                         );
                         w.paint_quad(fill(
                             Bounds::new(point(x + p.x, y + p.y), size(px(1.5), lh)),
-                            crate::theme::content(1.),
+                            vorkspace_ui::theme::content(1.),
                         ));
                     }
                 }
@@ -2056,274 +2075,7 @@ impl Element for CodeElement {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use gpui::{TestAppContext, WindowBounds, WindowOptions};
-    #[gpui::test]
-    fn wrapped_editor_keeps_unicode_selection_visual_navigation_and_resize_in_sync(
-        cx: &mut TestAppContext,
-    ) {
-        let window = cx.update(|cx| {
-            bind(cx);
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                        point(px(0.), px(0.)),
-                        size(px(400.), px(240.)),
-                    ))),
-                    ..Default::default()
-                },
-                |_, cx| cx.new(Input::editor),
-            )
-            .unwrap()
-        });
-        let text = format!("{}🙂漢字\nsecond line\n", "word ".repeat(30));
-        window
-            .update(cx, |i, w, cx| {
-                w.focus(&i.focus, cx);
-                i.set_text(text.clone(), cx);
-                i.move_to(0, cx);
-            })
-            .unwrap();
-        cx.refresh().unwrap();
-        let height = window
-            .update(cx, |i, _, _| {
-                let code = i.code.as_ref().unwrap();
-                assert!(code.tops[1] - code.tops[0] > i.line_height * 2.);
-                for (at, _) in text
-                    .char_indices()
-                    .take_while(|(at, _)| *at < text.find('\n').unwrap())
-                {
-                    assert_eq!(i.code_index(i.code_position(at)), at, "UTF-8 offset {at}");
-                }
-                code.total()
-            })
-            .unwrap();
-        cx.simulate_keystrokes(window.into(), "down");
-        window
-            .update(cx, |i, _, _| {
-                assert_eq!(
-                    i.cursor_location().0,
-                    1,
-                    "Down moves within a wrapped logical line"
-                );
-                assert!(i.cursor() > 0);
-                assert_eq!(
-                    i.code_position(i.cursor()).y,
-                    px(TOP_PADDING + i.line_height)
-                );
-            })
-            .unwrap();
-        cx.simulate_window_resize(window.into(), size(px(260.), px(240.)));
-        cx.refresh().unwrap();
-        window
-            .update(cx, |i, _, cx| {
-                assert!(i.code.as_ref().unwrap().total() > height);
-                i.set_word_wrap(false, cx);
-            })
-            .unwrap();
-        cx.refresh().unwrap();
-        window
-            .update(cx, |i, _, _| {
-                assert_eq!(i.content.as_ref(), text);
-                assert_eq!(
-                    i.code.as_ref().unwrap().tops[1] - TOP_PADDING,
-                    i.line_height
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn overview_markers_jump_and_the_thumb_drags_without_editing_or_selecting(
-        cx: &mut TestAppContext,
-    ) {
-        use crate::editor_analysis::{Change, Diagnostic};
-        let window = cx.update(|cx| {
-            bind(cx);
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                        point(px(0.), px(0.)),
-                        size(px(400.), px(240.)),
-                    ))),
-                    ..Default::default()
-                },
-                |_, cx| cx.new(Input::editor),
-            )
-            .unwrap()
-        });
-        let text: String = (0..200).map(|n| format!("line {n}\n")).collect();
-        let diagnostic = text.find("line 150").unwrap();
-        let change = text.find("line 80").unwrap();
-        window
-            .update(cx, |i, w, cx| {
-                w.focus(&i.focus, cx);
-                i.set_text(text.clone(), cx);
-                i.set_editor_analysis(
-                    Analysis {
-                        diagnostics: vec![Diagnostic {
-                            from: diagnostic,
-                            to: diagnostic + 4,
-                            severity: "error".into(),
-                            message: "Unexpected token".into(),
-                        }],
-                        changes: vec![Change {
-                            kind: "mod".into(),
-                            from: change,
-                            to: change + 7,
-                            deleted: 1,
-                            original: "old line\n".into(),
-                            old_line: 80,
-                            tokens: Vec::new(),
-                        }],
-                        folds: Vec::new(),
-                        tokens: Vec::new(),
-                    },
-                    cx,
-                );
-            })
-            .unwrap();
-        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        let (rail, error_tick, change_tick) = window
-            .update(visual, |i, _, _| {
-                let code = i.code.as_ref().unwrap();
-                (
-                    code.rail.unwrap(),
-                    code.markers[0].bounds.center(),
-                    code.markers[1].bounds.center(),
-                )
-            })
-            .unwrap();
-        assert_eq!(rail.size.width, px(18.));
-        visual.simulate_click(error_tick, Default::default());
-        visual.run_until_parked();
-        window
-            .update(visual, |i, _, _| {
-                assert_eq!(i.cursor(), diagnostic);
-                assert!(i.scroll_y > px(2000.));
-                assert!(!i.selecting);
-            })
-            .unwrap();
-        visual.simulate_click(change_tick, Default::default());
-        visual.run_until_parked();
-        let thumb = window
-            .update(visual, |i, _, _| {
-                assert_eq!(i.cursor(), diagnostic, "Git navigation preserves the caret");
-                assert!(i.scroll_y < px(2000.));
-                let code = i.code.as_ref().unwrap();
-                let m = Metrics::new(
-                    i.scroll_y.as_f32(),
-                    code.total(),
-                    rail.size.height.as_f32(),
-                    rail.size.height.as_f32(),
-                );
-                // Grab the thumb away from the change tick, which deliberately
-                // takes priority over dragging in the frontend.
-                rail.origin + point(px(8.), px(m.thumb_top + 4.))
-            })
-            .unwrap();
-        visual.simulate_mouse_down(thumb, MouseButton::Left, Default::default());
-        let end = point(thumb.x, rail.bottom() - px(1.));
-        visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
-        visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
-        visual.run_until_parked();
-        window
-            .update(visual, |i, _, _| {
-                assert_eq!(i.content.as_ref(), text);
-                assert_eq!(i.cursor(), diagnostic);
-                assert!(i.scroll_y > px(3500.), "drag ended at {:?}", i.scroll_y);
-                assert!(i.code.as_ref().unwrap().drag_offset.is_none());
-                assert!(!i.selecting);
-            })
-            .unwrap();
-    }
-    #[gpui::test]
-    fn editor_keyboard_undo_ime_and_viewport_are_native_and_bounded(cx: &mut TestAppContext) {
-        let window = cx.update(|cx| {
-            bind(cx);
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                        point(px(0.), px(0.)),
-                        size(px(400.), px(240.)),
-                    ))),
-                    ..Default::default()
-                },
-                |_, cx| cx.new(Input::editor),
-            )
-            .unwrap()
-        });
-        window
-            .update(cx, |input, w, cx| {
-                w.focus(&input.focus, cx);
-                input.set_text((0..10_000).map(|n| format!("line {n}: 🙂\n")).collect(), cx);
-                input.move_to(0, cx);
-                input.reset_editor_history();
-            })
-            .unwrap();
-        cx.refresh().unwrap();
-        window
-            .update(cx, |input, _, _| {
-                assert!(input.code.as_ref().unwrap().visible.len() < 20);
-                assert_eq!(input.cursor_location(), (1, 1));
-            })
-            .unwrap();
-        let m = "cmd";
-        cx.simulate_keystrokes(window.into(), "tab enter");
-        window
-            .update(cx, |i, _, _| assert!(i.content.starts_with("  \n  line 0")))
-            .unwrap();
-        cx.simulate_keystrokes(window.into(), &format!("{m}-z {m}-z"));
-        window
-            .update(cx, |i, _, _| assert!(i.content.starts_with("line 0")))
-            .unwrap();
-        cx.simulate_keystrokes(window.into(), &format!("{m}-shift-z"));
-        window
-            .update(cx, |i, w, cx| {
-                assert!(i.content.starts_with("  line 0"));
-                i.replace_and_mark_text_in_range(None, "漢", None, w, cx);
-                i.replace_text_in_range(None, "漢字", w, cx);
-                assert!(i.content.starts_with("  漢字line"));
-                i.undo(&Undo, w, cx);
-                assert!(i.content.starts_with("  line"));
-                i.move_to(i.content.len(), cx);
-            })
-            .unwrap();
-        cx.refresh().unwrap();
-        window
-            .update(cx, |i, _, cx| {
-                assert!(i.scroll_y > px(100_000.));
-                let code = i.code.as_mut().unwrap();
-                assert!(code.visible.len() < 20);
-                i.scroll_y = px(0.);
-                code.reveal = false;
-                cx.notify();
-            })
-            .unwrap();
-        cx.refresh().unwrap();
-        window
-            .update(cx, |i, w, cx| {
-                assert_eq!(
-                    i.scroll_y,
-                    px(0.),
-                    "scrolling away must not snap back to the caret"
-                );
-                i.move_to(0, cx);
-                let before = i.content.clone();
-                i.replace_text_in_range(None, &"x".repeat(document_limit()), w, cx);
-                assert_eq!(
-                    i.content, before,
-                    "oversized edits must be rejected in full"
-                );
-            })
-            .unwrap();
-    }
-    fn document_limit() -> usize {
-        vorkspace_core::files::document::MAX_LINE_BYTES + 1
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod feature_tests {
@@ -2355,7 +2107,7 @@ mod feature_tests {
             .update(cx, |i, _, cx| {
                 i.set_text(source.into(), cx);
                 i.set_editor_analysis(
-                    crate::editor_analysis::analyze("a.js", source, None).unwrap(),
+                    vorkspace_editor::editor_analysis::analyze("a.js", source, None).unwrap(),
                     cx,
                 );
                 i.toggle_fold_row(0, cx);
@@ -2415,9 +2167,12 @@ mod feature_tests {
                 assert_eq!(i.content.as_ref(), "cons");
                 i.set_text("const value = 2;\n".into(), cx);
                 i.set_editor_diff(true, true);
-                let analysis =
-                    crate::editor_analysis::analyze("a.ts", &i.content, Some("const value = 1;\n"))
-                        .unwrap();
+                let analysis = vorkspace_editor::editor_analysis::analyze(
+                    "a.ts",
+                    &i.content,
+                    Some("const value = 1;\n"),
+                )
+                .unwrap();
                 i.set_editor_analysis(analysis, cx);
             })
             .unwrap();

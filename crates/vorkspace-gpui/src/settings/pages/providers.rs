@@ -1,12 +1,10 @@
-use crate::{
-    settings::{
-        SettingsView,
-        widgets::{note, secondary_button},
-    },
-    theme::*,
+use crate::settings::{
+    SettingsView,
+    widgets::{note, secondary_button},
 };
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use vorkspace_core::provider::Kind;
+use vorkspace_ui::theme::*;
 impl SettingsView {
     pub(super) fn providers_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let p = self.prefs.clone();

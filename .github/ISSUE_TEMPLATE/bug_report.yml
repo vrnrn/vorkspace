@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        vorkspace supports macOS, Linux, and Windows.
+        vorkspace runs on macOS. Remote hosts can run on macOS or Linux.
 
   - type: input
     id: version
@@ -22,7 +22,6 @@ body:
       options:
         - macOS
         - Linux
-        - Windows
     validations:
       required: true
 
@@ -30,7 +29,7 @@ body:
     id: os-version
     attributes:
       label: OS version
-      placeholder: "Windows 11, Ubuntu 24.04, macOS 15.5"
+      placeholder: "macOS 15.5, Ubuntu 24.04"
     validations:
       required: true
 

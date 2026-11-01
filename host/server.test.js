@@ -584,7 +584,7 @@ describe("remote host API", () => {
     symlinkSync(
       tmpdir(),
       join(s.directory, "outside"),
-      process.platform === "win32" ? "junction" : "dir",
+      "dir",
     );
     expect(
       (await s.call("files.read", { projectId: s.project.id, path: "outside" }))

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 pub(crate) fn run() {
     eprintln!("Vox display preview: no microphone or provider; exits after one state cycle.");
-    gpui::Application::with_platform(gpui_platform::current_platform(false))
+    gpui::Application::with_platform(std::rc::Rc::new(gpui_macos::MacPlatform::new(false)))
         .with_assets(crate::assets::Assets)
         .run(|cx| {
             crate::input::bind(cx);

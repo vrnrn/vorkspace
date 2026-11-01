@@ -50,7 +50,7 @@ test("desktop stays free of games and decorative title/composer effects", async 
     "crates/vorkspace-gpui/src/main.rs",
     "crates/vorkspace-gpui/src/conversation.rs",
     "crates/vorkspace-gpui/src/settings/model.rs",
-    "crates/vorkspace-gpui/src/settings/preferences.rs",
+    "crates/vorkspace-ui/src/preferences.rs",
     "vendor/gpui-pre-apple/src/metal_renderer.rs",
   ]) {
     const source = await readFile(join(root, name), "utf8");

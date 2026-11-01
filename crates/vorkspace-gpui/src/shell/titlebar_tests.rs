@@ -130,7 +130,7 @@ fn assert_titlebar(
 
 #[gpui::test]
 fn zoomed_titlebar_keeps_native_controls_navigation_and_tabs_separate(cx: &mut TestAppContext) {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     let (window, _, _) = tests::window(cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     // A minimum-width rail exercises navigation's padding budget at low zoom;
@@ -188,7 +188,7 @@ impl Render for InsetTitlebar {
 
 #[gpui::test]
 fn inset_titlebar_uses_the_same_native_inset_and_navigation_budget(cx: &mut TestAppContext) {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     let (window, _, _) = tests::window(cx);
     let shell = window
         .update(cx, |_, w, cx| {
@@ -247,7 +247,7 @@ fn inset_titlebar_uses_the_same_native_inset_and_navigation_budget(cx: &mut Test
 
 #[gpui::test]
 fn titlebar_bot_and_app_views_keep_the_same_zoomed_navigation(cx: &mut TestAppContext) {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     let (window, _, _) = tests::window(cx);
     let (manager, bot) = window
         .update(cx, |shell, w, cx| {
@@ -295,7 +295,7 @@ fn titlebar_bot_and_app_views_keep_the_same_zoomed_navigation(cx: &mut TestAppCo
 #[gpui::test]
 fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         bind_keys(cx);
         crate::app_menu::init(cx);
     });

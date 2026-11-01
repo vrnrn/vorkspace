@@ -644,7 +644,7 @@ impl Bots {
                 .text_size(px(12.))
                 .line_height(px(20.));
             if let Some(report) = &run.report {
-                for (ix, mut row) in crate::markdown_model::parse_full(report)
+                for (ix, mut row) in vorkspace_model::markdown_model::parse_full(report)
                     .blocks
                     .iter()
                     .flat_map(|b| crate::markdown::rows(&b.block))
@@ -660,7 +660,7 @@ impl Bots {
                             format!("habit-report-{}-{}-{ix}", h.id, run.at).into(),
                             crate::markdown::Tone::Normal,
                             None,
-                            crate::clock::Instant::now(),
+                            vorkspace_ui::clock::Instant::now(),
                         ),
                     ));
                 }

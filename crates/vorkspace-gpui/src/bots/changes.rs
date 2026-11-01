@@ -37,9 +37,9 @@ struct Summary {
     revision: u64,
 }
 struct Surface {
-    git: Entity<crate::git_status::ProjectGit>,
-    changes: Entity<crate::changes::Changes>,
-    review: Option<Entity<crate::review::ReviewPane>>,
+    git: Entity<crate::git_tools::git_status::ProjectGit>,
+    changes: Entity<crate::git_tools::changes::Changes>,
+    review: Option<Entity<crate::git_tools::review::ReviewPane>>,
     enabled: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -341,24 +341,24 @@ impl Bots {
             }
         }
         if !self.project_changes.surfaces.contains_key(&key) {
-            let git = cx.new(|cx| crate::git_status::ProjectGit::new(root, cx));
+            let git = cx.new(|cx| crate::git_tools::git_status::ProjectGit::new(root, cx));
             let provider = self
                 .chat()
                 .map(|v| Kind::from_id(&v.read(cx).summary.provider))
                 .unwrap_or(Kind::Codex);
             let changes = cx.new(|cx| {
-                let mut view = crate::changes::Changes::new(git.clone(), window, cx);
+                let mut view = crate::git_tools::changes::Changes::new(git.clone(), window, cx);
                 view.text_provider = provider;
                 view
             });
             let event_key = key.clone();
             let changes_event = cx.subscribe(
                 &changes,
-                move |this, view, event: &crate::changes::ChangesEvent, cx| match event {
-                    crate::changes::ChangesEvent::View(mode) => {
+                move |this, view, event: &crate::git_tools::changes::ChangesEvent, cx| match event {
+                    crate::git_tools::changes::ChangesEvent::View(mode) => {
                         view.update(cx, |v, cx| v.set_view(*mode, cx))
                     }
-                    crate::changes::ChangesEvent::OpenDiff { cwd, path, staged } => {
+                    crate::git_tools::changes::ChangesEvent::OpenDiff { cwd, path, staged } => {
                         this.open_change_review(&event_key, cwd, path.as_deref(), *staged, cx)
                     }
                 },
@@ -366,7 +366,7 @@ impl Bots {
             let summary_id = bot.id.clone();
             let git_event = cx.subscribe(
                 &git,
-                move |this, _, _: &crate::git_status::GitChanged, cx| {
+                move |this, _, _: &crate::git_tools::git_status::GitChanged, cx| {
                     if let Some(summary) = this.project_changes.summaries.get_mut(&summary_id) {
                         summary.loaded = None;
                         summary.revision += 1;
@@ -415,9 +415,9 @@ impl Bots {
         };
         let review = surface.review.clone().unwrap_or_else(|| {
             cx.new(|cx| {
-                crate::review::ReviewPane::new(
+                crate::git_tools::review::ReviewPane::new(
                     surface.git.clone(),
-                    crate::review::ReviewState::default(),
+                    crate::git_tools::review::ReviewState::default(),
                     cx,
                 )
             })
@@ -426,9 +426,9 @@ impl Bots {
             let review_key = key.clone();
             let event = cx.subscribe(
                 &review,
-                move |this, _, event: &crate::review::ReviewEvent, cx| {
+                move |this, _, event: &crate::git_tools::review::ReviewEvent, cx| {
                     match event {
-                        crate::review::ReviewEvent::Empty => {
+                        crate::git_tools::review::ReviewEvent::Empty => {
                             if let Some(surface) =
                                 this.project_changes.surfaces.get_mut(&review_key)
                             {
@@ -442,7 +442,7 @@ impl Bots {
                                 this.route = None;
                             }
                         }
-                        crate::review::ReviewEvent::Comment(text) => {
+                        crate::git_tools::review::ReviewEvent::Comment(text) => {
                             this.enqueue(&review_key.0, text.clone(), Vec::new(), false, cx)
                         }
                         _ => (),
@@ -459,7 +459,7 @@ impl Bots {
         }
         review.update(cx, |view, cx| {
             view.open(
-                crate::review::ReviewTab::Changes {
+                crate::git_tools::review::ReviewTab::Changes {
                     cwd: cwd.into(),
                     path: path.map(str::to_owned),
                     staged: Some(staged),

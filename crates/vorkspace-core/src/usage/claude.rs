@@ -68,11 +68,8 @@ fn config_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 fn credentials(config: Option<PathBuf>) -> Option<Value> {
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(value) = keychain(config.as_deref()) {
-            return Some(value);
-        }
+    if let Some(value) = keychain(config.as_deref()) {
+        return Some(value);
     }
     let dir = config.or_else(|| {
         std::env::var_os("HOME")
@@ -90,7 +87,6 @@ fn credential_blob(raw: &str) -> Option<Value> {
     Some(value)
 }
 
-#[cfg(target_os = "macos")]
 pub(crate) fn delete_keychain(config: &std::path::Path) -> Result<(), String> {
     use crate::process;
     use std::{
@@ -125,7 +121,6 @@ pub(crate) fn delete_keychain(config: &std::path::Path) -> Result<(), String> {
     result
 }
 
-#[cfg(target_os = "macos")]
 fn keychain_service(config: Option<&std::path::Path>) -> String {
     use sha2::{Digest, Sha256};
     use unicode_normalization::UnicodeNormalization;
@@ -138,7 +133,6 @@ fn keychain_service(config: Option<&std::path::Path>) -> String {
         .unwrap_or_else(|| "Claude Code-credentials".into())
 }
 
-#[cfg(target_os = "macos")]
 fn keychain(config: Option<&std::path::Path>) -> Option<Value> {
     use crate::process;
     use std::{
@@ -218,7 +212,6 @@ pub(super) fn external_usage(name: &str) -> Snapshot {
 #[cfg(test)]
 mod backend_tests {
     use super::*;
-    #[cfg(unix)]
     #[test]
     fn bedrock_probe_uses_cli_status_and_the_selected_profile_without_oauth() {
         use std::{os::unix::fs::PermissionsExt, process::Command};

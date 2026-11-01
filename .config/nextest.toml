@@ -1,0 +1,8 @@
+# Each test owns a process, so GPUI's global theme, clock and platform state
+# cannot leak between tests that run at the same time.
+[profile.default]
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[profile.ci]
+failure-output = "immediate-final"

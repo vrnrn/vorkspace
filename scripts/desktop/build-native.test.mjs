@@ -5,9 +5,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
 
-test("macOS installer reports replacement failures without nesting or replacing the old app", {
-  skip: process.platform === "win32",
-}, async (t) => {
+test("macOS installer reports replacement failures without nesting or replacing the old app", async (t) => {
   for (const failure of ["staging cleanup", "destination removal", "copy", "none"]) {
     await t.test(failure, async (t) => {
       const root = await mkdtemp(join(tmpdir(), "vorkspace-install-test-"));

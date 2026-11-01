@@ -1,12 +1,10 @@
 use super::masked::masked_text;
 use super::*;
-use crate::{
-    settings::widgets::{primary_button, secondary_button},
-    theme::*,
-};
+use crate::settings::widgets::{primary_button, secondary_button};
 use gpui::{
     AnimationExt, AnyElement, App, Div, FontWeight, MouseButton, Role, SharedString, div, px,
 };
+use vorkspace_ui::theme::*;
 fn account_button(
     id: SharedString,
     label: SharedString,

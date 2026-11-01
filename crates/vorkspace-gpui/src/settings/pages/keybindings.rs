@@ -1,9 +1,7 @@
 //! React's command names, defaults, scopes, filter and shortcut recorder.
-use crate::{
-    settings::{Preferences, SettingsView},
-    theme::*,
-};
+use crate::settings::{Preferences, SettingsView};
 use gpui::{AnyElement, Context, FontWeight, Role, div, prelude::*, px};
+use vorkspace_ui::theme::*;
 #[derive(Clone, Copy)]
 pub(crate) struct Binding {
     pub command: &'static str,

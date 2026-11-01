@@ -1,8 +1,8 @@
 //! The notch is a separate, nonactivating native surface, never window chrome.
 use super::*;
-use crate::{clock::Instant, pane_motion::PaneSlide};
 use gpui::{AnyElement, Focusable, MouseMoveEvent, PathBuilder, canvas, point};
 use std::time::Duration;
+use vorkspace_ui::{clock::Instant, pane_motion::PaneSlide};
 
 pub(super) const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const DONE_TIME: Duration = Duration::from_secs(3);
@@ -316,7 +316,7 @@ impl Vox {
         let (ink, speed) = indicator(status, self.notch.hearing);
         let showing_control = self.notch.status_hovered;
         let pulse = if speed > 0. && !self.notch.closing && !showing_control {
-            if !crate::clock::suppress_endless_animation_frames() {
+            if !vorkspace_ui::clock::suppress_endless_animation_frames() {
                 window.request_animation_frame();
             }
             // Timed from opening: pointer movement resets `touched`.
@@ -340,7 +340,7 @@ impl Vox {
             .relative()
             .overflow_hidden()
             .text_color(white(0.9))
-            .font_family(crate::fonts::UI)
+            .font_family(vorkspace_ui::fonts::UI)
             .on_hover(cx.listener(|voice, hovered: &bool, _, cx| {
                 voice.notch.hovered = *hovered;
                 voice.touch(cx);

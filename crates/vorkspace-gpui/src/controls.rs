@@ -1,9 +1,9 @@
 //! Shared native control behavior; callers retain their surface-specific styling.
-use crate::theme::{accent_color, content, shell_fill};
 use gpui::{
     Context, Div, ElementId, IntoElement, Render, Role, SharedString, Stateful, Window, div,
     prelude::*, px,
 };
+use vorkspace_ui::theme::{accent_color, content, shell_fill};
 
 /// GPUI routes Return/Space releases and accessibility clicks through `on_click`.
 /// Do not add a second key handler: it would activate the same command twice.

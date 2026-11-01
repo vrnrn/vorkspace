@@ -7,7 +7,7 @@ fn image_lightbox_opens_from_composer_and_sent_images_and_restores_focus(cx: &mu
     cx.update(|cx| {
         crate::input::bind(cx);
         crate::image_lightbox::bind(cx);
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
     });
     let (window, _, active) = super::tests::window(cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);

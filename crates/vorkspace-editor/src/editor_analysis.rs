@@ -1,0 +1,535 @@
+//! The Tauri editor's CodeMirror/Lezer analysis, without a web view. The bundled
+//! parsers and editorLint.ts run in a bounded interpreter on a background worker.
+//! Languages with a Tree-sitter grammar are analysed natively by editor_syntax.
+use gpui::SharedString;
+use rquickjs::{Context, Function, Promise, Runtime};
+use serde::Deserialize;
+use std::{ops::Range, time::Duration};
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Analysis {
+    pub diagnostics: Vec<Diagnostic>,
+    pub changes: Vec<Change>,
+    pub folds: Vec<Fold>,
+    pub tokens: Vec<Token>,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct Token {
+    pub from: usize,
+    pub to: usize,
+    pub kind: SharedString,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct Diagnostic {
+    pub from: usize,
+    pub to: usize,
+    pub severity: String,
+    pub message: String,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct Change {
+    pub kind: String,
+    pub from: usize,
+    pub to: usize,
+    pub deleted: usize,
+    pub original: String,
+    pub old_line: usize,
+    pub tokens: Vec<Token>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Fold {
+    pub from: usize,
+    pub to: usize,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct Completion {
+    pub label: String,
+    pub detail: String,
+    pub kind: String,
+    pub from: usize,
+    pub to: usize,
+    pub insert: String,
+    pub cursor: usize,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct SearchMatch {
+    pub from: usize,
+    pub to: usize,
+    pub insert: String,
+}
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SearchResult {
+    pub matches: Vec<SearchMatch>,
+    pub invalid: bool,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct Formatted {
+    pub formatted: String,
+    #[serde(rename = "cursorOffset")]
+    pub cursor: usize,
+}
+fn byte(source: &str, offset: usize) -> usize {
+    let mut units = 0;
+    for (at, ch) in source.char_indices() {
+        if units >= offset {
+            return at;
+        }
+        units += ch.len_utf16();
+    }
+    source.len()
+}
+fn utf16(source: &str, at: usize) -> usize {
+    source[..at].encode_utf16().count()
+}
+/// CPU time used by this thread. These interpreters run to completion on the
+/// calling thread and cannot block, so limiting this bounds their work exactly
+/// as a wall clock would, without charging them for time a busy machine gave to
+/// other processes.
+fn thread_cpu_time() -> Duration {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: a valid out-pointer for a clock id that every Unix target provides.
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+    Duration::new(time.tv_sec as u64, time.tv_nsec as u32)
+}
+fn runtime() -> Result<(Runtime, Context), String> {
+    let runtime = Runtime::new().map_err(|e| e.to_string())?;
+    runtime.set_memory_limit(256 * 1024 * 1024);
+    runtime.set_max_stack_size(4 * 1024 * 1024);
+    let deadline = thread_cpu_time() + Duration::from_secs(3);
+    runtime.set_interrupt_handler(Some(Box::new(move || thread_cpu_time() > deadline)));
+    let context = Context::full(&runtime).map_err(|e| e.to_string())?;
+    Ok((runtime, context))
+}
+pub fn complete(
+    path: &str,
+    source: &str,
+    at: usize,
+    explicit: bool,
+) -> Result<Vec<Completion>, String> {
+    let (_runtime, context) = runtime()?;
+    let json = context
+        .with(|ctx| -> rquickjs::Result<String> {
+            ctx.eval::<(), _>(include_str!("../assets/native-editor.js"))?;
+            let function: Function = ctx.globals().get("vorkspaceComplete")?;
+            function
+                .call::<_, Promise>((path, source, utf16(source, at), explicit))?
+                .finish()
+        })
+        .map_err(|e| e.to_string())?;
+    let mut options: Vec<Completion> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    for option in &mut options {
+        option.from = byte(source, option.from);
+        option.to = byte(source, option.to);
+        option.cursor = byte(&option.insert, option.cursor);
+    }
+    Ok(options)
+}
+pub fn search(
+    source: &str,
+    query: &str,
+    replacement: &str,
+    case: bool,
+    word: bool,
+    regex: bool,
+) -> Result<SearchResult, String> {
+    let (_runtime, context) = runtime()?;
+    let json = context
+        .with(|ctx| -> rquickjs::Result<String> {
+            ctx.eval::<(), _>(include_str!("../assets/native-editor.js"))?;
+            let function: Function = ctx.globals().get("vorkspaceSearch")?;
+            function.call((source, query, replacement, case, word, regex))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut result: SearchResult = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    // Convert all positions in one pass, including large replace-all results.
+    let offsets = byte_offsets(source);
+    for m in &mut result.matches {
+        m.from = offsets[m.from.min(offsets.len() - 1)];
+        m.to = offsets[m.to.min(offsets.len() - 1)];
+    }
+    Ok(result)
+}
+pub fn chunk_action(
+    original: &str,
+    current: &str,
+    at: usize,
+    selection: Range<usize>,
+    stage: bool,
+) -> Result<Option<String>, String> {
+    let (_runtime, context) = runtime()?;
+    let json = context
+        .with(|ctx| -> rquickjs::Result<String> {
+            ctx.eval::<(), _>(include_str!("../assets/native-editor.js"))?;
+            let function: Function = ctx.globals().get("vorkspaceChunkAction")?;
+            function.call((
+                original,
+                current,
+                utf16(current, at),
+                utf16(current, selection.start),
+                utf16(current, selection.end),
+                stage,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    serde_json::from_str(&json).map_err(|e| e.to_string())
+}
+pub fn format(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
+    transform(
+        "vorkspaceFormat",
+        path,
+        source,
+        at,
+        include_str!("../assets/native-format.js"),
+    )
+}
+pub fn emmet(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
+    transform(
+        "vorkspaceEmmet",
+        path,
+        source,
+        at,
+        include_str!("../assets/native-editor.js"),
+    )
+}
+fn transform(
+    name: &str,
+    path: &str,
+    source: &str,
+    at: usize,
+    bundle: &str,
+) -> Result<Option<Formatted>, String> {
+    let (_runtime, context) = runtime()?;
+    let json = context
+        .with(|ctx| -> rquickjs::Result<String> {
+            ctx.eval::<(), _>(bundle)?;
+            let function: Function = ctx.globals().get(name)?;
+            if name == "vorkspaceFormat" || name == "vorkspaceEmmet" {
+                function
+                    .call::<_, Promise>((path, source, utf16(source, at)))?
+                    .finish()
+            } else {
+                function.call((path, source, utf16(source, at)))
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    let mut result: Option<Formatted> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    if let Some(result) = &mut result {
+        result.cursor = byte(&result.formatted, result.cursor);
+    }
+    Ok(result)
+}
+fn byte_offsets(source: &str) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(source.len() + 1);
+    for (at, ch) in source.char_indices() {
+        offsets.extend(std::iter::repeat_n(at, ch.len_utf16()));
+    }
+    offsets.push(source.len());
+    offsets
+}
+/// The one contiguous replacement between two texts, found by trimming their
+/// common prefix and suffix. Typing, undo, reloads and IME all reduce to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Edit {
+    pub start: usize,
+    pub old_end: usize,
+    pub new_end: usize,
+}
+impl Edit {
+    pub fn between(old: &str, new: &str) -> Option<Self> {
+        if old == new {
+            return None;
+        }
+        let (a, b) = (old.as_bytes(), new.as_bytes());
+        let mut start = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+        let room = a.len().min(b.len()) - start;
+        let suffix = a
+            .iter()
+            .rev()
+            .zip(b.iter().rev())
+            .take(room)
+            .take_while(|(x, y)| x == y)
+            .count();
+        // The shared bytes are identical, so both texts agree on boundaries.
+        while !old.is_char_boundary(start) {
+            start -= 1;
+        }
+        let (mut old_end, mut new_end) = (a.len() - suffix, b.len() - suffix);
+        while !old.is_char_boundary(old_end) {
+            old_end += 1;
+            new_end += 1;
+        }
+        Some(Self {
+            start,
+            old_end,
+            new_end,
+        })
+    }
+    /// Where `from..to` lands after the edit. Ranges around the edit stretch
+    /// over the new text, ranges cut by it are trimmed, and ranges inside the
+    /// replaced text are gone.
+    pub fn map(&self, from: usize, to: usize) -> Option<(usize, usize)> {
+        let shift = |at: usize| at - self.old_end + self.new_end;
+        if to <= self.start {
+            return Some((from, to));
+        }
+        if from >= self.old_end {
+            return Some((shift(from), shift(to)));
+        }
+        let from = if from <= self.start {
+            from
+        } else {
+            self.new_end
+        };
+        let to = if to >= self.old_end {
+            shift(to)
+        } else {
+            self.start
+        };
+        (from < to).then_some((from, to))
+    }
+}
+impl Analysis {
+    /// Last results moved through an edit, so the buffer keeps its colours,
+    /// markers and gutter until fresh analysis arrives instead of flashing.
+    pub fn remapped(&self, edit: Edit) -> Self {
+        let tokens = self
+            .tokens
+            .iter()
+            .filter_map(|t| {
+                let (from, to) = edit.map(t.from, t.to)?;
+                Some(Token {
+                    from,
+                    to,
+                    kind: t.kind.clone(),
+                })
+            })
+            .collect();
+        let diagnostics = self
+            .diagnostics
+            .iter()
+            .filter_map(|d| {
+                let (from, to) = edit.map(d.from, d.to)?;
+                Some(Diagnostic {
+                    from,
+                    to,
+                    ..d.clone()
+                })
+            })
+            .collect();
+        let changes = self
+            .changes
+            .iter()
+            .filter_map(|c| {
+                let (from, to) = edit.map(c.from, c.to)?;
+                Some(Change {
+                    from,
+                    to,
+                    ..c.clone()
+                })
+            })
+            .collect();
+        let folds = self
+            .folds
+            .iter()
+            .filter_map(|f| {
+                let (from, to) = edit.map(f.from, f.to)?;
+                Some(Fold { from, to })
+            })
+            .collect();
+        Self {
+            diagnostics,
+            changes,
+            folds,
+            tokens,
+        }
+    }
+}
+impl Diagnostic {
+    pub fn range(&self) -> Range<usize> {
+        self.from..self.to
+    }
+    pub fn priority(&self) -> u8 {
+        match self.severity.as_str() {
+            "error" => 3,
+            "warning" => 2,
+            "info" => 1,
+            _ => 0,
+        }
+    }
+}
+
+pub fn analyze(path: &str, source: &str, original: Option<&str>) -> Result<Analysis, String> {
+    // A headless worker must finish parsing the whole document. A fixed two
+    // seconds interrupts large TSX files (and their diff baseline) before the
+    // complete tree can be published. Keep small requests short and all work
+    // bounded, while allowing about one second per 64 KiB of actual input.
+    let bytes = source.len().saturating_add(
+        original
+            .filter(|original| *original != source)
+            .map_or(0, str::len),
+    );
+    let budget = Duration::from_secs(bytes.div_ceil(64 * 1024).clamp(2, 30) as u64);
+    analyze_within(path, source, original, budget)
+}
+
+fn analyze_within(
+    path: &str,
+    source: &str,
+    original: Option<&str>,
+    budget: Duration,
+) -> Result<Analysis, String> {
+    let runtime = Runtime::new().map_err(|e| e.to_string())?;
+    runtime.set_memory_limit(64 * 1024 * 1024);
+    runtime.set_max_stack_size(2 * 1024 * 1024);
+    let deadline = thread_cpu_time() + budget;
+    runtime.set_interrupt_handler(Some(Box::new(move || thread_cpu_time() > deadline)));
+    let context = Context::full(&runtime).map_err(|e| e.to_string())?;
+    let json = context
+        .with(|ctx| -> rquickjs::Result<String> {
+            ctx.eval::<(), _>(include_str!("../assets/native-editor.js"))?;
+            let function: Function = ctx.globals().get("vorkspaceAnalyze")?;
+            function
+                .call::<_, Promise>((path, source, original))?
+                .finish()
+        })
+        // An interrupted job leaves the async call pending forever, which
+        // rquickjs reports as a dead lock. Name the real cause.
+        .map_err(|e| {
+            if thread_cpu_time() > deadline {
+                format!("analysis exceeded its {budget:?} budget")
+            } else {
+                e.to_string()
+            }
+        })?;
+    let mut analysis: Analysis = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    // CodeMirror offsets are UTF-16, while native selection/IME uses UTF-8.
+    let offsets = byte_offsets(source);
+    let byte = |at: usize| offsets[at.min(offsets.len() - 1)];
+    for diagnostic in &mut analysis.diagnostics {
+        diagnostic.from = byte(diagnostic.from);
+        diagnostic.to = byte(diagnostic.to);
+    }
+    for change in &mut analysis.changes {
+        change.from = byte(change.from);
+        change.to = byte(change.to);
+        let offsets = byte_offsets(&change.original);
+        for token in &mut change.tokens {
+            token.from = offsets[token.from.min(offsets.len() - 1)];
+            token.to = offsets[token.to.min(offsets.len() - 1)];
+        }
+    }
+    for token in &mut analysis.tokens {
+        token.from = byte(token.from);
+        token.to = byte(token.to);
+    }
+    for fold in &mut analysis.folds {
+        fold.from = byte(fold.from);
+        fold.to = byte(fold.to);
+    }
+    Ok(analysis)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn frontend_parsers_report_real_syntax_errors_and_keep_grammar_gap_filters() {
+        for (path, source) in [
+            ("a.tsx", "export const App = () => <div>hello</div>;"),
+            (
+                "a.ts",
+                "const isKey = (x: unknown): x is [string, number] => true;",
+            ),
+            ("a.css", "@source '../src';"),
+            ("a.rs", "fn main() { let Some(a) = None else { return }; }"),
+        ] {
+            assert!(
+                analyze(path, source, None).unwrap().diagnostics.is_empty(),
+                "{path}"
+            );
+        }
+        for (path, source) in [
+            ("a.json", "{\"x\": }"),
+            ("a.js", "const x = ;"),
+            ("a.py", "def broken(:\n pass"),
+        ] {
+            let errors = analyze(path, source, None).unwrap().diagnostics;
+            assert!(!errors.is_empty(), "{path}");
+            assert!(errors.iter().all(|d| d.from < d.to
+                && source.is_char_boundary(d.from)
+                && source.is_char_boundary(d.to)));
+        }
+    }
+    #[test]
+    fn frontend_chunks_and_diagnostics_keep_unicode_byte_positions() {
+        let source = "const emoji = '🙂';\nconst x = ;\n";
+        let result = analyze("a.js", source, Some("const emoji = '🙂';\nconst x = 1;\n")).unwrap();
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].kind, "mod");
+        assert_eq!(result.changes[0].from, source.find("const x").unwrap());
+        assert!(result.diagnostics[0].from >= source.find("const x").unwrap());
+        assert!(source.is_char_boundary(result.diagnostics[0].to));
+    }
+}
+
+#[cfg(test)]
+mod parity_tests;
+
+#[cfg(test)]
+mod edit_tests {
+    use super::*;
+
+    #[test]
+    fn edits_trim_shared_text_on_character_boundaries() {
+        assert_eq!(Edit::between("abc", "abc"), None);
+        assert_eq!(
+            Edit::between("let a;", "let ab;"),
+            Some(Edit {
+                start: 5,
+                old_end: 5,
+                new_end: 6
+            })
+        );
+        // é and è share their first UTF-8 byte; the edit covers whole chars.
+        assert_eq!(
+            Edit::between("aéb", "aèb"),
+            Some(Edit {
+                start: 1,
+                old_end: 3,
+                new_end: 3
+            })
+        );
+    }
+
+    #[test]
+    fn remapping_keeps_colours_through_an_edit() {
+        let token = |from, to| Token {
+            from,
+            to,
+            kind: "var(--syntax-string)".into(),
+        };
+        let analysis = Analysis {
+            tokens: vec![token(0, 3), token(4, 9), token(10, 12)],
+            ..Default::default()
+        };
+        // Typing inside the middle token stretches it; later ones shift.
+        let typed = Edit::between("let \"abc\" x;", "let \"abXc\" x;").unwrap();
+        let spans: Vec<_> = analysis
+            .remapped(typed)
+            .tokens
+            .iter()
+            .map(|t| (t.from, t.to))
+            .collect();
+        assert_eq!(spans, [(0, 3), (4, 10), (11, 13)]);
+        // Deleting a token's whole text drops it.
+        let gone = Edit {
+            start: 4,
+            old_end: 9,
+            new_end: 4,
+        };
+        assert_eq!(analysis.remapped(gone).tokens.len(), 2);
+    }
+}

@@ -1,4 +1,3 @@
-import { IS_WIN } from "../platform/platform.js";
 function windowsPath(path) {
   return (
     /^[A-Za-z]:[\\/]/.test(path) ||
@@ -7,7 +6,7 @@ function windowsPath(path) {
   );
 }
 export function slash(path) {
-  return windowsPath(path) || (IS_WIN && !path.startsWith("/"))
+  return windowsPath(path)
     ? path.replace(/\\/g, "/")
     : path;
 }

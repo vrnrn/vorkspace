@@ -3,12 +3,7 @@ use super::{
     TranscriptView,
     live_phase::{LiveScroll, live_phase},
 };
-use crate::clock::Instant;
-use crate::theme::*;
-use crate::{
-    markdown, markdown_model,
-    reveal::{Disclosure, Motion},
-};
+use crate::markdown;
 use gpui::{
     AnyElement, Context, Pixels, Role, SharedString, Transformation, div, percentage, prelude::*,
     px, rgb,
@@ -21,6 +16,10 @@ use vorkspace_core::tool::{
     ToolCall, ToolState,
     tasks::{AgentRun, AgentStep, Panel, TaskList, TaskStatus},
 };
+use vorkspace_model::markdown_model;
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::reveal::{Disclosure, Motion};
+use vorkspace_ui::theme::*;
 
 pub(super) fn render(
     view: &mut TranscriptView,

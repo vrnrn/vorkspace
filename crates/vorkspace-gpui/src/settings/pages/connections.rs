@@ -6,7 +6,6 @@ use crate::{
         Section, SettingsView,
         widgets::{red, secondary_button},
     },
-    theme::*,
 };
 use gpui::{
     AnyElement, Context, Div, Focusable, FontWeight, Role, SharedString, Task, Window, div,
@@ -19,6 +18,7 @@ use std::{
     time::Duration,
 };
 use vorkspace_core::remote::{Connections, JobView, Machine};
+use vorkspace_ui::theme::*;
 
 const TARGET: &str = "SSH target";
 const NAME: &str = "Machine name";
@@ -758,7 +758,7 @@ impl SettingsView {
                     .text_center()
                     .text_size(px(13.))
                     .text_color(content(0.45))
-                    .child("Add your always-on Windows, Mac, or Linux machine to get started.")
+                    .child("Add your always-on Mac or Linux machine to get started.")
                     .into_any_element(),
             );
         }
@@ -775,7 +775,7 @@ impl SettingsView {
                     .child(if self.connections.advanced { "▾ Advanced" } else { "▸ Advanced" })
                     .on_click(cx.listener(|this, _, _, cx| { this.connections.advanced = !this.connections.advanced; cx.notify(); })))
                 .when(self.connections.advanced, |d| d.child(div().max_w(px(160.)).child(port)))
-                .child(paragraph("vorkspace installs and starts its background host, then connects securely. Your SSH keys and config are used automatically. Enable SSH on the host and sign in to Codex or Claude Code there. On Windows and Mac, keep the host’s desktop account signed in and the machine awake. Locking the desktop is fine."))
+                .child(paragraph("vorkspace installs and starts its background host, then connects securely. Your SSH keys and config are used automatically. Enable SSH on the host and sign in to Codex or Claude Code there. On a Mac, keep the host’s desktop account signed in and the machine awake. Locking the desktop is fine."))
                 .child(paragraph("On Linux, setup installs a systemd user service and turns on lingering for your account (loginctl enable-linger), so the host and your other user services keep running after you log out. Without systemd, as in many containers and microVMs, the host runs as a background process instead and is started again when you reconnect. The host keeps running until you stop it on that machine; removing it here only disconnects this desktop."))
                 .child(div().flex().justify_end().gap_2()
                     .child(secondary_button("cancel-machine", "Cancel", false, busy).child("Cancel").on_click(cx.listener(|this, _, _, cx| {
@@ -946,7 +946,7 @@ impl SettingsView {
             .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(format!("Remove {} from this desktop?", machine.name)))
             .child(paragraph("This closes this desktop’s connection to the machine. It does not stop the host, and its sessions keep running and stay on that machine. You can add it again later."))
             .child(paragraph("Removing alone leaves this desktop’s credential valid on the host. Revoke access to invalidate it first; the machine must be reachable."))
-            .child(paragraph("To stop the host and turn off its background service, run ~/.vorkspace-host/bin/vorkspace-host service uninstall on that machine (%USERPROFILE%\\.vorkspace-host\\bin\\vorkspace-host.cmd service uninstall on Windows). Its sessions and history are kept."))
+            .child(paragraph("To stop the host and turn off its background service, run ~/.vorkspace-host/bin/vorkspace-host service uninstall on that machine. Its sessions and history are kept."))
             .child(div().flex().flex_wrap().gap_2()
                 .child(secondary_button("revoke-remove-machine", "Revoke access and remove", true, disabled).child("Revoke access and remove")
                     .on_click(cx.listener(move |this, _, _, cx| this.remove_connection(revoke_machine.clone(), true, cx))))

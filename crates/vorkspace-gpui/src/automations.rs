@@ -4,8 +4,6 @@ use crate::{
     input::{self, Input},
     pickers::{ModelList, ModelPicked, ProjectPicked, ProjectPicker, cached_model_name},
     popover::{Anchor, AnchorSlot, popover},
-    runtime::{Database, locked},
-    theme::*,
 };
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Role, SharedString,
@@ -24,6 +22,8 @@ use vorkspace_core::{
     provider::Kind,
     session_groups::Folder,
 };
+use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::theme::*;
 
 mod editor;
 mod gallery;
@@ -77,7 +77,7 @@ struct Editor {
     draft: AutomationUpsert,
     name: Entity<Input>,
     prompt: Entity<Input>,
-    completion: Entity<crate::composer_completion::Completion>,
+    completion: Entity<crate::composer::composer_completion::Completion>,
     fields: Vec<TriggerFields>,
     saved: bool,
     dirty: bool,
@@ -377,9 +377,12 @@ impl Automations {
             input
         });
         let completion = cx.new(|cx| {
-            let completion =
-                crate::composer_completion::Completion::new(prompt.clone(), draft.cwd.clone(), cx)
-                    .inline_field();
+            let completion = crate::composer::composer_completion::Completion::new(
+                prompt.clone(),
+                draft.cwd.clone(),
+                cx,
+            )
+            .inline_field();
             if let Some(store) = &self.database {
                 completion.with_store(store.clone())
             } else {

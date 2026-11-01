@@ -1,8 +1,8 @@
 //! Channel conversations use the existing native input, Markdown and approval owners.
 use super::*;
-use crate::clock::Instant;
 use gpui::FontWeight;
 use std::sync::Arc;
+use vorkspace_ui::clock::Instant;
 
 impl Bots {
     pub(in crate::bots) fn send_channel_message(&mut self, channel: &str, cx: &mut Context<Self>) {
@@ -139,7 +139,7 @@ impl Bots {
                     .message_cache
                     .entry(key.clone())
                     .or_insert_with(|| {
-                        let mut parser = crate::markdown_model::MarkdownParser::new();
+                        let mut parser = vorkspace_model::markdown_model::MarkdownParser::new();
                         parser.set_text(message["text"].as_str().unwrap_or_default());
                         Arc::new(
                             parser
@@ -177,7 +177,7 @@ impl Bots {
         let bot_mentions = members
             .iter()
             .filter_map(|id| self.roster.get(id))
-            .map(|bot| crate::composer_completion::BotMention {
+            .map(|bot| crate::composer::composer_completion::BotMention {
                 id: bot.id.clone(),
                 name: bot.label(),
                 mascot: bot.mascot.clone(),
@@ -189,7 +189,7 @@ impl Bots {
             completion.clone()
         } else {
             let completion = cx.new(|cx| {
-                crate::composer_completion::Completion::bot_mentions(
+                crate::composer::composer_completion::Completion::bot_mentions(
                     input.clone(),
                     bot_mentions,
                     cx,

@@ -1,5 +1,7 @@
 //! Native menus dispatch through the same workspace and editor action owners.
-use crate::{file_editor as editor, image_lightbox, input, settings::Preferences, shell};
+use crate::{
+    file_tools::file_editor as editor, image_lightbox, input, settings::Preferences, shell,
+};
 use gpui::{
     Action, AnyWindowHandle, App, Global, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType,
     actions,
@@ -48,7 +50,7 @@ fn workspace_fallback<A: Action>(cx: &mut App) {
                 }
                 cx.activate(true);
                 window.activate_window();
-                crate::traffic_lights::show(window);
+                vorkspace_ui::traffic_lights::show(window);
                 window.focus(&focus, cx);
                 focus.dispatch_action(action.as_ref(), window, cx);
             });
@@ -70,7 +72,7 @@ actions!(
     ]
 );
 
-pub(crate) fn clipboard_route(action: crate::status_menu::Action, cx: &mut App) {
+pub(crate) fn clipboard_route(action: vorkspace_macos::status_menu::Action, cx: &mut App) {
     let Some(target) = workspace_target(cx) else {
         return;
     };
@@ -98,10 +100,10 @@ pub(crate) fn init(cx: &mut App) {
         });
     });
     cx.on_action(|_: &crate::clipboard::Settings, cx| {
-        clipboard_route(crate::status_menu::Action::Settings, cx)
+        clipboard_route(vorkspace_macos::status_menu::Action::Settings, cx)
     });
     cx.on_action(|_: &crate::clipboard::Composer, cx| {
-        clipboard_route(crate::status_menu::Action::QuickComposer, cx)
+        clipboard_route(vorkspace_macos::status_menu::Action::QuickComposer, cx)
     });
     macro_rules! workspace_commands {
         ($($action:ty),+ $(,)?) => { $(workspace_fallback::<$action>(cx);)+ };
@@ -158,7 +160,7 @@ pub(crate) fn init(cx: &mut App) {
                 .orderFrontStandardAboutPanel(None);
         }
     });
-    cx.on_action(|_: &CheckUpdates, cx| crate::updater::check(cx));
+    cx.on_action(|_: &CheckUpdates, cx| vorkspace_macos::updater::check(cx));
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());

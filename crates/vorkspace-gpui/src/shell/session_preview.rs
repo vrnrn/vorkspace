@@ -1,11 +1,12 @@
 //! Hover cards for unopened sessions do not construct conversation entities.
-use crate::{pickers::cached_model_name, theme::*};
+use crate::pickers::cached_model_name;
 use gpui::{AnyElement, FontWeight, div, prelude::*, px};
 use std::path::Path;
 use vorkspace_core::{
     provider::Kind,
     store::{Session, SessionPreviewData},
 };
+use vorkspace_ui::theme::*;
 
 pub(super) fn render(
     summary: &Session,

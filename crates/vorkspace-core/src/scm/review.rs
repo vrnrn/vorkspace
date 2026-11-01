@@ -113,7 +113,6 @@ struct DiskVersion {
     len: u64,
     modified: Option<SystemTime>,
     created: Option<SystemTime>,
-    #[cfg(unix)]
     identity: (u64, u64, i64, i64),
 }
 
@@ -182,7 +181,6 @@ pub fn file_diff_versions(
                     len: meta.len(),
                     modified: meta.modified().ok(),
                     created: meta.created().ok(),
-                    #[cfg(unix)]
                     identity: {
                         use std::os::unix::fs::MetadataExt;
                         (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())

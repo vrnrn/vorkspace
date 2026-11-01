@@ -1,14 +1,12 @@
 //! Notes use shared Markdown rendering with their desktop image asset paths.
-use crate::clock::Instant;
-use crate::{
-    markdown::{self, MarkdownRow, Part, Tone},
-    markdown_model,
-    runtime::{Database, locked},
-    theme::*,
-};
+use crate::markdown::{self, MarkdownRow, Part, Tone};
 use gpui::{AnyElement, Context, ImageSource, Render, Role, Window, div, img, prelude::*, px};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::path::Path;
+use vorkspace_model::markdown_model;
+use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::theme::*;
 
 enum Row {
     Markdown(MarkdownRow),

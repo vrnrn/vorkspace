@@ -100,7 +100,7 @@ fn run_wakes(cx: &mut TestAppContext, span: Duration) -> Vec<Duration> {
 #[gpui::test]
 fn sidebar_pointer_events_notify_the_painted_owner(cx: &mut TestAppContext) {
     // Suppressed clock frames isolate pointer-driven invalidation.
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     let (window, view, _) = open(cx);
     // Isolate the rail listener: the preview has its own pointer listener.
     view.update(cx, |view, cx| {
@@ -138,7 +138,7 @@ fn sidebar_pointer_events_notify_the_painted_owner(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn sidebar_gaze_is_isolated_and_cleaned_up_per_window(cx: &mut TestAppContext) {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     let (first, first_view, _) = open(cx);
     let (second, second_view, _) = open(cx);
     for view in [&first_view, &second_view] {
@@ -187,7 +187,7 @@ fn sidebar_gaze_is_isolated_and_cleaned_up_per_window(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn idle_surfaces_share_sparse_beat_wakes_instead_of_a_frame_loop(cx: &mut TestAppContext) {
-    let _clock = crate::clock::use_test_clock_with_endless_frames(cx);
+    let _clock = vorkspace_ui::clock::use_test_clock_with_endless_frames(cx);
     let (_window, view, _) = open(cx);
     let frames = notices(cx, &view);
     let span = Duration::from_secs(120);
@@ -210,7 +210,7 @@ fn idle_surfaces_share_sparse_beat_wakes_instead_of_a_frame_loop(cx: &mut TestAp
 
 #[gpui::test]
 fn working_and_attention_ticks_return_to_sparse_idle_life(cx: &mut TestAppContext) {
-    let _clock = crate::clock::use_test_clock_with_endless_frames(cx);
+    let _clock = vorkspace_ui::clock::use_test_clock_with_endless_frames(cx);
     let (_window, view, _) = open(cx);
     let renders = notices(cx, &view);
     for status in ["working", "needs-you"] {

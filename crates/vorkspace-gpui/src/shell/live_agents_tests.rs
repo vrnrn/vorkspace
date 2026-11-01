@@ -2,7 +2,7 @@ use super::*;
 use gpui::{TestAppContext, VisualTestContext, WindowHandle};
 
 fn fixture(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     super::super::tests::window(cx)
 }
 fn busy(window: WindowHandle<Shell>, id: i64, running: bool, cx: &mut TestAppContext) {
@@ -313,7 +313,7 @@ fn native_activity_capture() {
             )))
         },
     );
-    cx.update(|cx| crate::clock::use_test_clock(cx));
+    cx.update(|cx| vorkspace_ui::clock::use_test_clock(cx));
     for theme in ["dark", "light", "harbor"] {
         for (name, compact, expanded, height, single) in [
             ("expanded", false, false, 800., false),
@@ -432,7 +432,7 @@ fn native_activity_capture() {
                     })
                     .unwrap();
             }
-            crate::clock::settle_headless_animations(window, &mut cx);
+            vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
             cx.capture_screenshot(window.into())
                 .unwrap()
                 .save(output.join(format!("working-{theme}-{name}.png")))
@@ -489,7 +489,7 @@ fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clo
         .unwrap();
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.run_until_parked();
-    crate::clock::settle_animations(window, visual);
+    vorkspace_ui::clock::settle_animations(window, visual);
     let focus = visual.update(|w, cx| w.focused(cx));
     let (snapshots, started) = window
         .update(visual, |shell, _, cx| {
@@ -576,7 +576,7 @@ impl Render for MotionHost {
     }
 }
 fn motion_fixture(cx: &mut TestAppContext, count: usize) -> WindowHandle<MotionHost> {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     cx.add_window(|_, cx| {
         let card = cx.new(|cx| {
             let mut card = LiveAgents::new(gpui::WeakEntity::new_invalid(), cx);

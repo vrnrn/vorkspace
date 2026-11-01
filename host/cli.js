@@ -27,7 +27,6 @@ import { createHostServer } from "./server.js";
 import { REMOTE_PROVIDERS } from "./runtime/models/connections/protocol.js";
 import { connectionInfo, installService, uninstallService } from "./service.js";
 import { version } from "../package.json";
-import { protectWindowsDirectory } from "./windows.js";
 process.umask(0o077);
 // npm-based providers can launch Node subprocesses without a separate Node
 // installation. Keep the packaged runtime first in the host's own PATH.
@@ -70,7 +69,7 @@ async function main() {
     return;
   }
   if (command === "help" || command === "--help") {
-    console.log(`vorkspace Host (experimental; Node 24+; Windows/Linux/macOS)
+    console.log(`vorkspace Host (experimental; Node 24+; Linux/macOS)
   serve                 Run in foreground on 127.0.0.1
   start                 Run detached from this terminal
   service install       Install/start the persistent user service
@@ -88,8 +87,7 @@ Connect another computer using an SSH forward to the loopback port.`);
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     throw new Error("Invalid port");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (process.platform === "win32") await protectWindowsDirectory(directory);
-  else chmodSync(directory, 0o700);
+  chmodSync(directory, 0o700);
   if (command === "connection-info") {
     console.log(JSON.stringify(await connectionInfo(directory)));
     return;
@@ -157,14 +155,13 @@ Connect another computer using an SSH forward to the loopback port.`);
       ],
       {
         detached: true,
-        windowsHide: true,
         stdio: ["ignore", log, log],
         env: process.env,
       },
     );
     child.unref();
     closeSync(log);
-    for (let i = 0; i < (process.platform === "win32" ? 150 : 50); i++) {
+    for (let i = 0; i < 50; i++) {
       await new Promise((resolve) => setTimeout(resolve, 100));
       const state = readRunning();
       if (state && state.pid === child.pid) {

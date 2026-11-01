@@ -34,7 +34,7 @@ fn peer_message() -> Message {
 
 fn chat(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     cx.update(|cx| {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         input::bind(cx);
         let store = Store::open(Path::new(":memory:")).unwrap();
         let summary = store.create("codex", "/private/tmp/bot-queue-ui").unwrap();
@@ -342,14 +342,14 @@ fn bot_plus_menu_and_saved_draft_card_share_session_actions(cx: &mut TestAppCont
         })
         .unwrap();
     visual.run_until_parked();
-    crate::clock::settle_animations(window, visual);
+    vorkspace_ui::clock::settle_animations(window, visual);
     assert!(visual.debug_bounds("edit-message-draft").is_some());
     assert!(visual.debug_bounds("remove-message-draft").is_some());
     assert!(visual.debug_bounds("send-message-draft").is_some());
     for width in [260., 360., 900.] {
         visual.simulate_resize(size(px(width), px(680.)));
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         for selector in [
             "edit-message-draft",
             "remove-message-draft",
@@ -537,7 +537,7 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.simulate_resize(size(px(900.), px(680.)));
     visual.run_until_parked();
-    crate::clock::settle_animations(window, visual);
+    vorkspace_ui::clock::settle_animations(window, visual);
     let edit = visual.debug_bounds("edit-message-draft").unwrap().center();
     visual.simulate_click(edit, Default::default());
     visual.simulate_keystrokes("cmd-a");
@@ -759,7 +759,6 @@ fn restart_consumes_only_the_composer_revision_that_became_a_saved_bot_draft(
     }
 }
 
-#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "Requires Metal and VORKSPACE_BOT_DRAFT_CAPTURE_DIR"]
 fn native_bot_draft_and_add_menu_capture() {
@@ -780,13 +779,13 @@ fn native_bot_draft_and_add_menu_capture() {
             )))
         },
     );
-    crate::clock::use_test_clock(&cx);
+    vorkspace_ui::clock::use_test_clock(&cx);
     for light in [false, true] {
         let prefs = crate::settings::Preferences {
             theme: if light { "light" } else { "dark" }.into(),
             ..Default::default()
         };
-        crate::theme::configure(&prefs, false, true);
+        vorkspace_ui::theme::configure(&prefs, false, true);
         cx.update(|cx| {
             cx.set_global(prefs);
             input::bind(cx);
@@ -833,7 +832,7 @@ fn native_bot_draft_and_add_menu_capture() {
         })
         .unwrap();
         cx.run_until_parked();
-        crate::clock::settle_headless_animations(window, &mut cx);
+        vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
         let theme = if light { "light" } else { "dark" };
         cx.capture_screenshot(window.into())
             .unwrap()
@@ -850,7 +849,7 @@ fn native_bot_draft_and_add_menu_capture() {
         })
         .unwrap();
         cx.run_until_parked();
-        crate::clock::settle_headless_animations(window, &mut cx);
+        vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
         cx.capture_screenshot(window.into())
             .unwrap()
             .save(output.join(format!("bot-menu-{theme}.png")))
@@ -858,7 +857,7 @@ fn native_bot_draft_and_add_menu_capture() {
         cx.update_window(window.into(), |_, window, _| window.remove_window())
             .unwrap();
     }
-    crate::theme::configure(&Default::default(), false, true);
+    vorkspace_ui::theme::configure(&Default::default(), false, true);
 }
 
 #[gpui::test]
@@ -1060,7 +1059,7 @@ fn background_and_peer_errors_show_recovery_controls_once(cx: &mut TestAppContex
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.simulate_resize(size(px(360.), px(600.)));
     visual.run_until_parked();
-    crate::clock::settle_animations(window, visual);
+    vorkspace_ui::clock::settle_animations(window, visual);
     assert!(visual.debug_bounds("bot-background-update-error").is_some());
     assert!(visual.debug_bounds("bot-pending-peer").is_some());
     for selector in [
@@ -1078,7 +1077,7 @@ fn background_and_peer_errors_show_recovery_controls_once(cx: &mut TestAppContex
         );
         visual.simulate_click(button.center(), Default::default());
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
     }
     assert_eq!(
         *events.borrow(),
@@ -1097,7 +1096,7 @@ fn background_and_peer_errors_show_recovery_controls_once(cx: &mut TestAppContex
         })
         .unwrap();
     visual.run_until_parked();
-    crate::clock::settle_animations(window, visual);
+    vorkspace_ui::clock::settle_animations(window, visual);
     assert!(visual.debug_bounds("bot-background-update-error").is_none());
     assert!(visual.debug_bounds("bot-pending-retry-peer").is_some());
     assert!(visual.debug_bounds("bot-pending-discard-peer").is_some());
@@ -1253,7 +1252,7 @@ fn card_save_admission_stays_responsive_and_publishes_latest_at_the_current_row(
         })
         .unwrap();
     drop(guard);
-    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+    cx.update(|cx| vorkspace_runtime::runtime::card_persistence::finish_for_test(cx));
     cx.run_until_parked();
     window
         .update(cx, |view, _, cx| {
@@ -1300,7 +1299,7 @@ fn committed_card_refresh_survives_a_new_submission_and_the_next_refresh(cx: &mu
         drop(guard);
         // Wait for the actual worker's commit without handling the UI receipt
         // or closing the worker that must perform the following refresh.
-        cx.update(|cx| crate::runtime::card_persistence::wait_for_saves_for_test(cx));
+        cx.update(|cx| vorkspace_runtime::runtime::card_persistence::wait_for_saves_for_test(cx));
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(
                 &locked(&store).unwrap().load(session).unwrap().rows[index].text
@@ -1357,7 +1356,7 @@ fn committed_card_refresh_survives_a_new_submission_and_the_next_refresh(cx: &mu
                 assert!(!view.bot_ui.card_versions.is_empty());
             })
             .unwrap();
-        cx.update(|cx| crate::runtime::card_persistence::wait_for_saves_for_test(cx));
+        cx.update(|cx| vorkspace_runtime::runtime::card_persistence::wait_for_saves_for_test(cx));
         cx.run_until_parked();
         window
             .update(cx, |view, _, cx| {
@@ -1376,7 +1375,7 @@ fn committed_card_refresh_survives_a_new_submission_and_the_next_refresh(cx: &mu
             "Latest"
         );
     }
-    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+    cx.update(|cx| vorkspace_runtime::runtime::card_persistence::finish_for_test(cx));
 }
 
 #[gpui::test]
@@ -1415,7 +1414,7 @@ fn card_save_completion_keeps_replacements_and_reconciles_new_submissions(cx: &m
     }
     drop(guard1);
     drop(guard2);
-    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+    cx.update(|cx| vorkspace_runtime::runtime::card_persistence::finish_for_test(cx));
     cx.run_until_parked();
     for (fixture, replacement) in [(&first, true), (&second, false)] {
         let (window, store, id, index, _) = fixture;

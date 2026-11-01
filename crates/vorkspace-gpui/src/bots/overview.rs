@@ -1,7 +1,7 @@
 //! Bot details content inside the shell's shared right sidebar.
 use super::panel_stack::{PanelStack, Pose};
 use super::*;
-use crate::clock::Instant;
+use vorkspace_ui::clock::Instant;
 
 impl Bots {
     pub(crate) fn native_detail_content(&self, cx: &App) -> bool {

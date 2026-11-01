@@ -18,11 +18,6 @@ target/
 coverage/
 *.dmg
 *.app/
-*.msi
-*.exe
-*.deb
-*.rpm
-*.AppImage
 *.tar.gz
 *.zip
 latest.json
@@ -38,9 +33,6 @@ npm-debug.log*
 ._*
 .Spotlight-V100
 .Trashes
-Thumbs.db
-ehthumbs.db
-Desktop.ini
 
 # Patches for review, never pushed
 /.work/
@@ -52,3 +44,21 @@ Desktop.ini
 # Python tooling caches
 __pycache__/
 *.py[cod]
+
+# Local agent state
+.claude/
+.impeccable/
+
+# Databases and native tooling output
+*.db
+*.db-shm
+*.db-wal
+DerivedData/
+xcuserdata/
+.swiftpm/
+
+# Editor leftovers
+*.swp
+*~
+*.orig
+*.rej

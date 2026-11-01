@@ -19,7 +19,7 @@ function resolveNativeEnv(base = process.env) {
 }
 const nativeEnv = resolveNativeEnv(process.env);
 // The first Cargo build on a fresh Windows runner can exceed one minute.
-const cargoTimeout = process.platform === "win32" ? 180_000 : 60_000;
+const cargoTimeout = 60_000;
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "vorkspace-dependency-guard-"));

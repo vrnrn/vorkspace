@@ -1,11 +1,9 @@
 //! ReminderNotices.tsx. Persistence and opening sessions belong to the host.
-use crate::{
-    popover::{Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, menu_popover},
-    theme::*,
-};
+use crate::popover::{Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, menu_popover};
 use chrono::{Local, TimeZone};
 use gpui::{Context, Entity, EventEmitter, Role, Subscription, Window, div, prelude::*, px};
 use vorkspace_core::session_groups::{reminder_at, reminder_presets};
+use vorkspace_ui::theme::*;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Snapshot {

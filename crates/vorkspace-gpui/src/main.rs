@@ -4,86 +4,44 @@ mod app_menu;
 mod assets;
 mod automations;
 mod bots;
-mod changes;
 mod clipboard;
-mod clock;
-mod composer_completion;
-mod composer_motion;
-mod context_meter;
+mod composer;
 mod controls;
 mod conversation;
 mod dev_reload;
 mod diagrams;
-mod diff_view;
-mod editor_analysis;
-mod editor_scrollbar;
-mod editor_syntax;
-mod explorer;
-mod file_editor;
-mod file_icons;
+mod file_tools;
 mod fixtures;
-mod fonts;
-mod git_cache;
-mod git_graph;
-mod git_picker;
-mod git_status;
-#[cfg(not(test))]
-mod global_hotkey;
-#[cfg(target_os = "macos")]
-mod hang_diagnostics;
-mod history;
+mod git_tools;
 mod image_lightbox;
 mod inbox;
 mod input;
 mod liquid;
 mod markdown;
-mod markdown_model;
 #[cfg(test)]
 mod metal_tests;
 mod notes;
 mod notifications;
-mod pane_layout;
-mod pane_motion;
 mod pickers;
 mod popover;
 mod project_background;
-mod project_search;
 mod project_settings;
 mod project_tabs;
-mod questions;
-mod quick_composer;
-mod quick_open;
-mod reflow_motion;
 mod resource_pressure;
 mod response_actions;
-mod restart;
-mod reveal;
-mod review;
 mod right_panel;
-mod runtime;
 mod search;
-mod session_mark;
-mod session_review;
 mod settings;
 mod shell;
 mod sound;
-mod status_menu;
 mod syntax;
-mod tab_label;
-mod tab_motion;
 mod terminal;
-mod theme;
 mod todos;
-mod traffic_lights;
 mod transcript;
-mod updater;
 mod usage_footer;
 mod visuals;
 mod vox;
-mod webkit;
-mod window_appearance;
 mod workspace;
-mod worktree_switcher;
 
 use gpui::{
     App, Bounds, KeyBinding, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
@@ -115,7 +73,7 @@ fn restart(cx: &mut App) {
         cx.background_executor()
             .spawn(async { vorkspace_core::process::shutdown_all() })
             .await;
-        if let Err(error) = restart::relaunch_self() {
+        if let Err(error) = vorkspace_macos::restart::relaunch_self() {
             eprintln!("Could not schedule restart: {error}");
             return;
         }
@@ -392,29 +350,26 @@ fn main() {
     }
     let sidebar_metadata = db.session_sidebar_metadata(&projects);
     let db = Arc::new(Mutex::new(db));
-    #[cfg(target_os = "macos")]
     let diagnostics_path = std::path::absolute(&database)
         .ok()
         .and_then(|path| path.parent().map(|root| root.join("diagnostics")));
-    let platform = gpui_platform::current_platform(false);
-    gpui::Application::with_platform(platform)
+    gpui::Application::with_platform(std::rc::Rc::new(gpui_macos::MacPlatform::new(false)))
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
-            #[cfg(target_os = "macos")]
             if let Some(path) = diagnostics_path {
-                hang_diagnostics::start(cx, path);
+                vorkspace_macos::hang_diagnostics::start(cx, path);
             }
             dev_reload::install(cx);
-            updater::start(cx);
+            vorkspace_macos::updater::start(cx);
             app_menu::init(cx);
             input::bind(cx);
             image_lightbox::bind(cx);
-            composer_completion::bind(cx);
-            file_editor::bind(cx);
+            composer::composer_completion::bind(cx);
+            file_tools::file_editor::bind(cx);
             popover::bind(cx);
-            explorer::bind(cx);
-            history::bind(cx);
-            diff_view::bind(cx);
+            file_tools::explorer::bind(cx);
+            git_tools::history::bind(cx);
+            git_tools::diff_view::bind(cx);
             terminal::bind(cx);
             let modifier = "cmd";
             cx.bind_keys([
@@ -445,8 +400,8 @@ fn main() {
                         traffic_light_position: // Original macOS chrome: 12 pt left inset, with
                             // 14 pt native buttons centered in the 40 pt bar.
                             Some(point(
-                                px(theme::TRAFFIC_LIGHT_MARGIN),
-                                px((theme::TITLE_BAR_HEIGHT - theme::TRAFFIC_LIGHT_SIZE) / 2.),
+                                px(vorkspace_ui::theme::TRAFFIC_LIGHT_MARGIN),
+                                px((vorkspace_ui::theme::TITLE_BAR_HEIGHT - vorkspace_ui::theme::TRAFFIC_LIGHT_SIZE) / 2.),
                             )),
                     }),
                     ..Default::default()
@@ -467,11 +422,11 @@ fn main() {
                         shell.focus_active(window, cx);
                     });
                     {
-                        traffic_lights::pin(window);
+                        vorkspace_ui::traffic_lights::pin(window);
                         // AppKit rebuilds the buttons on some titlebar changes.
                         shell.update(cx, |_, cx| {
                             cx.observe_window_activation(window, |_, window, _| {
-                                traffic_lights::pin(window)
+                                vorkspace_ui::traffic_lights::pin(window)
                             })
                             .detach();
                         });

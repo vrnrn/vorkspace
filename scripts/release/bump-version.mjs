@@ -19,10 +19,8 @@ function replaceVersion(source, pattern, label) {
   return source.replace(pattern, (_match, before, after) => `${before}${version}${after}`);
 }
 const manifest = replaceVersion(read("Cargo.toml"), /^(version = ")[^"]+(")/m, "workspace");
-let lock = read("Cargo.lock");
-for (const name of ["vorkspace-core", "vorkspace-gpui"]) {
-  lock = replaceVersion(lock, new RegExp(`(name = "${name}"\\nversion = ")[^"]+(")`), name);
-}
+// Every workspace crate inherits the version, so a stale lock entry fails --locked.
+const lock = replaceVersion(read("Cargo.lock"), /(name = "vorkspace-[^"]+"\nversion = ")[^"]+(")/g, "workspace crates");
 // Validate every manifest before changing any file; repeating a version is safe.
 for (const [name, value] of [
   ["package.json", JSON.stringify(packageJson, null, 2) + "\n"],

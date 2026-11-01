@@ -1,9 +1,7 @@
 use crate::settings::SettingsView;
-use crate::{
-    settings::{SettingsEvent, management::Target, widgets::icon_action},
-    theme::*,
-};
+use crate::settings::{SettingsEvent, management::Target, widgets::icon_action};
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
+use vorkspace_ui::theme::*;
 impl SettingsView {
     pub(super) fn bots_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let p = self.prefs.clone();

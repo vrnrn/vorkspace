@@ -1,6 +1,6 @@
 # Remote access (experimental)
 
-vorkspace can run Claude Code, Codex, Pi, OMP, and Antigravity sessions on a separate Windows, Linux, or macOS host. The host owns the provider processes and session database. Closing the desktop, closing a session tab, or losing the SSH tunnel does not stop a host session.
+vorkspace can run Claude Code, Codex, Pi, OMP, and Antigravity sessions on a separate macOS or Linux host. The host owns the provider processes and session database. Closing the desktop, closing a session tab, or losing the SSH tunnel does not stop a host session.
 
 A folder on a connected machine is a project in the rail, marked with a globe. Every session in it runs on that machine, in the same session view and composer as a local session. The Sessions sidebar lists that machine's sessions for the project.
 
@@ -12,12 +12,10 @@ vorkspace downloads the host package matching the desktop release and remote arc
 
 Prerequisites:
 
-- SSH must already be enabled and reachable on the host. vorkspace uses the desktop's OpenSSH client and normal SSH config, keys, and agent. Windows clients need the OpenSSH Client feature installed.
-- Hosts: Windows 10/11 or Server 2019+, Linux, or macOS, on x64 or arm64. Mac/Linux need `curl` or `wget`, `tar`, and `shasum` or `sha256sum`. Windows needs Windows PowerShell 5.1, OpenSSH Server, and Task Scheduler; no WSL or Unix shell is required. Setup detects the remote platform through SSH.
-- Install and authenticate each provider you want to use on the host under the connecting OS account. The host must be able to find its CLI on PATH or in its standard install directory. Antigravity's ACP server is available only on macOS and Linux.
+- SSH must already be enabled and reachable on the host. vorkspace uses the desktop's OpenSSH client and normal SSH config, keys, and agent.
+- Hosts: macOS or Linux, on x64 or arm64, with `curl` or `wget`, `tar`, and `shasum` or `sha256sum`. Windows machines are not supported; setup detects them through SSH and stops with that message.
+- Install and authenticate each provider you want to use on the host under the connecting OS account. The host must be able to find its CLI on PATH or in its standard install directory.
 - On Linux with systemd, setup installs a systemd user service and runs `loginctl enable-linger` for the SSH account so the host survives logout. Lingering applies to all of that account's user services, and `service uninstall` leaves it enabled. If enabling it requires administrator access, Settings displays the recovery command. On Linux without systemd (many containers and microVMs, such as Firecracker), setup starts the host as a detached background process instead. It survives SSH disconnects, but nothing restarts it if it exits or the machine reboots; the next connect starts it again. macOS needs an active desktop login; keep that Mac signed in and awake.
-- Windows uses a per-user Task Scheduler task, with no time limit, under the connecting user's normal permissions. Sign in to that same account at the Windows desktop and keep it signed in and awake. Locking the desktop and disconnecting SSH are fine; signing out or rebooting interrupts agents. The task starts again at the next login. No Windows password is stored for scheduling. This uses an interactive logon token because S4U tasks cannot access network or encrypted files. [Microsoft task logon documentation](https://learn.microsoft.com/en-us/windows/win32/taskschd/principal-logontype).
-- Windows provider discovery supports native `.exe` installations for supported providers other than Antigravity, and standard npm installations of `@openai/codex` and `@anthropic-ai/claude-code`. Those npm entry points run with the bundled Node runtime; arbitrary custom `.cmd` wrappers are not supported. SSH aliases can supply Windows domain/user names through the normal SSH config.
 
 SSH host verification and password/passphrase prompts appear in Settings. Changed host keys are rejected by OpenSSH. Passwords/passphrases are used only for the current authentication, not saved. When key/agent authentication is available, opening the remote view restores a lost tunnel automatically. If SSH needs another prompt, use **Reconnect** in Settings. Reconnecting uses the saved device credential and checks the host's identity.
 
@@ -56,7 +54,7 @@ node build/host/vorkspace-host.mjs pair --name "My laptop"
 
 `start` launches the host independently of the terminal. `pair` prints a device ID and a device token; copy the token to the receiving desktop. Create a separate credential for each desktop. Tokens grant control of the host as its OS user, including provider execution and workspace reads.
 
-The host binds only to `127.0.0.1:3774`. For compatibility with existing installations, the internal host data directory retains its legacy name. State and logs live in `~/.vorkspace-host` (`%USERPROFILE%\.vorkspace-host` on Windows). Unix permissions restrict access to the owner; Windows ACLs restrict it to the current user, SYSTEM, and Administrators. Use `--data-dir` and `--port` to override them. `serve` runs in the foreground for debugging.
+The host binds only to `127.0.0.1:3774`. For compatibility with existing installations, the internal host data directory retains its legacy name. State and logs live in `~/.vorkspace-host`. Unix permissions restrict access to the owner. Use `--data-dir` and `--port` to override them. `serve` runs in the foreground for debugging.
 
 Open an SSH tunnel from your laptop:
 
@@ -84,17 +82,16 @@ node build/host/vorkspace-host.mjs service uninstall
 
 SSH setup names each device credential after the desktop's computer name. Removing a saved connection from the desktop does not stop the host. It revokes the device credential only when you choose **Revoke access and remove**. Otherwise, use `devices` and `revoke` on the host to remove access. Stopping the host interrupts active turns; restarting retains their transcripts and marks them interrupted. No uncertain provider operation is automatically replayed after a host crash.
 
-`service uninstall` is the cleanup path for a host you no longer want running. It removes the systemd user service, the LaunchAgent, or this user's scheduled task. It then stops the host, including a manually started one, and interrupts any running turns. It never deletes the data directory. Sessions, logs, and device credentials stay in `~/.vorkspace-host` until you delete that directory yourself. To remove access without stopping the host, use `revoke` instead. On Linux, the command prints how to turn off lingering if nothing else needs it.
+`service uninstall` is the cleanup path for a host you no longer want running. It removes the systemd user service or the LaunchAgent. It then stops the host, including a manually started one, and interrupts any running turns. It never deletes the data directory. Sessions, logs, and device credentials stay in `~/.vorkspace-host` until you delete that directory yourself. To remove access without stopping the host, use `revoke` instead. On Linux, the command prints how to turn off lingering if nothing else needs it.
 
 The machine must remain awake. Manual `start` launches a detached process. `service install` installs a user service; SSH setup runs it automatically. Only one host may own a data directory. Restart the host after changing its provider installation or PATH. Service installs preserve an already-running host, including one previously started manually.
 
 SSH-installed hosts have a launcher at `~/.vorkspace-host/bin/vorkspace-host`; use it in place of `node build/host/vorkspace-host.mjs` in management commands. Existing service identifiers also retain their legacy names. Linux services are named `vorkspace-host.service`; macOS uses `com.vorkspace.host`. A service manager can restart a stopped process, so use `service uninstall` rather than `stop` to keep the host stopped.
 
-On Windows, the launcher is `%USERPROFILE%\.vorkspace-host\bin\vorkspace-host.cmd`. The scheduled task is named `vorkspace Host-<user SID>`; `service uninstall` unregisters it and stops the host. Normal cancellation and shutdown stop the provider's process tree. A plain manual `start` is detached, but use `service install` for SSH-hosted Windows sessions so Task Scheduler owns the process independently of the SSH login.
 
 ## Release packaging
 
-`npm run host:package` builds a self-contained package for the current Windows/Mac/Linux architecture. `npm run host:package -- --all` builds all six archives, using pinned official Node binaries and checksums. Archives contain the host bundle, runtime, launcher, and licenses. `host/package.mjs` pins the runtime version. Cross-packaging Windows on Unix requires `zip` and `unzip`; native Windows packaging uses PowerShell.
+`npm run host:package` builds a self-contained package for the current Mac or Linux architecture. `npm run host:package -- --all` builds all four archives, using pinned official Node binaries and checksums. Archives contain the host bundle, runtime, launcher, and licenses. `host/package.mjs` pins the runtime version.
 
 Automatic SSH installation requires host archives and checksum files on the exact desktop version release. Build scripts do not publish these archives. For unpublished builds, use the manual connection procedure above. Updating a running host restarts its service and interrupts active turns; durable history remains on the host.
 
@@ -121,9 +118,9 @@ cargo test
 
 Host tests use fake provider executables and temporary loopback servers. They do not contact paid models. They cover the Codex and Claude transports, Pi/OMP RPC, Antigravity ACP, cross-client reattachment, duplicate sends, approval races, interruption recovery, device revocation, path checks, and detached host lifecycle. On Node 26, use `NODE_OPTIONS=--no-experimental-webstorage npm run check:web` to avoid its experimental global storage interfering with the existing happy-dom tests.
 
-For the real OpenSSH transport and native askpass smoke test on Linux/macOS, build with `npm run host:package` and `cargo build --locked -p vorkspace-gpui --profile native-dev`, then run `python3 scripts/checks/test-remote-ssh.py`. It uses a disposable loopback sshd, temporary keys and known-hosts file, and an isolated packaged host. It leaves personal SSH configuration, provider credentials, and OS services untouched.
+For the real OpenSSH transport and native askpass smoke test, build with `npm run host:package` and `cargo build --locked -p vorkspace-gpui --profile native-dev`, then run `python3 scripts/checks/test-remote-ssh.py`. It uses a disposable loopback sshd, temporary keys and known-hosts file, and an isolated packaged host. It leaves personal SSH configuration, provider credentials, and OS services untouched.
 
-Host CI runs on Windows, macOS, and Linux. Windows-specific tests cover ACL inheritance, Task Scheduler definitions, bootstrap parsing/installation, and provider child-process cleanup. They use temporary data and mocked task registration so normal test runs do not install or replace a real user's background task. Full SSH-to-Task-Scheduler setup must also be validated on a signed-in Windows host before a supported release.
+Host CI runs on macOS. The Linux service and bootstrap paths are exercised with temporary data and mocked service managers, so normal test runs do not install or replace a real user's background service. Setup on a real Linux machine must be validated by hand.
 
 ## Session synchronization
 

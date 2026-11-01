@@ -1,9 +1,9 @@
 use super::*;
-use crate::theme::*;
 use gpui::{
     Animation, AnimationExt, AnyElement, FontWeight, Role, SharedString, Transformation, div,
     percentage, px,
 };
+use vorkspace_ui::theme::*;
 
 impl Accounts {
     pub(crate) fn has_modal_auth(&self) -> bool {

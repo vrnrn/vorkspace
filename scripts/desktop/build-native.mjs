@@ -75,14 +75,8 @@ export function buildNative() {
   const target = process.env.CARGO_BUILD_TARGET
     ? join(metadata.target_directory, process.env.CARGO_BUILD_TARGET)
     : metadata.target_directory;
-  if (process.platform === "darwin") {
-    run("bash", ["scripts/desktop/bundle-native-macos.sh", "release", target, app.version, "vorkspace-data"]);
-    const sourceApp = join(target, "release", "vorkspace.app");
-    installAppBundle(sourceApp);
-  } else {
-    const executable = process.platform === "win32" ? "vorkspace-gpui.exe" : "vorkspace-gpui";
-    console.log(`Executable: ${join(target, "release", executable)}`);
-  }
+  run("bash", ["scripts/desktop/bundle-native-macos.sh", "release", target, app.version, "vorkspace-data"]);
+  installAppBundle(join(target, "release", "vorkspace.app"));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

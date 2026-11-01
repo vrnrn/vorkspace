@@ -1,13 +1,13 @@
 // A collapsed project sidebar peeks from the right edge and puts itself
 // away once the pointer leaves it.
 use super::Shell;
-use crate::clock::Instant;
-use crate::{reveal::bezier, theme::*};
 use gpui::{
     AnyElement, BoxShadow, Context, DispatchPhase, MouseDownEvent, MouseMoveEvent, Pixels, Point,
     StyleRefinement, Window, canvas, div, prelude::*, px, rgba,
 };
 use std::time::Duration;
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::{reveal::bezier, theme::*};
 
 /// How close to the window's right edge the pointer peeks the sidebar out.
 const PEEK_EDGE: f32 = 6.;

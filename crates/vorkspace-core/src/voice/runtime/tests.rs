@@ -41,7 +41,6 @@ fn catalog_projects_only_bounded_identity_and_names() {
     assert!(result[0]["name"].as_str().unwrap().chars().count() <= 256);
 }
 
-#[cfg(unix)]
 mod lifecycle {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt};

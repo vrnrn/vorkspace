@@ -1,10 +1,10 @@
 //! CSS filter blur for account identities. Each paint stage needs its own layer:
 //! GPUI batches a layer's quads before its glyphs regardless of insertion order.
-use crate::theme::*;
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
     LayoutId, Pixels, Window, div, prelude::*,
 };
+use vorkspace_ui::theme::*;
 pub(super) fn masked_text(text: String, masked: bool) -> AnyElement {
     let child = div().truncate().child(text).into_any_element();
     if masked {

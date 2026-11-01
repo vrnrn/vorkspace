@@ -11,7 +11,7 @@ struct Controller {
     config: String,
     error: Option<String>,
     #[cfg(not(test))]
-    registration: Option<crate::global_hotkey::Registration>,
+    registration: Option<vorkspace_macos::global_hotkey::Registration>,
     #[cfg(not(test))]
     task: Option<gpui::Task<()>>,
 }
@@ -42,7 +42,7 @@ pub(crate) fn configure(prefs: &crate::settings::Preferences, cx: &mut App) {
     }
     #[cfg(not(test))]
     if prefs.vox_enabled && !shortcut.is_empty() {
-        match crate::global_hotkey::Registration::new(shortcut) {
+        match vorkspace_macos::global_hotkey::Registration::new(shortcut) {
             Ok((registration, receiver)) => {
                 let task = cx.spawn(async move |cx| {
                     while receiver.recv().await.is_ok() {
@@ -147,7 +147,7 @@ mod tests {
     fn global_shortcut_stops_the_existing_panel_without_activating_the_workspace(
         cx: &mut gpui::TestAppContext,
     ) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let store = Arc::new(std::sync::Mutex::new(
             vorkspace_core::store::Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap(),
         ));

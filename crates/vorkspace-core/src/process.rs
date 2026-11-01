@@ -1,10 +1,9 @@
-//! Child policy extracted from src-tauri/src/background_work.rs.
+//! Child process policy: group isolation and termination.
 use std::process::Command;
 
 /// Apply scheduling hints before exec so descendants inherit them.
 /// Best effort: a refused hint must not prevent a provider from launching.
 pub fn configure_child(command: &mut Command) {
-    #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         // Only system calls here: the post-fork child must not allocate or lock.
@@ -21,7 +20,6 @@ pub fn configure_child(command: &mut Command) {
                 }
                 let priority = libc::getpriority(libc::PRIO_PROCESS, 0).max(10);
                 libc::setpriority(libc::PRIO_PROCESS, 0, priority);
-                #[cfg(target_os = "macos")]
                 setiopolicy_np(0, 0, 3); // DISK, PROCESS, THROTTLE
                 Ok(())
             });
@@ -30,7 +28,6 @@ pub fn configure_child(command: &mut Command) {
     let _ = command;
 }
 
-#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn setiopolicy_np(kind: i32, scope: i32, policy: i32) -> i32;
 }
@@ -39,31 +36,14 @@ unsafe extern "C" {
 pub fn isolate(command: &mut Command) {
     configure_child(command);
     command.env("VORKSPACE_HARNESS_PARENT", std::process::id().to_string());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000 | 0x0000_0200);
-    }
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
 }
 
 /// Called only by the provider worker. Always reap the immediate child.
 pub fn terminate(child: &mut std::process::Child) {
-    #[cfg(unix)]
     unsafe {
         libc::kill(-(child.id() as i32), libc::SIGKILL);
-    }
-    #[cfg(windows)]
-    {
-        let mut kill = Command::new("taskkill");
-        kill.args(["/PID", &child.id().to_string(), "/T", "/F"]);
-        use std::os::windows::process::CommandExt;
-        kill.creation_flags(0x0800_0000);
-        let _ = kill.status();
     }
     let _ = child.kill();
     let _ = child.wait();
@@ -156,17 +136,8 @@ pub fn shutdown_all() {
         .copied()
         .collect();
     for pid in pids {
-        #[cfg(unix)]
         unsafe {
             libc::kill(-(pid as i32), libc::SIGKILL);
-        }
-        #[cfg(windows)]
-        {
-            let mut c = Command::new("taskkill");
-            c.args(["/PID", &pid.to_string(), "/T", "/F"]);
-            use std::os::windows::process::CommandExt;
-            c.creation_flags(0x0800_0000);
-            let _ = c.status();
         }
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
@@ -180,7 +151,7 @@ pub fn shutdown_all() {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

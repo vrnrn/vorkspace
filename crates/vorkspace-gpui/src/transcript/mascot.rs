@@ -1,8 +1,8 @@
 //! ProjectMascot / SubagentMascot: the React transcript's two-frame pixel faces.
-use crate::theme::content;
 use gpui::{Animation, AnimationExt, AnyElement, canvas, div, prelude::*, px, rgb};
 use std::time::Duration;
 use vorkspace_core::tool::ToolState;
+use vorkspace_ui::theme::content;
 
 type Frame = [&'static str; 8];
 

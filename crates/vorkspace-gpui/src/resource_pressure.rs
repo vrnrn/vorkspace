@@ -1,6 +1,6 @@
 // A sidebar warning while the machine is under pressure, opening the running
 // work vorkspace owns so it can be stopped.
-use crate::{popover::AnchorSlot, right_panel::spinner, theme::*};
+use crate::{popover::AnchorSlot, right_panel::spinner};
 use gpui::{
     AnyElement, Context, EventEmitter, FocusHandle, FontWeight, Role, ScrollHandle, SharedString,
     Task, Window, div, prelude::*, px,
@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 use vorkspace_core::resources::{self, OwnedProcess, Pressure, Sample};
+use vorkspace_ui::theme::*;
 
 const TICK: Duration = Duration::from_millis(500);
 const POLL: Duration = Duration::from_secs(3);
