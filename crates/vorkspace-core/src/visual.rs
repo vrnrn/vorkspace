@@ -22,7 +22,7 @@ type Clock = fn() -> Duration;
 /// thread and cannot block, so limiting this stops a runaway script as a wall
 /// clock would, without charging a valid one for time a busy machine gave to
 /// other work.
-fn thread_cpu_time() -> Duration {
+pub fn thread_cpu_time() -> Duration {
     let mut time = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,

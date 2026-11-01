@@ -11,9 +11,9 @@ use std::{
     collections::HashMap,
     rc::Rc,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
-use vorkspace_core::visual::{MAX_MERMAID_BYTES, validate_svg};
+use vorkspace_core::visual::{MAX_MERMAID_BYTES, thread_cpu_time, validate_svg};
 use vorkspace_ui::theme::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -93,33 +93,63 @@ impl Palette {
     }
 }
 
-/// A loaded Pele context and the deadline its interrupt handler checks.
-type PeleContext = (Runtime, Context, Rc<Cell<Instant>>);
+/// The budget's time source. Readings are only compared on one thread: a
+/// `Pele` is not `Send`, so it never leaves the worker that loaded it.
+type Clock = fn() -> Duration;
+
+const LOAD_BUDGET: Duration = Duration::from_secs(10);
+const CALL_BUDGET: Duration = Duration::from_secs(3);
+
+/// A loaded Pele context and the deadline its interrupt handler checks. Pele
+/// is pure computation: Mermaid source is data, no host function is bound, and
+/// a call returns without awaiting. Limiting its thread's CPU time stops a
+/// runaway render as a wall clock would, without charging a valid one for time
+/// a busy machine gave to other work.
+struct Pele {
+    _runtime: Runtime,
+    context: Context,
+    clock: Clock,
+    deadline: Rc<Cell<Duration>>,
+}
+
+impl Pele {
+    fn with_clock(clock: Clock) -> Result<Self, String> {
+        let runtime = Runtime::new().map_err(|e| e.to_string())?;
+        runtime.set_memory_limit(256 * 1024 * 1024);
+        runtime.set_max_stack_size(4 * 1024 * 1024);
+        let deadline = Rc::new(Cell::new(clock() + LOAD_BUDGET));
+        let check = deadline.clone();
+        runtime.set_interrupt_handler(Some(Box::new(move || clock() > check.get())));
+        let context = Context::full(&runtime).map_err(|e| e.to_string())?;
+        context
+            .with(|ctx| ctx.eval::<(), _>(include_str!("../assets/pele.global.js")))
+            .map_err(|e| format!("Pele failed to load: {e}"))?;
+        Ok(Self {
+            _runtime: runtime,
+            context,
+            clock,
+            deadline,
+        })
+    }
+
+    fn run<R>(&self, work: impl FnOnce(&Context) -> Result<R, String>) -> Result<R, String> {
+        self.deadline.set((self.clock)() + CALL_BUDGET);
+        work(&self.context)
+    }
+}
 
 thread_local! {
     /// A warm Pele context per worker thread, with the current call's deadline.
-    static PELE: RefCell<Option<PeleContext>> = const { RefCell::new(None) };
+    static PELE: RefCell<Option<Pele>> = const { RefCell::new(None) };
 }
 
 fn pele<R>(work: impl FnOnce(&Context) -> Result<R, String>) -> Result<R, String> {
     PELE.with(|cell| {
         let mut cell = cell.borrow_mut();
         if cell.is_none() {
-            let runtime = Runtime::new().map_err(|e| e.to_string())?;
-            runtime.set_memory_limit(256 * 1024 * 1024);
-            runtime.set_max_stack_size(4 * 1024 * 1024);
-            let deadline = Rc::new(Cell::new(Instant::now() + Duration::from_secs(10)));
-            let check = deadline.clone();
-            runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() > check.get())));
-            let context = Context::full(&runtime).map_err(|e| e.to_string())?;
-            context
-                .with(|ctx| ctx.eval::<(), _>(include_str!("../assets/pele.global.js")))
-                .map_err(|e| format!("Pele failed to load: {e}"))?;
-            *cell = Some((runtime, context, deadline));
+            *cell = Some(Pele::with_clock(thread_cpu_time)?);
         }
-        let (_, context, deadline) = cell.as_ref().unwrap();
-        deadline.set(Instant::now() + Duration::from_secs(3));
-        work(context)
+        cell.as_ref().unwrap().run(work)
     })
 }
 
@@ -130,24 +160,26 @@ pub(crate) fn mermaid_svg(source: &str) -> Result<String, String> {
             "Mermaid source must contain 1–{MAX_MERMAID_BYTES} bytes"
         ));
     }
-    pele(|context| {
-        context.with(|ctx| {
-            let pele: Object = ctx.globals().get("pele").map_err(|e| e.to_string())?;
-            let render: Function = pele.get("render").map_err(|e| e.to_string())?;
-            let options = Object::new(ctx.clone()).map_err(|e| e.to_string())?;
-            // Static output: no links or remote images in a native image.
-            options.set("links", false).map_err(|e| e.to_string())?;
-            options.set("images", false).map_err(|e| e.to_string())?;
-            let result: Object = render.call((source, options)).map_err(|e| {
-                let message = ctx
-                    .catch()
-                    .as_exception()
-                    .and_then(|e| e.message())
-                    .unwrap_or_else(|| e.to_string());
-                format!("Mermaid: {message}")
-            })?;
-            result.get::<_, String>("svg").map_err(|e| e.to_string())
-        })
+    pele(|context| render_mermaid(context, source))
+}
+
+fn render_mermaid(context: &Context, source: &str) -> Result<String, String> {
+    context.with(|ctx| {
+        let pele: Object = ctx.globals().get("pele").map_err(|e| e.to_string())?;
+        let render: Function = pele.get("render").map_err(|e| e.to_string())?;
+        let options = Object::new(ctx.clone()).map_err(|e| e.to_string())?;
+        // Static output: no links or remote images in a native image.
+        options.set("links", false).map_err(|e| e.to_string())?;
+        options.set("images", false).map_err(|e| e.to_string())?;
+        let result: Object = render.call((source, options)).map_err(|e| {
+            let message = ctx
+                .catch()
+                .as_exception()
+                .and_then(|e| e.message())
+                .unwrap_or_else(|| e.to_string());
+            format!("Mermaid: {message}")
+        })?;
+        result.get::<_, String>("svg").map_err(|e| e.to_string())
     })
 }
 
