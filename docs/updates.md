@@ -44,4 +44,6 @@ Notarization is optional: `--notary-profile YOUR_KEYCHAIN_PROFILE` additionally 
 
 Keep prior native archives and the existing appcast in the output directory for later versions. Archive names are never overwritten. Publishing the verified files to the configured release endpoints is a separate action; retain the existing desktop signing key so installed clients can verify the first native update.
 
+The bundle nests `vorkspace Clipboard.app`, which is signed before the main bundle. After an update, the app replaces the helper still running from the old build, which clears clipboard history.
+
 Sparkle owns native update verification, installation and relaunch. Before distributing a release, test the published old application against the candidate using disposable copies and data. Verify rejected signatures, replacement and relaunch, restored settings and drafts, and a subsequent native update. A local archive test does not prove the hosted feed is available.

@@ -10,7 +10,11 @@ cargo build --locked -p vorkspace-gpui -p vorkspace-clipboard --profile native-d
 bash scripts/desktop/bundle-native-macos.sh native-dev target "$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')" dev-data
 ```
 
-`npm run check` covers host, Vox, build tooling, Rust formatting, Clippy, and every Rust test. Rust tests run under `cargo-nextest` (`cargo install --locked cargo-nextest`), where each test owns a process, so GPUI global state stays isolated while the whole suite runs in parallel. `npm run check:fast` runs tooling, Vox, formatting, Clippy, and core unit tests for fast iteration without the GPUI suite. The core suite exercises Copilot streaming/authentication against a local peer and Vox start, resume, duplicate tool calls, cancellation, and transcript flush against a disposable Codex protocol peer. Browser audio tests cover pinned devices, late permission grants, playback, and media disposal. Asset generation validates editor analysis, highlighting, completion, search, and formatting in a JavaScript interpreter.
+`npm run check` covers host, Vox, build tooling, Rust formatting, Clippy, and every Rust test, including the vendored `block` crate. Rust tests run under `cargo-nextest` (`cargo install --locked cargo-nextest`), where each test owns a process, so GPUI global state stays isolated while the whole suite runs in parallel. `npm run check:fast` runs tooling, Vox, formatting, Clippy, and core unit tests for fast iteration without the GPUI suite. The core suite exercises Copilot streaming/authentication against a local peer and Vox start, resume, duplicate tool calls, cancellation, and transcript flush against a disposable Codex protocol peer. Browser audio tests cover pinned devices, late permission grants, playback, and media disposal. Asset generation validates editor analysis, highlighting, completion, search, and formatting in a JavaScript interpreter.
+
+Tooling checks also guard the repository itself. `module-cycles.test.mjs` keeps top-level modules depending in one direction, and `docs.test.mjs` fails if a document names an `npm run` script or `-p` crate that doesn't exist, or if a guide loses its plain-English companion.
+
+The clipboard helper's lifecycle tests start the real binary with their own sockets, so they never touch a running app. They do hold ⌘⇧C briefly if nothing else has it, and they report it as taken if something does.
 
 For the real SSH transport, build a host package and run the disposable loopback test:
 
@@ -20,6 +24,8 @@ python3 scripts/checks/test-remote-ssh.py
 ```
 
 It needs local OpenSSH `sshd`, creates temporary keys/configuration, and exercises native askpass, host persistence, and reconnection. It does not alter normal SSH configuration.
+
+`ui_parity_capture` is an ignored test that renders 17 surfaces in dark and light through the headless Metal renderer into `VORKSPACE_UI_PARITY_DIR`, so captures from two trees can be compared byte for byte. The capture isn't fully isolated from the machine: a live notice, such as a harness update, can appear in it.
 
 GPUI tests marked ignored require their named platform resource or an explicit benchmark run. Inspect them with `cargo test -p vorkspace-gpui --profile native-dev -- --list`. A frame benchmark measures the specified CPU path; it does not prove GPU presentation rate.
 

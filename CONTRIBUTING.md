@@ -12,4 +12,4 @@ npm run assets
 npm run build
 ```
 
-Run `npm run dev -- --fixture` against isolated development data for interactive checks. Keep measurements and work logs outside the repository. Pair technical documentation changes with their `docs/eli5/` companions. Preserve dependency copyright notices and licenses.
+Run `npm run dev -- --dev-data --fixture` for interactive checks against isolated development data. Keep measurements and work logs outside the repository. Pair technical documentation changes with their `docs/eli5/` companions. Preserve dependency copyright notices and licenses.

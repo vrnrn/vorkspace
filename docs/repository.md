@@ -1,6 +1,6 @@
 # Repository map
 
-The desktop is a Rust workspace that runs as one process. The remote host is a separate Node application. Directory boundaries follow those runtime owners, and dependencies only point downward. That holds between crates and between the top-level modules inside each crate, and `scripts/checks/module-cycles.test.mjs` enforces it. A lower module that needs something from above receives it as a small trait, such as `BotsHost`, `VoxHost`, `AnnotationDraft`, or `SelectableText`. The one permitted cycle is `agent` and `bot_model`, because Bot records hold their settings and turn settings hold the Bot.
+The desktop is a Rust workspace that runs as the app plus a small clipboard helper process. The remote host is a separate Node application. Directory boundaries follow those runtime owners, and dependencies only point downward. That holds between crates and between the top-level modules inside each crate, and `scripts/checks/module-cycles.test.mjs` enforces it. A lower module that needs something from above receives it as a small trait, such as `BotsHost`, `VoxHost`, `AnnotationDraft`, or `SelectableText`. The one permitted cycle is `agent` and `bot_model`, because Bot records hold their settings and turn settings hold the Bot.
 
 | Path | Responsibility |
 | --- | --- |
@@ -17,7 +17,7 @@ The desktop is a Rust workspace that runs as one process. The remote host is a s
 | `embedded/vox/` | Microphone and WebRTC audio page; Rust admits actions and owns the call |
 | `scripts/desktop/` | Development runner, build, bundle, signing, and bundle configuration |
 | `scripts/release/` | Version stamping and signed update archive tools |
-| `scripts/checks/` | Repository/dependency validation and disposable SSH integration checks |
+| `scripts/checks/` | Repository, dependency and documentation validation, and disposable SSH integration checks |
 | `scripts/benchmarks/` | Reproducible synthetic measurements with isolated data |
 | `scripts/assets/` | Icon generation tools, run by hand when an upstream icon set changes |
 | `crates/vorkspace-gpui/fixtures/` | Visual SDK sample programs embedded as development fixtures |

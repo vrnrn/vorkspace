@@ -10,21 +10,23 @@ The desktop is Rust. Provider CLIs run as supervised child processes. A small Ja
 
 ## Run locally
 
-Install a current stable Rust toolchain, Node.js 24 or newer, and Xcode with macOS components. Install and sign in to at least one supported [provider CLI](docs/providers.md).
+You need a current stable Rust toolchain, Node.js 24 or newer, and Xcode with macOS components. Install and sign in to at least one supported [provider CLI](docs/providers.md).
 
 ```sh
 npm run dev -- --cwd /path/to/project
 ```
 
-Development defaults to the fast-rebuilding `native-dev` profile and normal desktop data (`vorkspace.db`), running from `target/native-dev/` without touching `/Applications`. Pass `--release` for release performance, which also installs to `/Applications/vorkspace.app`, or `--dev-data` for isolated data. Type `r` then Enter in the dev runner to rebuild and restart. After `npm run build`, press `⌘⌥R` inside vorkspace to restart with the installed build.
+This builds the app and its clipboard helper in the fast-rebuilding `native-dev` profile, runs them from `target/native-dev/`, and leaves `/Applications` alone. It opens your normal desktop data, so add `--dev-data` for an isolated launch. Type `r` then Enter in the terminal to rebuild and restart.
+
+To test, install `cargo-nextest` once, then run the full check:
 
 ```sh
+cargo install --locked cargo-nextest
 npm ci
-npm test
-npm run build
+npm run check
 ```
 
-The macOS release bundle is `target/release/vorkspace.app`, which local macOS builds install directly to `/Applications/vorkspace.app`. Both release and dev runs use existing desktop data by default; use `--dev-data` for an isolated launch.
+`npm run build` makes the release bundle at `target/release/vorkspace.app` and installs it to `/Applications/vorkspace.app`. See [building](docs/building.md) for every option.
 
 ## Features and architecture
 

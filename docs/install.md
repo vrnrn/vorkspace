@@ -2,6 +2,8 @@
 
 Build from source using [building](building.md). On macOS, `npm run build` creates `target/release/vorkspace.app` and installs it directly to `/Applications/vorkspace.app`. All builds use existing desktop data by default, keeping sessions and project continuity persistent across builds.
 
+With **Keep recent copies** on, the app also runs a small clipboard helper from inside its bundle. It keeps recording after you quit vorkspace, until you log out, use Quit in the clipboard menu, or turn the setting off. It doesn't start at login: after logging in, it starts when you next open the app. Before deleting the app, use Quit in the clipboard menu, or the helper keeps running until you log out.
+
 Published updates use the installed app's usual updater. Release preparation provides the existing desktop download format alongside native Sparkle updates. Both replace the normal app bundle and retain its saved data. See [updates](updates.md) for signing and feed configuration.
 
 Local builds are ad-hoc signed by default. Sparkle is enabled by supplying its framework during release packaging. Developer ID signing and notarization are optional. Building alone never publishes a release.
