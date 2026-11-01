@@ -47,6 +47,8 @@ JavaScript is maintained directly under `host/` and `embedded/`. No browser fron
 
 GPUI renders the desktop. WebKit is limited to Vox and sandboxed HTML previews. Sparkle can verify and install explicitly configured macOS updates.
 
+Close to Tray hides the one workspace window instead of quitting, and clicking the Dock icon brings it back.
+
 Bots are opened inside the main workspace. The macOS menu bar opens clipboard history, also available with ⌘⇧C. General settings control the icon and contain a Clipboard group between Workspace and About. Quick Composer, Settings and Quit remain available in the clipboard menu.
 
 Clipboard history has one process-local owner with at most 50 entries and a 64 MiB retained payload budget, including normalized search text and reserved thumbnail and native presentation bytes. Individual images are limited to 16 MiB encoded and text to 1 MiB; larger copies are skipped without displacing existing entries. Nothing is persisted. Eviction and Clear release originals and bounded native thumbnails; clearing history leaves the system clipboard alone. Turning recording off clears history and stops its polling task and shortcut registration. A thin Swift/AppKit panel owns presentation only, using system menu material and controls. Its preview pane appears only after a continuous one-second image hover; leaving the image, filtering, clearing or closing cancels the preview. Closing releases native presentation copies. With recording off, the popup shrinks to Settings, Quick Composer and Quit; clipboard controls and previews are absent.

@@ -1362,15 +1362,15 @@ fn register_system_power_observers(observer: &AnyObject) {
     }
 }
 
-extern "C" fn should_handle_reopen(this: &mut Object, _: Sel, _: id, has_open_windows: bool) {
-    if !has_open_windows {
-        let platform = unsafe { get_mac_platform(this) };
-        let mut lock = platform.0.lock();
-        if let Some(mut callback) = lock.reopen.take() {
-            drop(lock);
-            callback();
-            platform.0.lock().reopen.get_or_insert(callback);
-        }
+// AppKit counts floating panels as open windows, so a visible Vox notch must not
+// stop a Dock click from reaching a hidden workspace.
+extern "C" fn should_handle_reopen(this: &mut Object, _: Sel, _: id, _: bool) {
+    let platform = unsafe { get_mac_platform(this) };
+    let mut lock = platform.0.lock();
+    if let Some(mut callback) = lock.reopen.take() {
+        drop(lock);
+        callback();
+        platform.0.lock().reopen.get_or_insert(callback);
     }
 }
 
