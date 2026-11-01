@@ -11,3 +11,5 @@ Even quick test builds use a fully optimized copy of the small JavaScript engine
 Automated checks use pretend provider processes to test voice recovery, Stop, and duplicate requests without opening a microphone. Copilot translation is checked with a local server. Real accounts and hardware still need a live call.
 
 The startup benchmark under `scripts/benchmarks/` makes pretend history in a temporary folder. It can compare an older commit with the current code, using a fresh process for each measurement. This checks one part of startup, not every part of the app's responsiveness.
+
+`npm run benchmark:native` times the real app drawing into an invisible window, using a big pretend history. It shows how long opening a long chat and drawing a frame take, so you can compare before and after a change.

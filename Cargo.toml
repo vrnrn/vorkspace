@@ -50,3 +50,8 @@ opt-level = 1
 
 [profile.native-dev.package.vorkspace-runtime]
 opt-level = 1
+
+# Release code generation for scripts/benchmarks/benchmark-native.mjs, built apart
+# from the shipped profile so a benchmark never replaces its artifacts.
+[profile.perf]
+inherits = "release"
