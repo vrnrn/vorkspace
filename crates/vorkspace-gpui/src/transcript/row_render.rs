@@ -454,7 +454,7 @@ impl TranscriptView {
                     && first
                     && last
                     && attachments.is_empty()
-                    && is_emoji_only(&text) =>
+                    && is_emoji_only(text) =>
             {
                 // In a Bot's chat a few emoji stand alone: no bubble or actions.
                 div()
