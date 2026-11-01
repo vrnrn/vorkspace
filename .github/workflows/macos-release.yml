@@ -18,6 +18,8 @@ jobs:
       contents: write
     env:
       CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      NEXTEST_PROFILE: ci
       MACOSX_DEPLOYMENT_TARGET: '11.0'
     steps:
       - uses: actions/checkout@v7
@@ -31,6 +33,7 @@ jobs:
         with:
           components: rustfmt, clippy
           targets: aarch64-apple-darwin
+      - uses: taiki-e/install-action@nextest
       - name: Prepare unused version, build number, and release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
