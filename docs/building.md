@@ -40,7 +40,12 @@ History, ⌘⇧C and the menu bar icon belong to `vorkspace-clipboard`, a separa
 - Each bundle path gets its own helper, so a development build and the installed app can run side by side. You'll see two menu bar icons, and only the first gets ⌘⇧C. The other reports that in Settings.
 - To stop it, use Quit in the clipboard menu or turn off **Keep recent copies**.
 
-`cargo run -p vorkspace-gpui` builds only the app. To include the helper, first run `cargo build --locked -p vorkspace-clipboard --profile native-dev`.
+`cargo run` builds only the app, and the app looks for the helper beside its own binary. To include it, build both in the same profile:
+
+```sh
+cargo build --locked -p vorkspace-clipboard --profile native-dev
+cargo run --locked -p vorkspace-gpui --profile native-dev
+```
 
 ## Release builds
 
