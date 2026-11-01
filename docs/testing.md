@@ -23,7 +23,7 @@ It needs local OpenSSH `sshd`, creates temporary keys/configuration, and exercis
 
 GPUI tests marked ignored require their named platform resource or an explicit benchmark run. Inspect them with `cargo test -p vorkspace-gpui --profile native-dev -- --list`. A frame benchmark measures the specified CPU path; it does not prove GPU presentation rate.
 
-`npm run benchmark:native` drives the real shell offscreen through Metal, in the `perf` Cargo profile, against 300 generated sessions and a 4,000-row history in temporary data. It reports main-thread time for first frame, opening the long session, redraw, composer input, and streamed appends, as a median over fresh processes. Save a result outside the repository with `-- --save <path>` and check a change with `-- --compare <path>`.
+`npm run benchmark:native` drives the real shell offscreen, in the `perf` Cargo profile, against 300 generated sessions and a 4,000-row history in temporary data. `scene_*` metrics are main-thread CPU time to build a frame, not GPU time: they cover redraw, composer input, and appending to settled history, which is not the live streaming path. `metal_render_readback` is the only metric that reaches Metal, and it includes copying pixels back. Each result is a median over fresh processes. Save one outside the repository with `-- --save <path>` and check a change with `-- --compare <path>`.
 
 Every Cargo profile compiles QuickJS with full optimization. Editor, diagram, and visual deadlines assume the shipped interpreter, and an unoptimized one is about five times slower, which fails work that a release build finishes in budget.
 
