@@ -5689,6 +5689,7 @@ impl Window {
         subscription
     }
 
+    #[cfg_attr(not(feature = "test-support"), allow(unused_variables))]
     fn reset_cursor_style(&self, cx: &mut App, reason: &'static str) {
         #[cfg(feature = "test-support")]
         {
