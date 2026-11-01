@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::scm::{expand_home, path_to_js, MAX_TEXT_FILE_BYTES};
+use crate::scm::MAX_TEXT_FILE_BYTES;
+use crate::shell_env::expand_home;
+use crate::shell_env::path_to_js;
 
 #[cfg(test)]
 mod tests;
@@ -769,7 +771,7 @@ fn git_command(root: &Path, args: &[&str]) -> Command {
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_LITERAL_PATHSPECS", "1")
-        .env("PATH", crate::scm::shell::cached_gui_search_path());
+        .env("PATH", crate::shell_env::cached_gui_search_path());
     for name in [
         "GIT_DIR",
         "GIT_WORK_TREE",

@@ -2,6 +2,7 @@
 //! staging. Ported from fs.rs `git_file_diff_for`, `git_commit_files_for`,
 //! `git_commit_file_diff_for` and `git_stage_contents_for`.
 use super::*;
+use crate::shell_env::{expand_home, path_to_js};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 pub fn session_handle(value: &Value) -> Option<i64> {
     value
         .as_i64()
-        .or_else(|| value.as_str().map(crate::store::desktop_session_handle))
+        .or_else(|| value.as_str().map(crate::session::desktop_session_handle))
 }
 
 pub(crate) fn document_cards(block: &Value) -> Vec<Value> {
@@ -32,7 +32,7 @@ fn launch(value: &Value) -> Option<Value> {
     let cwd = value["cwd"].as_str()?.trim();
     let model = value["model"].as_str()?.trim();
     let harness = value["harness"].as_str()?;
-    if cwd.is_empty() || model.is_empty() || crate::provider::Kind::parse(harness).is_none() {
+    if cwd.is_empty() || model.is_empty() || crate::kind::Kind::parse(harness).is_none() {
         return None;
     }
     let title = value["title"].as_str()?.trim();
@@ -208,17 +208,6 @@ pub(crate) fn block_launches(blocks: &[Value]) -> Vec<Vec<Value>> {
 }
 
 impl super::Bot {
-    /// Refresh references without discarding native-created documents or launch
-    /// monitoring state. Removed desktop references disappear on the next read.
-    pub fn refresh_work(&mut self, store: &crate::store::Store) -> Result<bool, String> {
-        let Some(session) = self.session_id else {
-            return Ok(false);
-        };
-        let Some((documents, launches)) = store.bot_work(session)? else {
-            return Ok(false);
-        };
-        self.apply_work(documents, launches)
-    }
     pub fn apply_work(
         &mut self,
         documents: Vec<super::Document>,

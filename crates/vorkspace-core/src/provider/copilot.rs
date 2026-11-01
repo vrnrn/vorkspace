@@ -4,7 +4,7 @@ mod protocol;
 #[cfg(test)]
 mod tests;
 use super::{Kind, Request};
-use crate::{catalog::Model, local_http, process, scm::shell};
+use crate::{local_http, model_cache::Model, process, shell_env as shell};
 use protocol::{model_id, Events};
 use serde_json::{json, Value};
 use std::{
@@ -106,7 +106,7 @@ pub(crate) fn models() -> Result<Vec<Model>, String> {
     Ok(catalog(&credential()?)?
         .iter()
         .filter_map(|row| {
-            let mut model = crate::catalog::model(
+            let mut model = crate::model_cache::model(
                 &format!("copilot/{}", row["id"].as_str()?),
                 row["name"].as_str()?,
             );

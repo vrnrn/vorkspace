@@ -60,18 +60,21 @@ fn private_temporary(path: &Path) -> Result<std::fs::File, String> {
 
 /// Resolve an editor link against its workspace without touching disk.
 pub fn resolve_path(path: &Path, cwd: &Path) -> PathBuf {
-    if super::remote::is_remote(path) {
+    if crate::remote_workspace::is_remote(path) {
         return path.to_path_buf();
     }
-    if super::remote::is_remote(cwd) {
-        if let Some(remote) = crate::remote::parse_remote_path(&cwd.to_string_lossy()) {
+    if crate::remote_workspace::is_remote(cwd) {
+        if let Some(remote) = crate::remote_path::parse_remote_path(&cwd.to_string_lossy()) {
             let path = path.to_string_lossy();
             let host = if path.starts_with('/') || path.as_bytes().get(1) == Some(&b':') {
                 path.into_owned()
             } else {
                 super::join_path(&remote.host_path, &path)
             };
-            return PathBuf::from(crate::remote::remote_path(&remote.environment_id, &host));
+            return PathBuf::from(crate::remote_path::remote_path(
+                &remote.environment_id,
+                &host,
+            ));
         }
     }
     let path = expand_home(path);
@@ -92,7 +95,7 @@ pub fn resolve_path(path: &Path, cwd: &Path) -> PathBuf {
 }
 
 pub fn read_document(path: &Path) -> Result<Document, String> {
-    if super::remote::is_remote(path) {
+    if crate::remote_workspace::is_remote(path) {
         let bytes = read_remote_bytes(path)?;
         if is_video_path(path) {
             #[derive(Deserialize)]
@@ -100,8 +103,10 @@ pub fn read_document(path: &Path) -> Result<Document, String> {
             struct Modified {
                 mtime_ms: Option<u64>,
             }
-            let stats: Vec<Modified> =
-                super::remote::command("stat_files", serde_json::json!({"paths":[path]}))?;
+            let stats: Vec<Modified> = crate::remote_workspace::command(
+                "stat_files",
+                serde_json::json!({"paths":[path]}),
+            )?;
             let modified = stats
                 .first()
                 .and_then(|info| info.mtime_ms)
@@ -164,7 +169,7 @@ pub fn read_document(path: &Path) -> Result<Document, String> {
 fn read_remote_bytes(path: &Path) -> Result<Vec<u8>, String> {
     use base64::Engine;
     let encoded: String =
-        super::remote::command("read_binary_file", serde_json::json!({"path":path}))?;
+        crate::remote_workspace::command("read_binary_file", serde_json::json!({"path":path}))?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .map_err(|error| format!("Invalid remote file content: {error}"))?;
@@ -302,9 +307,9 @@ pub fn save_document(path: &Path, document: &TextDocument, text: &str) -> Result
     if text.len() > MAX_TEXT_BYTES || text.split('\n').any(|line| line.len() > MAX_LINE_BYTES) {
         return Err("Text exceeds the editor size limit.".into());
     }
-    if super::remote::is_remote(path) {
+    if crate::remote_workspace::is_remote(path) {
         return save_remote_document(path, document, text, |args| {
-            super::remote::run_remote_command("write_editor_text_file", args)
+            crate::remote_workspace::run_remote_command("write_editor_text_file", args)
         });
     }
     let destination = std::fs::canonicalize(expand_home(path)).map_err(|e| e.to_string())?;

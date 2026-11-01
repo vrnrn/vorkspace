@@ -4,25 +4,22 @@ pub mod api;
 pub mod bridge;
 pub mod cards;
 pub mod channels;
-mod desktop;
 pub mod files;
 pub mod habits;
 pub mod launch;
 pub mod memory;
 pub mod peers;
 mod teams;
-pub use teams::MinionMetadata;
-pub mod work;
-pub(crate) use desktop::codex_home;
 #[cfg(test)]
 mod tests;
+pub mod work;
 
+pub use crate::bot_model::*;
 use crate::{
     project_appearance::{
         default_foreground_color, default_seed_for, normalize_badge_shape, normalize_bot_face,
-        Background, BOT_FACES, COLORS, MASCOTS,
+        BOT_FACES, MASCOTS,
     },
-    store::Store,
     transcript::Row,
 };
 use serde::{Deserialize, Serialize};
@@ -31,129 +28,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const COLORS_BOT: [u32; 9] = [
-    COLORS[1], COLORS[2], COLORS[3], COLORS[4], COLORS[5], COLORS[6], COLORS[7], COLORS[8],
-    0x8b63e9,
-];
-pub const DEFAULT_SOUL: &str =
-    "# Soul\n\n## Standing instructions\n- (Add anything it should always keep in mind.)\n";
-pub fn new_id() -> String {
-    format!("{:032x}", rand::random::<u128>())
-}
-fn default_bot_shape() -> String {
-    "squircle".into()
-}
-fn default_bot_textured() -> bool {
-    true
-}
-fn is_true(value: &bool) -> bool {
-    *value
-}
-fn is_default_shape(shape: &str) -> bool {
-    shape.is_empty() || shape == "squircle"
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Bot {
-    pub id: String,
-    pub session_id: Option<i64>,
-    /// Keep a missing desktop association visible instead of silently starting
-    /// a replacement conversation when its saved UUID cannot be resolved.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unavailable_session: Option<String>,
-    pub name: String,
-    /// Committed setup choices remain durable until the backing session owns
-    /// them. Publishing its session ID clears this bootstrap configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_configuration: Option<Box<InitialConfiguration>>,
-    pub mascot: String,
-    #[serde(
-        default = "default_bot_shape",
-        skip_serializing_if = "is_default_shape"
-    )]
-    pub shape: String,
-    pub color: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fg_color: Option<u32>,
-    #[serde(default = "default_bot_textured", skip_serializing_if = "is_true")]
-    pub textured: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seed: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub grid: Option<u8>,
-    pub projects: Vec<String>,
-    pub show_started_sessions_in_sidebar: bool,
-    pub use_sidebar_folders: bool,
-    pub background: Option<Background>,
-    pub launches: Vec<Launch>,
-    pub documents: Vec<Document>,
-    /// References last projected from desktop blocks, to reconcile deletions.
-    #[serde(default)]
-    pub desktop_document_ids: Vec<String>,
-    #[serde(default)]
-    pub desktop_launch_ids: Vec<i64>,
-    pub outbox: Vec<Message>,
-    pub pending_reports: Vec<String>,
-    pub habit_sessions: Vec<i64>,
-    pub seen_rows: usize,
-    /// Persistent team membership. The actor owns its history and outbox;
-    /// its parent owns shared soul, memory, todos and project assignments.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub minion: Option<MinionMetadata>,
-    /// Experimental helpers it spawned, sharing its memory.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub minions: Vec<Minion>,
-}
-/// A project session a Bot spawned to work alongside it. It acts with its
-/// parent's app capability, so it reads and writes the parent's memory, which
-/// it shares with the parent and every other minion.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Minion {
-    pub name: String,
-    pub session_id: i64,
-    pub project: String,
-    pub created_at: u64,
-}
-impl Default for Bot {
-    fn default() -> Self {
-        Self {
-            id: new_id(),
-            session_id: None,
-            unavailable_session: None,
-            name: String::new(),
-            initial_configuration: None,
-            mascot: MASCOTS[0].into(),
-            shape: "squircle".into(),
-            color: COLORS_BOT[0],
-            fg_color: None,
-            textured: true,
-            seed: None,
-            grid: None,
-            projects: Vec::new(),
-            show_started_sessions_in_sidebar: false,
-            use_sidebar_folders: false,
-            background: None,
-            launches: Vec::new(),
-            documents: Vec::new(),
-            desktop_document_ids: Vec::new(),
-            desktop_launch_ids: Vec::new(),
-            outbox: Vec::new(),
-            pending_reports: Vec::new(),
-            habit_sessions: Vec::new(),
-            seen_rows: 0,
-            minions: Vec::new(),
-            minion: None,
-        }
-    }
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InitialConfiguration {
-    pub provider: String,
-    pub settings: crate::agent::Settings,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub soul: Option<String>,
-}
 impl Bot {
     pub fn label(&self) -> String {
         if !self.name.trim().is_empty() {
@@ -245,52 +119,7 @@ impl Bot {
             .retain(|p| !p.trim().is_empty() && seen.insert(crate::files::path_key(p)));
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Launch {
-    pub session_id: i64,
-    pub cwd: String,
-    pub title: String,
-    pub harness: String,
-    pub model: Option<String>,
-    pub origin_turn: u64,
-    pub notify_on_complete: bool,
-    #[serde(default)]
-    pub completed: bool,
-    #[serde(default)]
-    pub dismissed: bool,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Document {
-    pub id: String,
-    pub kind: String,
-    pub title: String,
-    pub summary: String,
-    pub body: String,
-    pub created_at: u64,
-    pub updated_at: u64,
-}
 pub type Work = (Vec<Document>, Vec<Launch>);
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Message {
-    pub id: String,
-    pub text: String,
-    /// Saved transport context, kept separate from the visible message text.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prepared_prompt: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub peer: Option<peers::Peer>,
-    #[serde(default)]
-    pub sent_at: Option<u64>,
-    #[serde(default)]
-    pub internal: bool,
-    #[serde(default)]
-    pub error: Option<String>,
-    #[serde(default)]
-    pub attachments: Vec<String>,
-}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Roster {
@@ -304,15 +133,15 @@ pub struct Roster {
     /// Last observed desktop identities, for reconciling later desktop edits
     /// without discarding deliberate native edits or resurrecting deletions.
     #[serde(skip_serializing_if = "Option::is_none")]
-    desktop_source: Option<Vec<Bot>>,
+    pub(crate) desktop_source: Option<Vec<Bot>>,
     /// Shared by local snapshots so queued saves compare with the last successful publication.
     #[serde(skip)]
-    storage_baseline: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    pub(crate) storage_baseline: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 // Three-way reconciliation applies only this snapshot's changes to the latest
 // durable roster. Identified arrays allow independent Bots and messages to be
 // edited concurrently; ambiguous edits are rejected rather than overwritten.
-fn merge_roster_value(
+pub(crate) fn merge_roster_value(
     base: Option<&serde_json::Value>,
     local: Option<&serde_json::Value>,
     remote: Option<&serde_json::Value>,
@@ -465,7 +294,7 @@ fn merge_roster_value(
 
 // Apply understood changes back onto the original JSON, retaining fields
 // written by newer or other clients which the native model does not understand.
-fn overlay_roster_value(
+pub(crate) fn overlay_roster_value(
     old: Option<&serde_json::Value>,
     new: &serde_json::Value,
     raw: Option<&serde_json::Value>,
@@ -513,78 +342,6 @@ fn overlay_roster_value(
 }
 
 impl Roster {
-    pub fn load(store: &Store) -> Result<Self, String> {
-        let raw = store.setting("bot-roster")?;
-        let mut roster: Self = raw
-            .as_ref()
-            .map(|text| {
-                serde_json::from_str(text).map_err(|e| format!("Cannot read Bot roster: {e}"))
-            })
-            .transpose()?
-            .unwrap_or_default();
-        if raw.is_some() {
-            *roster.storage_baseline.lock().map_err(|e| e.to_string())? =
-                Some(serde_json::to_string(&roster).map_err(|e| e.to_string())?);
-        }
-        if store.uses_vorkspace_schema() {
-            if let Some(preferences) = store.desktop_preferences() {
-                roster.reconcile_desktop(store, preferences)?;
-            }
-        }
-        let mut ids = HashSet::new();
-        roster.bots.retain(|m| {
-            !m.id.is_empty()
-                && m.id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
-                && ids.insert(m.id.clone())
-        });
-        for bot in &mut roster.bots {
-            bot.normalize();
-        }
-        roster.migrate_minions();
-        roster.sanitize_team_queues();
-        Ok(roster)
-    }
-    pub fn save(&self, store: &Store) -> Result<(), String> {
-        let value = serde_json::to_string(self).map_err(|e| e.to_string())?;
-        let mut baseline = self.storage_baseline.lock().map_err(|e| e.to_string())?;
-        let empty = serde_json::to_value(Roster::default()).map_err(|e| e.to_string())?;
-        let base: serde_json::Value = baseline
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()
-            .map_err(|e| e.to_string())?
-            .unwrap_or(empty.clone());
-        let local: serde_json::Value = serde_json::from_str(&value).map_err(|e| e.to_string())?;
-        for _ in 0..8 {
-            let current = store.setting("bot-roster")?;
-            let raw: serde_json::Value = current
-                .as_deref()
-                .map(serde_json::from_str)
-                .transpose()
-                .map_err(|e| e.to_string())?
-                .unwrap_or(empty.clone());
-            let remote: serde_json::Value = if current.is_some() {
-                let parsed: Roster = serde_json::from_value(raw.clone())
-                    .map_err(|e| format!("Cannot read Bot roster: {e}"))?;
-                serde_json::to_value(parsed).map_err(|e| e.to_string())?
-            } else {
-                empty.clone()
-            };
-            let merged = merge_roster_value(Some(&base), Some(&local), Some(&remote), "roster")?
-                .ok_or("Cannot remove the Bot roster")?;
-            let merged = overlay_roster_value(Some(&remote), &merged, Some(&raw), "roster");
-            let merged = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
-            match store.compare_swap_setting("bot-roster", current.as_deref(), &merged) {
-                Ok(()) => {
-                    *baseline = Some(value);
-                    return Ok(());
-                }
-                Err(error) if error.contains("another window") => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err("Bot roster is being changed in another window; your changes were preserved in this window.".into())
-    }
     /// Prepare an unsaved identity without changing the roster or its storage.
     pub fn draft(&self, projects: Vec<String>) -> Bot {
         let mut bot = Bot {
@@ -656,13 +413,6 @@ impl Roster {
     }
 }
 
-pub fn root(store: &Store) -> PathBuf {
-    store
-        .data_dir()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("vorkspace-test-{}", new_id())))
-        .join("bots")
-}
 pub fn load_files(root: &Path, bot: &Bot) -> Result<files::AgentFiles, String> {
     let owner = bot.storage_id();
     let mut files = files::load(root, owner, None)?;
@@ -798,4 +548,16 @@ pub fn rotation_brief(rows: &[Row]) -> String {
     format!(
         "Your provider context was rotated while preserving the full chat. Earlier exchanges:\n{earlier}\n\nRecent exchanges:\n{recent}"
     )
+}
+
+/// Reuse the provider-owned rollout directory prepared by the desktop app.
+/// Nothing is created or copied when the native UI opens a Bot.
+pub(crate) fn codex_home(root: &Path, account: &str) -> Result<Option<PathBuf>, String> {
+    crate::accounts::validate_id(account)?;
+    let family = root
+        .parent()
+        .ok_or("Bot storage has no data directory")?
+        .join("codex-bots");
+    let home = crate::compatibility::bot_owner(&family, account, true);
+    Ok(home.is_dir().then_some(home))
 }

@@ -92,7 +92,7 @@ pub struct Settings {
     #[serde(skip)]
     pub remote_action: Option<serde_json::Value>,
     pub account: crate::accounts::Profile,
-    pub usage_limit: Option<crate::usage::Limit>,
+    pub usage_limit: Option<crate::limit::Limit>,
     /// Isolated background text jobs; never persisted as conversation settings.
     #[serde(skip)]
     pub text_only: bool,
@@ -102,7 +102,7 @@ pub struct Settings {
     pub prepared_prompt: Option<String>,
     /// One admitted ticket lookup, carried separately from visible user text.
     #[serde(skip)]
-    pub ticket_context: Option<crate::ticket_context::Admission>,
+    pub ticket_context: Option<crate::ticket_admission::Admission>,
     #[serde(skip)]
     pub ticket_context_data_dir: Option<std::path::PathBuf>,
     /// Immutable identity captured for this newly submitted turn.
@@ -163,14 +163,14 @@ pub struct ProviderSwitch {
 #[derive(Clone, Debug)]
 pub struct MinionContext {
     /// The parent Bot.
-    pub bot: crate::bot::Bot,
+    pub bot: crate::bot_model::Bot,
     pub name: String,
     pub root: std::path::PathBuf,
     pub executable: std::path::PathBuf,
 }
 #[derive(Clone, Debug)]
 pub struct BotContext {
-    pub bot: crate::bot::Bot,
+    pub bot: crate::bot_model::Bot,
     pub root: std::path::PathBuf,
     pub executable: std::path::PathBuf,
 }

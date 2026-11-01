@@ -1,5 +1,6 @@
 //! Commit-message and PR prompts, ported from gitText.ts and jsonText.ts.
 //! Lengths count UTF-16 code units, like the JavaScript originals.
+pub(crate) use crate::js_text::{js_len, js_slice, js_space, js_trim};
 use serde_json::{Map, Value};
 
 use super::RangeContext;
@@ -206,31 +207,6 @@ pub(crate) fn parse_json_object(raw: &str) -> Option<Record> {
 
 pub(crate) fn string_field<'a>(rec: &'a Record, key: &str) -> &'a str {
     rec.get(key).and_then(Value::as_str).unwrap_or("")
-}
-
-/// JavaScript `\s`: Unicode white space plus the BOM.
-pub(crate) fn js_space(ch: char) -> bool {
-    ch.is_whitespace() || ch == '\u{feff}'
-}
-
-pub(crate) fn js_trim(text: &str) -> &str {
-    text.trim_matches(js_space)
-}
-
-pub(crate) fn js_len(text: &str) -> usize {
-    text.encode_utf16().count()
-}
-
-/// Longest prefix of at most `units` UTF-16 code units, without splitting a pair.
-pub(crate) fn js_slice(text: &str, units: usize) -> &str {
-    let mut count = 0;
-    for (index, ch) in text.char_indices() {
-        count += ch.len_utf16();
-        if count > units {
-            return &text[..index];
-        }
-    }
-    text
 }
 
 #[cfg(test)]

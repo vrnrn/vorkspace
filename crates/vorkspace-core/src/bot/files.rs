@@ -125,7 +125,7 @@ pub fn content_hash(text: &str) -> String {
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     use std::io::Write;
 
-    let temp = path.with_extension(format!("{}.tmp", crate::bot::new_id()));
+    let temp = path.with_extension(format!("{}.tmp", crate::session::new_id()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     use std::os::unix::fs::OpenOptionsExt;

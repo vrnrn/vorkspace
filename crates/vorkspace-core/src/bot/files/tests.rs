@@ -1,7 +1,7 @@
 use super::*;
 
 fn temp_root() -> PathBuf {
-    let root = std::env::temp_dir().join(format!("bot-{}", crate::bot::new_id()));
+    let root = std::env::temp_dir().join(format!("bot-{}", crate::session::new_id()));
     std::fs::create_dir_all(&root).unwrap();
     root
 }

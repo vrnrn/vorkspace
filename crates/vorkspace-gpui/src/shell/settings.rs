@@ -212,7 +212,7 @@ impl Shell {
                 }
                 SettingsEvent::VoxMemory => {
                     let result = locked(&this.store).and_then(|db| {
-                        let root = vorkspace_core::bot::root(&db);
+                        let root = vorkspace_core::store::bot_root(&db);
                         let memory =
                             vorkspace_core::bot::files::read(&root, "vox", None, "MEMORY.md")?;
                         if memory.text.is_none() {

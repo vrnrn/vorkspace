@@ -1,17 +1,22 @@
 //! The same live model catalogs the React model picker queries. No inference.
 mod claude;
 use crate::{
+    kind::Kind,
     process,
-    provider::{self, Kind},
+    provider::{self},
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     process::{Command, Stdio},
-    sync::{mpsc, Mutex, OnceLock},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
+};
+
+pub(crate) use crate::model_cache::{cache, model};
+pub use crate::model_cache::{
+    cached_models_for, cached_name, generation, invalidate, Model, ModelControl,
 };
 
 const CATALOG_BYTES: usize = 2 * 1024 * 1024;
@@ -25,7 +30,7 @@ pub struct RemoteCatalog {
 }
 
 pub fn remote_catalog(cwd: &str) -> Result<RemoteCatalog, String> {
-    let remote = crate::remote::parse_remote_path(cwd).ok_or("Invalid remote project")?;
+    let remote = crate::remote_path::parse_remote_path(cwd).ok_or("Invalid remote project")?;
     let connections = crate::remote::default_connections()?;
     let machine = connections.machine_for_environment(&remote.environment_id)?;
     let descriptor = connections.request(&machine.id, "environment.describe", json!({"supportedProviders":Kind::ALL.into_iter().map(|kind|kind.id()).collect::<Vec<_>>()}))?;
@@ -173,74 +178,6 @@ fn remote_catalog_response(value: &Value, providers: Vec<Kind>) -> Result<Remote
     })
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Model {
-    pub id: String,
-    pub name: String,
-    /// Concrete id behind a moving provider alias, retained for comparisons.
-    #[serde(default)]
-    pub alias_target: Option<String>,
-    pub efforts: Vec<String>,
-    pub default_effort: Option<String>,
-    pub fast: bool,
-    pub thinking: bool,
-    pub default: bool,
-    pub tiers: Vec<(String, String)>,
-    #[serde(default)]
-    pub controls: Vec<ModelControl>,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ModelControl {
-    pub id: String,
-    pub name: String,
-    pub current: String,
-    pub choices: Vec<(String, String)>,
-}
-#[derive(Default)]
-struct CatalogCache {
-    entries: Vec<(Kind, crate::accounts::Profile, Vec<Model>, Instant)>,
-    generation: std::collections::HashMap<(Kind, crate::accounts::Profile), u64>,
-}
-fn cache() -> &'static Mutex<CatalogCache> {
-    static CACHE: OnceLock<Mutex<CatalogCache>> = OnceLock::new();
-    CACHE.get_or_init(Default::default)
-}
-pub fn invalidate(kind: Kind, account: &crate::accounts::Profile) {
-    let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
-    *cache.generation.entry((kind, account.clone())).or_default() += 1;
-    cache
-        .entries
-        .retain(|(k, p, _, _)| *k != kind || p != account);
-}
-/// Generation changes whenever credentials invalidate this account's catalog.
-pub fn generation(kind: Kind, account: &crate::accounts::Profile) -> u64 {
-    cache()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .generation
-        .get(&(kind, account.clone()))
-        .copied()
-        .unwrap_or(0)
-}
-/// A model's catalog name from any account's cached catalog, without querying.
-pub fn cached_name(kind: Kind, id: &str) -> Option<String> {
-    let cache = cache().lock().unwrap_or_else(|e| e.into_inner());
-    cache
-        .entries
-        .iter()
-        .filter(|(k, ..)| *k == kind)
-        .find_map(|(_, _, rows, _)| rows.iter().find(|m| m.id == id).map(|m| m.name.clone()))
-}
-/// Account-scoped catalog for immediate display while a refresh runs.
-pub fn cached_models_for(kind: Kind, account: &crate::accounts::Profile) -> Option<Vec<Model>> {
-    cache()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .entries
-        .iter()
-        .find(|(k, profile, _, _)| *k == kind && profile == account)
-        .map(|(_, _, models, _)| models.clone())
-}
 pub fn models(kind: Kind) -> Result<Vec<Model>, String> {
     models_for(kind, &crate::accounts::Profile::default())
 }
@@ -371,20 +308,6 @@ pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<
     Ok(models)
 }
 
-pub(crate) fn model(id: &str, name: &str) -> Model {
-    Model {
-        id: id.into(),
-        name: name.into(),
-        alias_target: None,
-        efforts: Vec::new(),
-        default_effort: None,
-        fast: false,
-        thinking: false,
-        default: false,
-        tiers: Vec::new(),
-        controls: Vec::new(),
-    }
-}
 fn leaves<'a>(values: &'a Value, out: &mut Vec<&'a Value>) {
     for value in values.as_array().into_iter().flatten() {
         if value["options"].is_array() {
@@ -575,11 +498,11 @@ pub(crate) fn cli_json_for(
     profile: &crate::accounts::Profile,
 ) -> Result<Value, String> {
     let binary =
-        provider::resolve(kind).ok_or_else(|| format!("{} CLI not installed", kind.label()))?;
+        crate::cli::resolve(kind).ok_or_else(|| format!("{} CLI not installed", kind.label()))?;
     let mut command = Command::new(binary);
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::shell_env::apply_gui_env(&mut command);
     if kind == Kind::Claude {
-        crate::scm::shell::apply_claude_env(&mut command);
+        crate::shell_env::apply_claude_env(&mut command);
     }
     profile.apply(kind, &mut command)?;
     command
@@ -668,9 +591,9 @@ fn query_provider(
     account: &crate::accounts::Profile,
 ) -> Result<Value, String> {
     let binary =
-        provider::resolve(kind).ok_or_else(|| format!("{} CLI not installed", kind.label()))?;
+        crate::cli::resolve(kind).ok_or_else(|| format!("{} CLI not installed", kind.label()))?;
     let mut command = Command::new(binary);
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::shell_env::apply_gui_env(&mut command);
     account.apply(kind, &mut command)?;
     if kind == Kind::Codex {
         command.arg("app-server");

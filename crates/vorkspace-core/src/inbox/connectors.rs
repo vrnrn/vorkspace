@@ -1,13 +1,12 @@
 //! Inbox visibility is independent of authentication. Disabling a connector
 //! keeps credentials and read state while removing its work and UI surfaces.
-use super::{Store, PROVIDERS};
-use serde_json::Value;
+use super::PROVIDERS;
 use std::collections::BTreeMap;
 
-const KEY: &str = "native-inbox-connectors";
+pub(crate) const KEY: &str = "native-inbox-connectors";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Connectors(BTreeMap<String, bool>);
+pub struct Connectors(pub(crate) BTreeMap<String, bool>);
 
 impl Default for Connectors {
     fn default() -> Self {
@@ -21,30 +20,6 @@ impl Default for Connectors {
 }
 
 impl Connectors {
-    pub fn load(store: &Store) -> Self {
-        let native = store
-            .setting(KEY)
-            .ok()
-            .flatten()
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
-        let saved = native.or_else(|| {
-            store
-                .desktop_preferences()
-                .and_then(|preferences| preferences.json("vorkspace.inboxConnectors.v1"))
-        });
-        let mut connectors = Self::default();
-        for provider in PROVIDERS {
-            if let Some(enabled) = saved
-                .as_ref()
-                .and_then(|value| value.get(provider))
-                .and_then(Value::as_bool)
-            {
-                connectors.0.insert(provider.into(), enabled);
-            }
-        }
-        connectors
-    }
-
     pub fn enabled(&self, provider: &str) -> bool {
         self.0.get(provider).copied().unwrap_or(false)
     }
@@ -60,17 +35,12 @@ impl Connectors {
         *value = enabled;
         Ok(())
     }
-    pub fn save(&self, store: &Store) -> Result<(), String> {
-        store.save_setting(
-            KEY,
-            &serde_json::to_string(&self.0).map_err(|error| error.to_string())?,
-        )
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::Store;
     use crate::{
         desktop_preferences::DesktopPreferences,
         inbox::{Item, Service, ViewState},

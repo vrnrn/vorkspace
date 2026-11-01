@@ -354,20 +354,20 @@ fn missing_or_wrong_source_is_rejected_without_creating_it() {
 #[test]
 fn model_picker_keys_are_translated_to_provider_model_ids() {
     assert_eq!(
-        native_model("codex:gpt-6.1-sol", "codex").as_deref(),
+        crate::session::native_model("codex:gpt-6.1-sol", "codex").as_deref(),
         Some("gpt-6.1-sol")
     );
     assert_eq!(
-        native_model("claude:opus-4.8[effort=high]", "claude").as_deref(),
+        crate::session::native_model("claude:opus-4.8[effort=high]", "claude").as_deref(),
         Some("claude-opus-4-8")
     );
     assert_eq!(
-        native_model("claude:sonnet", "claude").as_deref(),
+        crate::session::native_model("claude:sonnet", "claude").as_deref(),
         Some("sonnet")
     );
     assert_eq!(
-        native_model("opencode:provider/model", "opencode").as_deref(),
+        crate::session::native_model("opencode:provider/model", "opencode").as_deref(),
         Some("provider/model")
     );
-    assert_eq!(native_model("codex:default", "codex"), None);
+    assert_eq!(crate::session::native_model("codex:default", "codex"), None);
 }

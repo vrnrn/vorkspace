@@ -1,7 +1,8 @@
 //! Generated sidebar titles, following sessions/model/sessionTitle.ts.
 use crate::{
     agent::Settings,
-    provider::{self, Kind, Request},
+    kind::Kind,
+    provider::{self, Request},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -9,20 +10,7 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
-/// Tauri's sessionDisplayTitle; persistence retains its canonical provider prefix.
-pub fn display_title<'a>(title: &'a str, provider: &str) -> &'a str {
-    let prefix = format!("{provider} · ");
-    if let Some(title) = title.strip_prefix(&prefix) {
-        return title;
-    }
-    if title == provider
-        || title == Kind::display_label(provider)
-        || title == format!("New {} session", Kind::display_label(provider))
-    {
-        return "New session";
-    }
-    title
-}
+pub use crate::session::display_title;
 
 const PROMPT: &str = r#"Generate a title that will help the user recognize this coding session weeks later.
 Also identify one GitHub issue or pull request only when the user explicitly refers to it by number or URL.

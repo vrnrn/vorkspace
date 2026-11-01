@@ -5,8 +5,8 @@ pub(crate) use index::{git_output_capped, is_indexable_root};
 pub use index::{list_project_files, list_project_files_sync_cancellable, ProjectFile};
 mod name;
 mod paths;
-pub mod remote;
-pub use remote::run_remote_command;
+pub use crate::remote_workspace as remote;
+pub use crate::remote_workspace::run_remote_command;
 
 use std::collections::HashSet;
 use std::io::{ErrorKind, Write};
@@ -16,7 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::scm::{expand_home, path_to_js};
+use crate::shell_env::expand_home;
+use crate::shell_env::path_to_js;
 pub use name::{
     leaf_name, validate_file_name, well_formed_file_name, NameIssue, NameIssueKind, Severity,
 };

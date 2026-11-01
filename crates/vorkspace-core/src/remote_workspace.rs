@@ -133,7 +133,7 @@ fn to_host(value: &mut Value, environment: &mut Option<String>) -> Result<(), St
             to_host(value, environment)?;
         }
     } else if let Value::String(path) = value {
-        let remote = crate::remote::parse_remote_path(path)
+        let remote = crate::remote_path::parse_remote_path(path)
             .ok_or("Files can only be copied or moved within one machine.")?;
         if environment
             .as_ref()
@@ -150,7 +150,7 @@ fn to_host(value: &mut Value, environment: &mut Option<String>) -> Result<(), St
 fn client_result(command: &str, environment: &str, args: &Value, mut result: Value) -> Value {
     let prefix = |path: &mut Value| {
         if let Some(host) = path.as_str() {
-            *path = Value::String(crate::remote::remote_path(environment, host));
+            *path = Value::String(crate::remote_path::remote_path(environment, host));
         }
     };
     let root = args
@@ -161,7 +161,7 @@ fn client_result(command: &str, environment: &str, args: &Value, mut result: Val
     let relative_path = |entry: &mut Value| {
         if let Some(path) = entry.get_mut("path") {
             if let Some(relative) = path.as_str() {
-                *path = Value::String(crate::remote::remote_path(
+                *path = Value::String(crate::remote_path::remote_path(
                     environment,
                     &format!("{root}/{relative}"),
                 ));

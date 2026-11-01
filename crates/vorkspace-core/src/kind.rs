@@ -91,6 +91,10 @@ impl Kind {
     }
 }
 
+pub fn supports_rewind(kind: Kind) -> bool {
+    matches!(kind, Kind::Codex | Kind::Pi | Kind::Omp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,11 +130,11 @@ mod tests {
             assert_eq!(Kind::parse(id), None);
             assert_eq!(Kind::from_id(id), Kind::Unsupported);
             assert_eq!(
-                crate::session_title::display_title(&format!("New {label} session"), id),
+                crate::session::display_title(&format!("New {label} session"), id),
                 "New session"
             );
             assert_eq!(
-                crate::session_title::display_title("My saved title", id),
+                crate::session::display_title("My saved title", id),
                 "My saved title"
             );
         }

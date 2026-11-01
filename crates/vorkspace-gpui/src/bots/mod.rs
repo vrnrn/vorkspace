@@ -376,8 +376,12 @@ impl Bots {
         bot::set_minions_enabled(prefs.bots && prefs.minions);
         let (roster, root, roster_error) = match locked(&store) {
             Ok(db) => match Roster::load(&db) {
-                Ok(roster) => (roster, bot::root(&db), None),
-                Err(error) => (Roster::default(), bot::root(&db), Some(error)),
+                Ok(roster) => (roster, vorkspace_core::store::bot_root(&db), None),
+                Err(error) => (
+                    Roster::default(),
+                    vorkspace_core::store::bot_root(&db),
+                    Some(error),
+                ),
             },
             Err(error) => (
                 Roster::default(),

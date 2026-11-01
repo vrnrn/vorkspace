@@ -242,7 +242,7 @@ pub(crate) fn project(blocks: &[Value]) -> Result<Vec<Row>, String> {
 fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
     let mut block = old
         .cloned()
-        .unwrap_or_else(|| json!({"id":format!("gpui-{}",crate::bot::new_id())}));
+        .unwrap_or_else(|| json!({"id":format!("gpui-{}",crate::session::new_id())}));
     let role = rows[0].role.as_str();
     let text = rows.iter().map(|r| r.text.as_str()).collect::<String>();
     // Reuse the complete original object for unchanged display rows. In

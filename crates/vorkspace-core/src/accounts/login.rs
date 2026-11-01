@@ -1,8 +1,5 @@
 use super::Profile;
-use crate::{
-    process,
-    provider::{self, Kind},
-};
+use crate::{kind::Kind, process};
 use std::{
     io::Read,
     process::{Command, Stdio},
@@ -39,9 +36,9 @@ pub fn authenticate(
     let args = arguments(kind, action)
         .ok_or("This provider does not offer a single browser sign-in flow")?;
     let binary =
-        provider::resolve(kind).ok_or_else(|| format!("{} CLI not installed", kind.label()))?;
+        crate::cli::resolve(kind).ok_or_else(|| format!("{} CLI not installed", kind.label()))?;
     let mut command = Command::new(binary);
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::shell_env::apply_gui_env(&mut command);
     profile.apply(kind, &mut command)?;
     command
         .args(args)

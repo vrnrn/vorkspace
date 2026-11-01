@@ -1,7 +1,7 @@
 //! Unix file-name checks for the explorer, ported from fileName.ts.
 use serde::{Deserialize, Serialize};
 
-use crate::scm::text::{js_len, js_space};
+use crate::js_text::{js_len, js_space};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

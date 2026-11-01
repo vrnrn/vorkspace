@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::scm::shell::dirs_home;
+use crate::shell_env::dirs_home;
 fn expand_home(path: &str) -> PathBuf {
-    crate::scm::expand_home(Path::new(path))
+    crate::shell_env::expand_home(Path::new(path))
 }
 
 const MAX_SKILLS: usize = 5_000;
@@ -390,7 +390,7 @@ fn scan_root(root: &Path, scope: &str, source: &str) -> Vec<DiscoveredSkill> {
         out.push(DiscoveredSkill {
             name,
             description,
-            path: crate::scm::path_to_js(&skill_md),
+            path: crate::shell_env::path_to_js(&skill_md),
             scope: scope.to_string(),
             source: source.to_string(),
         });

@@ -38,8 +38,11 @@ fn trim_slash(path: &str) -> String {
 
 /// Stable comparison key for Windows paths without changing their display case.
 pub fn path_key(path: &str) -> String {
-    if let Some(remote) = crate::remote::parse_remote_path(path) {
-        return crate::remote::remote_path(&remote.environment_id, &path_key(&remote.host_path));
+    if let Some(remote) = crate::remote_path::parse_remote_path(path) {
+        return crate::remote_path::remote_path(
+            &remote.environment_id,
+            &path_key(&remote.host_path),
+        );
     }
     let normalized = trim_slash(path);
     let drive =
@@ -59,8 +62,11 @@ fn skip_chars(text: &str, chars: usize) -> &str {
 }
 
 pub fn parent_path(path: &str) -> String {
-    if let Some(remote) = crate::remote::parse_remote_path(path) {
-        return crate::remote::remote_path(&remote.environment_id, &parent_path(&remote.host_path));
+    if let Some(remote) = crate::remote_path::parse_remote_path(path) {
+        return crate::remote_path::remote_path(
+            &remote.environment_id,
+            &parent_path(&remote.host_path),
+        );
     }
     let trimmed = trim_slash(path);
     if let Some(rest) = trimmed.strip_prefix("//") {
@@ -109,8 +115,8 @@ pub fn is_equal_or_inside(path: &str, root: &str) -> bool {
 }
 
 pub fn join_path(parent: &str, relative: &str) -> String {
-    if let Some(remote) = crate::remote::parse_remote_path(parent) {
-        return crate::remote::remote_path(
+    if let Some(remote) = crate::remote_path::parse_remote_path(parent) {
+        return crate::remote_path::remote_path(
             &remote.environment_id,
             &join_path(&remote.host_path, relative),
         );

@@ -22,6 +22,13 @@ fn existing_child(root: &Path, identity: &str) -> Option<PathBuf> {
         })
 }
 
+pub fn vorkspace_database() -> PathBuf {
+    let base = crate::shell_env::home()
+        .unwrap_or_default()
+        .join("Library/Application Support");
+    desktop_database(&base)
+}
+
 pub(crate) fn desktop_database(base: &Path) -> PathBuf {
     let current = base.join("com.vorkspace.desktop/vorkspace.db");
     if current.exists() {

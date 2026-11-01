@@ -1,7 +1,7 @@
 use super::*;
 use gpui::{TestAppContext, VisualTestContext, WindowHandle, size};
 use std::{cell::RefCell, rc::Rc, sync::Mutex};
-use vorkspace_core::{bot::peers::Peer, store::Store};
+use vorkspace_core::{bot::Peer, store::Store};
 
 fn message(id: &str, text: &str, internal: bool) -> Message {
     Message {

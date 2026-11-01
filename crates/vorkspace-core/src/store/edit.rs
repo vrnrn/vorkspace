@@ -1,6 +1,6 @@
 //! Two-phase edit: capture a revision, then trim only after provider confirmation.
 use super::*;
-use crate::provider::Kind;
+use crate::kind::Kind;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -98,7 +98,7 @@ impl Store {
             .into_iter()
             .find(|s| s.id == id)
             .ok_or("Conversation no longer exists")?;
-        if !crate::provider::supports_rewind(Kind::from_id(&session.provider)) {
+        if !crate::kind::supports_rewind(Kind::from_id(&session.provider)) {
             return Err("This provider does not support editing the last turn".into());
         }
         let rows = self.load(id)?.rows;

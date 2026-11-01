@@ -345,7 +345,7 @@ fn switching_from_peer_to_channel_keeps_the_autonomous_budget(cx: &mut TestAppCo
     s.manager.update(cx, |m, cx| {
         let mut sent = Message {
             prepared_prompt: None,
-            peer: Some(bot::peers::Peer {
+            peer: Some(bot::Peer {
                 from: "peer".into(),
                 hop: 4,
                 expect_reply: false,
@@ -4220,7 +4220,7 @@ fn a_users_message_steers_the_running_turn_but_never_a_peer_turn(cx: &mut TestAp
             "Retry must not reuse the uncertain steer's submission identity"
         );
         m.roster.get_mut(&s.id).unwrap().outbox.clear();
-        let peer = bot::peers::Peer {
+        let peer = bot::Peer {
             from: "merlin".into(),
             hop: 1,
             expect_reply: true,

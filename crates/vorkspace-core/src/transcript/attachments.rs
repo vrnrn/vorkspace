@@ -10,7 +10,7 @@ pub fn from_paths(paths: &[PathBuf]) -> serde_json::Value {
         paths
             .iter()
             .map(|path| {
-                let mime = crate::composer::image_mime(path);
+                let mime = image_mime(path);
                 serde_json::json!({
                     "id":path.to_string_lossy(), "path":path,
                     "name":path.file_name().unwrap_or_default().to_string_lossy(),
@@ -81,5 +81,15 @@ impl Transcript {
                 sent_at: None,
             });
         }
+    }
+}
+
+pub fn image_mime(path: &std::path::Path) -> Option<&'static str> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
     }
 }

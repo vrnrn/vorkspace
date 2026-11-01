@@ -2,7 +2,7 @@ use super::*;
 use gpui::{TestAppContext, VisualTestContext, WindowHandle};
 use std::{path::PathBuf, sync::Mutex};
 use vorkspace_core::{
-    bot::{Bot, Message, MinionMetadata, peers::Peer},
+    bot::{Bot, Message, MinionMetadata, Peer},
     store::Store,
 };
 

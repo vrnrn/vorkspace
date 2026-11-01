@@ -58,7 +58,7 @@ impl PiUsageProvider {
 pub(super) fn fetch_pi_usage(provider: PiUsageProvider) -> PiUsageResult {
     let Some(dir) = agent_dir(
         std::env::var_os("PI_CODING_AGENT_DIR"),
-        crate::accounts::home().map(|p| p.to_string_lossy().into_owned()),
+        crate::shell_env::home().map(|p| p.to_string_lossy().into_owned()),
     ) else {
         return unavailable(
             "Pi usage needs an absolute configuration directory. Check PI_CODING_AGENT_DIR.",

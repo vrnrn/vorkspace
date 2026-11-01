@@ -3,14 +3,13 @@
 use super::{Bot, Roster};
 use crate::{
     project_appearance::{default_foreground_color, default_seed_for, COLORS},
-    store::Store,
     time::now_ms,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
-const KEY: &str = "bot-channels-native-v1";
+pub(crate) const KEY: &str = "bot-channels-native-v1";
 pub const MAX_HOPS: u8 = 4;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 
@@ -136,58 +135,6 @@ pub fn resolve<'a>(roster: &'a Roster, query: &str) -> Result<&'a Bot, String> {
     }
 }
 impl Channels {
-    pub fn load(store: &Store) -> Result<Self, String> {
-        if let Some(raw) = store.setting(KEY)? {
-            return serde_json::from_str(&raw)
-                .map_err(|e| format!("Cannot read Bot Channels: {e}"));
-        }
-        let mut result = Self::default();
-        if let Some(prefs) = store.desktop_preferences() {
-            if let Some(raw) = prefs.get("vorkspace:bot-channels") {
-                let rows: Vec<Value> = serde_json::from_str(raw)
-                    .map_err(|e| format!("Cannot read desktop Channels: {e}"))?;
-                for mut row in rows {
-                    let sessions = row
-                        .as_object_mut()
-                        .ok_or("Invalid channel")?
-                        .remove("memberSessions")
-                        .unwrap_or(json!({}));
-                    if row.get("memberIds").is_none() {
-                        row["memberIds"] = row["botIds"].clone();
-                    }
-                    let mut channel: Channel =
-                        serde_json::from_value(row).map_err(|e| e.to_string())?;
-                    if let Some(raw) =
-                        prefs.get(&format!("vorkspace:bot-channel-messages:{}", channel.id))
-                    {
-                        channel.messages = serde_json::from_str(raw)
-                            .map_err(|e| format!("Cannot read channel messages: {e}"))?;
-                    }
-                    // Preserve the original references even if a backing session
-                    // is not currently resolvable. Do not manufacture history.
-                    if let Some(sessions) = sessions.as_object() {
-                        for (bot, id) in sessions {
-                            let id = id.as_str().ok_or("Invalid channel session")?;
-                            let native_id = store.resolve_session_id(id).map_err(|_| format!("Channel {} has an unavailable backing session for {bot}; its history was preserved", channel.name))?;
-                            channel.member_sessions.insert(bot.clone(), native_id);
-                        }
-                    }
-                    result.channels.push(channel);
-                }
-            }
-        }
-        Ok(result)
-    }
-    pub fn save(&self, store: &Store) -> Result<(), String> {
-        store.save_setting(
-            KEY,
-            &serde_json::to_string(self).map_err(|e| e.to_string())?,
-        )
-    }
-    pub fn save_with_draft(&self, store: &Store, key: &str, draft: &str) -> Result<(), String> {
-        let state = serde_json::to_string(self).map_err(|e| e.to_string())?;
-        store.save_settings(&[(KEY, &state), (key, draft)])
-    }
     pub fn create(
         &mut self,
         name: &str,

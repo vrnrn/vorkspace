@@ -33,7 +33,7 @@ impl DesktopPreferences {
                     .filter(|last| last["harness"] == provider)
                     .and_then(|last| last["model"].as_str())
             })
-            .and_then(|model| crate::store::native_model(model, provider));
+            .and_then(|model| crate::session::native_model(model, provider));
         let controls: HashMap<String, String> = self
             .json("vorkspace.lastModelSettings")
             .as_ref()

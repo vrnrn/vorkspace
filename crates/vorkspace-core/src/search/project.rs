@@ -93,7 +93,7 @@ pub fn search_project(
             result
         });
     }
-    let expanded = crate::scm::expand_home(root);
+    let expanded = crate::shell_env::expand_home(root);
     let root = expanded.as_path();
     let query = options.query.trim();
     if query.is_empty() || cancel.load(Ordering::Acquire) || !crate::files::is_indexable_root(root)
@@ -196,7 +196,7 @@ fn git_grep_capped(
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(1);
         let preview = String::from_utf8_lossy(preview_bytes).to_string();
-        let path = crate::scm::path_to_js(&root.join(&relative));
+        let path = crate::shell_env::path_to_js(&root.join(&relative));
         let column = match_column(
             &preview,
             query,

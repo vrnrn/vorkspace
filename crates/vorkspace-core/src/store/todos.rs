@@ -110,7 +110,7 @@ impl Store {
         self.todo_schema()?;
         let title = clean_title(title)?;
         let now = now_millis();
-        let id = crate::bot::new_id();
+        let id = crate::session::new_id();
         let tx = self
             .conn
             .unchecked_transaction()

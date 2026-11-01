@@ -2,7 +2,12 @@
 mod app_commands;
 pub use app_commands::AppCommandAdmission;
 mod attachments;
+pub(crate) mod automations_schema;
+mod bot_desktop;
+mod bot_state;
 mod bots;
+pub mod inbox_preferences;
+pub use bot_state::root as bot_root;
 mod card;
 mod composer_draft;
 mod follow_up;
@@ -28,28 +33,15 @@ mod shared;
 pub use shared::{IndexedHistoryCursor, IndexedHistoryPage};
 mod side_threads;
 pub(crate) mod todos;
+pub use crate::session::native_model;
 use crate::transcript::{Row, Transcript};
 pub use edit::EditSnapshot;
 use rusqlite::{params, Connection};
 pub use side_threads::DesktopSideThread;
 use std::path::Path;
-pub use vorkspace_import::native_model;
 pub use vorkspace_import::{vorkspace_database, ImportReport};
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct Session {
-    pub id: i64,
-    pub title: String,
-    pub provider: String,
-    pub cwd: String,
-    pub provider_id: Option<String>,
-    pub has_messages: bool,
-    /// Unix milliseconds; zero means an older session has no recorded time.
-    pub updated_at: u64,
-    pub archived: bool,
-    pub pinned: bool,
-    pub work_item: Option<crate::session_groups::WorkItem>,
-}
+pub use crate::session::Session;
 
 /// A session's pending or delivered reminder.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -723,7 +715,7 @@ impl Store {
         let updated_at = crate::response::now_ms();
         let title = format!(
             "New {} session",
-            crate::provider::Kind::parse(provider)
+            crate::kind::Kind::parse(provider)
                 .ok_or_else(|| format!("Unknown provider: {provider}"))?
                 .label()
         );

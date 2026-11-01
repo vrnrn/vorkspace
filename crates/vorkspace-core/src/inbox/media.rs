@@ -247,7 +247,7 @@ fn path_has_dotdot(path: &str) -> bool {
 }
 
 fn github_auth_token() -> Option<String> {
-    let home = crate::accounts::home()?;
+    let home = crate::shell_env::home()?;
     super::run_gh(&home, &["auth", "token"], false).ok()
 }
 

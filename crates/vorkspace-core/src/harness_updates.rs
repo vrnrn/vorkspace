@@ -2,7 +2,8 @@
 //! occurs only when the user chooses Update. Nothing is persisted.
 use crate::{
     catalog, cli,
-    provider::{self, Kind},
+    kind::Kind,
+    provider::{self},
 };
 use std::{
     cmp::Ordering,
@@ -45,7 +46,7 @@ pub fn compare_versions(a: &str, b: &str) -> Ordering {
     parts(a).cmp(&parts(b))
 }
 fn cwd() -> PathBuf {
-    crate::accounts::home().unwrap_or_else(|| PathBuf::from("/"))
+    crate::shell_env::home().unwrap_or_else(|| PathBuf::from("/"))
 }
 fn installed(kind: Kind) -> Result<String, String> {
     let path = provider::resolve(kind).ok_or("CLI could not be resolved")?;
@@ -127,7 +128,7 @@ pub fn run_update(update: &Update) -> Result<String, String> {
     let path = provider::resolve(update.harness).ok_or("CLI could not be resolved")?;
     let (program, args, homebrew) = match homebrew_upgrade(&path) {
         Some(upgrade) => (
-            crate::scm::shell::resolve_gui_binary("brew").ok_or("Homebrew could not be found")?,
+            crate::shell_env::resolve_gui_binary("brew").ok_or("Homebrew could not be found")?,
             upgrade,
             true,
         ),
@@ -162,7 +163,8 @@ mod tests {
 
     #[test]
     fn homebrew_installs_are_upgraded_through_brew() {
-        let root = std::env::temp_dir().join(format!("vorkspace-brew-{}", crate::bot::new_id()));
+        let root =
+            std::env::temp_dir().join(format!("vorkspace-brew-{}", crate::session::new_id()));
         let cask = root.join("Caskroom/claude-code@latest/2.1.311");
         let formula = root.join("Cellar/codex/1.2.3/bin");
         let plain = root.join("bin");

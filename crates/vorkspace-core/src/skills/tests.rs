@@ -455,9 +455,9 @@ fn disabled_project_skill_falls_back_to_same_name_personal_skill() {
     );
 
     let project_skill_path =
-        crate::scm::path_to_js(&project.0.join(".agents/skills/review/SKILL.md"));
+        crate::shell_env::path_to_js(&project.0.join(".agents/skills/review/SKILL.md"));
     let personal_skill_path =
-        crate::scm::path_to_js(&home.0.join(".agents/skills/review/SKILL.md"));
+        crate::shell_env::path_to_js(&home.0.join(".agents/skills/review/SKILL.md"));
 
     // 1. When neither is disabled, project skill wins.
     let enabled_skills = list_skills_from(&project.0, Some(&home.0), None);
@@ -522,7 +522,7 @@ fn disabled_skill_matching_preserves_distinct_unix_paths_with_backslashes() {
     assert!(skill_with_bs_dir.join("SKILL.md").exists());
     assert!(nested_file.exists());
 
-    let nested_path = crate::scm::path_to_js(&nested_file);
+    let nested_path = crate::shell_env::path_to_js(&nested_file);
     let skills = list_skills_from(&project.0, None, Some(&[nested_path]));
     let slash_skill = skills.iter().find(|s| s.name == "slash-skill");
     assert!(

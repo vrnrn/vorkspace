@@ -334,10 +334,10 @@ impl Store {
         Ok(cwd
             .filter(|cwd| cwd != &remote.project.cwd)
             .and_then(|cwd| {
-                if let Some(path) = crate::remote::parse_remote_path(&cwd) {
+                if let Some(path) = crate::remote_path::parse_remote_path(&cwd) {
                     (path.environment_id == remote.project.environment_id).then_some(cwd)
                 } else {
-                    Some(crate::remote::remote_path(
+                    Some(crate::remote_path::remote_path(
                         &remote.project.environment_id,
                         &cwd,
                     ))
