@@ -15,6 +15,7 @@ rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-featur
 
 # Exclude the unused screen-capture dependency.
 # Keep the Apple renderer's alpha and font-matching fixes.
+# The macOS bridge owns per-window cursor state and AppKit cursor rectangles.
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }

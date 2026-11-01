@@ -1675,7 +1675,7 @@ impl Render for Input {
                 d.h_full().font_family(vorkspace_ui::fonts::FIXED_FONT)
             })
             .track_focus(&self.focus)
-            .cursor(if self.code_rail_hovered() {
+            .cursor(if self.code.is_some() {
                 CursorStyle::Arrow
             } else {
                 CursorStyle::IBeam

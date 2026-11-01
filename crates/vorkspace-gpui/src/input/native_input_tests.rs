@@ -439,3 +439,146 @@ fn ime_replacement_and_grapheme_deletion(cx: &mut TestAppContext) {
         })
         .unwrap();
 }
+
+#[gpui::test]
+fn hover_cursor_composer_empty_filled_and_repaint(cx: &mut TestAppContext) {
+    let window = field(cx, false);
+    let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    cx.update(|w, _| w.activate_window());
+    cx.run_until_parked();
+    for (bot, text) in [
+        (false, ""),
+        (false, "unfinished 🙂 draft"),
+        (true, ""),
+        (true, "Bot draft"),
+    ] {
+        window
+            .update(cx, |i, _, cx| {
+                if bot {
+                    i.bot_composer("Fixture", cx);
+                }
+                i.set_text(text.into(), cx);
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        let bounds = window.update(cx, |i, _, _| i.bounds.unwrap()).unwrap();
+        cx.simulate_mouse_move(bounds.center(), None, Default::default());
+        cx.run_until_parked();
+        assert_eq!(cx.cursor_style(), CursorStyle::IBeam);
+        cx.refresh().unwrap();
+        assert_eq!(cx.cursor_style(), CursorStyle::IBeam);
+        cx.simulate_mouse_move(point(px(1000.), px(1000.)), None, Default::default());
+        cx.run_until_parked();
+        assert_eq!(cx.cursor_style(), CursorStyle::Arrow);
+    }
+}
+
+#[gpui::test]
+fn hover_cursor_file_editor_text_gutter_rail_and_background(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| cx.new(Input::editor))
+            .unwrap()
+    });
+    window
+        .update(cx, |i, _, cx| i.set_text("fn main() {}\n".repeat(80), cx))
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|w, _| w.activate_window());
+    visual.run_until_parked();
+    for scale in [1., 1.5, 1.] {
+        visual.update(|w, cx| w.set_ui_scale(scale, cx));
+        visual.simulate_resize(size(px(700.), px(500.)));
+        visual.run_until_parked();
+        let bounds = window.update(visual, |i, _, _| i.bounds.unwrap()).unwrap();
+        for (position, expected) in [
+            (bounds.center(), CursorStyle::IBeam),
+            (
+                point(bounds.left() - px(25.), bounds.top() + px(10.)),
+                CursorStyle::Arrow,
+            ),
+            (
+                point(bounds.right() + px(8.), bounds.top() + px(10.)),
+                CursorStyle::Arrow,
+            ),
+            (bounds.center(), CursorStyle::IBeam),
+            (point(px(1000.), px(1000.)), CursorStyle::Arrow),
+        ] {
+            visual.simulate_mouse_move(
+                point(position.x * scale, position.y * scale),
+                None,
+                Default::default(),
+            );
+            visual.run_until_parked();
+            assert_eq!(
+                visual.cursor_style(),
+                expected,
+                "scale={scale}, position={position:?}"
+            );
+            visual.refresh().unwrap();
+            assert_eq!(visual.cursor_style(), expected);
+        }
+    }
+}
+
+struct CachedCursorFixture {
+    input: Entity<Input>,
+    show: bool,
+}
+impl Render for CachedCursorFixture {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().when(self.show, |d| {
+            d.child(
+                self.input
+                    .clone()
+                    .cached(gpui::StyleRefinement::default().w_full()),
+            )
+        })
+    }
+}
+
+#[gpui::test]
+fn hover_cursor_stationary_cached_composer_replacement(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            let input = cx.new(Input::new);
+            cx.new(|_| CachedCursorFixture { input, show: false })
+        })
+        .unwrap()
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|w, _| w.activate_window());
+    visual.simulate_mouse_move(point(px(10.), px(10.)), None, Default::default());
+    for show in [true, true, false, true, false] {
+        window
+            .update(visual, |fixture, _, cx| {
+                fixture.show = show;
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert_eq!(
+            visual.cursor_style(),
+            if show {
+                CursorStyle::IBeam
+            } else {
+                CursorStyle::Arrow
+            }
+        );
+    }
+    visual.deactivate_window();
+    window
+        .update(visual, |fixture, _, cx| {
+            fixture.show = true;
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert_eq!(
+        visual.cursor_style(),
+        CursorStyle::Arrow,
+        "inactive repaint cannot take cursor ownership"
+    );
+    visual.update(|w, _| w.activate_window());
+    visual.run_until_parked();
+    assert_eq!(visual.cursor_style(), CursorStyle::IBeam);
+}

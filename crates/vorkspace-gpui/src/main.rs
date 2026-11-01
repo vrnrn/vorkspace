@@ -25,6 +25,7 @@ mod markdown;
 mod menu_bar;
 #[cfg(test)]
 mod metal_tests;
+mod native_view;
 mod notes;
 mod notifications;
 mod panel_kit;

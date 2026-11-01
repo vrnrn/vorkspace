@@ -1,4 +1,5 @@
 //! Generated HTML lives in an opaque sandbox with no app bridge or network.
+use crate::native_view::invalidate_parent_cursor_rects;
 use gpui::{Context, Window, canvas, prelude::*};
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
@@ -13,6 +14,7 @@ use objc2_web_kit::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
+
 define_class!(
     #[unsafe(super(NSView))]
     #[name = "VorkspaceArtifactClip"]
@@ -196,8 +198,12 @@ impl Html {
         }
     }
     pub(super) fn hide(&self) {
-        if let Some(view) = self.view.borrow().as_ref() {
+        #[cfg(target_os = "macos")]
+        if let Some(view) = self.view.borrow().as_ref()
+            && !view.clip.isHidden()
+        {
             view.clip.setHidden(true);
+            invalidate_parent_cursor_rects(&view.clip);
         }
     }
 }
@@ -222,8 +228,11 @@ impl gpui::Render for Html {
                     let clipped = bounds.intersect(&window.content_mask().bounds);
                     let mut view = view.borrow_mut();
                     if clipped.size.width <= gpui::px(0.) || clipped.size.height <= gpui::px(0.) {
-                        if let Some(view) = view.as_ref() {
+                        if let Some(view) = view.as_ref()
+                            && !view.clip.isHidden()
+                        {
                             view.clip.setHidden(true);
+                            invalidate_parent_cursor_rects(&view.clip);
                         }
                         return;
                     }
@@ -298,13 +307,21 @@ impl gpui::Render for Html {
                             }
                             view.markup = html.clone();
                         }
-                        parent.addSubview_positioned_relativeTo(
-                            &view.clip,
-                            NSWindowOrderingMode::Above,
-                            None,
-                        );
+                        let mut cursor_rects_changed = unsafe { view.clip.superview() }
+                            .as_deref()
+                            .is_none_or(|superview| !std::ptr::eq(superview, parent));
+                        if cursor_rects_changed {
+                            parent.addSubview_positioned_relativeTo(
+                                &view.clip,
+                                NSWindowOrderingMode::Above,
+                                None,
+                            );
+                        }
                         view.clip.ivars().set(interactive);
-                        view.clip.setFrame(rect);
+                        if view.clip.frame() != rect {
+                            view.clip.setFrame(rect);
+                            cursor_rects_changed = true;
+                        }
                         view.web.setFrame(web_rect);
                         // The owned WebKit view is used only on the main thread.
                         unsafe {
@@ -312,7 +329,13 @@ impl gpui::Render for Html {
                                 view.web.setPageZoom(scale);
                             }
                         }
-                        view.clip.setHidden(false);
+                        if view.clip.isHidden() {
+                            view.clip.setHidden(false);
+                            cursor_rects_changed = true;
+                        }
+                        if cursor_rects_changed {
+                            invalidate_parent_cursor_rects(&view.clip);
+                        }
                     }
                 },
             )

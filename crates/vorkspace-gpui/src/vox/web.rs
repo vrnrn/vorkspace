@@ -1,5 +1,6 @@
 //! This WebKit view only loads the per-call, capability-protected loopback page.
 //! Generated documents use a completely separate opaque WebKit configuration.
+use crate::native_view::invalidate_parent_cursor_rects;
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
     runtime::ProtocolObject, sel,
@@ -105,6 +106,7 @@ impl Web {
             web.setUIDelegate(Some(ProtocolObject::from_ref(&*guard)));
             web.setAlphaValue(0.01);
             parent.addSubview(&web);
+            invalidate_parent_cursor_rects(&web);
             let url = NSURL::URLWithString(&NSString::from_str(url)).ok_or("Invalid voice URL")?;
             web.loadRequest(&NSURLRequest::requestWithURL(&url));
             Ok(Self { web, _guard: guard })

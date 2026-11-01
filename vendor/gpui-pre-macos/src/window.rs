@@ -28,7 +28,7 @@ use gpui::{
     AnyWindowHandle, BackgroundExecutor, Bounds, Capslock, CursorStyle, ExternalDragPayload,
     ExternalPaths, FileDropEvent, ForegroundExecutor, FrameRequestSource, KeyDownEvent, Keystroke,
     Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, PlatformAtlas, PlatformDisplay, PlatformFrameSignal, PlatformInput,
+    Pixels, Platform, PlatformAtlas, PlatformDisplay, PlatformFrameSignal, PlatformInput,
     PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
     SharedString, Size, SystemWindowTab, WindowAppearance, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowKind, WindowParams, WindowVisibility, point, px, size,
@@ -176,6 +176,10 @@ unsafe fn build_classes() {
             decl.add_method(
                 sel!(resetCursorRects),
                 reset_cursor_rects as extern "C" fn(&Object, Sel),
+            );
+            decl.add_method(
+                sel!(willRemoveSubview:),
+                view_will_remove_subview as extern "C" fn(&Object, Sel, id),
             );
             decl.add_method(
                 sel!(pressureChangeWithEvent:),
@@ -388,41 +392,44 @@ pub(crate) fn convert_mouse_position(position: NSPoint, window_height: Pixels) -
     )
 }
 
-/// Stores the cursor style on the active GPUI window and invalidates its cursor rects.
-///
-/// # Safety
-///
-/// This function is not thread safe. Callers must ensure this is called on the AppKit main
-/// thread because it reads the active AppKit window and updates GPUI window state associated
-/// with Objective-C objects.
-pub(crate) unsafe fn set_active_window_cursor_style(style: CursorStyle) {
-    // SAFETY: The caller guarantees AppKit main-thread access. `is_gpui_window` ensures the
-    // window has our WINDOW_STATE_IVAR before reading it.
-    unsafe {
-        let app = NSApplication::sharedApplication(nil);
-        let key_window: id = msg_send![app, keyWindow];
-        let main_window: id = msg_send![app, mainWindow];
-        let active_window = if !key_window.is_null() && is_gpui_window(key_window) {
-            Some(key_window)
-        } else if !main_window.is_null() && is_gpui_window(main_window) {
-            Some(main_window)
-        } else {
-            None
-        };
-
-        let Some(active_window) = active_window else {
+fn set_native_cursor_style(window_state: &Arc<Mutex<MacWindowState>>, style: CursorStyle) {
+    let (native_window, native_view, changed) = {
+        let mut state = window_state.lock();
+        if state.closed.load(Ordering::Acquire) {
             return;
-        };
-
-        let window_state = get_window_state(&*active_window);
-        let mut window_state = window_state.lock();
-        if window_state.cursor_style != style {
-            window_state.cursor_style = style;
-            let _: () = msg_send![
-                window_state.native_window,
-                invalidateCursorRectsForView: window_state.native_view.as_ptr()
-            ];
         }
+        let changed = state.cursor_style != style;
+        state.cursor_style = style;
+        (state.native_window, state.native_view.as_ptr(), changed)
+    };
+
+    #[cfg(feature = "test-support")]
+    let native_window_number = unsafe { native_window.windowNumber() as u64 };
+    #[cfg(feature = "test-support")]
+    gpui::cursor_diagnostic::record_native(
+        native_window_number,
+        "native.cursor.style",
+        format!("style={style:?} changed={changed} view={native_view:p}"),
+    );
+
+    if changed {
+        #[cfg(feature = "test-support")]
+        gpui::cursor_diagnostic::record_native(
+            native_window_number,
+            "native.cursor.rects.invalidate.begin",
+            format!("view={native_view:p}"),
+        );
+        unsafe {
+            // AppKit rebuilds this view's cursor rectangles immediately when
+            // this is the key window, and when it next becomes key otherwise.
+            let _: () = msg_send![native_window, invalidateCursorRectsForView: native_view];
+        }
+        #[cfg(feature = "test-support")]
+        gpui::cursor_diagnostic::record_native(
+            native_window_number,
+            "native.cursor.rects.invalidate.end",
+            format!("view={native_view:p}"),
+        );
     }
 }
 
@@ -1085,6 +1092,11 @@ impl MacWindow {
             ];
 
             let content_view = native_window.contentView();
+            #[cfg(feature = "test-support")]
+            gpui::cursor_diagnostic::associate_native_window(
+                native_window.windowNumber() as u64,
+                handle.window_id().as_u64(),
+            );
             let native_view: id = msg_send![VIEW_CLASS, alloc];
             let native_view = NSView::initWithFrame_(native_view, NSView::bounds(content_view));
             assert!(!native_view.is_null());
@@ -1438,6 +1450,10 @@ impl PlatformWindow for MacWindow {
 
     fn content_size(&self) -> Size<Pixels> {
         self.0.as_ref().lock().content_size()
+    }
+
+    fn set_cursor_style(&self, style: CursorStyle, _platform: &dyn Platform) {
+        set_native_cursor_style(&self.0, style);
     }
 
     fn resize(&mut self, size: Size<Pixels>) {
@@ -2123,7 +2139,19 @@ impl PlatformWindow for MacWindow {
 
     fn draw(&self, scene: &gpui::Scene) {
         let mut this = self.0.lock();
+        #[cfg(feature = "test-support")]
+        gpui::cursor_diagnostic::record_native(
+            unsafe { this.native_window.windowNumber() as u64 },
+            "native.scene.submit.begin",
+            "renderer.draw",
+        );
         this.renderer.draw(scene);
+        #[cfg(feature = "test-support")]
+        gpui::cursor_diagnostic::record_native(
+            unsafe { this.native_window.windowNumber() as u64 },
+            "native.scene.submit.end",
+            "renderer.draw-returned",
+        );
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
@@ -2453,14 +2481,6 @@ fn get_scale_factor(native_window: id) -> f32 {
     if factor == 0.0 { 2. } else { factor }
 }
 
-/// Returns whether `window` is one of GPUI's managed windows.
-unsafe fn is_gpui_window(window: id) -> bool {
-    unsafe {
-        msg_send![window, isKindOfClass: WINDOW_CLASS]
-            || msg_send![window, isKindOfClass: PANEL_CLASS]
-    }
-}
-
 unsafe fn get_window_state(object: &Object) -> Arc<Mutex<MacWindowState>> {
     unsafe {
         let raw: *mut c_void = *object.get_ivar(WINDOW_STATE_IVAR);
@@ -2496,6 +2516,72 @@ extern "C" fn dealloc_view(this: &Object, _: Sel) {
     }
 }
 
+struct DeferredCursorRectInvalidation {
+    window_state: Arc<Mutex<MacWindowState>>,
+    native_window: id,
+    native_view: id,
+}
+
+impl Drop for DeferredCursorRectInvalidation {
+    fn drop(&mut self) {
+        unsafe {
+            let _: () = msg_send![self.native_view, release];
+            let _: () = msg_send![self.native_window, release];
+        }
+    }
+}
+
+extern "C" fn view_will_remove_subview(this: &Object, _: Sel, subview: id) {
+    unsafe {
+        let _: () = msg_send![super(this, class!(NSView)), willRemoveSubview: subview];
+        let window_state = get_window_state(this);
+        let (native_window, native_view) = {
+            let state = window_state.lock();
+            (state.native_window, state.native_view.as_ptr())
+        };
+        let _: id = msg_send![native_window, retain];
+        let _: id = msg_send![native_view, retain];
+
+        #[cfg(feature = "test-support")]
+        gpui::cursor_diagnostic::record_native(
+            native_window.windowNumber() as u64,
+            "appkit.subview.will_remove",
+            format!("parent={this:p} child={subview:p}"),
+        );
+
+        let context = Box::new(DeferredCursorRectInvalidation {
+            window_state,
+            native_window,
+            native_view,
+        });
+        DispatchQueue::main().exec_async_f(
+            Box::into_raw(context).cast(),
+            invalidate_cursor_rects_after_subview_removal,
+        );
+    }
+}
+
+extern "C" fn invalidate_cursor_rects_after_subview_removal(context: *mut c_void) {
+    unsafe {
+        let context = Box::from_raw(context as *mut DeferredCursorRectInvalidation);
+        let state = context.window_state.lock();
+        let closed = state.closed.load(Ordering::Acquire);
+        drop(state);
+        if !closed {
+            let _: () = msg_send![
+                context.native_window,
+                invalidateCursorRectsForView: context.native_view
+            ];
+            #[cfg(feature = "test-support")]
+            gpui::cursor_diagnostic::record_native(
+                context.native_window.windowNumber() as u64,
+                "native.cursor.rects.invalidate.after_subview_removal",
+                format!("view={:p}", context.native_view),
+            );
+        }
+    }
+}
+
 fn add_mouse_tracking_area(native_view: &Objc2NSView) {
     let options = NSTrackingAreaOptions::MouseEnteredAndExited
         | NSTrackingAreaOptions::MouseMoved
@@ -2518,17 +2604,9 @@ fn add_mouse_tracking_area(native_view: &Objc2NSView) {
     native_view.addTrackingArea(&tracking_area);
 }
 
-extern "C" fn reset_cursor_rects(this: &Object, _: Sel) {
-    // SAFETY: AppKit invokes cursor-rect updates on the main thread for GPUIView instances,
-    // whose WINDOW_STATE_IVAR is initialized when the view is created. The cursor registered
-    // below is a valid NSCursor.
+unsafe fn cursor_for_style(style: CursorStyle) -> id {
     unsafe {
-        let _: () = msg_send![super(this, class!(NSView)), resetCursorRects];
-
-        let window_state = get_window_state(this);
-        let cursor_style = window_state.lock().cursor_style;
-
-        let cursor: id = match cursor_style {
+        match style {
             CursorStyle::Arrow => msg_send![class!(NSCursor), arrowCursor],
             CursorStyle::IBeam => msg_send![class!(NSCursor), IBeamCursor],
             CursorStyle::Crosshair => msg_send![class!(NSCursor), crosshairCursor],
@@ -2562,11 +2640,138 @@ extern "C" fn reset_cursor_rects(this: &Object, _: Sel) {
             CursorStyle::DragLink => msg_send![class!(NSCursor), dragLinkCursor],
             CursorStyle::DragCopy => msg_send![class!(NSCursor), dragCopyCursor],
             CursorStyle::ContextualMenu => msg_send![class!(NSCursor), contextualMenuCursor],
-        };
-
-        let bounds = NSView::bounds(this as *const Object as id);
-        let _: () = msg_send![this, addCursorRect: bounds cursor: cursor];
+        }
     }
+}
+
+fn subtract_cursor_rect(rect: NSRect, hole: NSRect, output: &mut Vec<NSRect>) {
+    let left = rect.origin.x.max(hole.origin.x);
+    let bottom = rect.origin.y.max(hole.origin.y);
+    let right = (rect.origin.x + rect.size.width).min(hole.origin.x + hole.size.width);
+    let top = (rect.origin.y + rect.size.height).min(hole.origin.y + hole.size.height);
+    if right <= left || top <= bottom {
+        output.push(rect);
+        return;
+    }
+
+    let rect_right = rect.origin.x + rect.size.width;
+    let rect_top = rect.origin.y + rect.size.height;
+    if top < rect_top {
+        output.push(NSRect::new(
+            NSPoint::new(rect.origin.x, top),
+            NSSize::new(rect.size.width, rect_top - top),
+        ));
+    }
+    if rect.origin.y < bottom {
+        output.push(NSRect::new(
+            rect.origin,
+            NSSize::new(rect.size.width, bottom - rect.origin.y),
+        ));
+    }
+    if rect.origin.x < left {
+        output.push(NSRect::new(
+            NSPoint::new(rect.origin.x, bottom),
+            NSSize::new(left - rect.origin.x, top - bottom),
+        ));
+    }
+    if right < rect_right {
+        output.push(NSRect::new(
+            NSPoint::new(right, bottom),
+            NSSize::new(rect_right - right, top - bottom),
+        ));
+    }
+}
+
+unsafe fn cursor_rects_excluding_subviews(view: &Object, visible_rect: NSRect) -> Vec<NSRect> {
+    const MAX_CURSOR_RECT_FRAGMENTS: usize = 256;
+
+    unsafe {
+        let subviews: id = msg_send![view, subviews];
+        let subview_count: NSUInteger = msg_send![subviews, count];
+        let mut rects = vec![visible_rect];
+        for index in 0..subview_count {
+            let subview: id = msg_send![subviews, objectAtIndex: index];
+            let is_hidden: BOOL = msg_send![subview, isHidden];
+            if is_hidden == YES {
+                continue;
+            }
+
+            let frame: NSRect = msg_send![subview, frame];
+            let mut remaining = Vec::with_capacity(rects.len() + 4);
+            for rect in rects {
+                subtract_cursor_rect(rect, frame, &mut remaining);
+                if remaining.len() > MAX_CURSOR_RECT_FRAGMENTS {
+                    // Avoid unbounded work if a native surface creates an
+                    // unexpectedly complex child hierarchy. Leaving the
+                    // parent uncovered preserves native child ownership.
+                    return Vec::new();
+                }
+            }
+            rects = remaining;
+
+            #[cfg(feature = "test-support")]
+            {
+                let window_state = get_window_state(view);
+                let native_window_number = window_state.lock().native_window.windowNumber() as u64;
+                gpui::cursor_diagnostic::record_native(
+                    native_window_number,
+                    "appkit.resetCursorRects.exclude",
+                    format!(
+                        "view={view:p} child={subview:p} frame=({}, {}, {}, {})",
+                        frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
+                    ),
+                );
+            }
+        }
+        rects
+    }
+}
+
+extern "C" fn reset_cursor_rects(this: &Object, _: Sel) {
+    let window_state = unsafe { get_window_state(this) };
+    let state = window_state.lock();
+    let style = state.cursor_style;
+    let closed = state.closed.load(Ordering::Acquire);
+    #[cfg(feature = "test-support")]
+    let native_window_number = unsafe { state.native_window.windowNumber() as u64 };
+    drop(state);
+    #[cfg(feature = "test-support")]
+    let _trace_scope = gpui::cursor_diagnostic::native_scope(native_window_number);
+    #[cfg(feature = "test-support")]
+    gpui::cursor_diagnostic::record_native(
+        native_window_number,
+        "appkit.resetCursorRects.begin",
+        format!("view={this:p} style={style:?} closed={closed}"),
+    );
+
+    unsafe {
+        let _: () = msg_send![super(this, class!(NSView)), resetCursorRects];
+        if !closed {
+            let visible_rect: NSRect = msg_send![this, visibleRect];
+            if visible_rect.size.width > 0. && visible_rect.size.height > 0. {
+                let cursor = cursor_for_style(style);
+                for rect in cursor_rects_excluding_subviews(this, visible_rect) {
+                    let _: () = msg_send![this, addCursorRect: rect cursor: cursor];
+                    #[cfg(feature = "test-support")]
+                    gpui::cursor_diagnostic::record_native(
+                        native_window_number,
+                        "appkit.resetCursorRects.add",
+                        format!(
+                            "view={this:p} style={style:?} rect=({}, {}, {}, {})",
+                            rect.origin.x, rect.origin.y, rect.size.width, rect.size.height,
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    gpui::cursor_diagnostic::record_native(
+        native_window_number,
+        "appkit.resetCursorRects.end",
+        format!("view={this:p}"),
+    );
 }
 
 extern "C" fn handle_key_equivalent(this: &Object, _: Sel, native_event: id) -> BOOL {
@@ -2792,6 +2997,20 @@ extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
     let mut lock = window_state.as_ref().lock();
     let window_height = lock.content_size().height;
     let native_event_type = unsafe { native_event.eventType() };
+    #[cfg(feature = "test-support")]
+    let native_window_number = unsafe { lock.native_window.windowNumber() as u64 };
+    #[cfg(feature = "test-support")]
+    {
+        let location: NSPoint = unsafe { msg_send![native_event, locationInWindow] };
+        gpui::cursor_diagnostic::record_native(
+            native_window_number,
+            "appkit.event.begin",
+            format!(
+                "type={native_event_type:?} location=({}, {}) view={this:p}",
+                location.x, location.y
+            ),
+        );
+    }
     match native_event_type {
         NSEventType::NSLeftMouseDown => {
             // AppKit owns `native_event` for the callback; retain it so the drag session can still
@@ -2937,9 +3156,23 @@ extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
         }
 
         if let Some(mut callback) = lock.event_callback.take() {
+            #[cfg(feature = "test-support")]
+            let _trace_scope = gpui::cursor_diagnostic::native_scope(native_window_number);
+            #[cfg(feature = "test-support")]
+            gpui::cursor_diagnostic::record_native(
+                native_window_number,
+                "appkit.gpui_callback.begin",
+                format!("type={native_event_type:?}"),
+            );
             drop(lock);
             callback(event);
             window_state.lock().event_callback = Some(callback);
+            #[cfg(feature = "test-support")]
+            gpui::cursor_diagnostic::record_native(
+                native_window_number,
+                "appkit.gpui_callback.end",
+                format!("type={native_event_type:?}"),
+            );
         }
     }
 }
@@ -3150,6 +3383,25 @@ extern "C" fn window_did_change_key_status(this: &Object, selector: Sel, _: id) 
     let window_state = unsafe { get_window_state(this) };
     let lock = window_state.lock();
     let is_active = unsafe { lock.native_window.isKeyWindow() == YES };
+    #[cfg(feature = "test-support")]
+    let native_window_number = unsafe { lock.native_window.windowNumber() as u64 };
+    #[cfg(feature = "test-support")]
+    let _trace_scope = gpui::cursor_diagnostic::native_scope(native_window_number);
+    #[cfg(feature = "test-support")]
+    gpui::cursor_diagnostic::record_native(
+        native_window_number,
+        "appkit.window.activation",
+        format!(
+            "kind={} is_key={is_active} visible={} cursor_visible_before={}",
+            if selector == sel!(windowDidBecomeKey:) {
+                "became-key"
+            } else {
+                "resigned-key"
+            },
+            unsafe { lock.native_window.isVisible() == YES },
+            lock.cursor_visible.load(Ordering::Relaxed),
+        ),
+    );
 
     // AppKit also unhides the cursor on activation changes, so mirror that here.
     lock.cursor_visible.store(true, Ordering::Relaxed);
