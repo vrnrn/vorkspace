@@ -231,9 +231,7 @@ impl Shell {
                         Ok(files) => {
                             this.close_settings(window, cx);
                             window.dispatch_action(
-                                Box::new(crate::file_tools::file_editor::OpenPath(
-                                    files.memory_path,
-                                )),
+                                Box::new(crate::file_link::OpenPath(files.memory_path)),
                                 cx,
                             );
                         }

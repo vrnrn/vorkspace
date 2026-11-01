@@ -85,10 +85,8 @@ impl TranscriptView {
         let code = fence.code.clone();
         let copied = self.copied == Some(key);
         let file_link = fence.path.as_ref().map(|raw| {
-            let (path, location) = crate::file_tools::file_editor::file_location(
-                raw,
-                self.file_link_base.as_deref().unwrap_or(""),
-            );
+            let (path, location) =
+                crate::file_link::file_location(raw, self.file_link_base.as_deref().unwrap_or(""));
             let (line, column) = location.unwrap_or((fence.start_line, 1));
             format!("{path}:{line}:{column}")
         });
@@ -148,11 +146,9 @@ impl TranscriptView {
                                         .on_click(move |event, window, cx| {
                                             if event.click_count() == 1 {
                                                 window.dispatch_action(
-                                                    Box::new(
-                                                        crate::file_tools::file_editor::OpenPath(
-                                                            path.clone(),
-                                                        ),
-                                                    ),
+                                                    Box::new(crate::file_link::OpenPath(
+                                                        path.clone(),
+                                                    )),
                                                     cx,
                                                 );
                                             }
