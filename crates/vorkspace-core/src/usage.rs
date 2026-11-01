@@ -1,4 +1,4 @@
-//! Subscription usage, ported from rateLimits.ts and src-tauri/rate_limits.rs.
+//! Subscription usage.
 //! Blocking probes belong on a worker. Credentials are read only, never rotated.
 pub(crate) mod claude;
 mod pi;

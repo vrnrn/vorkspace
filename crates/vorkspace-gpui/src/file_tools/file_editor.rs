@@ -1589,7 +1589,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "external\n");
-        std::fs::write(&path, include_bytes!("../../../assets/vorkspace.png")).unwrap();
+        std::fs::write(&path, include_bytes!("../../assets/vorkspace.png")).unwrap();
         window.update(cx, |e, _, cx| e.load(true, cx)).unwrap();
         cx.run_until_parked();
         window

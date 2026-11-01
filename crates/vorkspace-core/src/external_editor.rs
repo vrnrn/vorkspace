@@ -1,5 +1,4 @@
-//! Opening a project folder in an installed code editor, ported from
-//! src-tauri/src/external_editor.rs.
+//! Opening a project folder in an installed code editor.
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 

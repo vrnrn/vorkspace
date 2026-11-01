@@ -167,18 +167,9 @@ fn icon_body(path: &str) -> Option<&'static str> {
         "refresh" => {
             "<path d='M20 7v5h-5M4 17v-5h5'/><path d='M6 6a8 8 0 0 1 13 2l1 4M4 12l1 4a8 8 0 0 0 13 2'/>"
         }
-        "plus" => "<path d='M12 5v14M5 12h14'/>",
-        "close" => "<path d='m7 7 10 10M17 7 7 17'/>",
         "grip-vertical" => {
             "<circle cx='9' cy='5' r='1'/><circle cx='9' cy='12' r='1'/><circle cx='9' cy='19' r='1'/><circle cx='15' cy='5' r='1'/><circle cx='15' cy='12' r='1'/><circle cx='15' cy='19' r='1'/>"
         }
-        "sidebar" => "<rect x='3' y='4' width='18' height='16' rx='3'/><path d='M9 4v16'/>",
-        "search" => "<circle cx='10.5' cy='10.5' r='6.5'/><path d='m16 16 4.5 4.5'/>",
-        "folder" => {
-            "<path d='M3 8V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z'/>"
-        }
-        "chevron-down" => "<path d='m7 10 5 5 5-5'/>",
-        "chevron-right" => "<path d='m10 7 5 5-5 5'/>",
         "chat" => {
             "<path d='M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-1 1v-9.5A8.5 8.5 0 0 1 11.5 3h1A8.5 8.5 0 0 1 21 11.5Z'/><path d='M8 10h8M8 14h5'/>"
         }
@@ -188,14 +179,8 @@ fn icon_body(path: &str) -> Option<&'static str> {
         "lock" => {
             "<rect x='5' y='10' width='14' height='11' rx='3'/><path d='M8 10V7a4 4 0 0 1 8 0v3'/>"
         }
-        "open-folder" => {
-            "<path d='M3 8V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v3M3 8v10a2 2 0 0 0 2 2h13l4-8H7l-4 8'/>"
-        }
         // Hugeicons ArrowUp01 at the composer submit's 2.25 stroke.
         "send" => "<path d='M18 15s-4.42-6-6-6-6 6-6 6' stroke-width='2.25'/>",
-        "git-branch" => {
-            "<path d='M7 19h6c2.83 0 4.24 0 5.12-.88C19 17.24 19 15.83 19 13v-3m0 0c.7 0 2.01 1.99 2.5 2.5M19 10c-.7 0-2.01 1.99-2.5 2.5M5 7v10' stroke-width='1.75'/><circle cx='5' cy='5' r='2' stroke-width='1.75'/><circle cx='19' cy='5' r='2' stroke-width='1.75'/><circle cx='5' cy='19' r='2' stroke-width='1.75'/>"
-        }
         // ContextMeter's empty 14px ring (radius 6, stroke 2) on a 24 grid.
         "context-ring" => "<circle cx='12' cy='12' r='10.29' stroke-width='3.43'/>",
         "window" => "<rect x='3' y='4' width='18' height='16' rx='3'/><path d='M3 9h18'/>",

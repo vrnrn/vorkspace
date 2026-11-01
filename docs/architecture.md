@@ -2,7 +2,7 @@
 
 ## Desktop ownership
 
-`crates/vorkspace-gpui` owns windows, focus, layout, input, rendering, and interactive views. `crates/vorkspace-core` owns provider transports, persistence, filesystem/Git operations, account configuration, Bot state, and application effects. Both execute in one desktop process; there is no separate local daemon.
+`crates/vorkspace-gpui` owns windows, focus, layout, input, rendering, and interactive views, on top of the smaller `vorkspace-ui`, `vorkspace-runtime`, `vorkspace-editor`, `vorkspace-model`, and `vorkspace-macos` crates. `crates/vorkspace-core` owns provider transports, persistence, filesystem/Git operations, account configuration, Bot state, and application effects. All of them execute in one desktop process; there is no separate local daemon.
 
 A conversation admits a turn, records its submission state, starts the selected provider CLI through the core process owner, and projects streamed events into the visible transcript. Approvals and Stop remain routed through that owner. Durable receipts and revision checks distinguish accepted work from unknown or stale results. Closing or hiding a view does not mean its conversation was deleted.
 

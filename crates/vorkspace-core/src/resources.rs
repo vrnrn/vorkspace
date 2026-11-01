@@ -1,5 +1,4 @@
-//! System pressure and the processes vorkspace owns, extracted from
-//! src-tauri/src/resources.rs and resourcePressure.ts.
+//! System pressure and the processes vorkspace owns.
 use crate::process::{self, Agent};
 use std::collections::{HashMap, HashSet};
 use std::process::Command;

@@ -1,4 +1,4 @@
-//! Child policy extracted from src-tauri/src/background_work.rs.
+//! Child process policy: group isolation and termination.
 use std::process::Command;
 
 /// Apply scheduling hints before exec so descendants inherit them.

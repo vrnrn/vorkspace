@@ -1,5 +1,4 @@
-//! Git-backed recordings of workspace changes during a turn, ported from
-//! src-tauri/src/checkpoint/turn.rs. These snapshots record what changed.
+//! Git-backed recordings of workspace changes during a turn. These snapshots record what changed.
 //! Shared reviews require successful edit evidence for each displayed file,
 //! without inferring which process owns individual lines. Synchronous: callers
 //! run these on a background executor.

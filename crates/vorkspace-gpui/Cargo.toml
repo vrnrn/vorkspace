@@ -29,7 +29,6 @@ base64 = "0.22"
 alacritty_terminal = "0.26"
 libc = "0.2"
 rquickjs = "0.14.0"
-similar = "2.7"
 # The vendored renderer's backdrop-blur marker for frosted popovers.
 gpui_apple = { package = "gpui-pre-apple", version = "=0.3.9" }
 # Pins the native traffic lights to the Tauri app's spacing.
@@ -39,7 +38,6 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFData", "CFDictionary", "CFNumber", "CFString"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
 objc2-image-io = { version = "0.3.2", default-features = false, features = ["std", "CGImageSource", "objc2-core-graphics"] }
-png = "0.18"
 raw-window-handle = "0.6"
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKPreferences", "WKWebsiteDataStore", "WKNavigation", "WKNavigationDelegate", "WKNavigationAction", "WKUIDelegate", "WKFrameInfo", "WKSecurityOrigin", "block2"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSNotification", "NSString", "NSGeometry", "NSData", "NSRange", "NSArray", "NSSet", "NSError", "NSBundle", "NSURL", "NSURLRequest"] }

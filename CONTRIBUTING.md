@@ -2,9 +2,10 @@
 
 Read `AGENTS.md` before changing the code. Trace the state owner and preserve conversation identity, unfinished drafts, cancellation, and durable storage.
 
-The root Cargo workspace contains `crates/vorkspace-core` and `crates/vorkspace-gpui`. JavaScript source under `host/` owns the remote host; `embedded/` owns the editor and voice audio helpers. Build and verification commands live under `scripts/`. See the [repository map](docs/repository.md) for ownership and test locations.
+The root Cargo workspace lives in `crates/`; the [repository map](docs/repository.md) says what each crate owns. Follow `DESIGN.md` for every UI change. JavaScript source under `host/` owns the remote host; `embedded/` owns the editor and voice audio helpers. Build and verification commands live under `scripts/`. See the [repository map](docs/repository.md) for ownership and test locations.
 
 ```sh
+cargo install --locked cargo-nextest
 npm ci
 npm run check
 npm run assets

@@ -1,4 +1,4 @@
-//! GUI-launch environment for git and gh, ported from src-tauri harness.rs.
+//! GUI-launch environment for git and gh.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;

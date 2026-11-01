@@ -1,5 +1,5 @@
-//! Source control for the Changes and History panes, ported from
-//! src-tauri/src/fs.rs. Synchronous: callers run these on a background executor.
+//! Source control for the Changes and History panes.
+//! Synchronous: callers run these on a background executor.
 mod review;
 pub(crate) mod shell;
 pub(crate) mod text;

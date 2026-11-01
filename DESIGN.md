@@ -4,7 +4,8 @@ Vorkspace should feel like one quiet, native macOS tool. Chrome recedes; the
 conversation, code and user's work carry the color. Use this guide for every UI
 change, and extend it when you add a new shared convention.
 
-Paths are relative to `crates/vorkspace-gpui/src/`.
+Paths are relative to `crates/vorkspace-gpui/src/`, except `theme.rs`, `reveal.rs` and
+`pane_motion.rs`, which live in `crates/vorkspace-ui/src/`.
 
 ---
 

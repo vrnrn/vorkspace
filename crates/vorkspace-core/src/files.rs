@@ -1,5 +1,4 @@
-//! Explorer filesystem operations, ported from src-tauri/src/fs.rs, plus the
-//! pure name and path helpers from the files feature model.
+//! Explorer filesystem operations, plus the pure name and path helpers from the files feature model.
 pub mod document;
 mod index;
 pub(crate) use index::{git_output_capped, is_indexable_root};
