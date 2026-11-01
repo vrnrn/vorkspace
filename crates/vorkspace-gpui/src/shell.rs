@@ -39,6 +39,8 @@ mod terminal_tabs;
 mod title_tabs;
 #[cfg(test)]
 mod titlebar_tests;
+#[cfg(test)]
+mod ui_parity_tests;
 mod vox;
 mod worktrees;
 
