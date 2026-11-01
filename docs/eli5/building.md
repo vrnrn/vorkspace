@@ -1,6 +1,6 @@
 # Building vorkspace
 
-Install Rust, Node.js 24 or newer, and Xcode on your Mac. Run `npm run dev` to build and open vorkspace with release performance and your normal saved data. Type `r` then Enter in its terminal to rebuild and reopen it. Both build profiles let the runner close the app normally before reopening it. If the new app cannot be installed, the runner opens the fresh build from its output folder. For a separate development copy with isolated data, run `npm run dev -- --native-dev --dev-data`.
+Install Rust, Node.js 24 or newer, and Xcode on your Mac. Run `npm run dev` to build and open vorkspace with your normal saved data. It uses a quick-to-rebuild version that runs a little slower than the real app and stays out of your Applications folder; add `--release` to get the real thing. Type `r` then Enter in its terminal to rebuild and reopen it. Both build profiles let the runner close the app normally before reopening it. With `--release`, if the new app cannot be installed, the runner opens the fresh build from its output folder. For a separate development copy with isolated data, run `npm run dev -- --native-dev --dev-data`.
 
 You can also use vorkspace to work on vorkspace itself: run `npm run build`, confirm it installed the new app, then choose **Restart vorkspace** or press `⌘⌥R`. Restart uses the app's normal shutdown and saved state, and waits for the old app to exit before opening the new one. It does not rebuild the code. Use the terminal's `r` for a separate development copy, because Restart prefers the installed app on a Mac.
 
