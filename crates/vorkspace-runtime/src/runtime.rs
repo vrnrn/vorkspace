@@ -29,6 +29,7 @@ struct TurnInput {
     prompt: String,
     settings: Settings,
 }
+#[derive(Default)]
 pub struct Update {
     /// Full, bounded latest-tool label for this run; None means no known tool.
     pub activity: Option<String>,
@@ -251,29 +252,10 @@ fn run_turn_using(
             &tx,
             &cancel,
             Update {
-                source_len: None,
                 activity: activity.label(),
-                worktree_cwd: None,
-                commands: None,
-                provider_turn_id: None,
-                turn_ready: false,
-                follow_up_delivered: Vec::new(),
-                follow_up_errors: Vec::new(),
                 delivered: settings.bot_message_id.clone(),
                 start,
                 rows: transcript.rows[start..].to_vec(),
-                provider_id: None,
-                model: None,
-                config_model: None,
-                config_settings: None,
-                context: None,
-                metrics: None,
-                usage_limit: None,
-                approvals: Vec::new(),
-                approvals_resolved: Vec::new(),
-                questions: Vec::new(),
-                questions_resolved: Vec::new(),
-                handoff: None,
                 status: if creating_worktree {
                     "Creating worktree…"
                 } else if settings.pending_provider_switch.is_some() {
@@ -282,7 +264,7 @@ fn run_turn_using(
                     "Connecting…"
                 }
                 .into(),
-                finished: false,
+                ..Default::default()
             },
         )?;
         if creating_worktree {
@@ -306,31 +288,11 @@ fn run_turn_using(
                 &tx,
                 &cancel,
                 Update {
-                    source_len: None,
                     activity: activity.label(),
                     worktree_cwd: Some(cwd),
-                    commands: None,
-                    provider_turn_id: None,
-                    turn_ready: false,
-                    follow_up_delivered: Vec::new(),
-                    follow_up_errors: Vec::new(),
-                    delivered: None,
                     start: transcript.rows.len(),
-                    rows: Vec::new(),
-                    provider_id: None,
-                    model: None,
-                    config_model: None,
-                    config_settings: None,
-                    context: None,
-                    metrics: None,
-                    usage_limit: None,
-                    approvals: Vec::new(),
-                    approvals_resolved: Vec::new(),
-                    questions: Vec::new(),
-                    questions_resolved: Vec::new(),
-                    handoff: None,
                     status: "Connecting…".into(),
-                    finished: false,
+                    ..Default::default()
                 },
             )?;
         }
@@ -360,31 +322,11 @@ fn run_turn_using(
                 &tx,
                 &cancel,
                 Update {
-                    source_len: None,
                     activity: activity.label(),
-                    worktree_cwd: None,
-                    commands: None,
-                    provider_turn_id: None,
-                    turn_ready: false,
-                    follow_up_delivered: Vec::new(),
-                    follow_up_errors: Vec::new(),
-                    delivered: None,
                     start: transcript.rows.len(),
-                    rows: Vec::new(),
-                    provider_id: None,
-                    model: None,
-                    config_model: None,
-                    config_settings: None,
-                    context: None,
-                    metrics: None,
-                    usage_limit: None,
-                    approvals: Vec::new(),
-                    approvals_resolved: Vec::new(),
-                    questions: Vec::new(),
-                    questions_resolved: Vec::new(),
                     handoff: Some(Some(prepared)),
                     status: "Connecting…".into(),
-                    finished: false,
+                    ..Default::default()
                 },
             )?;
         }
@@ -404,73 +346,19 @@ fn run_turn_using(
                 .starts_with('/');
         let prompt = if raw_native_command {
             prompt
-        } else if let Some(bot) = &settings.bot {
-            let files = vorkspace_core::bot::load_files(&bot.root, &bot.bot)?;
-            let added = vorkspace_core::bot::context(&bot.bot, &files, &bot.executable);
-            let fingerprint = vorkspace_core::bot::files::content_hash(&added);
-            bot_fingerprint = Some(fingerprint.clone());
-            let rotated = provider_id.is_some() && context.ratio().is_some_and(|r| r >= 0.8);
-            if rotated {
-                provider_id = None;
-                locked(&store)?.reset_provider_id(summary.id)?;
-            }
-            let receipt = locked(&store)?.setting(&format!("bot-context:{}", summary.id))?;
-            let expected =
-                serde_json::json!({"provider":provider_id,"hash":fingerprint}).to_string();
-            let intro = if provider_id.is_none() || receipt.as_deref() != Some(&expected) {
-                added
-            } else {
-                String::new()
-            };
-            let brief = if provider_id.is_none() && turn_start > 0 {
-                vorkspace_core::bot::rotation_brief(&transcript.rows[..turn_start])
-            } else {
-                String::new()
-            };
-            let prompt = if let Some(handoff) = &settings.handoff {
-                vorkspace_core::response::wrap_handoff_prompt(
-                    &handoff.from,
-                    &handoff.brief,
-                    &prompt,
-                )
-            } else {
-                prompt
-            };
-            format!("{intro}\n\n{brief}\n\n{prompt}")
-        } else if let Some(minion) = &settings.minion {
-            // Its parent's soul and memory, re-sent whenever they change.
-            let files = vorkspace_core::bot::load_files(&minion.root, &minion.bot)?;
-            let added = vorkspace_core::bot::minion_context(
-                &minion.bot,
-                &minion.name,
-                &summary.cwd,
-                &files,
-                &minion.executable,
-            );
-            let fingerprint = vorkspace_core::bot::files::content_hash(&added);
-            bot_fingerprint = Some(fingerprint.clone());
-            let receipt = locked(&store)?.setting(&format!("bot-context:{}", summary.id))?;
-            let expected =
-                serde_json::json!({"provider":provider_id,"hash":fingerprint}).to_string();
-            let intro = if provider_id.is_none() || receipt.as_deref() != Some(&expected) {
-                added
-            } else {
-                String::new()
-            };
-            let prompt = continuing_prompt(
-                settings.handoff.as_ref(),
-                provider_id.is_none(),
-                &transcript.rows[..turn_start],
-                prompt,
-            );
-            format!("{intro}\n\n{prompt}")
         } else {
-            continuing_prompt(
-                settings.handoff.as_ref(),
-                provider_id.is_none(),
-                &transcript.rows[..turn_start],
+            turn_prompt(
                 prompt,
-            )
+                &settings,
+                TurnHistory {
+                    summary: &summary,
+                    earlier: &transcript.rows[..turn_start],
+                    context: &context,
+                },
+                &mut provider_id,
+                &mut bot_fingerprint,
+                &store,
+            )?
         };
         let cwd = settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd);
         if settings.bot.is_none()
@@ -1049,34 +937,102 @@ fn run_turn_using(
     // Final status must still arrive after cancellation. Dropping a window closes
     // the receiver, so the worker never keeps a closed viewport alive.
     let _ = tx.send_blocking(Update {
-        source_len: None,
         activity: activity.label(),
         // A stop can make the UI skip intermediate updates. Keep the created
         // checkout in the final receipt so the next Send cannot create it twice.
         worktree_cwd: created_worktree,
-        commands: None,
-        provider_turn_id: None,
-        turn_ready: false,
         follow_up_delivered: accepted_messages,
-        follow_up_errors: Vec::new(),
         delivered: initial_delivery,
         start,
         rows,
         provider_id,
-        model: None,
-        config_model: None,
-        config_settings: None,
-        context: None,
-        metrics: None,
         usage_limit: if cancelled { None } else { usage_limit },
-        approvals: Vec::new(),
-        approvals_resolved: Vec::new(),
-        questions: Vec::new(),
-        questions_resolved: Vec::new(),
         handoff,
         status,
         finished: true,
+        ..Default::default()
     });
+}
+
+/// What a turn's prompt needs to know about the conversation so far.
+struct TurnHistory<'a> {
+    summary: &'a Session,
+    earlier: &'a [vorkspace_core::transcript::Row],
+    context: &'a vorkspace_core::context::Usage,
+}
+
+/// Prefixes a turn with the Bot or minion context the provider hasn't seen yet.
+/// A Bot near its context limit starts a fresh provider session instead.
+fn turn_prompt(
+    prompt: String,
+    settings: &Settings,
+    history: TurnHistory<'_>,
+    provider_id: &mut Option<String>,
+    bot_fingerprint: &mut Option<String>,
+    store: &Database,
+) -> Result<String, String> {
+    if let Some(bot) = &settings.bot {
+        let files = vorkspace_core::bot::load_files(&bot.root, &bot.bot)?;
+        let added = vorkspace_core::bot::context(&bot.bot, &files, &bot.executable);
+        let fingerprint = vorkspace_core::bot::files::content_hash(&added);
+        *bot_fingerprint = Some(fingerprint.clone());
+        let rotated = provider_id.is_some() && history.context.ratio().is_some_and(|r| r >= 0.8);
+        if rotated {
+            *provider_id = None;
+            locked(store)?.reset_provider_id(history.summary.id)?;
+        }
+        let receipt = locked(store)?.setting(&format!("bot-context:{}", history.summary.id))?;
+        let expected = serde_json::json!({"provider":provider_id,"hash":fingerprint}).to_string();
+        let intro = if provider_id.is_none() || receipt.as_deref() != Some(&expected) {
+            added
+        } else {
+            String::new()
+        };
+        let brief = if provider_id.is_none() && !history.earlier.is_empty() {
+            vorkspace_core::bot::rotation_brief(history.earlier)
+        } else {
+            String::new()
+        };
+        let prompt = if let Some(handoff) = &settings.handoff {
+            vorkspace_core::response::wrap_handoff_prompt(&handoff.from, &handoff.brief, &prompt)
+        } else {
+            prompt
+        };
+        Ok(format!("{intro}\n\n{brief}\n\n{prompt}"))
+    } else if let Some(minion) = &settings.minion {
+        // Its parent's soul and memory, re-sent whenever they change.
+        let files = vorkspace_core::bot::load_files(&minion.root, &minion.bot)?;
+        let added = vorkspace_core::bot::minion_context(
+            &minion.bot,
+            &minion.name,
+            &history.summary.cwd,
+            &files,
+            &minion.executable,
+        );
+        let fingerprint = vorkspace_core::bot::files::content_hash(&added);
+        *bot_fingerprint = Some(fingerprint.clone());
+        let receipt = locked(store)?.setting(&format!("bot-context:{}", history.summary.id))?;
+        let expected = serde_json::json!({"provider":provider_id,"hash":fingerprint}).to_string();
+        let intro = if provider_id.is_none() || receipt.as_deref() != Some(&expected) {
+            added
+        } else {
+            String::new()
+        };
+        let prompt = continuing_prompt(
+            settings.handoff.as_ref(),
+            provider_id.is_none(),
+            history.earlier,
+            prompt,
+        );
+        Ok(format!("{intro}\n\n{prompt}"))
+    } else {
+        Ok(continuing_prompt(
+            settings.handoff.as_ref(),
+            provider_id.is_none(),
+            history.earlier,
+            prompt,
+        ))
+    }
 }
 
 /// checkpointEdits.ts's sessionEditPaths: files named by successful edit tools.

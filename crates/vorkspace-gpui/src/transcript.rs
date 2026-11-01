@@ -15,6 +15,7 @@ mod history;
 mod pending_rows;
 mod rebuilding;
 mod response_bar;
+mod row_bodies;
 mod row_render;
 mod streaming_frames;
 pub(crate) use history::PreparedHistory;

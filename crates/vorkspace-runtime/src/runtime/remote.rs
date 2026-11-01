@@ -27,31 +27,9 @@ fn require_ticket_context(descriptor: &Value) -> Result<(), String> {
 
 fn update(status: impl Into<String>, finished: bool) -> Update {
     Update {
-        source_len: None,
-        activity: None,
-        worktree_cwd: None,
-        commands: None,
-        provider_turn_id: None,
-        turn_ready: false,
-        follow_up_delivered: vec![],
-        follow_up_errors: vec![],
-        delivered: None,
-        start: 0,
-        rows: vec![],
-        provider_id: None,
-        model: None,
-        config_model: None,
-        config_settings: None,
-        context: None,
-        metrics: None,
-        usage_limit: None,
-        approvals: vec![],
-        approvals_resolved: vec![],
-        questions: vec![],
-        questions_resolved: vec![],
-        handoff: None,
         status: status.into(),
         finished,
+        ..Default::default()
     }
 }
 /// Only matching, present host revisions prove that projection is unchanged.
