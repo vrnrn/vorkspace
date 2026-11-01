@@ -14,4 +14,6 @@ Developer tools live under `scripts/`. The small JavaScript components that ship
 
 The **Mac release** workflow is started manually from `main`. It picks a free version, numbers the build, includes that version's release notes, runs checks, signs the downloads, and publishes only after those steps succeed. Normal code pushes do not publish anything. The app can show its included notes offline and announces a newly installed version once. If you open notes that were not included in the app, it tries to read that exact version's published notes without blocking the window.
 
+Restart always reopens the copy of the app you are using, so a development build stays a development build even if an older app sits in your Applications folder.
+
 Starting a new worktree? Run `npm run worktree:seed` first. It borrows the finished build from your main checkout without using extra disk, so the first build takes about half as long.
