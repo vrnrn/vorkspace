@@ -85,7 +85,7 @@ pub fn parse(v: &Value) -> Result<Value, String> {
     Ok(result)
 }
 pub fn pull_request(cwd: &str, repo: Option<&str>, number: u64) -> Result<Value, String> {
-    let binary = crate::scm::shell::resolve_gui_binary("gh").ok_or("GitHub CLI not found")?;
+    let binary = crate::shell_env::resolve_gui_binary("gh").ok_or("GitHub CLI not found")?;
     let mut cmd = std::process::Command::new(binary);
     cmd.current_dir(cwd).args([
         "pr",
@@ -98,7 +98,7 @@ pub fn pull_request(cwd: &str, repo: Option<&str>, number: u64) -> Result<Value,
         cmd.args(["--repo", repo]);
     }
     cmd.env("GH_PROMPT_DISABLED", "1");
-    crate::scm::shell::apply_gui_env(&mut cmd);
+    crate::shell_env::apply_gui_env(&mut cmd);
     crate::process::configure_child(&mut cmd);
     let output = cmd.output().map_err(|e| e.to_string())?;
     if !output.status.success() {

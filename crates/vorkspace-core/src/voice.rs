@@ -59,7 +59,7 @@ pub fn reset(store: &Store) -> Result<(), String> {
 }
 pub fn memory_action(store: &Store, action: &str, input: &Value) -> Result<Value, String> {
     bot::api::validate(action, input)?;
-    let root = bot::root(store);
+    let root = crate::store::bot_root(store);
     let topic = input["topic"].as_str();
     match action {
         "memory.read" => Ok(json!(memory::read(&root, "vox", topic)?)),

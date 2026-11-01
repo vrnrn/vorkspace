@@ -283,7 +283,7 @@ impl Conversation {
         let bot = self.settings.bot.is_some();
         let kind = Kind::from_id(&self.summary.provider);
         let beside = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_some_and(|p| p.model_controls == "beside");
         let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
         let controls = if beside {

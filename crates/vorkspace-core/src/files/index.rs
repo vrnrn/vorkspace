@@ -1,7 +1,10 @@
 //! Bounded, cancellable project listing shared by mentions and Quick Open.
 //! Ported from the retired Tauri filesystem service.
 use super::Ignore;
-use crate::scm::{expand_home, git_cmd, path_to_js, shell::dirs_home};
+use crate::scm::git_cmd;
+use crate::shell_env::dirs_home;
+use crate::shell_env::expand_home;
+use crate::shell_env::path_to_js;
 use serde::{Deserialize, Serialize};
 use std::{
     io::Read,
@@ -44,8 +47,9 @@ pub fn list_project_files_sync_cancellable(
     if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
         return Ok(Vec::new());
     }
-    if super::remote::is_remote(Path::new(cwd)) {
-        let files = super::remote::command("list_project_files", serde_json::json!({"cwd":cwd}))?;
+    if crate::remote_workspace::is_remote(Path::new(cwd)) {
+        let files =
+            crate::remote_workspace::command("list_project_files", serde_json::json!({"cwd":cwd}))?;
         return Ok(
             if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
                 Vec::new()

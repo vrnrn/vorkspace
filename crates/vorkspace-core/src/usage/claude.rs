@@ -4,14 +4,14 @@ use std::{io::Read, path::PathBuf, time::Duration};
 
 pub(super) fn fetch_for(profile: &crate::accounts::Profile) -> Result<Snapshot, FetchError> {
     if let Some(snapshot) =
-        crate::catalog::cli_json_for(crate::provider::Kind::Claude, &["auth", "status"], profile)
+        crate::catalog::cli_json_for(crate::kind::Kind::Claude, &["auth", "status"], profile)
             .ok()
             .and_then(|v| backend_usage(&v))
     {
         return Ok(snapshot);
     }
     let config = profile
-        .directory(crate::provider::Kind::Claude)
+        .directory(crate::kind::Kind::Claude)
         .map_err(FetchError::failed)?
         .or_else(config_dir);
     let credentials = credentials(config).ok_or_else(|| {
@@ -87,52 +87,7 @@ fn credential_blob(raw: &str) -> Option<Value> {
     Some(value)
 }
 
-pub(crate) fn delete_keychain(config: &std::path::Path) -> Result<(), String> {
-    use crate::process;
-    use std::{
-        process::{Command, Stdio},
-        time::Instant,
-    };
-    let service = keychain_service(Some(config));
-    let mut command = Command::new("/usr/bin/security");
-    command
-        .args(["delete-generic-password", "-s", &service])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    process::isolate(&mut command);
-    let mut child = command.spawn().map_err(|e| e.to_string())?;
-    let _registration = process::register(child.id());
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let result = loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() || status.code() == Some(44) => break Ok(()),
-            Ok(Some(_)) => {
-                break Err("Could not remove the account's Claude Keychain credentials".into());
-            }
-            Err(e) => break Err(e.to_string()),
-            Ok(None) if Instant::now() >= deadline => {
-                break Err("Removing Claude credentials timed out".into());
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-        }
-    };
-    process::terminate(&mut child);
-    result
-}
-
-fn keychain_service(config: Option<&std::path::Path>) -> String {
-    use sha2::{Digest, Sha256};
-    use unicode_normalization::UnicodeNormalization;
-    config
-        .map(|dir| {
-            let selector: String = dir.to_string_lossy().nfc().collect();
-            let digest = format!("{:x}", Sha256::digest(selector.as_bytes()));
-            format!("Claude Code-credentials-{}", &digest[..8])
-        })
-        .unwrap_or_else(|| "Claude Code-credentials".into())
-}
-
+use crate::accounts::keychain_service;
 fn keychain(config: Option<&std::path::Path>) -> Option<Value> {
     use crate::process;
     use std::{

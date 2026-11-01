@@ -44,7 +44,7 @@ impl Conversation {
         }
     }
     /// This session's minion attachment, if it is a minion now.
-    pub(crate) fn minion(&self) -> Option<crate::bots::MinionAttachment> {
+    pub(crate) fn minion(&self) -> Option<crate::conversation::MinionAttachment> {
         self.minions
             .as_ref()?
             .borrow()
@@ -717,3 +717,27 @@ impl Conversation {
 
 #[cfg(test)]
 mod annotation_tests;
+
+impl crate::image_lightbox::AnnotationDraft for gpui::WeakEntity<Conversation> {
+    fn begin(&self, cx: &mut gpui::App) -> Option<u64> {
+        self.upgrade()
+            .map(|owner| owner.update(cx, |owner, cx| owner.annotation_draft_generation(cx)))
+    }
+    fn apply(
+        &self,
+        source: &std::path::Path,
+        generation: u64,
+        bytes: &[u8],
+        cx: &mut gpui::App,
+    ) -> Result<(PathBuf, u64), String> {
+        let owner = self.upgrade().ok_or("The draft was closed")?;
+        let path = owner.update(cx, |owner, cx| {
+            owner.apply_annotated_attachment(source, generation, bytes, cx)
+        })?;
+        Ok((path, owner.read(cx).attachment_draft_generation()))
+    }
+}
+
+pub(crate) fn annotation_owner(view: &Entity<Conversation>) -> crate::image_lightbox::DraftOwner {
+    std::rc::Rc::new(view.downgrade())
+}

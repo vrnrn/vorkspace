@@ -765,12 +765,12 @@ impl Bots {
                 .min_h_0()
                 .overflow_y_scroll()
                 .p_4()
-                .on_action(
-                    cx.listener(|this, _: &crate::shell::DismissMenu, window, cx| {
+                .on_action(cx.listener(
+                    |this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
                         this.dismiss_channel_settings(window, cx);
                         cx.stop_propagation();
-                    }),
-                )
+                    },
+                ))
                 .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape" {
                         this.dismiss_channel_settings(window, cx);

@@ -32,7 +32,7 @@ fn review_overview_has_no_change_markers_and_supports_scrolling_and_dragging(
     assert_eq!(rail.size.width, px(18.));
     window
         .update(visual, |_, window, cx| {
-            let (add, del) = crate::file_tools::editor_scrollbar::diff_colors(cx);
+            let (add, del) = vorkspace_ui::editor_scrollbar::diff_colors(cx);
             let scale = window.scale_factor();
             let quads = window.painted_quads();
             let rail_quads: Vec<_> = quads
@@ -293,7 +293,7 @@ fn side_by_side_pairs_changes_without_dropping_lines_or_crossing_hunks() {
 fn live_layout_switch_retains_hunks_folds_anchor_tokens_and_comment_draft(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+    cx.update(|cx| cx.set_global(vorkspace_ui::preferences::Preferences::default()));
     let before: String = (0..100).map(|n| format!("line {n}\n")).collect();
     let after = before
         .replace("line 5\n", "changed 5\nextra\n")
@@ -328,7 +328,9 @@ fn live_layout_switch_retains_hunks_folds_anchor_tokens_and_comment_draft(
             (key, draft, view.hunks.len())
         }).unwrap();
     cx.update(|cx| {
-        cx.update_global::<crate::settings::Preferences, _>(|p, _| p.diff_view = "split".into())
+        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|p, _| {
+            p.diff_view = "split".into()
+        })
     });
     window
         .update(cx, |view, _, _| {
@@ -395,7 +397,7 @@ fn live_layout_switch_retains_hunks_folds_anchor_tokens_and_comment_draft(
         .unwrap();
     assert!(
         (left.size.width + right.size.width - viewport.size.width).abs()
-            <= px(crate::file_tools::editor_scrollbar::WIDTH + 1.)
+            <= px(vorkspace_ui::editor_scrollbar::WIDTH + 1.)
     );
     window
         .update(visual, |view, _, cx| {
@@ -429,7 +431,9 @@ fn live_layout_switch_retains_hunks_folds_anchor_tokens_and_comment_draft(
         .unwrap();
     for mode in ["unified", "split"] {
         visual.update(|_, cx| {
-            cx.update_global::<crate::settings::Preferences, _>(|p, _| p.diff_view = mode.into())
+            cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|p, _| {
+                p.diff_view = mode.into()
+            })
         });
         window
             .update(visual, |view, _, cx| {

@@ -28,7 +28,7 @@ fn a_padded_anchor_records_its_outer_edge(cx: &mut gpui::TestAppContext) {
 #[test]
 fn danger_rows_keep_readable_ink_when_highlighted_or_hovered() {
     for appearance in ["dark", "light"] {
-        let preferences = crate::settings::Preferences {
+        let preferences = vorkspace_ui::preferences::Preferences {
             theme: appearance.into(),
             ..Default::default()
         };
@@ -266,7 +266,7 @@ fn selected_danger_row_repaints_on_theme_change_without_losing_focus(
     });
     let mut previous_bounds = None;
     for appearance in ["dark", "light", "dark"] {
-        let preferences = crate::settings::Preferences {
+        let preferences = vorkspace_ui::preferences::Preferences {
             theme: appearance.into(),
             ..Default::default()
         };

@@ -181,10 +181,7 @@ pub(super) fn encode<T: serde::Serialize>(value: &T) -> Result<String, String> {
     HISTORY_ENCODE_BYTES.with(|count| count.set(count.get() + encoded.len()));
     Ok(encoded)
 }
-pub(crate) fn handle(id: &str) -> i64 {
-    let bytes = Sha256::digest(id.as_bytes());
-    (i64::from_le_bytes(bytes[..8].try_into().unwrap()) & ((1_i64 << 53) - 1)).max(1)
-}
+pub(crate) use crate::session::desktop_session_handle as handle;
 fn parse_block(raw: &str) -> Result<Value, String> {
     let mut value = parse(raw)?;
     crate::compatibility::block(&mut value);
@@ -228,7 +225,7 @@ fn read_extras(path: &Path) -> Result<BTreeMap<String, String>, String> {
     }
 }
 fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
-    let temporary = path.with_extension(format!("{}.tmp", crate::bot::new_id()));
+    let temporary = path.with_extension(format!("{}.tmp", crate::session::new_id()));
     let result = (|| {
         use std::io::Write;
         let mut options = std::fs::OpenOptions::new();
@@ -785,7 +782,7 @@ impl Store {
     }
     pub(super) fn shared_create(&self, provider: &str, cwd: &str) -> Result<Session, String> {
         self.shared_writable()?;
-        let label = crate::provider::Kind::parse(provider)
+        let label = crate::kind::Kind::parse(provider)
             .ok_or_else(|| format!("Unknown provider: {provider}"))?
             .label();
         let original = crate::accounts::request_id();
@@ -901,7 +898,7 @@ impl Store {
             .map(|raw| parse(&raw))
             .transpose()?
             .unwrap_or_default();
-        settings.model = super::vorkspace_import::native_model(&model, &provider);
+        settings.model = crate::session::native_model(&model, &provider);
         // A prior native launch may have created an untouched default blank.
         // Seed only that blank, never a saved or resumed conversation's model.
         let default_controls = controls.iter().all(|(key, value)| {
@@ -985,7 +982,7 @@ impl Store {
             [self.persisted_session_id(id)?],
             |r| Ok((r.get(0)?, r.get(1)?)),
         ))?;
-        if settings.model != super::vorkspace_import::native_model(&saved_model, &provider) {
+        if settings.model != crate::session::native_model(&saved_model, &provider) {
             let model = settings.model.as_deref().unwrap_or("default");
             let model = if provider == "claude" {
                 model.strip_prefix("claude-").unwrap_or(model)
@@ -1038,8 +1035,7 @@ impl Store {
                 }
                 if let Some(id) = &info.model_id {
                     model["id"] = json!(if info.provider == session_provider
-                        && super::vorkspace_import::native_model(&session_model, &session_provider)
-                            .as_ref()
+                        && crate::session::native_model(&session_model, &session_provider).as_ref()
                             == Some(id)
                     {
                         session_model.clone()

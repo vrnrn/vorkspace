@@ -47,13 +47,13 @@ impl Conversation {
     pub(super) fn actor_look(
         &self,
         bot: &vorkspace_core::bot::Bot,
-    ) -> crate::bots::avatar::BotLookConfig {
+    ) -> crate::avatar::BotLookConfig {
         if bot.is_minion() {
             let history = self
                 .team_histories
                 .as_ref()
                 .and_then(|h| h.borrow().get(&self.summary.id).cloned());
-            return crate::bots::avatar::minion_look(
+            return crate::avatar::minion_look(
                 history
                     .as_ref()
                     .and_then(|h| h.parent.as_ref())
@@ -61,7 +61,7 @@ impl Conversation {
                 &bot.id,
             );
         }
-        crate::bots::avatar::BotLookConfig::from_bot(bot)
+        crate::avatar::BotLookConfig::from_bot(bot)
     }
     pub(super) fn render_team_history(
         &mut self,
@@ -88,7 +88,7 @@ impl Conversation {
             .into_any_element();
         if let Some(actor) = actor {
             let look = self.actor_look(&actor);
-            body = crate::bots::chat_surface_with_look(
+            body = crate::bot_header::chat_surface_with_look(
                 body,
                 &actor,
                 look,

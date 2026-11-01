@@ -47,7 +47,13 @@ impl Protocol {
             &request.cwd.to_string_lossy(),
             &message.attachments,
         )?;
-        crate::ticket_context::prepare_request(&mut request, cancel)?;
+        crate::ticket_context::prepare_request(
+            &mut request.prompt,
+            &request.cwd,
+            request.settings.ticket_context_data_dir.as_deref(),
+            &mut request.settings.ticket_context,
+            cancel,
+        )?;
         // A retained message can be retried after its acknowledgement deadline.
         // Never let a late reply from that attempt acknowledge the retry.
         let wire = format!(

@@ -1,13 +1,13 @@
 //! editorScrollbar.ts's geometry, shared by native file and review surfaces.
-pub(crate) const WIDTH: f32 = 18.;
-pub(crate) const MIN_THUMB: f32 = 32.;
+pub const WIDTH: f32 = 18.;
+pub const MIN_THUMB: f32 = 32.;
 
-pub(crate) fn diff_colors(cx: &gpui::App) -> (u32, u32) {
+pub fn diff_colors(cx: &gpui::App) -> (u32, u32) {
     let palette = cx
-        .try_global::<crate::settings::Preferences>()
+        .try_global::<crate::preferences::Preferences>()
         .map(|p| p.diff_palette.as_str())
         .unwrap_or("default");
-    let light = vorkspace_ui::theme::content(1.).l < 0.5;
+    let light = crate::theme::content(1.).l < 0.5;
     match (palette, light) {
         ("colorblind", false) => (0x388bfd, 0xdb6d28),
         ("colorblind", true) => (0x0969da, 0xbc4c00),
@@ -18,7 +18,7 @@ pub(crate) fn diff_colors(cx: &gpui::App) -> (u32, u32) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Metrics {
+pub struct Metrics {
     pub scrollable: bool,
     pub max_scroll: f32,
     pub max_thumb_top: f32,

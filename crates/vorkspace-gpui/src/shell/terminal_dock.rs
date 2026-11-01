@@ -363,7 +363,7 @@ impl Shell {
             .flex()
             .items_center()
             .border_b_1()
-            .border_color(crate::right_panel::stroke())
+            .border_color(crate::panel_kit::stroke())
             .child(
                 div()
                     .id("terminal-tabs")
@@ -465,7 +465,7 @@ impl Shell {
                                             .text_size(px(13.))
                                             .map(|d| {
                                                 if active {
-                                                    d.bg(crate::right_panel::selection())
+                                                    d.bg(crate::panel_kit::selection())
                                                         .text_color(content(1.))
                                                 } else if hovered {
                                                     d.bg(content(0.05)).text_color(content(1.))
@@ -1049,7 +1049,7 @@ impl Shell {
             .relative()
             .flex_shrink_0()
             .overflow_hidden()
-            .border_color(crate::right_panel::stroke())
+            .border_color(crate::panel_kit::stroke())
             .map(|d| match dock.side {
                 DockSide::Bottom => d.border_t_1(),
                 DockSide::Top => d.border_b_1(),

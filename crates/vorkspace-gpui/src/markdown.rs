@@ -1,7 +1,6 @@
 //! GPUI port of AgentMarkdown.tsx and its .agent-markdown CSS.
 mod search;
 use crate::syntax::HighlightedDocument;
-use crate::transcript::selection::TextSelection;
 use gpui::Window;
 use gpui::{
     AnyElement, App, ClickEvent, Div, FontStyle, FontWeight, HighlightStyle, InteractiveText,
@@ -29,10 +28,21 @@ pub(crate) fn link_menu(url: &str, position: Point<Pixels>, window: &mut Window,
     );
 }
 
-fn activate_link(event: &ClickEvent, selection: Option<&TextSelection>) -> bool {
+/// Text selection over rendered Markdown. The transcript implements this, so
+/// Markdown has no dependency on it.
+pub(crate) trait SelectableText {
+    fn with_text(&self, text: SharedString) -> Selection;
+    fn with_cursor(&self, cursor: gpui::CursorStyle) -> Selection;
+    fn offset(&self, offset: usize) -> Selection;
+    fn has_selection(&self) -> bool;
+    fn wrap(&self, text: SharedString, layout: gpui::TextLayout, child: AnyElement) -> AnyElement;
+}
+pub(crate) type Selection = std::rc::Rc<dyn SelectableText>;
+
+fn activate_link(event: &ClickEvent, selection: Option<&Selection>) -> bool {
     event.click_count() == 1
         && !event.modifiers().shift
-        && !selection.is_some_and(TextSelection::has_selection)
+        && !selection.is_some_and(|selection| selection.has_selection())
 }
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
@@ -63,7 +73,6 @@ impl Tone {
         }
     }
 }
-pub(crate) const FIXED_FONT: &str = "Menlo";
 const PART_BYTES: usize = 2048;
 const PART_LINES: usize = 24;
 
@@ -390,7 +399,7 @@ fn inline_selected(
     now: Instant,
     word_base: usize,
     font_size: f32,
-    selection: Option<TextSelection>,
+    selection: Option<Selection>,
 ) -> AnyElement {
     if runs.iter().any(|r| r.style.code) {
         return rich_inline(runs, id, tone, fade, now, word_base, font_size, selection);
@@ -448,7 +457,7 @@ fn inline_selected(
             highlights.push((range.clone(), highlight));
         }
         if style.code || style.math {
-            fonts.push((range.clone(), FIXED_FONT.into()));
+            fonts.push((range.clone(), vorkspace_ui::fonts::FIXED_FONT.into()));
         }
         if let Some(url) = &style.link {
             links.push(range);
@@ -514,7 +523,7 @@ fn rich_inline(
     now: Instant,
     mut word: usize,
     font_size: f32,
-    selection: Option<TextSelection>,
+    selection: Option<Selection>,
 ) -> AnyElement {
     let mut children = Vec::new();
     let mut offset = 0;
@@ -554,7 +563,7 @@ fn rich_inline(
                         .search
                         .map(search::search_background)
                         .unwrap_or_else(|| content(0.08)))
-                    .font_family(FIXED_FONT)
+                    .font_family(vorkspace_ui::fonts::FIXED_FONT)
                     .text_size(px(font_size * 0.8))
                     .line_height(px(24.))
                     .text_color(content(1.))
@@ -698,7 +707,7 @@ pub(crate) fn resolve_file_links(row: &mut MarkdownRow, base: &str) {
                 && !target.starts_with("mailto:")
                 && (!target.contains("://") || target.starts_with("file://"))
             {
-                let (path, location) = crate::file_tools::file_editor::file_location(&target, base);
+                let (path, location) = crate::file_link::file_location(&target, base);
                 run.style.link = Some(location.map_or_else(
                     || path.clone(),
                     |(line, col)| format!("{path}:{line}:{col}"),
@@ -721,10 +730,7 @@ fn open_link(url: &str, window: &mut Window, cx: &mut App) {
     if url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:") {
         cx.open_url(url);
     } else if !url.starts_with('#') && (!url.contains("://") || url.starts_with("file://")) {
-        window.dispatch_action(
-            Box::new(crate::file_tools::file_editor::OpenPath(url.into())),
-            cx,
-        );
+        window.dispatch_action(Box::new(crate::file_link::OpenPath(url.into())), cx);
     }
 }
 
@@ -743,7 +749,7 @@ pub(crate) fn body_selected(
     tone: Tone,
     fade: Option<&[Instant]>,
     now: Instant,
-    selection: Option<TextSelection>,
+    selection: Option<Selection>,
 ) -> AnyElement {
     // Share one logical row across its styled fragments. Selection boundaries
     // then span inline code and formatting without scanning transcript history.
@@ -810,7 +816,7 @@ pub(crate) fn body_selected(
                         .py_2()
                         .rounded(px(10.))
                         .bg(content(0.06))
-                        .font_family(FIXED_FONT)
+                        .font_family(vorkspace_ui::fonts::FIXED_FONT)
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .text_color(content(0.7))
@@ -829,7 +835,7 @@ pub(crate) fn body_selected(
             } else {
                 child
             };
-            body.font_family(FIXED_FONT)
+            body.font_family(vorkspace_ui::fonts::FIXED_FONT)
                 .text_color(content(0.78))
                 .child(child)
                 .into_any_element()
@@ -916,7 +922,7 @@ pub(crate) fn code_lines_selected(
     highlighted: Option<&HighlightedDocument>,
     query: &str,
     current: bool,
-    selection: Option<TextSelection>,
+    selection: Option<Selection>,
 ) -> Div {
     let selection = selection.map(|selection| {
         selection.with_text(
@@ -976,7 +982,7 @@ pub(crate) fn code_lines_selected(
                 .min_w_full()
                 .line_height(px(20.))
                 .text_size(px(12.))
-                .font_family(FIXED_FONT)
+                .font_family(vorkspace_ui::fonts::FIXED_FONT)
                 .when(fence.numbered, |d| {
                     d.child(
                         div()

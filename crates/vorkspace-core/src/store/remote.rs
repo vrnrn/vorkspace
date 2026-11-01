@@ -98,7 +98,10 @@ fn host_settings(project: &RemoteProject, host: &Value) -> Settings {
         .get("thinking")
         .and_then(|value| value.parse::<bool>().ok());
     if let Some(cwd) = host["cwd"].as_str().filter(|cwd| *cwd != project.cwd) {
-        settings.worktree_cwd = Some(crate::remote::remote_path(&project.environment_id, cwd));
+        settings.worktree_cwd = Some(crate::remote_path::remote_path(
+            &project.environment_id,
+            cwd,
+        ));
     }
     settings
 }
@@ -145,7 +148,7 @@ impl Store {
             .as_str()
             .ok_or("Host project has no identity")?;
         let remote = RemoteProject {
-            key: crate::remote::remote_path(
+            key: crate::remote_path::remote_path(
                 environment_id,
                 cwd.replace('\\', "/").trim_end_matches('/'),
             ),
@@ -287,13 +290,13 @@ impl Store {
         if !cwd.starts_with("remote://") {
             return self.local_create(provider, cwd);
         }
-        let kind = crate::provider::Kind::parse(provider).ok_or("Unknown remote provider")?;
+        let kind = crate::kind::Kind::parse(provider).ok_or("Unknown remote provider")?;
         let project = self
             .remote_projects()?
             .into_values()
             .find(|project| {
                 project.key.trim_end_matches('/') == cwd.trim_end_matches('/')
-                    || crate::remote::remote_path(
+                    || crate::remote_path::remote_path(
                         &project.environment_id,
                         project.cwd.replace('\\', "/").trim_end_matches('/'),
                     )

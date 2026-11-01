@@ -100,7 +100,7 @@ pub(crate) fn mark_idle(pid: u32, idle: bool) {
             OWNER.get().map(|session| Agent {
                 session,
                 pid,
-                identity: crate::resources::identity(pid),
+                identity: identity(pid),
             })
         };
     }
@@ -110,7 +110,7 @@ pub fn register(pid: u32) -> Registration {
     let agent = OWNER.get().map(|session| Agent {
         session,
         pid,
-        identity: crate::resources::identity(pid),
+        identity: identity(pid),
     });
     active()
         .lock()
@@ -148,6 +148,27 @@ pub fn shutdown_all() {
         && std::time::Instant::now() < deadline
     {
         std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+pub fn identity(pid: u32) -> Option<String> {
+    unsafe {
+        let mut info: libc::proc_bsdinfo = std::mem::zeroed();
+        let size = std::mem::size_of_val(&info) as i32;
+        if libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut _,
+            size,
+        ) != size
+        {
+            return None;
+        }
+        Some(format!(
+            "{}:{}:{}",
+            pid, info.pbi_start_tvsec, info.pbi_start_tvusec
+        ))
     }
 }
 

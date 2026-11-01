@@ -9,16 +9,11 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 /// Tauri's application-data location, keyed by its bundle identifier.
-pub fn vorkspace_database() -> PathBuf {
-    let base = crate::accounts::home()
-        .unwrap_or_default()
-        .join("Library/Application Support");
-    crate::compatibility::desktop_database(&base)
-}
+pub use crate::compatibility::vorkspace_database;
 
 #[derive(Debug, Default)]
 pub struct ImportReport {
@@ -160,7 +155,7 @@ fn import_sessions(
         let model_settings: HashMap<String, String> =
             serde_json::from_str(&model_settings).map_err(invalid)?;
         let mut settings = Settings {
-            model: native_model(&session.get::<_, String>(3)?, &provider),
+            model: crate::session::native_model(&session.get::<_, String>(3)?, &provider),
             effort: ["effort", "reasoningEffort", "reasoning_effort", "variant"]
                 .into_iter()
                 .find_map(|key| model_settings.get(key).cloned()),
@@ -234,24 +229,6 @@ fn import_sessions(
     }
     tx.commit()?;
     Ok(report)
-}
-
-pub fn native_model(model: &str, provider: &str) -> Option<String> {
-    let model = model.trim();
-    let model = model.strip_prefix(&format!("{provider}:")).unwrap_or(model);
-    let model = model.split('[').next().unwrap_or(model);
-    if model.is_empty() || model == "default" {
-        return None;
-    }
-    let model = if provider == "claude"
-        && !model.starts_with("claude-")
-        && model.chars().any(|c| c.is_ascii_digit())
-    {
-        format!("claude-{}", model.replace('.', "-"))
-    } else {
-        model.into()
-    };
-    Some(model)
 }
 
 fn transcript(blocks: &[Value]) -> rusqlite::Result<Transcript> {

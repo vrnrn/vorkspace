@@ -74,6 +74,56 @@ impl Store {
         tx.commit().map_err(|e| e.to_string())
     }
 }
+impl Store {
+    pub fn follow_ups(&self, session: i64) -> Result<State, String> {
+        let mut state: State = if self.uses_vorkspace_schema() && session >= 0 {
+            self.shared_follow_ups(session)?
+        } else {
+            self.setting(&format!("follow-up:{session}"))?
+                .map(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
+                .transpose()?
+                .unwrap_or_default()
+        };
+        let mut remaining = Vec::new();
+        for message in state.messages {
+            if self
+                .setting(&format!("bot-delivered:{session}:{}", message.id))?
+                .is_none()
+            {
+                remaining.push(message);
+            }
+        }
+        state.messages = remaining;
+        if let Some(draft) = &state.draft {
+            if self
+                .setting(&format!("bot-delivered:{session}:{}", draft.id))?
+                .is_some()
+            {
+                state.draft = None;
+            }
+        }
+        // Recovery is always explicit, as in React's deserializeSession.
+        state.paused = !state.messages.is_empty();
+        Ok(state)
+    }
+    pub fn save_follow_ups(&self, session: i64, state: &State) -> Result<(), String> {
+        if self.uses_vorkspace_schema() && session >= 0 {
+            return self.shared_save_follow_ups(session, state);
+        }
+        let key = format!("follow-up:{session}");
+        let previous = self
+            .setting(&key)?
+            .and_then(|text| serde_json::from_str::<State>(&text).ok());
+        if previous.is_some_and(|previous| previous.revision > state.revision) {
+            return Ok(());
+        }
+        self.save_setting(
+            &key,
+            &serde_json::to_string(state).map_err(|e| e.to_string())?,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

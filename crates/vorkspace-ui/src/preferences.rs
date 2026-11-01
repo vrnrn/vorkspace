@@ -294,3 +294,21 @@ impl Preferences {
         self.hidden_models.contains(&model_key(provider, model))
     }
 }
+
+pub fn observe_window_scale<T: 'static>(
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<T>,
+) -> gpui::Subscription {
+    apply_window_scale(window, cx);
+    cx.observe_global_in::<Preferences>(window, |_, window, cx| apply_window_scale(window, cx))
+}
+
+fn apply_window_scale<T: 'static>(window: &mut gpui::Window, cx: &mut gpui::Context<T>) {
+    let scale = cx
+        .try_global::<Preferences>()
+        .map_or(1., Preferences::interface_scale);
+    if window.ui_scale() != scale {
+        window.set_ui_scale(scale, cx);
+        cx.notify();
+    }
+}

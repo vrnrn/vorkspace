@@ -32,7 +32,7 @@ impl Shell {
             .gap(px(6.))
             .px_2()
             .border_b_1()
-            .border_color(crate::right_panel::stroke())
+            .border_color(crate::panel_kit::stroke())
             .cursor(CursorStyle::OpenHand)
             .on_mouse_down(
                 MouseButton::Left,
@@ -267,7 +267,7 @@ impl Shell {
             .gap_1()
             .h(px(30.))
             .border_t_1()
-            .border_color(crate::right_panel::stroke())
+            .border_color(crate::panel_kit::stroke())
             .child(
                 div()
                     .text_size(px(11.))
@@ -403,7 +403,7 @@ impl Shell {
                 .overflow_hidden()
                 .flex()
                 .flex_col()
-                .border_color(crate::right_panel::stroke())
+                .border_color(crate::panel_kit::stroke())
                 .when(rect.x > 0.001, |d| d.border_l_1())
                 .when(rect.y > 0.001, |d| d.border_t_1())
         };
@@ -553,7 +553,7 @@ impl Shell {
                             .rounded_md()
                             .bg(pane_fill())
                             .border_1()
-                            .border_color(crate::right_panel::stroke())
+                            .border_color(crate::panel_kit::stroke())
                             .text_size(px(12.))
                             .text_color(content(0.8))
                             .child("Not enough room to tile here"),
@@ -729,7 +729,7 @@ impl Shell {
                     .overflow_hidden()
                     .when(moving, |d| d.opacity(0.4))
                     .when(!chat_hidden, |d| {
-                        d.border_l_1().border_color(crate::right_panel::stroke())
+                        d.border_l_1().border_color(crate::panel_kit::stroke())
                     })
                     .on_mouse_down(
                         MouseButton::Left,

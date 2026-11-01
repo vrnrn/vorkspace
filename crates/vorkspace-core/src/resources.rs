@@ -105,26 +105,7 @@ struct Process {
 }
 
 /// Kernel process birth time prevents PID reuse from authorizing a stop.
-pub fn identity(pid: u32) -> Option<String> {
-    unsafe {
-        let mut info: libc::proc_bsdinfo = std::mem::zeroed();
-        let size = std::mem::size_of_val(&info) as i32;
-        if libc::proc_pidinfo(
-            pid as i32,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut _,
-            size,
-        ) != size
-        {
-            return None;
-        }
-        Some(format!(
-            "{}:{}:{}",
-            pid, info.pbi_start_tvsec, info.pbi_start_tvusec
-        ))
-    }
-}
+pub use crate::process::identity;
 
 /// System CPU since the previous call, and the kernel's memory pressure level.
 pub fn usage() -> Usage {

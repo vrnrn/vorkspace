@@ -1,5 +1,6 @@
 //! Bounded CLI invocations for Settings management. Call only from workers.
-use crate::provider::Kind;
+mod discovery;
+use crate::kind::Kind;
 use std::{
     collections::HashMap,
     io::Read,
@@ -33,7 +34,7 @@ pub fn output(
     timeout: Duration,
 ) -> Result<String, String> {
     let mut command = Command::new(binary);
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::shell_env::apply_gui_env(&mut command);
     command
         .args(args)
         .current_dir(cwd)
@@ -96,12 +97,12 @@ pub fn inspect(kind: Kind, path: Option<&str>) -> Result<Inspection, String> {
             }
             p
         }
-        None => crate::provider::resolve_auto(kind).ok_or("CLI could not be resolved")?,
+        None => resolve_auto(kind).ok_or("CLI could not be resolved")?,
     };
     if !path.is_file() {
         return Err("CLI executable does not exist.".into());
     }
-    let cwd = crate::scm::shell::dirs_home()
+    let cwd = crate::shell_env::dirs_home()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"));
     let version = output(&path, &["--version".into()], &cwd, Duration::from_secs(10))?;
@@ -113,6 +114,95 @@ pub fn inspect(kind: Kind, path: Option<&str>) -> Result<Inspection, String> {
         return Err("Codex CLI returned an invalid version.".into());
     }
     Ok(Inspection { path, version })
+}
+
+/// GUI apps may not inherit the login shell PATH. Try the same common user and
+/// system install locations as harness.rs, plus Claude's versioned native install.
+/// An explicit override wins and errors at launch rather than silently falling back.
+pub fn resolve(kind: Kind) -> Option<PathBuf> {
+    if !kind.is_supported() {
+        return None;
+    }
+    if let Some(path) = configured(kind) {
+        return Some(path);
+    }
+    resolve_auto(kind)
+}
+pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
+    if !kind.is_supported() {
+        return None;
+    }
+    let key = format!("VORKSPACE_{}_BINARY", kind.id().to_uppercase());
+    if let Some(path) = std::env::var_os(key).filter(|s| !s.is_empty()) {
+        return Some(path.into());
+    }
+    let mut candidates: Vec<PathBuf> =
+        Some(std::ffi::OsString::from(crate::shell_env::gui_search_path()))
+            .into_iter()
+            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.join(kind.binary_name()))
+            .collect();
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let home = PathBuf::from(home);
+        for dir in kind.install_dirs().iter().copied().chain([
+            ".local/bin",
+            ".bun/bin",
+            ".npm-global/bin",
+            ".cargo/bin",
+            "n/bin",
+        ]) {
+            candidates.push(home.join(dir).join(kind.binary_name()));
+        }
+        if kind == Kind::Claude {
+            candidates.push(home.join(".claude/local/claude"));
+            let dir = home.join(".local/share/claude/versions");
+            let mut versions: Vec<_> = std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .collect();
+            versions.sort_by_key(|p| {
+                p.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .split('.')
+                    .map(|s| s.parse::<u32>().unwrap_or(0))
+                    .collect::<Vec<_>>()
+            });
+            candidates.extend(versions.into_iter().rev());
+        }
+    }
+    for dir in [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/snap/bin",
+    ] {
+        candidates.push(Path::new(dir).join(kind.binary_name()));
+    }
+    if kind == Kind::Pi {
+        let alias = "pi-coding-agent";
+        let paths: Vec<_> = candidates
+            .iter()
+            .filter_map(|p| p.parent().map(|dir| dir.join(alias)))
+            .collect();
+        candidates.extend(paths);
+    }
+    candidates
+        .into_iter()
+        .find_map(|p| (executable(&p) && discovery::matches(kind, &p)).then_some(p))
+}
+fn executable(path: &Path) -> bool {
+    let Ok(meta) = path.metadata() else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
 }
 
 #[cfg(test)]

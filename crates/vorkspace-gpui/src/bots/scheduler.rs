@@ -164,7 +164,7 @@ impl Bots {
             if run.view.read(cx).needs_approval() {
                 views.push(run.view.clone());
             }
-            if let Some(owner) = self.owner.upgrade() {
+            {
                 for launch in self
                     .roster
                     .bots
@@ -174,9 +174,9 @@ impl Bots {
                         (l.origin_turn >> 32) as i64 == session && !l.completed && !l.dismissed
                     })
                 {
-                    if let Some(view) = owner
-                        .read(cx)
-                        .bot_session_entity(launch.session_id)
+                    if let Some(view) = self
+                        .owner
+                        .session_entity(launch.session_id, cx)
                         .filter(|v| v.read(cx).needs_approval())
                     {
                         views.push(view);
@@ -1240,9 +1240,9 @@ impl Bots {
                     l.session_id
                 })
                 .collect::<Vec<_>>();
-            if let Some(owner) = self.owner.upgrade() {
+            {
                 for child in children {
-                    if let Some(view) = owner.read(cx).bot_session_entity(child) {
+                    if let Some(view) = self.owner.session_entity(child, cx) {
                         view.update(cx, |v, cx| v.stop_if_busy(cx));
                     }
                 }

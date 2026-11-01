@@ -8,7 +8,7 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     let summary = store.create("codex", "/tmp").unwrap();
     cx.update(|cx| {
         input::bind(cx);
-        cx.set_global(crate::settings::Preferences {
+        cx.set_global(vorkspace_ui::preferences::Preferences {
             follow_up: "queue".into(),
             ..Default::default()
         });

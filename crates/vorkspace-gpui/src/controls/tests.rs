@@ -217,7 +217,7 @@ fn switch_geometry_and_focus_feedback_follow_theme_and_state(cx: &mut TestAppCon
         for workspace_theme in ["default", "harbor"] {
             visual.update(|_, _| {
                 theme::configure(
-                    &crate::settings::Preferences {
+                    &vorkspace_ui::preferences::Preferences {
                         theme: if light { "light" } else { "dark" }.into(),
                         workspace_theme: workspace_theme.into(),
                         ..Default::default()
@@ -321,7 +321,7 @@ fn native_control_captures() {
     for light in [false, true] {
         cx.update(|_| {
             theme::configure(
-                &crate::settings::Preferences {
+                &vorkspace_ui::preferences::Preferences {
                     theme: if light { "light" } else { "dark" }.into(),
                     workspace_theme: "harbor".into(),
                     ..Default::default()

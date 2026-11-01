@@ -459,7 +459,7 @@ fn cards_screenshot_materialization_renders_two_pills_and_routes_clicks(cx: &mut
         .update(cx, |_, _, cx| {
             cx.subscribe(
                 &cx.entity(),
-                move |_, _, event: &crate::bots::cards::CardAction, _| {
+                move |_, _, event: &crate::transcript::bot_cards::CardAction, _| {
                     events.borrow_mut().push(event.0.clone())
                 },
             )

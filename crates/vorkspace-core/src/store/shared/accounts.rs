@@ -96,7 +96,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::Kind;
+    use crate::kind::Kind;
 
     #[test]
     fn isolated_account_names_and_selections_survive_restart() {

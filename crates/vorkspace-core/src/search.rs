@@ -1,7 +1,7 @@
 //! SearchView.tsx/appSearch.ts: fuzzy titles and paths, literal message/content
 //! matches, stable identities, and the same per-scope ordering and limits.
 pub mod project;
-use crate::{files::ProjectFile, store::Session, transcript::Row};
+use crate::{files::ProjectFile, session::Session, transcript::Row};
 use std::{
     collections::HashMap,
     ops::Range,
@@ -183,7 +183,7 @@ pub fn titles(rows: &[Session], query: &str) -> Vec<Hit> {
     }
     rows.iter()
         .filter_map(|s| {
-            let title = crate::session_title::display_title(&s.title, &s.provider);
+            let title = crate::session::display_title(&s.title, &s.provider);
             let (score, highlights) = fuzzy(query, title)?;
             Some(Hit {
                 id: format!("conversation:{}", s.id),
@@ -328,7 +328,7 @@ pub fn message_hit(
         },
         highlights: literal_ranges(&title, query).into_iter().take(1).collect(),
         title,
-        meta: crate::session_title::display_title(&session.title, &session.provider).into(),
+        meta: crate::session::display_title(&session.title, &session.provider).into(),
         provider: session.provider.clone(),
         score: if live { 20 } else { 16 } + recency(session.updated_at),
         updated_at: session.updated_at,

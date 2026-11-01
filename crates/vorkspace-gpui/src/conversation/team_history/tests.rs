@@ -2,7 +2,7 @@ use super::*;
 use gpui::{TestAppContext, VisualTestContext, WindowHandle};
 use std::{path::PathBuf, sync::Mutex};
 use vorkspace_core::{
-    bot::{Bot, Message, MinionMetadata, peers::Peer},
+    bot::{Bot, Message, MinionMetadata, Peer},
     store::Store,
 };
 
@@ -32,7 +32,7 @@ fn fixture(cx: &mut TestAppContext, configured: bool, retired: bool) -> WindowHa
         }),
         ..Default::default()
     };
-    let histories: crate::bots::TeamHistories = Default::default();
+    let histories: crate::conversation::TeamHistories = Default::default();
     histories.borrow_mut().insert(
         summary.id,
         crate::bots::TeamHistory {

@@ -290,7 +290,7 @@ impl DesktopPreferences {
             .and_then(Value::as_object)
             .into_iter()
             .flatten()
-            .filter(|(provider, _)| crate::provider::Kind::parse(provider).is_some())
+            .filter(|(provider, _)| crate::kind::Kind::parse(provider).is_some())
             .filter_map(|(provider, value)| {
                 value
                     .as_str()
@@ -402,7 +402,7 @@ impl DesktopPreferences {
         reconcile_preference(target, baseline, next, "recent_models", json!(choices));
         let tab = self
             .get("vorkspace.modelPickerTab")
-            .filter(|tab| *tab == "favorites" || crate::provider::Kind::parse(tab).is_some())
+            .filter(|tab| *tab == "favorites" || crate::kind::Kind::parse(tab).is_some())
             .unwrap_or("favorites");
         reconcile_preference(target, baseline, next, "model_picker_tab", json!(tab));
     }
@@ -644,13 +644,14 @@ fn sidebar_tab_order(value: &Value) -> Value {
 }
 
 fn model_choice(provider: &str, model: &str) -> Option<Value> {
-    crate::provider::Kind::parse(provider)?;
-    if model.split_once(':').is_some_and(|(prefix, _)| {
-        crate::provider::Kind::parse(prefix).is_some() && prefix != provider
-    }) {
+    crate::kind::Kind::parse(provider)?;
+    if model
+        .split_once(':')
+        .is_some_and(|(prefix, _)| crate::kind::Kind::parse(prefix).is_some() && prefix != provider)
+    {
         return None;
     }
-    Some(json!({"provider":provider, "model":crate::store::native_model(model, provider)}))
+    Some(json!({"provider":provider, "model":crate::session::native_model(model, provider)}))
 }
 
 pub(super) fn valid_hex(color: &str) -> bool {
@@ -663,7 +664,7 @@ pub(super) fn providers(value: &Value) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-        .filter(|id| crate::provider::Kind::parse(id).is_some())
+        .filter(|id| crate::kind::Kind::parse(id).is_some())
     {
         if !out.iter().any(|id| id == provider) {
             out.push(provider.to_owned());
@@ -677,10 +678,10 @@ pub(super) fn native_models(value: &Value) -> Map<String, Value> {
         .into_iter()
         .flatten()
         .filter_map(|(provider, model)| {
-            crate::provider::Kind::parse(provider)?;
+            crate::kind::Kind::parse(provider)?;
             Some((
                 provider.clone(),
-                json!(crate::store::native_model(model.as_str()?, provider)?),
+                json!(crate::session::native_model(model.as_str()?, provider)?),
             ))
         })
         .collect()

@@ -8,6 +8,7 @@ pub(crate) const DEFAULT_SHORTCUT: &str = "ctrl-alt-space";
 #[derive(Default)]
 struct Controller {
     panel: Option<WindowHandle<Vox>>,
+    workspace_toggle: Option<fn(&mut App)>,
     config: String,
     error: Option<String>,
     #[cfg(not(test))]
@@ -17,7 +18,7 @@ struct Controller {
 }
 impl Global for Controller {}
 
-pub(crate) fn configure(prefs: &crate::settings::Preferences, cx: &mut App) {
+pub(crate) fn configure(prefs: &vorkspace_ui::preferences::Preferences, cx: &mut App) {
     if !cx.has_global::<Controller>() {
         cx.set_global(Controller::default());
     }
@@ -71,14 +72,17 @@ fn toggle_global(cx: &mut App) {
     {
         return;
     }
-    let Some(target) = crate::app_menu::workspace_target(cx) else {
-        return;
-    };
-    let _ = target.update(cx, |root, window, cx| {
-        if let Ok(shell) = root.downcast::<Shell>() {
-            shell.update(cx, |shell, cx| shell.toggle_vox(window, cx));
-        }
-    });
+    if let Some(toggle) = cx
+        .try_global::<Controller>()
+        .and_then(|c| c.workspace_toggle)
+    {
+        toggle(cx);
+    }
+}
+
+/// The global shortcut's fallback when no call panel exists yet.
+pub(crate) fn set_workspace_toggle(toggle: fn(&mut App), cx: &mut App) {
+    cx.default_global::<Controller>().workspace_toggle = Some(toggle);
 }
 
 pub(crate) fn toggle(voice: gpui::Entity<Vox>, cx: &mut App) {
@@ -159,12 +163,12 @@ mod tests {
                 },
                 |_, cx| {
                     cx.new(|_| {
-                        let prefs = crate::settings::Preferences {
+                        let prefs = vorkspace_ui::preferences::Preferences {
                             vox_enabled: true,
                             ..Default::default()
                         };
                         let voice =
-                            Vox::new(WeakEntity::new_invalid(), store, &prefs, "/project".into());
+                            Vox::new(std::rc::Rc::new(NoHost), store, &prefs, "/project".into());
                         voice.active.store(true, Ordering::Relaxed);
                         voice
                     })

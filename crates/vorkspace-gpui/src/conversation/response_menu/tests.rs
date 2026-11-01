@@ -191,8 +191,8 @@ fn response_transfer_menus_hide_models_for_their_provider(cx: &mut TestAppContex
     let window = conversation(cx);
     window
         .update(cx, |view, _, cx| {
-            cx.set_global(crate::settings::Preferences {
-                hidden_models: vec![crate::settings::model_key("claude", "hidden")],
+            cx.set_global(vorkspace_ui::preferences::Preferences {
+                hidden_models: vec![vorkspace_ui::preferences::model_key("claude", "hidden")],
                 ..Default::default()
             });
             for kind in [TransferKind::Handoff, TransferKind::SecondOpinion] {

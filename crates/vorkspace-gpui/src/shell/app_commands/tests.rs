@@ -1,5 +1,6 @@
 use super::*;
 use gpui::TestAppContext;
+use vorkspace_core::agent::Settings;
 fn command_window(cx: &mut TestAppContext) -> (gpui::WindowHandle<Shell>, i64, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     for args in [

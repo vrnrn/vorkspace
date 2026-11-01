@@ -34,9 +34,7 @@ fn transport_error(message: String, mutating: bool) -> RewindError {
     }
 }
 
-pub fn supports_rewind(kind: Kind) -> bool {
-    matches!(kind, Kind::Codex | Kind::Pi | Kind::Omp)
-}
+pub use crate::kind::supports_rewind;
 
 /// Runs on a worker, after the caller has reserved its conversation. Returns the
 /// provider binding to persist with the confirmed local truncation. Pi forks to
@@ -57,7 +55,7 @@ pub fn rewind_last_turn(
     // It must not later resume with a pre-revert in-memory context.
     parked::discard_session(&request);
     let mut command = Command::new(&request.binary);
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::shell_env::apply_gui_env(&mut command);
     command.envs(&request.settings.environment);
     request.settings.account.apply(request.kind, &mut command)?;
     if request.kind == Kind::Codex {

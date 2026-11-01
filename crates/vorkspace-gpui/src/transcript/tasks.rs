@@ -543,7 +543,7 @@ fn agent(
         if let Some(report) = report {
             let report = if failed {
                 div()
-                    .font_family(markdown::FIXED_FONT)
+                    .font_family(vorkspace_ui::fonts::FIXED_FONT)
                     .text_size(px(12.))
                     .line_height(px(20.))
                     .text_color({

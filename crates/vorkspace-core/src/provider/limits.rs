@@ -1,7 +1,7 @@
 //! Keep Claude's reset time through its terminal error, even when its synthetic
 //! assistant frame ends the transport before the result frame can arrive.
 use super::*;
-use crate::usage::Limit;
+use crate::limit::Limit;
 
 impl Protocol {
     pub(super) fn claude_error(&mut self, error: &str, frame: &Value) -> String {

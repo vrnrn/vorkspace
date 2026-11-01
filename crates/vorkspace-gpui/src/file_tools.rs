@@ -1,5 +1,4 @@
 //! File surfaces: the explorer, project search, quick open and the editor pane.
-pub(crate) mod editor_scrollbar;
 pub(crate) mod explorer;
 pub(crate) mod file_editor;
 pub(crate) mod project_search;

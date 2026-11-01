@@ -1,7 +1,7 @@
 //! Inbox arrival/revision sounds use the same saved project policy as sessions.
 use super::delivery::ProjectRule;
-use crate::settings::Preferences;
 use vorkspace_core::inbox::Item;
+use vorkspace_ui::preferences::Preferences;
 
 pub(crate) fn should_chime(
     preferences: &Preferences,

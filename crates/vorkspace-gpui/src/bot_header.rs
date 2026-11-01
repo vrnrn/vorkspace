@@ -1,5 +1,5 @@
 //! Fixed chat identity, outside the transcript's scroll and input ownership.
-use super::avatar;
+use crate::avatar;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, FontWeight, Render, canvas, div, prelude::*, px,
 };
@@ -9,8 +9,8 @@ use vorkspace_ui::theme::*;
 const FACE: f32 = 64.;
 const BACKDROP: f32 = 256.;
 /// Clear of the window's top edge: the Bot page has no title bar.
-pub(super) const TOP: f32 = 24.;
-pub(super) const HEIGHT: f32 = TOP + FACE + 2. + 22.;
+pub(crate) const TOP: f32 = 24.;
+pub(crate) const HEIGHT: f32 = TOP + FACE + 2. + 22.;
 
 #[derive(Clone)]
 struct Identity {

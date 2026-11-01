@@ -37,7 +37,7 @@ struct Summary {
     revision: u64,
 }
 struct Surface {
-    git: Entity<crate::git_tools::git_status::ProjectGit>,
+    git: Entity<crate::git_status::ProjectGit>,
     changes: Entity<crate::git_tools::changes::Changes>,
     review: Option<Entity<crate::git_tools::review::ReviewPane>>,
     enabled: bool,
@@ -341,7 +341,7 @@ impl Bots {
             }
         }
         if !self.project_changes.surfaces.contains_key(&key) {
-            let git = cx.new(|cx| crate::git_tools::git_status::ProjectGit::new(root, cx));
+            let git = cx.new(|cx| crate::git_status::ProjectGit::new(root, cx));
             let provider = self
                 .chat()
                 .map(|v| Kind::from_id(&v.read(cx).summary.provider))
@@ -366,7 +366,7 @@ impl Bots {
             let summary_id = bot.id.clone();
             let git_event = cx.subscribe(
                 &git,
-                move |this, _, _: &crate::git_tools::git_status::GitChanged, cx| {
+                move |this, _, _: &crate::git_status::GitChanged, cx| {
                     if let Some(summary) = this.project_changes.summaries.get_mut(&summary_id) {
                         summary.loaded = None;
                         summary.revision += 1;
@@ -605,14 +605,7 @@ impl Bots {
                     .any(|c| selected.as_ref() == Some(&c.root));
                 let appearance = self
                     .owner
-                    .upgrade()
-                    .and_then(|o| {
-                        o.read(cx)
-                            .workspace
-                            .project_appearance
-                            .get(&project.path)
-                            .cloned()
-                    })
+                    .project_appearance(&project.path, cx)
                     .unwrap_or_default();
                 let label = appearance.label(&project.path);
                 let count = project.count();

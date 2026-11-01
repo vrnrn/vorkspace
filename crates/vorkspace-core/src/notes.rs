@@ -139,7 +139,7 @@ pub fn is_project(cwd: &str) -> bool {
     {
         return false;
     }
-    crate::accounts::home()
+    crate::shell_env::home()
         .is_none_or(|home| crate::files::path_key(&home.to_string_lossy()) != path)
 }
 

@@ -57,7 +57,7 @@ fn replace_is_one_undo_and_autosave_formats_with_original_encoding(cx: &mut Test
     ));
     let original = "\u{feff}{\"word\":\"hello\",\"other\":\"hello\"}\r\n";
     std::fs::write(&path, original).unwrap();
-    cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+    cx.update(|cx| cx.set_global(vorkspace_ui::preferences::Preferences::default()));
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
             let git = cx
@@ -108,7 +108,9 @@ fn replace_is_one_undo_and_autosave_formats_with_original_encoding(cx: &mut Test
         })
         .unwrap();
     cx.run_until_parked();
-    cx.update(|cx| cx.update_global::<crate::settings::Preferences, _>(|p, _| p.autosave = true));
+    cx.update(|cx| {
+        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|p, _| p.autosave = true)
+    });
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(999));
     cx.run_until_parked();
@@ -133,7 +135,7 @@ fn autosave_refuses_external_edits_even_before_the_file_poll(cx: &mut TestAppCon
     ));
     std::fs::write(&path, "original\n").unwrap();
     cx.update(|cx| {
-        cx.set_global(crate::settings::Preferences {
+        cx.set_global(vorkspace_ui::preferences::Preferences {
             autosave: true,
             ..Default::default()
         })
@@ -174,7 +176,7 @@ fn saving_a_clean_file_still_applies_the_format_on_save_preference(cx: &mut Test
         std::process::id()
     ));
     std::fs::write(&path, "{\"value\":1}").unwrap();
-    cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+    cx.update(|cx| cx.set_global(vorkspace_ui::preferences::Preferences::default()));
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
             let git = cx

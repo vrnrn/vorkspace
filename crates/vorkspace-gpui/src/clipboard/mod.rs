@@ -8,7 +8,7 @@ use gpui::Task;
 use gpui::{App, AppContext, Context, Entity, Global};
 use history::{Content, History, Preview};
 use std::sync::Arc;
-gpui::actions!(clipboard, [Toggle, Settings, Composer]);
+gpui::actions!(clipboard, [Toggle, Settings, Composer, Quit]);
 
 struct Clipboard(Entity<Service>);
 impl Global for Clipboard {}
@@ -149,10 +149,7 @@ impl Service {
                         }
                         menu::Event::Settings => cx.dispatch_action(&Settings),
                         menu::Event::Composer => cx.dispatch_action(&Composer),
-                        menu::Event::Quit => crate::app_menu::clipboard_route(
-                            vorkspace_macos::status_menu::Action::Quit,
-                            cx,
-                        ),
+                        menu::Event::Quit => cx.dispatch_action(&Quit),
                         menu::Event::Closed => s.query.clear(),
                     });
                 }

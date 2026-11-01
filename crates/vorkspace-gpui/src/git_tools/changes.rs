@@ -3,12 +3,12 @@
 //! and unstaged files as a list or a tree. Every Git call runs off-thread,
 //! one mutation at a time per checkout.
 use crate::{
-    git_tools::git_status::{GitChanged, ProjectGit},
+    git_status::{GitChanged, ProjectGit},
     input::{self, Input},
+    panel_kit::*,
     popover::{
         Align, Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle, menu_popover,
     },
-    right_panel::*,
 };
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FontWeight, Hsla, PromptLevel, Role,
@@ -1784,7 +1784,7 @@ impl Changes {
                             .flex_shrink_0()
                             .flex()
                             .justify_end()
-                            .font_family(crate::markdown::FIXED_FONT)
+                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
                             .text_size(px(11.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(status_color(&file.status))

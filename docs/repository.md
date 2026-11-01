@@ -1,6 +1,6 @@
 # Repository map
 
-The desktop is a Rust workspace that runs as one process. The remote host is a separate Node application. Directory boundaries follow those runtime owners, and crate dependencies only point downward: nothing below `vorkspace-gpui` can reach back up into it.
+The desktop is a Rust workspace that runs as one process. The remote host is a separate Node application. Directory boundaries follow those runtime owners, and dependencies only point downward. That holds between crates and between the top-level modules inside each crate, and `scripts/checks/module-cycles.test.mjs` enforces it. A lower module that needs something from above receives it as a small trait, such as `BotsHost`, `VoxHost`, `AnnotationDraft`, or `SelectableText`. The one permitted cycle is `agent` and `bot_model`, because Bot records hold their settings and turn settings hold the Bot.
 
 | Path | Responsibility |
 | --- | --- |

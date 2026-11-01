@@ -24,10 +24,8 @@ pub use commands::{
 };
 mod attachments;
 mod compaction;
-mod discovery;
 mod follow_up;
 mod frames;
-mod kind;
 mod lifecycle;
 mod limits;
 mod parked;
@@ -50,7 +48,8 @@ mod tasks;
 pub use rewind::{rewind_last_turn, supports_rewind, RewindError};
 #[cfg(test)]
 mod text_tests;
-pub use kind::Kind;
+pub use crate::cli::{resolve, resolve_auto};
+pub use crate::kind::Kind;
 
 const BATCH_BYTES: usize = 64 * 1024;
 const TICK: Duration = Duration::from_millis(16);
@@ -94,7 +93,7 @@ pub enum Event {
     Reasoning(String),
     Tool(ToolCall),
     Status(String),
-    UsageLimited(crate::usage::Limit),
+    UsageLimited(crate::limit::Limit),
     Interjection {
         text: String,
         custom_type: String,
@@ -116,96 +115,6 @@ fn codex_error(error: &Value, fallback: &str) -> String {
     }
 }
 
-/// GUI apps may not inherit the login shell PATH. Try the same common user and
-/// system install locations as harness.rs, plus Claude's versioned native install.
-/// An explicit override wins and errors at launch rather than silently falling back.
-pub fn resolve(kind: Kind) -> Option<PathBuf> {
-    if !kind.is_supported() {
-        return None;
-    }
-    if let Some(path) = crate::cli::configured(kind) {
-        return Some(path);
-    }
-    resolve_auto(kind)
-}
-pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
-    if !kind.is_supported() {
-        return None;
-    }
-    let key = format!("VORKSPACE_{}_BINARY", kind.id().to_uppercase());
-    if let Some(path) = std::env::var_os(key).filter(|s| !s.is_empty()) {
-        return Some(path.into());
-    }
-    let mut candidates: Vec<PathBuf> = Some(std::ffi::OsString::from(
-        crate::scm::shell::gui_search_path(),
-    ))
-    .into_iter()
-    .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-    .filter(|p| !p.as_os_str().is_empty())
-    .map(|p| p.join(kind.binary_name()))
-    .collect();
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        let home = PathBuf::from(home);
-        for dir in kind.install_dirs().iter().copied().chain([
-            ".local/bin",
-            ".bun/bin",
-            ".npm-global/bin",
-            ".cargo/bin",
-            "n/bin",
-        ]) {
-            candidates.push(home.join(dir).join(kind.binary_name()));
-        }
-        if kind == Kind::Claude {
-            candidates.push(home.join(".claude/local/claude"));
-            let dir = home.join(".local/share/claude/versions");
-            let mut versions: Vec<_> = std::fs::read_dir(dir)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|e| e.path())
-                .collect();
-            versions.sort_by_key(|p| {
-                p.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .split('.')
-                    .map(|s| s.parse::<u32>().unwrap_or(0))
-                    .collect::<Vec<_>>()
-            });
-            candidates.extend(versions.into_iter().rev());
-        }
-    }
-    for dir in [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/snap/bin",
-    ] {
-        candidates.push(Path::new(dir).join(kind.binary_name()));
-    }
-    if kind == Kind::Pi {
-        let alias = "pi-coding-agent";
-        let paths: Vec<_> = candidates
-            .iter()
-            .filter_map(|p| p.parent().map(|dir| dir.join(alias)))
-            .collect();
-        candidates.extend(paths);
-    }
-    candidates
-        .into_iter()
-        .find_map(|p| (executable(&p) && discovery::matches(kind, &p)).then_some(p))
-}
-fn executable(path: &Path) -> bool {
-    let Ok(meta) = path.metadata() else {
-        return false;
-    };
-    if !meta.is_file() {
-        return false;
-    }
-    use std::os::unix::fs::PermissionsExt;
-    meta.permissions().mode() & 0o111 != 0
-}
-
 fn write_json(out: &mut impl Write, value: Value) -> Result<(), String> {
     let mut frame = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
     frame.push(b'\n');
@@ -225,7 +134,7 @@ struct Protocol {
     interrupt_id: Option<String>,
     claude_prompt_sent: bool,
     claude_result_seen: bool,
-    claude_usage_limit: Option<crate::usage::Limit>,
+    claude_usage_limit: Option<crate::limit::Limit>,
     claude_resume_at: Option<Instant>,
     follow_up_ready: bool,
     steering: HashMap<String, (crate::follow_up::Message, Instant)>,
@@ -715,7 +624,7 @@ impl Protocol {
                 match v["type"].as_str().unwrap_or("") {
                     "rate_limit_event" if v["parent_tool_use_id"].is_null() => {
                         self.claude_usage_limit =
-                            crate::usage::Limit::from_claude_info(&v["rate_limit_info"]);
+                            crate::limit::Limit::from_claude_info(&v["rate_limit_info"]);
                     }
                     "control_response" if v["response"]["request_id"] == "native-init" => {
                         self.claude_prompt(stdin)?;
@@ -1327,10 +1236,23 @@ fn run_operation(
         return Err("Stopped".into());
     }
     if !probe && !compact && !command_probe {
-        crate::ticket_context::admit_request(&mut request, &cancel)?;
+        crate::ticket_context::admit_request(
+            &request.prompt,
+            &request.cwd,
+            request.settings.text_only,
+            request.settings.ticket_context_data_dir.as_deref(),
+            &mut request.settings.ticket_context,
+            &cancel,
+        )?;
     }
     if !probe && !compact && !command_probe {
-        crate::ticket_context::prepare_request(&mut request, &cancel)?;
+        crate::ticket_context::prepare_request(
+            &mut request.prompt,
+            &request.cwd,
+            request.settings.ticket_context_data_dir.as_deref(),
+            &mut request.settings.ticket_context,
+            &cancel,
+        )?;
     }
     let claude_new_session = (request.kind == Kind::Claude
         && request.provider_id.is_none()
@@ -1348,9 +1270,9 @@ fn run_operation(
     }
     let mut command = Command::new(&request.binary);
     if request.kind == Kind::Claude {
-        crate::scm::shell::apply_claude_env(&mut command);
+        crate::shell_env::apply_claude_env(&mut command);
     }
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::shell_env::apply_gui_env(&mut command);
     command.envs(&request.settings.environment);
     request.settings.account.apply(request.kind, &mut command)?;
     match request.kind {

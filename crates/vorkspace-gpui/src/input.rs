@@ -1090,7 +1090,7 @@ impl EntityInputHandler for Input {
             && self.inline_commands
             && self.code.is_none()
             && cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_none_or(|p| p.autocorrect);
         gpui::TextInputConfiguration {
             autocorrect: enabled,
@@ -1155,7 +1155,7 @@ impl EntityInputHandler for Input {
             && text.len() == 1
             && text.chars().all(char::is_whitespace)
             && cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_none_or(|p| p.autocorrect)
         {
             let start = self.content[..r.start]
@@ -1672,7 +1672,7 @@ impl Render for Input {
                 "Composer"
             })
             .when(self.code.is_some(), |d| {
-                d.h_full().font_family(crate::markdown::FIXED_FONT)
+                d.h_full().font_family(vorkspace_ui::fonts::FIXED_FONT)
             })
             .track_focus(&self.focus)
             .cursor(if self.code_rail_hovered() {

@@ -243,10 +243,12 @@ impl Render for QuickOpen {
                 this.pick(this.active, cx);
                 cx.stop_propagation();
             }))
-            .on_action(cx.listener(|_, _: &crate::shell::DismissMenu, _, cx| {
-                cx.emit(Picked::Dismiss);
-                cx.stop_propagation();
-            }))
+            .on_action(
+                cx.listener(|_, _: &vorkspace_ui::actions::DismissMenu, _, cx| {
+                    cx.emit(Picked::Dismiss);
+                    cx.stop_propagation();
+                }),
+            )
             .child(
                 div()
                     .px_4()

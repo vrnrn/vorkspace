@@ -1,7 +1,14 @@
 //! Some unrelated programs also install `pi` or `omp`. As in the
 //! legacy binary resolver, verify their CLI contract before marking them installed.
 use super::*;
+use crate::process;
 use std::sync::OnceLock;
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+    sync::{mpsc, Mutex},
+    thread,
+};
 type IdentityCache = HashMap<(Kind, PathBuf), Option<std::time::SystemTime>>;
 pub(super) fn matches(kind: Kind, path: &Path) -> bool {
     if !kind.is_supported() {
@@ -23,7 +30,7 @@ pub(super) fn matches(kind: Kind, path: &Path) -> bool {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::shell_env::apply_gui_env(&mut command);
     process::isolate(&mut command);
     let Ok(mut child) = command.spawn() else {
         return false;

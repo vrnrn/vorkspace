@@ -30,7 +30,7 @@ impl SettingsView {
                         .debug_selector(|| "settings-bot-mascot".into())
                         .size(px(16.))
                         .flex_shrink_0()
-                        .child(crate::bots::avatar::avatar(
+                        .child(crate::avatar::avatar(
                             &bot.mascot,
                             bot.color,
                             "idle",

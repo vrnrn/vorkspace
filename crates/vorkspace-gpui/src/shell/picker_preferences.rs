@@ -3,8 +3,8 @@ use super::*;
 
 impl Shell {
     pub(super) fn observe_picker_preferences(&mut self, cx: &mut Context<Self>) {
-        let observer = cx.observe_global::<crate::settings::Preferences>(|this, cx| {
-            let prefs = cx.global::<crate::settings::Preferences>();
+        let observer = cx.observe_global::<vorkspace_ui::preferences::Preferences>(|this, cx| {
+            let prefs = cx.global::<vorkspace_ui::preferences::Preferences>();
             let saved = &mut this.workspace.preferences;
             if saved.model_picker_tab == prefs.model_picker_tab
                 && saved.favorite_models == prefs.favorite_models

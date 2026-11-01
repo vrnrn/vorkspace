@@ -1,9 +1,9 @@
 //! Native FileEditor/FilePane previews. Disk work and syntax parsing stay off
 //! the UI thread; drafts, selections and scrolling belong to each live tab.
 use crate::{
-    git_tools::git_status::{GitChanged, ProjectGit},
+    git_status::{GitChanged, ProjectGit},
     input::{self, Input},
-    right_panel::{icon_action, stroke},
+    panel_kit::{icon_action, stroke},
     transcript::TranscriptView,
 };
 use gpui::{
@@ -65,58 +65,6 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("escape", DismissSearch, Some("FileEditor")),
     ]);
 }
-pub(crate) fn menus(prefs: &crate::settings::Preferences, cx: &mut App) {
-    cx.set_menus(crate::app_menu::build(prefs));
-}
-#[derive(Clone, Debug, PartialEq, gpui::Action)]
-#[action(namespace = file_editor, no_json)]
-pub(crate) struct OpenPath(pub String);
-
-/// File links may include a one-based line and column (`:12:4` or `#L12`).
-pub(crate) fn file_location(raw: &str, cwd: &str) -> (String, Option<(usize, usize)>) {
-    let mut path = raw.strip_prefix("file://").unwrap_or(raw).to_owned();
-    let mut location = None;
-    if let Some((file, line)) = path.rsplit_once("#L")
-        && let Ok(line) = line.split('-').next().unwrap_or("").parse::<usize>()
-    {
-        location = Some((line.max(1), 1));
-        path = file.into();
-    } else if let Some((prefix, number)) = path.rsplit_once(':')
-        && let Ok(last) = number.parse::<usize>()
-    {
-        if let Some((file, line)) = prefix.rsplit_once(':')
-            && let Ok(line) = line.parse::<usize>()
-        {
-            location = Some((line.max(1), last.max(1)));
-            path = file.into();
-        } else {
-            location = Some((last.max(1), 1));
-            path = prefix.into();
-        }
-    }
-    if raw.starts_with("file://") || raw.contains('%') {
-        let bytes = path.as_bytes();
-        let mut decoded = Vec::new();
-        let mut at = 0;
-        while at < bytes.len() {
-            if bytes[at] == b'%'
-                && at + 2 < bytes.len()
-                && let Ok(hex) = std::str::from_utf8(&bytes[at + 1..at + 3])
-                && let Ok(byte) = u8::from_str_radix(hex, 16)
-            {
-                decoded.push(byte);
-                at += 3;
-            } else {
-                decoded.push(bytes[at]);
-                at += 1;
-            }
-        }
-        path = String::from_utf8_lossy(&decoded).into_owned();
-    }
-    let path = document::resolve_path(std::path::Path::new(&path), std::path::Path::new(cwd));
-    (path.to_string_lossy().into_owned(), location)
-}
-
 pub(crate) enum FileEvent {
     Dirty,
     Saved,
@@ -238,8 +186,10 @@ impl FileEditor {
                     this.refresh_git(cx);
                 }
             }),
-            cx.observe_global::<crate::settings::Preferences>(|this, cx| {
-                let wrap = cx.global::<crate::settings::Preferences>().file_word_wrap;
+            cx.observe_global::<vorkspace_ui::preferences::Preferences>(|this, cx| {
+                let wrap = cx
+                    .global::<vorkspace_ui::preferences::Preferences>()
+                    .file_word_wrap;
                 this.input
                     .update(cx, |input, cx| input.set_word_wrap(wrap, cx));
                 this.schedule_autosave(cx);
@@ -411,7 +361,7 @@ impl FileEditor {
                         this.dirty = false;
                         if first && (this.is_markdown() || this.is_svg()) {
                             this.preview = cx
-                                .try_global::<crate::settings::Preferences>()
+                                .try_global::<vorkspace_ui::preferences::Preferences>()
                                 .is_none_or(|prefs| prefs.file_view_mode != "source");
                         }
                         this.apply_navigation(cx);
@@ -650,7 +600,7 @@ impl FileEditor {
         if !self.dirty
             || self.disk_changed
             || !cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_some_and(|p| p.autosave)
         {
             return;
@@ -661,7 +611,7 @@ impl FileEditor {
                 if this.dirty
                     && !this.disk_changed
                     && cx
-                        .try_global::<crate::settings::Preferences>()
+                        .try_global::<vorkspace_ui::preferences::Preferences>()
                         .is_some_and(|p| p.autosave)
                 {
                     if this.input.read(cx).is_composing() || this.saving {
@@ -707,7 +657,7 @@ impl FileEditor {
         let at = self.input.read(cx).selection_range().end;
         let path = self.path.clone();
         let format = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_none_or(|p| p.format_on_save);
         self.saving = true;
         self.error = None;
@@ -863,8 +813,8 @@ impl FileEditor {
     fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.dismiss();
         self.preview = !self.preview;
-        if cx.has_global::<crate::settings::Preferences>() {
-            cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+        if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
+            cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
                 prefs.file_view_mode = if self.preview { "preview" } else { "source" }.into();
             });
         }
@@ -1397,26 +1347,6 @@ mod tests {
             .unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
-    #[test]
-    fn file_links_resolve_relative_paths_and_line_locations() {
-        assert_eq!(
-            file_location("src/../main.rs:12:4", "/project"),
-            ("/project/main.rs".into(), Some((12, 4)))
-        );
-        assert_eq!(
-            file_location("file:///project/my%20file.rs#L3", "/elsewhere"),
-            ("/project/my file.rs".into(), Some((3, 1)))
-        );
-        assert_eq!(
-            file_location("./README.md", "/project"),
-            ("/project/README.md".into(), None)
-        );
-        assert_eq!(
-            file_location("/tmp/a.rs:0", "/project"),
-            ("/tmp/a.rs".into(), Some((1, 1)))
-        );
-    }
-
     #[gpui::test]
     fn remembered_preview_mode_keeps_focus_and_find_switches_to_source(cx: &mut TestAppContext) {
         for (extension, source_mode) in [("md", false), ("svg", false), ("md", true), ("svg", true)]
@@ -1436,7 +1366,7 @@ mod tests {
             .unwrap();
             let file = path.to_string_lossy().into_owned();
             let window = cx.update(|cx| {
-                let prefs = crate::settings::Preferences {
+                let prefs = vorkspace_ui::preferences::Preferences {
                     file_view_mode: if source_mode { "source" } else { "preview" }.into(),
                     ..Default::default()
                 };

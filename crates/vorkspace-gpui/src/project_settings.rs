@@ -1,9 +1,7 @@
 //! TabGroupMenu's project appearance controls and ProjectBackgroundDialog.
 use crate::{
-    bots::{
-        avatar::{BotLookConfig, cached_badge_or_bot_image, color_swatch_circle},
-        color_picker::{ColorPicker, Picked},
-    },
+    avatar::{BotLookConfig, cached_badge_or_bot_image, color_swatch_circle},
+    color_picker::{ColorPicker, Picked},
     input::{self, Input},
     popover::{Align, Anchor, AnchorSlot, popover},
     project_background::ProjectBackground,
@@ -1041,7 +1039,7 @@ impl BackgroundDialog {
                             .text_right()
                             .text_size(px(12.))
                             .line_height(px(18.))
-                            .font_features(crate::right_panel::tabular())
+                            .font_features(crate::panel_kit::tabular())
                             .child(format!("{}%", (value * 100.).round())),
                     ),
             )

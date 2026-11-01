@@ -629,7 +629,7 @@ impl Bots {
             .child(card()
                 .children(bot.projects.iter().enumerate().map(|(ix,project)| {
                     let remove=project.clone(); let owner=bot.id.clone();
-                    let appearance=self.owner.upgrade().and_then(|o|o.read(cx).workspace.project_appearance.get(project).cloned()).unwrap_or_default();
+                    let appearance=self.owner.project_appearance(project,cx).unwrap_or_default();
                     let label=appearance.label(project);
                     let pretty=std::env::var("HOME").ok().and_then(|home|project.strip_prefix(&home).map(|rest|format!("~{rest}"))).unwrap_or_else(||project.clone());
                     let group:SharedString=format!("bot-project-{ix}").into();
@@ -939,17 +939,7 @@ impl Bots {
         cx.notify();
     }
     pub(super) fn pick_project(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let (projects, appearance) = self
-            .owner
-            .upgrade()
-            .map(|owner| {
-                let workspace = &owner.read(cx).workspace;
-                (
-                    workspace.projects.clone(),
-                    workspace.project_appearance.clone(),
-                )
-            })
-            .unwrap_or_default();
+        let (projects, appearance) = self.owner.projects(cx);
         let bot = id.to_string();
         let paths = projects.clone();
         let mut items: Vec<MenuItem> = projects

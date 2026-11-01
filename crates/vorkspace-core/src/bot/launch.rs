@@ -1,7 +1,7 @@
 //! Validate an app-requested launch before allocating a session or worktree.
 use crate::{
     agent::{AccessMode, Settings},
-    provider::Kind,
+    kind::Kind,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -14,18 +14,18 @@ pub struct Launch {
     pub draft: bool,
     pub reveal: bool,
     pub created_worktree: Option<CreatedWorktree>,
-    workspace: Workspace,
+    pub(crate) workspace: Workspace,
 }
 /// Proof of the resource this one launch created; existing checkouts never
 /// acquire this cleanup capability. Removal refuses dirty or changed work.
 pub struct CreatedWorktree {
     project: String,
-    path: String,
+    pub(crate) path: String,
     branch: String,
     head: String,
 }
 impl CreatedWorktree {
-    fn capture(project: &str, path: &str) -> Result<Self, String> {
+    pub(crate) fn capture(project: &str, path: &str) -> Result<Self, String> {
         let snapshot = crate::git::snapshot(Path::new(project))?;
         let tree = snapshot
             .worktrees
@@ -71,7 +71,7 @@ impl CreatedWorktree {
         Ok(())
     }
 }
-enum Workspace {
+pub(crate) enum Workspace {
     Current,
     Existing(String),
     New(String),
@@ -142,7 +142,7 @@ impl Launch {
                 return Err("Model belongs to another provider".into());
             }
             settings.model =
-                Some(crate::store::native_model(&model, provider.id()).ok_or("Invalid model")?);
+                Some(crate::session::native_model(&model, provider.id()).ok_or("Invalid model")?);
         }
         if let Some(values) = input.get("modelSettings") {
             let values = values
@@ -262,71 +262,7 @@ impl Launch {
         }
         Ok(())
     }
-    pub fn create(
-        &mut self,
-        store: &mut crate::store::Store,
-        project: &str,
-    ) -> Result<crate::store::Session, String> {
-        self.create_configured(store, project, None)
-    }
-    /// Keep preparation under one owner until its parent link is durable. A
-    /// failed link cannot escape with resources no UI installation will own.
-    pub fn create_started(
-        &mut self,
-        store: &mut crate::store::Store,
-        project: &str,
-        caller: i64,
-    ) -> Result<crate::store::Session, String> {
-        self.create_configured(store, project, Some(caller))
-    }
-    fn create_configured(
-        &mut self,
-        store: &mut crate::store::Store,
-        project: &str,
-        caller: Option<i64>,
-    ) -> Result<crate::store::Session, String> {
-        self.validate_workspace(project)?;
-        let mut summary = store.create(self.provider.id(), project)?;
-        let configured = (|| {
-            self.create_workspace(project, summary.id)?;
-            if matches!(self.workspace, Workspace::New(_)) {
-                self.created_worktree = Some(CreatedWorktree::capture(
-                    project,
-                    self.settings
-                        .worktree_cwd
-                        .as_deref()
-                        .ok_or("Created worktree path is unavailable")?,
-                )?);
-            }
-            store.title(summary.id, &self.title)?;
-            store.configure_agent(summary.id, self.provider.id(), &self.settings)?;
-            if let Some(caller) = caller {
-                store.save_started_link(summary.id, caller)?;
-            }
-            Ok::<_, String>(())
-        })();
-        if let Err(error) = configured {
-            // Remove durable ownership before its working copy. If deletion
-            // fails, preserve both and report the retained resource explicitly.
-            let cleanup = match store.delete(summary.id) {
-                Ok(()) => self.created_worktree.take().map(CreatedWorktree::rollback).transpose().err(),
-                Err(error) => Some(format!(
-                    "Unused session {} could not be removed; its working copy{} was preserved: {error}",
-                    summary.id,
-                    self.created_worktree.as_ref().map(|tree|format!(" {}",tree.path)).unwrap_or_default(),
-                )),
-            };
-            return Err(format!(
-                "Launch was not accepted: {error}{}",
-                cleanup
-                    .map(|error| format!(". {error}"))
-                    .unwrap_or_default(),
-            ));
-        }
-        summary.title = self.title.clone();
-        Ok(summary)
-    }
-    fn create_workspace(&mut self, project: &str, session: i64) -> Result<(), String> {
+    pub(crate) fn create_workspace(&mut self, project: &str, session: i64) -> Result<(), String> {
         if let Workspace::New(base) = &self.workspace {
             self.settings.worktree_cwd = Some(
                 crate::git::create_worktree(Path::new(project), base, session)?

@@ -1,10 +1,10 @@
 //! The editor shares native selection/IME handling with Input and retains glyph
 //! runs for visible lines. Scroll position is independent of the caret.
 use super::*;
-use crate::file_tools::editor_scrollbar::{Metrics, WIDTH};
 use gpui::{AnyElement, Task};
 use std::{cell::Cell, sync::Arc};
 use vorkspace_editor::editor_analysis::Analysis;
+use vorkspace_ui::editor_scrollbar::{Metrics, WIDTH};
 
 const TOP_PADDING: f32 = 8.;
 const BOTTOM_PADDING: f32 = 32.;
@@ -164,7 +164,7 @@ impl Input {
         let mut input = Self::new(cx);
         input.code = Some(Code::new());
         input.code.as_mut().unwrap().wrap = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_none_or(|p| p.file_word_wrap);
         input.label = "File editor".into();
         input.placeholder = "".into();
@@ -1116,20 +1116,15 @@ impl Input {
                 .shadow_md()
                 .when(code.can_stage, |d| {
                     d.child(
-                        crate::right_panel::icon_action(
-                            "stage-change",
-                            "Stage change",
-                            "plus",
-                            true,
-                        )
-                        .size(px(18.))
-                        .on_click(
-                            cx.listener(move |_, _, _, cx| cx.emit(CodeAction::Stage(index))),
-                        ),
+                        crate::panel_kit::icon_action("stage-change", "Stage change", "plus", true)
+                            .size(px(18.))
+                            .on_click(
+                                cx.listener(move |_, _, _, cx| cx.emit(CodeAction::Stage(index))),
+                            ),
                     )
                 })
                 .child(
-                    crate::right_panel::icon_action(
+                    crate::panel_kit::icon_action(
                         "revert-change",
                         "Revert change",
                         "rotate-ccw",
@@ -1262,7 +1257,7 @@ fn paint_rail(
             ),
             cursor_color,
         ));
-        let (add, del) = crate::file_tools::editor_scrollbar::diff_colors(cx);
+        let (add, del) = vorkspace_ui::editor_scrollbar::diff_colors(cx);
         // Git's layer is above the cursor/diagnostic layer in editorGit.ts.
         for change in &code.analysis.changes {
             let row = code.row(change.from);
@@ -1343,7 +1338,7 @@ fn plain_line(
             px(font_size),
             &[TextRun {
                 len: text.len(),
-                font: gpui::font(crate::markdown::FIXED_FONT),
+                font: gpui::font(vorkspace_ui::fonts::FIXED_FONT),
                 color,
                 background_color: None,
                 underline: None,
@@ -1364,7 +1359,7 @@ fn token_line(
 ) -> WrappedLine {
     let base = TextRun {
         len: 0,
-        font: gpui::font(crate::markdown::FIXED_FONT),
+        font: gpui::font(vorkspace_ui::fonts::FIXED_FONT),
         color: vorkspace_ui::theme::content(1.),
         background_color: None,
         underline: None,
@@ -1413,7 +1408,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
     };
     let base = TextRun {
         len: text.len(),
-        font: gpui::font(crate::markdown::FIXED_FONT),
+        font: gpui::font(vorkspace_ui::fonts::FIXED_FONT),
         color: vorkspace_ui::theme::content(1.),
         background_color: None,
         underline: None,
@@ -1613,7 +1608,7 @@ impl Element for CodeElement {
                     px(i.font_size),
                     &[TextRun {
                         len: 1,
-                        font: gpui::font(crate::markdown::FIXED_FONT),
+                        font: gpui::font(vorkspace_ui::fonts::FIXED_FONT),
                         color: vorkspace_ui::theme::content(1.),
                         background_color: None,
                         underline: None,
@@ -1914,7 +1909,7 @@ impl Element for CodeElement {
                             } else {
                                 "⌄".len()
                             },
-                            font: gpui::font(crate::markdown::FIXED_FONT),
+                            font: gpui::font(vorkspace_ui::fonts::FIXED_FONT),
                             color: vorkspace_ui::theme::content(0.45),
                             background_color: None,
                             underline: None,
@@ -1942,7 +1937,7 @@ impl Element for CodeElement {
                     px(11.),
                     &[TextRun {
                         len,
-                        font: gpui::font(crate::markdown::FIXED_FONT),
+                        font: gpui::font(vorkspace_ui::fonts::FIXED_FONT),
                         color: vorkspace_ui::theme::content(0.3),
                         background_color: None,
                         underline: None,

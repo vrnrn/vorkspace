@@ -1,83 +1,9 @@
 //! Host-owned plan previews and their read-only Markdown reader.
 use super::*;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Clone, Default, Deserialize, Serialize)]
-pub(crate) struct Plan {
-    pub id: String,
-    pub text: String,
-    #[serde(default)]
-    pub streaming: bool,
-    #[serde(default)]
-    pub status: String,
-}
-impl Plan {
-    pub(crate) fn can_build(&self, busy: bool) -> bool {
-        !busy
-            && !self.streaming
-            && !self.text.trim().is_empty()
-            && !matches!(self.status.as_str(), "streaming" | "building" | "built")
-    }
-    pub(crate) fn build_label(&self) -> &'static str {
-        match self.status.as_str() {
-            "building" => "Building…",
-            "built" => "Built",
-            _ => "Build",
-        }
-    }
-    pub(crate) fn title(&self) -> String {
-        self.text
-            .lines()
-            .find_map(|line| {
-                let line = line.trim();
-                if line.starts_with('#') {
-                    Some(line.trim_start_matches('#').trim().to_owned())
-                } else {
-                    None
-                }
-            })
-            .or_else(|| {
-                self.text
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty() && !line.starts_with("```") && *line != "---")
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| "Plan".into())
-            .chars()
-            .take(80)
-            .collect()
-    }
-    pub(crate) fn summary(&self) -> String {
-        let title = self.title();
-        let text = self
-            .text
-            .lines()
-            .map(str::trim)
-            .filter(|line| {
-                !line.is_empty()
-                    && !line.starts_with('#')
-                    && !line.starts_with("```")
-                    && *line != title
-            })
-            .take(3)
-            .collect::<Vec<_>>()
-            .join(" ");
-        if text.chars().count() > 140 {
-            format!("{}…", text.chars().take(139).collect::<String>())
-        } else {
-            text
-        }
-    }
-    fn command(&self) -> Value {
-        json!({"type":"send","intent":"build","planBlockId":self.id})
-    }
-    fn prompt(&self) -> String {
-        format!("Build the approved plan:\n\n{}", self.text)
-    }
-}
+use crate::transcript::remote_plans::Plan;
 struct Reader {
     id: String,
     text: String,
@@ -216,7 +142,7 @@ impl Conversation {
                         .child(icon("file-text", 16.))
                         .child(div().flex_1().truncate().text_size(px(13.)).child(title))
                         .child(
-                            crate::settings::widgets::secondary_button(
+                            crate::controls::secondary_button(
                                 "remote-reader-build",
                                 "Build approved plan",
                                 false,
@@ -249,6 +175,7 @@ impl Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     #[test]
     fn approved_plan_actions_keep_host_identity_and_exact_text() {
         let mut plan = Plan {

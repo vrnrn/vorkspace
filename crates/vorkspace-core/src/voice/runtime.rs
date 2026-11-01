@@ -4,7 +4,7 @@ use super::{
     audio::Audio,
     display::{recent_context, Display},
 };
-use crate::{process, provider, scm::shell};
+use crate::{process, provider, shell_env as shell};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,

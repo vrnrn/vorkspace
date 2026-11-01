@@ -2,21 +2,6 @@
 //! the parent. All collaboration routes use these same admission predicates.
 use super::*;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct MinionMetadata {
-    pub parent_id: String,
-    pub role: String,
-    pub specialties: Vec<String>,
-    pub retired: bool,
-    pub created_at: u64,
-    /// Refreshed from the roster, never a second persisted authority.
-    #[serde(skip)]
-    pub parent_name: String,
-    #[serde(skip)]
-    pub team: Vec<String>,
-}
-
 impl Bot {
     pub fn is_minion(&self) -> bool {
         self.minion.is_some()
@@ -220,7 +205,7 @@ impl Roster {
             }
         }
     }
-    pub(super) fn migrate_minions(&mut self) {
+    pub(crate) fn migrate_minions(&mut self) {
         let mut additions = Vec::new();
         for parent in &mut self.bots {
             if parent.is_minion() {

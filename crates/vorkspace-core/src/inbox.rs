@@ -1,10 +1,8 @@
 //! Native Inbox services and the desktop app's existing credential formats.
 mod avatar;
 mod bounded;
-mod connectors;
+pub(crate) mod connectors;
 pub use connectors::Connectors;
-mod preferences;
-pub use preferences::{BotDefaults, JiraFilter};
 mod notifications;
 pub use notifications::NotificationProject;
 mod media;
@@ -14,9 +12,11 @@ mod github;
 pub mod gitlab;
 pub mod jira;
 
-use crate::{session_groups::WorkItem, store::Store};
+use crate::session_groups::WorkItem;
 use chrono::{Datelike, Local, TimeZone};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+mod preferences;
+pub use preferences::{BotDefaults, JiraFilter};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
@@ -464,49 +464,6 @@ impl ViewState {
             serde_json::to_string(&self.jira_filter).unwrap_or_default()
         )
     }
-    pub fn load(store: &Store) -> Self {
-        if let Some(mut state) = store
-            .setting("native-inbox-state")
-            .ok()
-            .flatten()
-            .and_then(|s| serde_json::from_str::<Self>(&s).ok())
-        {
-            state.connectors = Connectors::load(store);
-            state.jira_filter = JiraFilter::load(store);
-            state.default_bots = BotDefaults::load(store);
-            state.normalize_source();
-            return state;
-        }
-        let desktop = store.desktop_preferences().cloned().unwrap_or_default();
-        let mut state = Self::default();
-        if let Some(source) = desktop
-            .get("vorkspace.inboxSource")
-            .filter(|s| PROVIDERS.contains(s))
-        {
-            state.source = source.into();
-        }
-        if let Some(filters) = desktop
-            .json("vorkspace.inboxFilters")
-            .and_then(|v| serde_json::from_value(v).ok())
-        {
-            state.filters = filters;
-        }
-        if let Some(seen) = desktop.json("vorkspace.inboxSeen") {
-            state.seen = serde_json::from_value(seen.clone()).unwrap_or_else(|_| Seen {
-                seeded: true,
-                items: serde_json::from_value(seen).unwrap_or_default(),
-            });
-        }
-        state.hidden_jira_projects = desktop
-            .json("vorkspace.jiraHiddenProjects")
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default();
-        state.connectors = Connectors::load(store);
-        state.jira_filter = JiraFilter::load(store);
-        state.default_bots = BotDefaults::load(store);
-        state.normalize_source();
-        state
-    }
     pub fn normalize_source(&mut self) {
         if !self.connectors.enabled(&self.source) {
             self.source = self
@@ -516,12 +473,6 @@ impl ViewState {
                 .unwrap_or("")
                 .into();
         }
-    }
-    pub fn save(&self, store: &Store) -> Result<(), String> {
-        store.save_setting(
-            "native-inbox-state",
-            &serde_json::to_string(self).map_err(|e| e.to_string())?,
-        )
     }
 }
 #[derive(Clone, Debug, Default)]
@@ -933,7 +884,7 @@ fn run_command(
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
         .env("GIT_PAGER", "cat");
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::shell_env::apply_gui_env(&mut command);
     let output = bounded::output(&mut command)?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if !output.status.success() {

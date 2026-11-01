@@ -1,17 +1,9 @@
 use super::*;
+pub(crate) use crate::bots::host_api::BotSession;
+use crate::bots::host_api::BotsHost;
+use serde_json::Value;
 use vorkspace_core::agent::Settings;
-pub(crate) struct BotSession {
-    pub id: i64,
-    pub title: String,
-    pub cwd: String,
-    pub busy: bool,
-    pub has_messages: bool,
-    pub archived: bool,
-    pub updated_at: u64,
-    pub needs_input: bool,
-    pub branch: Option<String>,
-    pub model: SharedString,
-}
+use vorkspace_core::{project_appearance::ProjectAppearance, session_groups::Groups};
 impl Shell {
     pub(super) fn close_bot_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Park the page, retaining Bot/channel drafts and in-flight work.
@@ -110,5 +102,88 @@ impl Shell {
         cx.defer(move |cx| {
             let _ = owner.update(cx, |owner, cx| owner.invalidate_chrome(cx));
         });
+    }
+}
+
+/// The shell's half of the contract `Bots` depends on.
+impl BotsHost for gpui::WeakEntity<Shell> {
+    fn session_views(&self, cx: &App) -> Vec<BotSession> {
+        self.upgrade()
+            .map(|shell| shell.read(cx).bot_session_views(cx))
+            .unwrap_or_default()
+    }
+    fn session_entity(&self, id: i64, cx: &App) -> Option<Entity<Conversation>> {
+        self.upgrade()
+            .and_then(|shell| shell.read(cx).bot_session_entity(id))
+    }
+    fn ensure_session(&self, id: i64, cx: &mut App) -> Option<Entity<Conversation>> {
+        self.upgrade()
+            .and_then(|shell| shell.update(cx, |shell, cx| shell.bot_ensure_session(id, cx)))
+    }
+    fn groups(&self, project: &str, cx: &App) -> Groups {
+        self.upgrade()
+            .map(|shell| shell.read(cx).bot_groups(project))
+            .unwrap_or_default()
+    }
+    fn apply_groups(&self, project: String, groups: Groups, cx: &mut App) {
+        let _ = self.update(cx, |shell, cx| shell.bot_apply_groups(project, groups, cx));
+    }
+    fn placement(
+        &self,
+        caller: i64,
+        project: &str,
+        input: &Value,
+        cx: &App,
+    ) -> Result<Option<(i64, Edge)>, String> {
+        self.upgrade()
+            .ok_or_else(|| "Workspace is unavailable".to_string())
+            .and_then(|shell| shell.read(cx).app_placement(caller, project, input, cx))
+    }
+    fn install_start(
+        &self,
+        caller: i64,
+        start: AppStart,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui::Result<Result<i64, String>> {
+        self.update(cx, |shell, cx| {
+            shell.app_install_start(caller, start, window, cx)
+        })
+    }
+    fn session_action(
+        &self,
+        caller: i64,
+        id: i64,
+        project: &str,
+        action: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui::Result<Result<Value, String>> {
+        self.update(cx, |shell, cx| {
+            shell.app_session_action(caller, id, project, action, window, cx)
+        })
+    }
+    fn open_session(&self, id: i64, window: &mut Window, cx: &mut App) {
+        let _ = self.update(cx, |shell, cx| shell.open(id, window, cx));
+    }
+    fn open_channels(&self, window: &mut Window, cx: &mut App) {
+        let _ = self.update(cx, |shell, cx| shell.open_classic_channels(window, cx));
+    }
+    fn project_appearance(&self, project: &str, cx: &App) -> Option<ProjectAppearance> {
+        self.upgrade().and_then(|shell| {
+            let appearance = &shell.read(cx).workspace.project_appearance;
+            appearance.get(project).cloned()
+        })
+    }
+    fn projects(&self, cx: &App) -> (Vec<String>, HashMap<String, ProjectAppearance>) {
+        self.upgrade()
+            .map(|shell| {
+                let workspace = &shell.read(cx).workspace;
+                (
+                    workspace.projects.clone(),
+                    workspace.project_appearance.clone(),
+                )
+            })
+            .unwrap_or_default()
     }
 }

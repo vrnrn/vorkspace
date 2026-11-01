@@ -38,7 +38,7 @@ impl DesktopPreferences {
     /// Read committed SQLite/WAL data once when opening a store. The store owns
     /// the verified snapshot so session reads never rescan WebKit directories.
     pub fn load(data_dir: &Path) -> Self {
-        let desktop = crate::store::vorkspace_database();
+        let desktop = crate::compatibility::vorkspace_database();
         if data_dir
             .canonicalize()
             .ok()
@@ -47,7 +47,7 @@ impl DesktopPreferences {
         {
             return Self::default();
         }
-        if let Some(home) = crate::accounts::home() {
+        if let Some(home) = crate::shell_env::home() {
             return Self::load_webkit(
                 &home
                     .join("Library/WebKit")
@@ -292,7 +292,7 @@ impl DesktopPreferences {
         let provider = self
             .json("vorkspace.lastModel")
             .and_then(|last| last["harness"].as_str().map(str::to_owned))
-            .filter(|id| crate::provider::Kind::parse(id).is_some());
+            .filter(|id| crate::kind::Kind::parse(id).is_some());
         if provider.is_some() || baseline.get("default_provider").is_some() {
             reconcile_preference(
                 preferences,
@@ -562,7 +562,7 @@ fn project_path(path: &str) -> bool {
         && path != "~"
         && !path.contains(".app/")
         && !(path.len() == 2 && path.ends_with(':'))
-        && crate::accounts::home().is_none_or(|home| Path::new(&path) != home)
+        && crate::shell_env::home().is_none_or(|home| Path::new(&path) != home)
 }
 fn merge_projects(old: Option<&Value>, current: &Value, source: &Value) -> Value {
     let Some(old) = old.and_then(Value::as_array) else {

@@ -1,14 +1,7 @@
 //! Direct Bot messages share the recipient's durable outbox and conversation.
-use super::{channels, Message, Roster};
-use serde::{Deserialize, Serialize};
+use super::{channels, Message, Peer, Roster};
+use serde::Deserialize;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Peer {
-    pub from: String,
-    pub hop: u8,
-    pub expect_reply: bool,
-}
 pub struct Accepted {
     pub bot: String,
     pub name: String,
@@ -156,7 +149,8 @@ pub fn enqueue(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{bot::Bot, store::Store};
+    use crate::bot::Bot;
+    use crate::store::Store;
     fn roster() -> Roster {
         Roster {
             bots: vec![

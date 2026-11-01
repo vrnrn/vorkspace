@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::scm::shell::dirs_home;
+use crate::shell_env::dirs_home;
 fn expand_home(path: &str) -> PathBuf {
-    crate::scm::expand_home(Path::new(path))
+    crate::shell_env::expand_home(Path::new(path))
 }
 
 fn claude_desktop_config(home: &Path) -> PathBuf {
@@ -64,7 +64,7 @@ pub fn mcp_add(
     config: String,
 ) -> Result<(), String> {
     let (name, server) = server_from_json(&provider, &name, &config)?;
-    let binary_path = crate::provider::resolve(crate::provider::Kind::from_id(&provider))
+    let binary_path = crate::provider::resolve(crate::kind::Kind::from_id(&provider))
         .map(|p| p.to_string_lossy().into_owned());
     {
         let home = dirs_home().ok_or("Home directory not found")?;
@@ -425,13 +425,8 @@ fn strip_jsonc(raw: &str) -> String {
 
 use std::time::Duration;
 fn resolve_mcp_binary(provider: &str, path: Option<&str>) -> Result<PathBuf, String> {
-    let kind = crate::provider::Kind::parse(provider)
-        .filter(|kind| {
-            matches!(
-                kind,
-                crate::provider::Kind::Claude | crate::provider::Kind::Codex
-            )
-        })
+    let kind = crate::kind::Kind::parse(provider)
+        .filter(|kind| matches!(kind, crate::kind::Kind::Claude | crate::kind::Kind::Codex))
         .ok_or("Unsupported MCP provider")?;
     path.map(PathBuf::from)
         .or_else(|| crate::provider::resolve(kind))

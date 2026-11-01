@@ -1,4 +1,6 @@
 use super::*;
+use crate::bot_header as header;
+use crate::shell::Shell;
 use gpui::{ScrollDelta, ScrollWheelEvent, TestAppContext, VisualTestContext, point, size};
 use std::sync::{Arc, Mutex};
 use vorkspace_core::store::Store;
@@ -384,7 +386,7 @@ fn native_bot_header_three_state_capture() {
     for light in [false, true] {
         let theme = if light { "light" } else { "dark" };
         vorkspace_ui::theme::configure(
-            &crate::settings::Preferences {
+            &vorkspace_ui::preferences::Preferences {
                 theme: theme.into(),
                 ..Default::default()
             },
@@ -442,5 +444,9 @@ fn native_bot_header_three_state_capture() {
             }
         }
     }
-    vorkspace_ui::theme::configure(&crate::settings::Preferences::default(), false, true);
+    vorkspace_ui::theme::configure(
+        &vorkspace_ui::preferences::Preferences::default(),
+        false,
+        true,
+    );
 }

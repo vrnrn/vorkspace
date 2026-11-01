@@ -329,7 +329,7 @@ impl AgentRun {
             format!("{label}, {failed} failed")
         }
     }
-    pub fn model_name(&self, provider: crate::provider::Kind) -> Option<String> {
+    pub fn model_name(&self, provider: crate::kind::Kind) -> Option<String> {
         let id = self.model.as_deref()?.trim();
         if id.is_empty()
             || ["auto", "default", "inherit", "unspecified"]
@@ -338,7 +338,7 @@ impl AgentRun {
         {
             return None;
         }
-        crate::catalog::cached_name(provider, id)
+        crate::model_cache::cached_name(provider, id)
             .or_else(|| desktop_model_name(id).map(str::to_owned))
             .or_else(|| Some(id.into()))
     }

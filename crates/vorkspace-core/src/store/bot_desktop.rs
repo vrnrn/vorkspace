@@ -1,8 +1,13 @@
 //! Desktop identities live in the workspace webview, while their conversations
 //! and provider configuration remain in the shared desktop database.
-use super::*;
+use crate::bot::*;
 use crate::desktop_preferences::DesktopPreferences;
+use crate::project_appearance::{Background, MASCOTS};
+use crate::store::Store;
 use serde_json::Value;
+use std::collections::HashSet;
+#[cfg(test)]
+use std::path::Path;
 
 const IDENTITY_FIELDS: &[&str] = &[
     "sessionId",
@@ -17,7 +22,7 @@ const IDENTITY_FIELDS: &[&str] = &[
 ];
 
 impl Roster {
-    pub(super) fn reconcile_desktop(
+    pub(crate) fn reconcile_desktop(
         &mut self,
         store: &Store,
         preferences: &DesktopPreferences,
@@ -213,18 +218,6 @@ fn css_color(raw: &str) -> Option<u32> {
     let offset = lightness - chroma / 2.;
     let byte = |v: f64| ((v + offset) * 255.).round() as u32;
     Some((byte(r) << 16) | (byte(g) << 8) | byte(b))
-}
-
-/// Reuse the provider-owned rollout directory prepared by the desktop app.
-/// Nothing is created or copied when the native UI opens a Bot.
-pub(crate) fn codex_home(root: &Path, account: &str) -> Result<Option<PathBuf>, String> {
-    crate::accounts::validate_id(account)?;
-    let family = root
-        .parent()
-        .ok_or("Bot storage has no data directory")?
-        .join("codex-bots");
-    let home = crate::compatibility::bot_owner(&family, account, true);
-    Ok(home.is_dir().then_some(home))
 }
 
 #[cfg(test)]

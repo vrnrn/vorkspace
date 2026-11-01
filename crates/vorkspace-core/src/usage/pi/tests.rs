@@ -5,7 +5,8 @@ use std::fs;
 struct Fixture(std::path::PathBuf);
 impl Fixture {
     fn new(value: serde_json::Value) -> Self {
-        let dir = std::env::temp_dir().join(format!("vorkspace-pi-usage-{}", crate::bot::new_id()));
+        let dir =
+            std::env::temp_dir().join(format!("vorkspace-pi-usage-{}", crate::session::new_id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("auth.json"), value.to_string()).unwrap();
         Self(dir)

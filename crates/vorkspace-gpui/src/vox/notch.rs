@@ -410,7 +410,7 @@ impl Vox {
                                     .justify_center()
                                     .opacity(reveal)
                                     .focus_visible(|s| s.bg(white(0.15)))
-                                    .font_family(crate::markdown::FIXED_FONT)
+                                    .font_family(vorkspace_ui::fonts::FIXED_FONT)
                                     .text_size(px(19.))
                                     .child(self.face.clone())
                                     .on_click(cx.listener(|voice, _, window, cx| {

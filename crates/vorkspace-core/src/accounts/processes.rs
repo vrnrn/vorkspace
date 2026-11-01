@@ -1,5 +1,5 @@
 use super::Profile;
-use crate::provider::Kind;
+use crate::kind::Kind;
 use std::{
     collections::HashMap,
     sync::{Mutex, OnceLock},

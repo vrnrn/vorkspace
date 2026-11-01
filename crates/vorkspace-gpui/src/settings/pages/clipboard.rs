@@ -1,5 +1,5 @@
+use crate::controls::secondary_button;
 use crate::settings::SettingsView;
-use crate::settings::widgets::secondary_button;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context};
 

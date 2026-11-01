@@ -387,7 +387,7 @@ impl Conversation {
             }
         }
         settings.disable_claude_hooks = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_some_and(|p| !p.claude_hooks);
         settings.model = self.model.clone();
         self.prepare_app_environment(&mut settings);

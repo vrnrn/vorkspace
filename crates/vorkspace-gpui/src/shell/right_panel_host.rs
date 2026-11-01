@@ -275,7 +275,7 @@ impl Shell {
             .flex_shrink_0()
             .w(px(width))
             .border_l_1()
-            .border_color(crate::right_panel::stroke())
+            .border_color(crate::panel_kit::stroke())
             // The full-width contents travel with the leading edge instead of
             // reflowing into the growing clip on every animation frame.
             .child(

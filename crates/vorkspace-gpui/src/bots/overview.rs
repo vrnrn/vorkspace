@@ -137,7 +137,7 @@ impl Render for Overview {
                         .h(px(self.top_inset))
                         .flex_shrink_0()
                         .border_b_1()
-                        .border_color(crate::right_panel::stroke()),
+                        .border_color(crate::panel_kit::stroke()),
                 )
             })
             .child(

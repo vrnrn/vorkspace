@@ -366,6 +366,23 @@ fn unit(text: &str, byte: usize, granularity: Granularity) -> Range<usize> {
         }
     }
 }
+impl crate::markdown::SelectableText for TextSelection {
+    fn with_text(&self, text: SharedString) -> crate::markdown::Selection {
+        Rc::new(self.clone().with_text(text))
+    }
+    fn with_cursor(&self, cursor: gpui::CursorStyle) -> crate::markdown::Selection {
+        Rc::new(self.clone().with_cursor(cursor))
+    }
+    fn offset(&self, offset: usize) -> crate::markdown::Selection {
+        Rc::new(TextSelection::offset(self, offset))
+    }
+    fn has_selection(&self) -> bool {
+        TextSelection::has_selection(self)
+    }
+    fn wrap(&self, text: SharedString, layout: TextLayout, child: AnyElement) -> AnyElement {
+        TextSelection::wrap(self, text, layout, child)
+    }
+}
 impl TextSelection {
     pub(crate) fn with_text(mut self, text: SharedString) -> Self {
         self.row_text = Some(text);
@@ -578,6 +595,16 @@ impl TranscriptView {
             row_text: None,
             cursor: gpui::CursorStyle::IBeam,
         })
+    }
+    pub(super) fn markdown_selection(
+        &self,
+        row: (usize, usize),
+        response: usize,
+        quote: bool,
+        cx: &Context<Self>,
+    ) -> Option<crate::markdown::Selection> {
+        self.text_selection(row, response, quote, cx)
+            .map(|selection| Rc::new(selection) as crate::markdown::Selection)
     }
     pub(super) fn move_selection(
         &mut self,

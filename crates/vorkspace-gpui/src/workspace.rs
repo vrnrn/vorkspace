@@ -334,10 +334,10 @@ pub(crate) struct Workspace {
     pub sidebar_subscriptions_visible: bool,
     /// The inset right panel: open state, tab, width and tab order.
     pub right_panel_open: bool,
-    pub right_panel_tab: crate::right_panel::RightTab,
+    pub right_panel_tab: crate::panel_kit::RightTab,
     /// Shared width for project tools and Bot details, independent of visibility.
     pub right_panel_width: f32,
-    pub right_panel_tabs: Vec<crate::right_panel::RightTab>,
+    pub right_panel_tabs: Vec<crate::panel_kit::RightTab>,
     pub changes_view: crate::git_tools::changes::ChangesView,
     /// Each tab's file/review pane beside its chat.
     pub reviews: std::collections::HashMap<i64, crate::git_tools::review::ReviewState>,
@@ -353,7 +353,7 @@ pub(crate) struct Workspace {
     /// The original desktop layout. Kept for older serialized workspaces;
     /// restored state always selects this layout.
     pub classic_layout: bool,
-    pub preferences: crate::settings::Preferences,
+    pub preferences: vorkspace_ui::preferences::Preferences,
     pub session_filters: vorkspace_core::session_filters::Filters,
     pub project_appearance: HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
     /// Last desktop source values, used to reconcile subsequent desktop changes
@@ -523,7 +523,7 @@ impl Default for Workspace {
             right_panel_open: false,
             right_panel_tab: Default::default(),
             right_panel_width: crate::right_panel::WIDTH_DEFAULT,
-            right_panel_tabs: crate::right_panel::RightTab::normalize(&[]),
+            right_panel_tabs: crate::panel_kit::RightTab::normalize(&[]),
             changes_view: Default::default(),
             reviews: Default::default(),
             review_owners: Default::default(),
@@ -531,7 +531,7 @@ impl Default for Workspace {
             focused: Default::default(),
             docks: Default::default(),
             classic_layout: true,
-            preferences: crate::settings::Preferences::default(),
+            preferences: vorkspace_ui::preferences::Preferences::default(),
             session_filters: Default::default(),
             project_appearance: Default::default(),
             desktop_project_preferences: None,
@@ -699,7 +699,7 @@ impl Workspace {
             .right_panel_width
             .clamp(crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX)
             .round();
-        state.right_panel_tabs = crate::right_panel::RightTab::normalize(&state.right_panel_tabs);
+        state.right_panel_tabs = crate::panel_kit::RightTab::normalize(&state.right_panel_tabs);
         state
             .reviews
             .retain(|id, review| known.contains(id) && !review.tabs.is_empty());

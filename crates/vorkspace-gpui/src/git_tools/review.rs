@@ -4,10 +4,10 @@
 //! build each diff there too; the view only lays out rows.
 use crate::{
     file_tools::file_editor::{FileEditor, FileEvent},
+    git_status::{GitChanged, ProjectGit},
     git_tools::diff_view::{DiffEvent, DiffFile, DiffView},
-    git_tools::git_status::{GitChanged, ProjectGit},
+    panel_kit::{selection, spinner, stroke},
     popover::{Anchor, Menu, MenuAction, MenuEvent, menu_popover},
-    right_panel::{selection, spinner, stroke},
 };
 use gpui::{
     AnyElement, Bounds, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable,
@@ -183,6 +183,13 @@ impl Source {
 
 /// Closed diff tabs retain their models, viewport and completed highlights.
 /// Editors are deliberately excluded, so no dirty document is kept here.
+fn review_cache(git: &mut ProjectGit) -> &mut ReviewCache {
+    git.review_cache
+        .get_or_insert_with(|| Box::new(ReviewCache::default()))
+        .downcast_mut()
+        .expect("only the review surface writes this slot")
+}
+
 #[derive(Default)]
 pub(crate) struct ReviewCache {
     sources: VecDeque<CachedSource>,
@@ -358,7 +365,7 @@ impl ReviewPane {
             cx.subscribe(&git, |this, _, _: &GitChanged, cx| {
                 this.refresh(cx);
             }),
-            cx.observe_global::<crate::settings::Preferences>(|_, cx| {
+            cx.observe_global::<vorkspace_ui::preferences::Preferences>(|_, cx| {
                 cx.notify();
             }),
         ];
@@ -396,7 +403,7 @@ impl ReviewPane {
         this
     }
     fn source(&mut self, tab: ReviewTab, cx: &mut Context<Self>) -> Source {
-        let cached = self.git.update(cx, |git, _| git.review_cache.take(&tab));
+        let cached = self.git.update(cx, |git, _| review_cache(git).take(&tab));
         let view = cached
             .as_ref()
             .map_or_else(|| cx.new(DiffView::new), |s| s.view.clone());
@@ -575,7 +582,7 @@ impl ReviewPane {
         let mut removed = self.sources.remove(ix);
         removed.cancel();
         self.git
-            .update(cx, |git, _| git.review_cache.remember(&removed));
+            .update(cx, |git, _| review_cache(git).remember(&removed));
         if self.state.active >= ix && self.state.active > 0 {
             self.state.active -= 1;
         }
@@ -607,7 +614,7 @@ impl ReviewPane {
         for mut removed in self.sources.drain(..) {
             removed.cancel();
             self.git
-                .update(cx, |git, _| git.review_cache.remember(&removed));
+                .update(cx, |git, _| review_cache(git).remember(&removed));
         }
         self.sources.push(source);
         self.state.active = 0;
@@ -889,7 +896,7 @@ impl ReviewPane {
                 editor.update(cx, |editor, cx| editor.set_visible(false, cx));
             }
             self.git
-                .update(cx, |git, _| git.review_cache.remember(source));
+                .update(cx, |git, _| review_cache(git).remember(source));
         }
     }
     /// Focus and Git changes reread the working tree; commits never change.
@@ -1458,7 +1465,7 @@ impl ReviewPane {
     /// SurfaceTabs: `h-9` strip of `w-56` tabs with a close button each.
     fn tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let animate = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_some_and(|p| p.tab_animations)
             && !self.tab_drag.as_ref().is_some_and(|d| d.active);
         let keyed = self

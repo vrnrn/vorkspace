@@ -1,5 +1,5 @@
 //! Compact project tool tabs shared by the rounded and expanded layouts.
-use crate::right_panel::RightTab;
+use crate::panel_kit::RightTab;
 use gpui::{CursorStyle, MouseButton, Role, Stateful, Window, div, prelude::*, px};
 use vorkspace_ui::clock::Instant;
 use vorkspace_ui::theme::*;
@@ -176,7 +176,7 @@ pub(crate) fn tab_button(
                                         .text_size(px(10.))
                                         .line_height(px(16.))
                                         .font_weight(gpui::FontWeight::MEDIUM)
-                                        .font_features(crate::right_panel::tabular())
+                                        .font_features(crate::panel_kit::tabular())
                                         .text_center()
                                         .child(label.count.to_string()),
                                 )

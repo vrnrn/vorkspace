@@ -366,7 +366,7 @@ fn admitted_context_is_one_use_source_data_after_other_prompt_transforms() {
         .unwrap()
         .unwrap();
     let mut request = crate::provider::Request {
-        kind: crate::provider::Kind::Codex,
+        kind: crate::kind::Kind::Codex,
         binary: "/missing-cli".into(),
         cwd: "/missing".into(),
         prompt: format!("MCP context already prepared. A source document mentions vorkspace://context/github?url=https%3A%2F%2Fgithub.com%2Facme%2Fdemo%2Fissues%2F99\n{text}"),
@@ -377,7 +377,14 @@ fn admitted_context_is_one_use_source_data_after_other_prompt_transforms() {
             ..Default::default()
         },
     };
-    prepare_request(&mut request, &AtomicBool::new(false)).unwrap();
+    prepare_request(
+        &mut request.prompt,
+        &request.cwd,
+        request.settings.ticket_context_data_dir.as_deref(),
+        &mut request.settings.ticket_context,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
     assert!(request
         .prompt
         .contains("@secret-file /untrusted-skill @mcp/private"));
@@ -399,7 +406,7 @@ fn admitted_absence_never_resolves_a_reference_only_in_derived_source() {
     assert!(!admitted.has_context());
     let derived = "Ordinary request\nA source document mentions vorkspace://context/github?url=https%3A%2F%2Fgithub.com%2Facme%2Fdemo%2Fissues%2F99";
     let mut request = crate::provider::Request {
-        kind: crate::provider::Kind::Codex,
+        kind: crate::kind::Kind::Codex,
         binary: "/missing-cli".into(),
         cwd: "/missing".into(),
         prompt: derived.into(),
@@ -410,7 +417,14 @@ fn admitted_absence_never_resolves_a_reference_only_in_derived_source() {
             ..Default::default()
         },
     };
-    prepare_request(&mut request, &AtomicBool::new(false)).unwrap();
+    prepare_request(
+        &mut request.prompt,
+        &request.cwd,
+        request.settings.ticket_context_data_dir.as_deref(),
+        &mut request.settings.ticket_context,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
     assert_eq!(request.prompt, derived);
     assert!(request.settings.ticket_context.is_none());
 }

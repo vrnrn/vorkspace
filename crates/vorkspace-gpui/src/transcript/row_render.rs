@@ -85,10 +85,8 @@ impl TranscriptView {
         let code = fence.code.clone();
         let copied = self.copied == Some(key);
         let file_link = fence.path.as_ref().map(|raw| {
-            let (path, location) = crate::file_tools::file_editor::file_location(
-                raw,
-                self.file_link_base.as_deref().unwrap_or(""),
-            );
+            let (path, location) =
+                crate::file_link::file_location(raw, self.file_link_base.as_deref().unwrap_or(""));
             let (line, column) = location.unwrap_or((fence.start_line, 1));
             format!("{path}:{line}:{column}")
         });
@@ -148,11 +146,9 @@ impl TranscriptView {
                                         .on_click(move |event, window, cx| {
                                             if event.click_count() == 1 {
                                                 window.dispatch_action(
-                                                    Box::new(
-                                                        crate::file_tools::file_editor::OpenPath(
-                                                            path.clone(),
-                                                        ),
-                                                    ),
+                                                    Box::new(crate::file_link::OpenPath(
+                                                        path.clone(),
+                                                    )),
                                                     cx,
                                                 );
                                             }
@@ -223,7 +219,7 @@ impl TranscriptView {
                         self.search_match
                             .as_ref()
                             .is_some_and(|(start, _)| *start == self.rows[ix].key.0),
-                        self.text_selection(
+                        self.markdown_selection(
                             self.rows[ix].key,
                             self.messages[self.rows[ix].message].start,
                             self.messages[self.rows[ix].message].role == "assistant",
@@ -475,14 +471,9 @@ impl TranscriptView {
                     && let Some(id) = cards::session(&value["sessionId"])
                     && let Some(view) = self.launches.get(&id)
                 {
-                    crate::bots::cards::launch(
-                        id,
-                        Some(view),
-                        self.started_at.elapsed().as_secs_f32(),
-                        cx,
-                    )
+                    bot_cards::launch(id, Some(view), self.started_at.elapsed().as_secs_f32(), cx)
                 } else {
-                    crate::bots::cards::render(value, cx)
+                    bot_cards::render(value, cx)
                 }
             }
             Body::OlderHistory
@@ -781,7 +772,7 @@ impl TranscriptView {
                         if reasoning {
                             None
                         } else {
-                            self.text_selection(row.key, message_start, !user && !error, cx)
+                            self.markdown_selection(row.key, message_start, !user && !error, cx)
                         },
                     )
                     .into_any_element()

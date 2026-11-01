@@ -5,6 +5,12 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::{process::Stdio, sync::mpsc, time::Duration};
 
+pub fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
 const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
 
 static LOGIN_SHELL_ENV: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);

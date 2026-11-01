@@ -1,7 +1,7 @@
 //! The original workspace pane: project header, Sessions / Explorer / Changes,
 //! and a session filter. App navigation and projects remain in the left rail.
 use super::*;
-use crate::{right_panel::RightTab, workspace::SidebarTab};
+use crate::{panel_kit::RightTab, workspace::SidebarTab};
 
 impl Shell {
     pub(super) fn classic_tool_tab(&self) -> Option<RightTab> {
@@ -66,7 +66,7 @@ impl Shell {
             .gap_1()
             .px_3()
             .border_b_1()
-            .border_color(crate::right_panel::stroke())
+            .border_color(crate::panel_kit::stroke())
             .child(
                 div()
                     .id("classic-workspace-project")
@@ -210,7 +210,7 @@ impl Shell {
                         .gap_1()
                         .px_2()
                         .border_b_1()
-                        .border_color(crate::right_panel::stroke())
+                        .border_color(crate::panel_kit::stroke())
                         .child(icon("search", 12.).text_color(content(0.5)))
                         .child(div().flex_1().min_w_0().child(self.sidebar_search.clone()))
                         .child(self.sidebar_filter_button(cx)),

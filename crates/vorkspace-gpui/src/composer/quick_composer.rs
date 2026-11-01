@@ -37,7 +37,7 @@ pub(crate) struct Controller {
 impl Controller {
     pub fn configure(
         &mut self,
-        prefs: &crate::settings::Preferences,
+        prefs: &vorkspace_ui::preferences::Preferences,
     ) -> Option<async_channel::Receiver<()>> {
         let shortcut = match prefs.keybindings.get("App: Quick Composer") {
             Some(Some(v)) => v.clone(),
@@ -88,7 +88,7 @@ impl EventEmitter<Launch> for QuickComposer {}
 impl QuickComposer {
     pub(crate) fn observe_scale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self._subscriptions
-            .push(crate::settings::observe_window_scale(window, cx));
+            .push(vorkspace_ui::preferences::observe_window_scale(window, cx));
     }
     pub fn new(
         projects: Vec<String>,
@@ -184,7 +184,7 @@ impl QuickComposer {
                     return;
                 };
                 this.cwd = path.clone();
-                let p = cx.global::<crate::settings::Preferences>();
+                let p = cx.global::<vorkspace_ui::preferences::Preferences>();
                 this.kind = p
                     .default_provider
                     .as_deref()
@@ -222,7 +222,7 @@ impl QuickComposer {
                     if !this.projects.contains(&this.cwd) {
                         this.projects.push(this.cwd.clone());
                     }
-                    let p = cx.global::<crate::settings::Preferences>();
+                    let p = cx.global::<vorkspace_ui::preferences::Preferences>();
                     this.kind = p
                         .default_provider
                         .as_deref()
@@ -253,7 +253,7 @@ impl QuickComposer {
         let list = cx.new(|cx| {
             ModelList::new_for(self.kind, self.model.clone(), &self.cwd, profile, cx)
                 .hide_providers(
-                    cx.global::<crate::settings::Preferences>()
+                    cx.global::<vorkspace_ui::preferences::Preferences>()
                         .hidden_providers
                         .clone(),
                 )
@@ -312,24 +312,19 @@ impl Render for QuickComposer {
                 }
             }))
             .child(
-                crate::settings::widgets::secondary_button(
-                    "quick-project",
-                    "Choose project",
-                    false,
-                    false,
-                )
-                .relative()
-                .child(self.project_anchor.probe())
-                .child(icon("folder", 14.))
-                .child(
-                    std::path::Path::new(&self.cwd)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                )
-                .child(icon("chevron-down", 12.))
-                .on_click(cx.listener(|this, _, window, cx| this.projects(window, cx))),
+                crate::controls::secondary_button("quick-project", "Choose project", false, false)
+                    .relative()
+                    .child(self.project_anchor.probe())
+                    .child(icon("folder", 14.))
+                    .child(
+                        std::path::Path::new(&self.cwd)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
+                    .child(icon("chevron-down", 12.))
+                    .on_click(cx.listener(|this, _, window, cx| this.projects(window, cx))),
             )
             .child(div().flex_1().min_h_0().child(self.completion.clone()))
             .child(
@@ -338,7 +333,7 @@ impl Render for QuickComposer {
                     .items_center()
                     .gap_2()
                     .child(
-                        crate::settings::widgets::secondary_button(
+                        crate::controls::secondary_button(
                             "quick-model",
                             "Choose model",
                             false,
@@ -356,7 +351,7 @@ impl Render for QuickComposer {
                         .on_click(cx.listener(|this, _, window, cx| this.models(window, cx))),
                     )
                     .child(
-                        crate::settings::widgets::secondary_button(
+                        crate::controls::secondary_button(
                             "quick-access",
                             "Change access",
                             false,
@@ -379,7 +374,7 @@ impl Render for QuickComposer {
                             .child("↵ start · ⌘↵ open"),
                     )
                     .child(
-                        crate::settings::widgets::primary_button(
+                        crate::controls::primary_button(
                             "quick-send",
                             "Start session",
                             self.input.read(cx).content.trim().is_empty(),

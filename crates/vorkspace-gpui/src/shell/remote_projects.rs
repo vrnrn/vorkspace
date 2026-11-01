@@ -1,6 +1,6 @@
 //! AddRemoteProjectDialog.tsx: browse host directories and remember their remote identity.
 use super::*;
-use crate::settings::widgets::secondary_button;
+use crate::controls::secondary_button;
 use gpui::EventEmitter;
 use serde::Deserialize;
 use serde_json::json;

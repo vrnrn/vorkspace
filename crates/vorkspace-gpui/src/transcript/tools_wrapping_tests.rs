@@ -84,7 +84,7 @@ fn assert_command_layout(
         assert!(row.left() >= px(0.));
         assert!(row.right() <= window.viewport_size().width);
         let mut style = window.text_style();
-        style.font_family = markdown::FIXED_FONT.into();
+        style.font_family = vorkspace_ui::fonts::FIXED_FONT.into();
         let lines = window
             .text_system()
             .shape_text(

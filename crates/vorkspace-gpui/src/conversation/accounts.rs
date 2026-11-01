@@ -55,7 +55,7 @@ impl Conversation {
                         .child(format!("Sign in to {} to continue", kind.label())),
                 )
                 .child(
-                    crate::settings::widgets::secondary_button(
+                    crate::controls::secondary_button(
                         "conversation-sign-in",
                         "Sign in",
                         true,

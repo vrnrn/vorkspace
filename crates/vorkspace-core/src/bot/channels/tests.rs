@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::Store;
 fn roster() -> Roster {
     Roster {
         bots: vec![

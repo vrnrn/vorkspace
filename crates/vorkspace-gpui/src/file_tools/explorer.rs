@@ -4,10 +4,10 @@
 //! every file operation run off the UI thread.
 use crate::{
     file_tools::project_search::{ProjectSearch, SearchEvent},
-    git_tools::git_status::{GitChanged, ProjectGit},
+    git_status::{GitChanged, ProjectGit},
     input::{self, Input},
+    panel_kit::*,
     popover::{Anchor, Menu, MenuAction, MenuEvent, MenuItem, menu_popover},
-    right_panel::*,
 };
 use gpui::{
     AnyElement, App, ClipboardEntry, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,

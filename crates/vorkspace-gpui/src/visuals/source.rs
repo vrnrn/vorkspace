@@ -1,13 +1,11 @@
 //! Immutable JavaScript source, highlighted once and drawn a viewport at a time.
-use crate::{
-    markdown::FIXED_FONT,
-    syntax::{HighlightRequest, HighlightedDocument},
-};
+use crate::syntax::{HighlightRequest, HighlightedDocument};
 use gpui::{
     Context, HighlightStyle, IntoElement, ListHorizontalSizingBehavior, Render, SharedString,
     StyledText, Task, UniformListScrollHandle, Window, div, prelude::*, px, rgb, uniform_list,
 };
 use std::{ops::Range, sync::Arc};
+use vorkspace_ui::fonts::FIXED_FONT;
 use vorkspace_ui::theme::content;
 
 const LINE_HEIGHT: f32 = 20.;

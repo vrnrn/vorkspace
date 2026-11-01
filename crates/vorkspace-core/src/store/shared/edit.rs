@@ -49,7 +49,7 @@ impl Store {
             .into_iter()
             .find(|s| s.id == id)
             .ok_or("Conversation no longer exists")?;
-        if !crate::provider::supports_rewind(crate::provider::Kind::from_id(&session.provider)) {
+        if !crate::kind::supports_rewind(crate::kind::Kind::from_id(&session.provider)) {
             return Err("This provider does not support editing the last turn".into());
         }
         let blocks = self.shared_blocks(id)?;

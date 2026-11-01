@@ -1,4 +1,5 @@
 use super::*;
+use crate::shell::Shell;
 use gpui::{TestAppContext, WindowHandle};
 use serde_json::{Value, json};
 use std::{
@@ -344,7 +345,7 @@ fn switching_from_peer_to_channel_keeps_the_autonomous_budget(cx: &mut TestAppCo
     s.manager.update(cx, |m, cx| {
         let mut sent = Message {
             prepared_prompt: None,
-            peer: Some(bot::peers::Peer {
+            peer: Some(bot::Peer {
                 from: "peer".into(),
                 hop: 4,
                 expect_reply: false,
@@ -1449,14 +1450,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
         assert_eq!(visual.debug_bounds(page).unwrap().left(), stack.left());
         let reader = s.manager.read_with(visual, |m, cx| match kind {
             "html" => m.html_documents["slide-document"].entity_id(),
-            "session" => m
-                .owner
-                .upgrade()
-                .unwrap()
-                .read(cx)
-                .bot_session_entity(session)
-                .unwrap()
-                .entity_id(),
+            "session" => m.owner.session_entity(session, cx).unwrap().entity_id(),
             _ => m.documents["slide-document"].entity_id(),
         });
         assert_eq!(
@@ -1496,14 +1490,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
         s.manager.read_with(visual, |m, cx| {
             let reopened = match kind {
                 "html" => m.html_documents["slide-document"].entity_id(),
-                "session" => m
-                    .owner
-                    .upgrade()
-                    .unwrap()
-                    .read(cx)
-                    .bot_session_entity(session)
-                    .unwrap()
-                    .entity_id(),
+                "session" => m.owner.session_entity(session, cx).unwrap().entity_id(),
                 _ => m.documents["slide-document"].entity_id(),
             };
             assert_eq!(reader, reopened);
@@ -1915,9 +1902,9 @@ fn settings_picker_model_overflow_preserves_bot_setup(cx: &mut TestAppContext) {
     for creating in [false, true] {
         s.window
             .update(visual, |_, window, cx| {
-                cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+                cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
                     prefs.model_picker_tab = Some("codex".into());
-                    prefs.recent_models = vec![crate::settings::ModelChoice {
+                    prefs.recent_models = vec![vorkspace_ui::preferences::ModelChoice {
                         provider: "codex".into(),
                         model: Some("overflow-test-model".into()),
                     }];
@@ -2481,8 +2468,7 @@ fn app_actions_are_project_scoped_and_mutation_retries_are_idempotent(cx: &mut T
     cx.update(|cx| {
         let m = s.manager.read(cx);
         assert_eq!(m.roster.get(&s.id).unwrap().launches.len(), 1);
-        let owner = m.owner.upgrade().unwrap();
-        let view = owner.read(cx).bot_session_entity(child).unwrap();
+        let view = m.owner.session_entity(child, cx).unwrap();
         assert_eq!(view.read(cx).input.read(cx).content, "Review the project");
         assert!(!view.read(cx).busy);
         assert!(m.hidden_session(child));
@@ -2715,13 +2701,7 @@ fn background_delegation_keeps_controls_when_hidden_from_the_sidebar(cx: &mut Te
         );
         assert!(manager.hidden_session(child));
         assert!(!manager.protected_app_target(child, cx));
-        manager
-            .owner
-            .upgrade()
-            .unwrap()
-            .read(cx)
-            .bot_session_entity(child)
-            .unwrap()
+        manager.owner.session_entity(child, cx).unwrap()
     });
     view.update(cx, |view, cx| {
         view.input
@@ -2858,15 +2838,7 @@ fn cold_background_delegation_controls_do_not_require_a_visible_or_live_view(
         manager.roster.save(&locked(&s.store).unwrap()).unwrap();
         assert!(manager.hidden_session(id));
         assert!(!manager.protected_app_target(id, cx));
-        assert!(
-            manager
-                .owner
-                .upgrade()
-                .unwrap()
-                .read(cx)
-                .bot_session_entity(id)
-                .is_none()
-        );
+        assert!(manager.owner.session_entity(id, cx).is_none());
     });
     assert!(
         call(
@@ -4248,7 +4220,7 @@ fn a_users_message_steers_the_running_turn_but_never_a_peer_turn(cx: &mut TestAp
             "Retry must not reuse the uncertain steer's submission identity"
         );
         m.roster.get_mut(&s.id).unwrap().outbox.clear();
-        let peer = bot::peers::Peer {
+        let peer = bot::Peer {
             from: "merlin".into(),
             hop: 1,
             expect_reply: true,

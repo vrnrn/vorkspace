@@ -2,33 +2,9 @@
 use crate::{
     file_tools::file_editor as editor, image_lightbox, input, settings::Preferences, shell,
 };
-use gpui::{
-    Action, AnyWindowHandle, App, Global, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType,
-    actions,
-};
+use gpui::{Action, App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, actions};
 
-#[derive(Default)]
-struct WorkspaceTarget(Option<AnyWindowHandle>);
-impl Global for WorkspaceTarget {}
-
-pub(crate) fn remember(window: &gpui::Window, cx: &mut App) {
-    cx.set_global(WorkspaceTarget(Some(window.window_handle())));
-}
-
-pub(crate) fn workspace_target(cx: &App) -> Option<AnyWindowHandle> {
-    let windows = cx.windows();
-    let live = |handle: &AnyWindowHandle| {
-        handle.downcast::<shell::Shell>().is_some() && windows.contains(handle)
-    };
-    cx.active_window()
-        .filter(live)
-        .or_else(|| {
-            cx.try_global::<WorkspaceTarget>()
-                .and_then(|target| target.0)
-                .filter(live)
-        })
-        .or_else(|| cx.windows().into_iter().find(live))
-}
+use crate::shell::workspace_target;
 
 /// Menus can run while an embedded native view owns first responder or the
 /// workspace is hidden. Select one live workspace and
@@ -72,7 +48,7 @@ actions!(
     ]
 );
 
-pub(crate) fn clipboard_route(action: vorkspace_macos::status_menu::Action, cx: &mut App) {
+fn clipboard_route(action: vorkspace_macos::status_menu::Action, cx: &mut App) {
     let Some(target) = workspace_target(cx) else {
         return;
     };
@@ -86,6 +62,7 @@ pub(crate) fn clipboard_route(action: vorkspace_macos::status_menu::Action, cx: 
 }
 
 pub(crate) fn init(cx: &mut App) {
+    crate::menu_bar::install(build, cx);
     cx.on_action(|_: &crate::clipboard::Toggle, cx| {
         let Some(target) = workspace_target(cx) else {
             return;
@@ -101,6 +78,9 @@ pub(crate) fn init(cx: &mut App) {
     });
     cx.on_action(|_: &crate::clipboard::Settings, cx| {
         clipboard_route(vorkspace_macos::status_menu::Action::Settings, cx)
+    });
+    cx.on_action(|_: &crate::clipboard::Quit, cx| {
+        clipboard_route(vorkspace_macos::status_menu::Action::Quit, cx)
     });
     cx.on_action(|_: &crate::clipboard::Composer, cx| {
         clipboard_route(vorkspace_macos::status_menu::Action::QuickComposer, cx)

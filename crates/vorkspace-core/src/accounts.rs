@@ -8,12 +8,58 @@ pub use identity::Identity;
 pub use login::arguments as login_arguments;
 pub use login::{authenticate, AuthAction};
 mod processes;
+fn delete_keychain(config: &std::path::Path) -> Result<(), String> {
+    use crate::process;
+    use std::{
+        process::{Command, Stdio},
+        time::Instant,
+    };
+    let service = keychain_service(Some(config));
+    let mut command = Command::new("/usr/bin/security");
+    command
+        .args(["delete-generic-password", "-s", &service])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    process::isolate(&mut command);
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    let _registration = process::register(child.id());
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    let result = loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() || status.code() == Some(44) => break Ok(()),
+            Ok(Some(_)) => {
+                break Err("Could not remove the account's Claude Keychain credentials".into());
+            }
+            Err(e) => break Err(e.to_string()),
+            Ok(None) if Instant::now() >= deadline => {
+                break Err("Removing Claude credentials timed out".into());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    };
+    process::terminate(&mut child);
+    result
+}
+
+pub(crate) fn keychain_service(config: Option<&std::path::Path>) -> String {
+    use sha2::{Digest, Sha256};
+    use unicode_normalization::UnicodeNormalization;
+    config
+        .map(|dir| {
+            let selector: String = dir.to_string_lossy().nfc().collect();
+            let digest = format!("{:x}", Sha256::digest(selector.as_bytes()));
+            format!("Claude Code-credentials-{}", &digest[..8])
+        })
+        .unwrap_or_else(|| "Claude Code-credentials".into())
+}
+
 #[cfg(test)]
 mod tests;
 pub use processes::stop_processes;
 pub(crate) use processes::{track, Tracked};
 
-use crate::provider::Kind;
+use crate::kind::Kind;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -142,7 +188,7 @@ impl Profile {
             .directory(kind)?
             .ok_or("The default provider account cannot be removed")?;
         if kind == Kind::Claude {
-            crate::usage::claude::delete_keychain(&dir)?;
+            delete_keychain(&dir)?;
         }
         match std::fs::symlink_metadata(&dir) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -155,11 +201,7 @@ impl Profile {
     }
 }
 
-pub fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
+pub use crate::shell_env::home;
 pub fn supports_profiles(kind: Kind) -> bool {
     matches!(kind, Kind::Codex | Kind::Claude)
 }

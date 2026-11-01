@@ -1,6 +1,6 @@
 //! SessionReview.tsx: the latest turn's recorded workspace changes, under its
 //! reply, with Undo, Keep and Review. The checkpoint runs off the UI thread.
-use crate::right_panel::{DIFF_ADD, DIFF_DEL, format_integer, tabular};
+use crate::panel_kit::{DIFF_ADD, DIFF_DEL, format_integer, tabular};
 use gpui::{
     Context, EventEmitter, FontWeight, Role, SharedString, Task, Window, div, prelude::*, px, rgb,
 };
@@ -380,7 +380,7 @@ impl Render for SessionReview {
                         .min_w_0()
                         .flex_1()
                         .truncate()
-                        .font_family(crate::markdown::FIXED_FONT)
+                        .font_family(vorkspace_ui::fonts::FIXED_FONT)
                         .text_size(px(12.))
                         .child(file.relative.clone()),
                 )

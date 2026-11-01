@@ -166,15 +166,7 @@ pub fn validate_attachments(paths: &[PathBuf]) -> Result<(), String> {
     }
     Ok(())
 }
-pub fn image_mime(path: &Path) -> Option<&'static str> {
-    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "gif" => Some("image/gif"),
-        "webp" => Some("image/webp"),
-        _ => None,
-    }
-}
+pub use crate::transcript::attachments::image_mime;
 pub fn image_data(path: &Path) -> Result<String, String> {
     use base64::Engine;
     let mut data = Vec::new();

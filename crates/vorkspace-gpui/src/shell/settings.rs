@@ -212,7 +212,7 @@ impl Shell {
                 }
                 SettingsEvent::VoxMemory => {
                     let result = locked(&this.store).and_then(|db| {
-                        let root = vorkspace_core::bot::root(&db);
+                        let root = vorkspace_core::store::bot_root(&db);
                         let memory =
                             vorkspace_core::bot::files::read(&root, "vox", None, "MEMORY.md")?;
                         if memory.text.is_none() {
@@ -231,9 +231,7 @@ impl Shell {
                         Ok(files) => {
                             this.close_settings(window, cx);
                             window.dispatch_action(
-                                Box::new(crate::file_tools::file_editor::OpenPath(
-                                    files.memory_path,
-                                )),
+                                Box::new(crate::file_link::OpenPath(files.memory_path)),
                                 cx,
                             );
                         }
@@ -426,8 +424,8 @@ impl Shell {
     }
     pub(super) fn apply_preferences(&mut self, cx: &mut Context<Self>) {
         self.workspace.preferences.ui_scale = self.workspace.preferences.ui_scale.clamp(
-            crate::settings::Preferences::MIN_UI_SCALE_PERCENT,
-            crate::settings::Preferences::MAX_UI_SCALE_PERCENT,
+            vorkspace_ui::preferences::Preferences::MIN_UI_SCALE_PERCENT,
+            vorkspace_ui::preferences::Preferences::MAX_UI_SCALE_PERCENT,
         );
         crate::clipboard::configure(self.workspace.preferences.clipboard_history, cx);
         if let Some(vox) = &self.vox {
@@ -436,7 +434,7 @@ impl Shell {
         }
         self.refresh_notification_permission();
         self.configure_quick_composer(cx);
-        crate::file_tools::file_editor::menus(&self.workspace.preferences, cx);
+        crate::menu_bar::refresh(&self.workspace.preferences, cx);
         vorkspace_core::cli::initialize(&self.workspace.preferences.binary_paths);
         self.keep_visible_idle_agents(cx);
         vorkspace_core::provider::configure_idle_agents(
@@ -470,7 +468,7 @@ impl Shell {
     }
     pub(crate) fn observe_scale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.observations
-            .push(crate::settings::observe_window_scale(window, cx));
+            .push(vorkspace_ui::preferences::observe_window_scale(window, cx));
     }
     fn choose_chat_background(&mut self, cx: &mut Context<Self>) {
         let prompt = cx.prompt_for_paths(PathPromptOptions {

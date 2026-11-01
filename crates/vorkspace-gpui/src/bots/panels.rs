@@ -6,7 +6,7 @@ use crate::{
     popover::{MenuAction, MenuItem, MenuStyle, Side},
     project_settings::{BackgroundDialog, Event as BackgroundEvent},
 };
-use gpui::{AnyView, Div, FontWeight, Stateful};
+use gpui::{AnyView, Div, FontWeight};
 use vorkspace_core::project_appearance::{
     ProjectAppearance, TEXTURE_PALETTES, default_foreground_color,
 };
@@ -50,24 +50,7 @@ pub(super) struct OpenPicker {
     pub(super) align: crate::popover::Align,
     pub(super) _events: Vec<Subscription>,
 }
-pub(super) fn button(
-    id: impl Into<gpui::ElementId>,
-    label: impl Into<SharedString>,
-) -> Stateful<Div> {
-    let label = label.into();
-    crate::controls::button(id, label.clone(), true)
-        .cursor(gpui::CursorStyle::Arrow)
-        .flex()
-        .items_center()
-        .gap_1p5()
-        .px_2p5()
-        .py_1p5()
-        .rounded_md()
-        .text_size(px(12.))
-        .text_color(content(0.8))
-        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-        .child(label)
-}
+pub(super) use crate::controls::bot_button as button;
 fn setting(label: &str, description: Option<&str>, control: AnyElement) -> Div {
     div()
         .min_h(px(48.))
@@ -222,7 +205,7 @@ struct LookEditor {
     dragging_grid: bool,
     grid_bounds: AnchorSlot,
     editing_color: Option<EditingColor>,
-    custom: Entity<super::color_picker::ColorPicker>,
+    custom: Entity<crate::color_picker::ColorPicker>,
     focus: gpui::FocusHandle,
     _events: Vec<Subscription>,
 }
@@ -235,11 +218,11 @@ impl LookEditor {
             f.set_text(bot.name.clone(), cx);
             f
         });
-        let custom = cx.new(|cx| super::color_picker::ColorPicker::new(bot.color, cx));
+        let custom = cx.new(|cx| crate::color_picker::ColorPicker::new(bot.color, cx));
         let events = vec![
             cx.subscribe(
                 &custom,
-                |this, _, event: &super::color_picker::Picked, cx| {
+                |this, _, event: &crate::color_picker::Picked, cx| {
                     match this.editing_color.unwrap_or(EditingColor::Background) {
                         EditingColor::Background => this.bot.color = event.0,
                         EditingColor::Foreground => this.bot.fg_color = Some(event.0),
@@ -1329,7 +1312,7 @@ mod minion_ui_tests {
             .update(|cx| {
                 cx.open_window(Default::default(), |_, cx| {
                     cx.new(|cx| {
-                        Shell::new(
+                        crate::shell::Shell::new(
                             store,
                             vec![active.clone(), retired.clone()],
                             cwd.clone(),
@@ -1391,13 +1374,7 @@ mod minion_ui_tests {
         cx.run_until_parked();
         manager.read_with(cx, |bots, cx| {
             let chat = bots.chat().unwrap();
-            let legacy = bots
-                .owner
-                .upgrade()
-                .unwrap()
-                .read(cx)
-                .bot_session_entity(retired.id)
-                .unwrap();
+            let legacy = bots.owner.session_entity(retired.id, cx).unwrap();
             assert_eq!(
                 chat.entity_id(),
                 legacy.entity_id(),

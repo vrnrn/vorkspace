@@ -589,12 +589,14 @@ impl Render for SearchView {
                 this.pick(this.active, cx);
                 cx.stop_propagation();
             }))
-            .on_action(cx.listener(|this, _: &crate::shell::DismissMenu, _, cx| {
-                if !this.input.read(cx).is_composing() {
-                    cx.emit(Event::Close);
-                }
-                cx.stop_propagation();
-            }))
+            .on_action(
+                cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, _, cx| {
+                    if !this.input.read(cx).is_composing() {
+                        cx.emit(Event::Close);
+                    }
+                    cx.stop_propagation();
+                }),
+            )
             .child(
                 div()
                     .id("app-search-header")
@@ -620,7 +622,7 @@ impl Render for SearchView {
                             .child(div().flex_1().min_w_0().child(self.input.clone())),
                     )
                     .when(loading, |d| {
-                        d.child(crate::right_panel::spinner(
+                        d.child(crate::panel_kit::spinner(
                             "app-search-loading",
                             "loader",
                             14.,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::Store;
 use habits::{Habit, Schedule};
 use std::sync::atomic::{AtomicBool, Ordering};
 

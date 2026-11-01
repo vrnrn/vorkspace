@@ -1,19 +1,17 @@
 //! Bot workspaces: one runtime per identity, shared by the rail, pages,
 //! overview and settings.
-pub(crate) mod avatar;
+pub(crate) use crate::avatar;
 pub(crate) mod cards;
 mod changes;
 mod channels;
-pub(crate) mod color_picker;
 mod creation;
+mod effects;
 mod files;
 mod filters;
-mod header;
-pub(crate) use header::{ChatHeader, chat_surface, chat_surface_with_look};
-mod effects;
 #[cfg(test)]
 mod header_tests;
 mod host;
+pub(crate) mod host_api;
 mod html;
 mod memory_ui;
 mod notifications;
@@ -31,7 +29,6 @@ use crate::{
     conversation::{BotSubmitted, Conversation, SessionChanged},
     input::{self, Input},
     popover::{Anchor, AnchorSlot, Menu, MenuEvent, menu_popover, popover},
-    shell::Shell,
 };
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, Focusable, MouseButton, Role, SharedString,
@@ -78,26 +75,9 @@ struct RunningHabit {
     cards: Vec<serde_json::Value>,
     mailbox: Vec<String>,
 }
-/// A minion session's context and app environment.
-pub(crate) type MinionAttachment = (
-    vorkspace_core::agent::MinionContext,
-    std::collections::HashMap<String, String>,
-);
-/// Minion sessions by ID, shared with the shell so it can attach them to
-/// their views without reading `Bots`, which may be mid-update.
-pub(crate) type MinionRegistry =
-    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<i64, MinionAttachment>>>;
-
-/// UI admission follows durable identity, including retired members and
-/// disabled Minions. Shared snapshots avoid reborrowing Bots from a chat.
-#[derive(Clone)]
-pub(crate) struct TeamHistory {
-    pub actor: Bot,
-    pub parent: Option<Bot>,
-}
-pub(crate) type TeamHistories = std::rc::Rc<std::cell::RefCell<HashMap<i64, TeamHistory>>>;
-pub(crate) type BotConversations =
-    std::rc::Rc<std::cell::RefCell<HashMap<i64, WeakEntity<Conversation>>>>;
+pub(crate) use crate::conversation::{
+    BotConversations, MinionRegistry, TeamHistories, TeamHistory,
+};
 
 pub(crate) struct Bots {
     minion_effects: effects::MinionEffects,
@@ -107,10 +87,10 @@ pub(crate) struct Bots {
     retired_teams: HashSet<String>,
     channels: channels::ChannelUi,
     parent_window: Option<gpui::AnyWindowHandle>,
-    owner: WeakEntity<Shell>,
+    owner: std::rc::Rc<dyn host_api::BotsHost>,
     store: Database,
     root: PathBuf,
-    prefs: crate::settings::Preferences,
+    prefs: vorkspace_ui::preferences::Preferences,
     pub(crate) roster: Roster,
     pub(crate) active: Option<String>,
     chats: HashMap<String, Entity<Conversation>>,
@@ -332,7 +312,7 @@ impl Bots {
         let app: &mut App = cx;
         app.defer(move |cx| {
             let _ = handle.update(cx, |_, window, cx| {
-                let _ = owner.update(cx, |owner, cx| owner.open(id, window, cx));
+                owner.open_session(id, window, cx);
             });
         });
     }
@@ -387,8 +367,8 @@ impl Bots {
     }
     pub(crate) fn new(
         store: Database,
-        owner: WeakEntity<Shell>,
-        prefs: crate::settings::Preferences,
+        owner: std::rc::Rc<dyn host_api::BotsHost>,
+        prefs: vorkspace_ui::preferences::Preferences,
         active: Option<String>,
         notice_region: AnchorSlot,
         cx: &mut Context<Self>,
@@ -396,8 +376,12 @@ impl Bots {
         bot::set_minions_enabled(prefs.bots && prefs.minions);
         let (roster, root, roster_error) = match locked(&store) {
             Ok(db) => match Roster::load(&db) {
-                Ok(roster) => (roster, bot::root(&db), None),
-                Err(error) => (Roster::default(), bot::root(&db), Some(error)),
+                Ok(roster) => (roster, vorkspace_core::store::bot_root(&db), None),
+                Err(error) => (
+                    Roster::default(),
+                    vorkspace_core::store::bot_root(&db),
+                    Some(error),
+                ),
             },
             Err(error) => (
                 Roster::default(),
@@ -613,7 +597,7 @@ impl Bots {
     }
     pub(crate) fn set_preferences(
         &mut self,
-        prefs: crate::settings::Preferences,
+        prefs: vorkspace_ui::preferences::Preferences,
         cx: &mut Context<Self>,
     ) {
         let was = self.prefs.bots;
@@ -912,8 +896,7 @@ impl Bots {
                 });
                 let Some(bot) = this.presentation_bot(&id) else { return; };
                 let page_chat = this.active.as_deref() == Some(id.as_str());
-                let existing = this.owner.upgrade()
-                    .and_then(|owner| owner.read(cx).bot_session_entity(summary.id))
+                let existing = this.owner.session_entity(summary.id, cx)
                     .filter(|view| bot.is_minion() && view.read(cx).settings.bot.is_none());
                 let view = existing.unwrap_or_else(|| cx.new(|cx| Conversation::new(summary, this.store.clone(), cx)));
                 this.conversation_views.borrow_mut().insert(view.read(cx).summary.id, view.downgrade());
@@ -1051,7 +1034,7 @@ impl Bots {
                 let source = id.clone();
                 this.observations.push(cx.subscribe(
                     &transcript,
-                    move |this, _, event: &cards::CardAction, cx| {
+                    move |this, _, event: &crate::transcript::bot_cards::CardAction, cx| {
                         this.card_action(&source, &event.0, cx)
                     },
                 ));

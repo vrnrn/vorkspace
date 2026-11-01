@@ -1197,7 +1197,7 @@ fn live_prompt_anchors_respect_history_visibility_and_the_anchor_preference(
         );
 
         view.apply_preferences(
-            &crate::settings::Preferences {
+            &vorkspace_ui::preferences::Preferences {
                 anchor_prompts: false,
                 ..Default::default()
             },

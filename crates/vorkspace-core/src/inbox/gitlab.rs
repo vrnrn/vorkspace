@@ -905,7 +905,7 @@ fn encode_path_component(value: &str) -> String {
 fn gitlab_repo_for(root: &Path, gitlab_url: &str) -> Result<String, String> {
     let mut cmd = Command::new("git");
     crate::process::configure_child(&mut cmd);
-    crate::scm::shell::apply_gui_env(&mut cmd);
+    crate::shell_env::apply_gui_env(&mut cmd);
     let output = cmd
         .args(["config", "--get-regexp", r"^remote\..*\.url$"])
         .current_dir(root)
@@ -1069,12 +1069,12 @@ fn write_secret_file(path: &Path, value: &str) -> Result<(), String> {
 
 fn expand_home(input: &str) -> PathBuf {
     if input == "~" {
-        return crate::scm::shell::dirs_home()
+        return crate::shell_env::dirs_home()
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(input));
     }
     if let Some(rest) = input.strip_prefix("~/") {
-        return crate::scm::shell::dirs_home()
+        return crate::shell_env::dirs_home()
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("~"))
             .join(rest);

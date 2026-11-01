@@ -59,7 +59,7 @@ fn begin(
 fn composer_toolbar_selects_one_row_during_resize_and_preserves_draft(cx: &mut TestAppContext) {
     vorkspace_ui::theme::configure(&Default::default(), false, true);
     cx.update(|cx| {
-        cx.set_global(crate::settings::Preferences::default());
+        cx.set_global(vorkspace_ui::preferences::Preferences::default());
         vorkspace_ui::clock::use_test_clock(cx);
         input::bind(cx);
         crate::popover::bind(cx);
@@ -74,7 +74,7 @@ fn composer_toolbar_selects_one_row_during_resize_and_preserves_draft(cx: &mut T
             for beside in [false, true] {
                 window
                     .update(visual, |view, _, cx| {
-                        cx.global_mut::<crate::settings::Preferences>()
+                        cx.global_mut::<vorkspace_ui::preferences::Preferences>()
                             .model_controls = if beside { "beside" } else { "combined" }.into();
                         view.summary.has_messages = started;
                         view.branch = Some("feature/a-very-long-branch-name".into());
@@ -150,7 +150,7 @@ fn composer_toolbar_selects_one_row_during_resize_and_preserves_draft(cx: &mut T
 #[gpui::test]
 fn compact_settings_keep_existing_actions_focus_and_anchor_on_resize(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        cx.set_global(crate::settings::Preferences::default());
+        cx.set_global(vorkspace_ui::preferences::Preferences::default());
         vorkspace_ui::clock::use_test_clock(cx);
         input::bind(cx);
         crate::popover::bind(cx);
@@ -322,7 +322,7 @@ fn compact_settings_keep_existing_actions_focus_and_anchor_on_resize(cx: &mut Te
 #[gpui::test]
 fn compact_bot_composer_keeps_queue_and_bot_settings_separate(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        cx.set_global(crate::settings::Preferences::default());
+        cx.set_global(vorkspace_ui::preferences::Preferences::default());
         crate::popover::bind(cx);
     });
     let window = window(cx, 220.);
@@ -409,7 +409,7 @@ fn native_narrow_composer_capture() {
     );
     vorkspace_ui::clock::use_test_clock(&cx);
     for light in [false, true] {
-        let prefs = crate::settings::Preferences {
+        let prefs = vorkspace_ui::preferences::Preferences {
             theme: if light { "light" } else { "dark" }.into(),
             ..Default::default()
         };
@@ -526,7 +526,7 @@ fn native_narrow_composer_capture() {
 }
 #[gpui::test]
 fn composer_uses_react_surface_and_equal_text_padding_with_attachments(cx: &mut TestAppContext) {
-    let preferences = crate::settings::Preferences::default();
+    let preferences = vorkspace_ui::preferences::Preferences::default();
     vorkspace_ui::theme::configure(&preferences, false, true);
     cx.update(|cx| {
         cx.set_global(preferences);

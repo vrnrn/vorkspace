@@ -83,7 +83,7 @@ impl Shell {
                 // curves at the top and bottom; on the left, the rail draws it.
                 .rounded_l(px(12.))
                 .when(!left, |d| d.border_l_1())
-                .border_color(crate::right_panel::stroke())
+                .border_color(crate::panel_kit::stroke())
                 .child(
                     div()
                         .absolute()
@@ -107,7 +107,7 @@ impl Shell {
                                         div()
                                             .size_full()
                                             .border_b_1()
-                                            .border_color(crate::right_panel::stroke()),
+                                            .border_color(crate::panel_kit::stroke()),
                                     ),
                             )
                         })
@@ -148,7 +148,7 @@ impl Shell {
                     .rounded_l(px(12.))
                     // Beside a left sidebar, the pane draws its own curved edge.
                     .when(left && sidebar_width > 0., |d| {
-                        d.border_l_1().border_color(crate::right_panel::stroke())
+                        d.border_l_1().border_color(crate::panel_kit::stroke())
                     })
                     .bg(pane_fill())
                     .children(tab_bar)

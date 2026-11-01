@@ -59,9 +59,9 @@ impl Conversation {
             .child(format!("{preview} ({files} attachments)"))
             .when(occupied, |d|d.child(if files_pending { "Wait for selected files to finish attaching." } else { "Clear the composer to restore a copy." }))
             .child(div().flex().gap_2()
-                .child(crate::settings::widgets::secondary_button("submission-restore","Restore a copy",true,disabled || !draft_ready || occupied || snapshot.is_none())
+                .child(crate::controls::secondary_button("submission-restore","Restore a copy",true,disabled || !draft_ready || occupied || snapshot.is_none())
                     .child("Restore a copy").on_click(cx.listener(|this,_,_,cx|this.review_local_submission(true,cx))))
-                .child(crate::settings::widgets::secondary_button("submission-dismiss","Dismiss notice",false,disabled)
+                .child(crate::controls::secondary_button("submission-dismiss","Dismiss notice",false,disabled)
                     .child("Dismiss notice").on_click(cx.listener(|this,_,_,cx|this.review_local_submission(false,cx)))))
             .into_any_element())
     }

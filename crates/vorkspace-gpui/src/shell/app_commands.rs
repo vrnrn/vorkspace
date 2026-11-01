@@ -1,20 +1,8 @@
 //! Operator uses the existing authenticated, per-session local app bridge.
 use super::*;
 use serde_json::{Value, json};
-use vorkspace_core::{
-    agent::Settings,
-    bot::bridge::{Call, Server},
-};
+use vorkspace_core::bot::bridge::{Call, Server};
 
-pub(crate) struct AppStart {
-    pub summary: Session,
-    pub settings: Settings,
-    pub prompt: String,
-    pub draft: bool,
-    pub reveal: bool,
-    pub placement: Option<(i64, Edge)>,
-    pub cleanup: Option<vorkspace_core::bot::launch::CreatedWorktree>,
-}
 enum Effect {
     None,
     /// A board changed; open views reload.

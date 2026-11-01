@@ -2,8 +2,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::scm::shell::dirs_home;
-use crate::scm::shell::{apply_gui_env, expand_home, resolve_gui_binary};
+use crate::shell_env::dirs_home;
+use crate::shell_env::{apply_gui_env, expand_home, resolve_gui_binary};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExternalEditor {

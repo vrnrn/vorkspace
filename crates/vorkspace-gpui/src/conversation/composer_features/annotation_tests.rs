@@ -71,7 +71,9 @@ fn drawing_save_control_publishes_pixels_to_the_draft(cx: &mut TestAppContext) {
                         alt: "Source".into(),
                         draft_session: Some(id),
                     },
-                    Some(owner.clone()),
+                    (Some(owner.clone()))
+                        .as_ref()
+                        .map(crate::conversation::composer_features::annotation_owner),
                     window,
                     cx,
                 )
@@ -136,7 +138,9 @@ fn close_controls_save_to_original_draft_and_stale_draft_keeps_preview(cx: &mut 
                             alt: "Source".into(),
                             draft_session: Some(id),
                         },
-                        Some(owner.clone()),
+                        (Some(owner.clone()))
+                            .as_ref()
+                            .map(crate::conversation::composer_features::annotation_owner),
                         window,
                         cx,
                     )

@@ -104,7 +104,7 @@ impl Conversation {
         }
         let mut message = self.message(text, Vec::new(), mode, cx);
         message.steer = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_none_or(|p| p.follow_up == "steer")
             && Kind::from_id(&self.summary.provider).can_steer();
         let id = message.id.clone();
@@ -214,7 +214,7 @@ impl Conversation {
         let attachments = std::mem::take(&mut self.attachments);
         let mut message = self.message(prompt, attachments, mode, cx);
         message.steer = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_none_or(|prefs| prefs.follow_up == "steer")
             && Kind::from_id(&self.summary.provider).can_steer()
             && message.can_steer();
@@ -428,7 +428,7 @@ impl Conversation {
         };
         if send {
             message.steer = cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_none_or(|prefs| prefs.follow_up == "steer")
                 && Kind::from_id(&self.summary.provider).can_steer();
             if !self.busy {
@@ -901,7 +901,7 @@ impl Conversation {
                 div().id(SharedString::from(format!("queued-{id}"))).role(Role::Group).aria_label(format!("Queued message: {}", message.label())).min_h(px(32.)).flex().items_center().gap(px(10.)).when(index > 0, |d| d.border_t_1().border_color(content(0.05)))
                     .child(icon("queue-list", 14.).text_color(content(0.35)))
                     .map(|row| if let Some(edit) = editing {
-                        row.child(div().flex_1().min_w_0().px(px(6.)).py(px(2.)).rounded_md().border_1().border_color(content(0.3)).bg(content(0.05)).on_action(cx.listener(|this, _: &crate::shell::DismissMenu, window, cx| { this.finish_queue_edit(false, window, cx); cx.stop_propagation(); })).child(edit.input.clone()))
+                        row.child(div().flex_1().min_w_0().px(px(6.)).py(px(2.)).rounded_md().border_1().border_color(content(0.3)).bg(content(0.05)).on_action(cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, window, cx| { this.finish_queue_edit(false, window, cx); cx.stop_propagation(); })).child(edit.input.clone()))
                             .child(queue_button("queue-save", "Save queued message", "check").on_click(cx.listener(|this, _, window, cx| this.finish_queue_edit(true, window, cx))))
                             .child(queue_button("queue-cancel", "Cancel queued message edit", "close").on_click(cx.listener(|this, _, window, cx| this.finish_queue_edit(false, window, cx))))
                     } else {

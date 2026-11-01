@@ -154,8 +154,10 @@ fn cold_hidden_habit_channel_and_worker_targets_are_protected_at_the_mutation_ow
     let outside = store.create("codex", "/outside").unwrap().id;
     assert!(store.check_app_target(caller, caller, "/project").is_err());
     assert!(store.check_app_target(caller, outside, "/project").is_err());
-    let mut roster = Roster::default();
-    roster.hidden_sessions = vec![target];
+    let mut roster = Roster {
+        hidden_sessions: vec![target],
+        ..Default::default()
+    };
     roster.save(&store).unwrap();
     drop(store);
     store = Store::open_vorkspace(&path).unwrap();
