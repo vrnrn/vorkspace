@@ -141,10 +141,9 @@ impl Supervisor {
         self.shared.wake.notify_all();
         let command = Command::Configure { recording, icon };
         if !self.send(command) && !recording {
-            // Recording off means no helper at all, even one this app never met.
-            if let Ok(stream) = UnixStream::connect(&self.socket) {
-                let _ = send(&stream, &command);
-            }
+            let shared = self.shared.clone();
+            let socket = self.socket.clone();
+            std::thread::spawn(move || retire(&shared, &socket, command));
         }
     }
 
@@ -159,6 +158,26 @@ impl Supervisor {
 
     pub fn connected(&self) -> bool {
         self.shared.stream.lock().unwrap().is_some()
+    }
+}
+
+/// Recording off means no helper at all, even one this app never connected to.
+/// A helper still closing its last client refuses this one, so the command only
+/// counts once Hello proves it was accepted.
+fn retire(shared: &Shared, socket: &Path, command: Command) {
+    for _ in 0..CONNECT_ATTEMPTS {
+        let Ok(stream) = UnixStream::connect(socket) else {
+            return;
+        };
+        let accepted = receive::<Notice>(&mut BufReader::new(&stream)).is_some();
+        if shared.desired.lock().unwrap().recording {
+            return;
+        }
+        if accepted {
+            let _ = send(&stream, &command);
+            return;
+        }
+        std::thread::sleep(CONNECT_DELAY);
     }
 }
 
