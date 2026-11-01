@@ -1,0 +1,195 @@
+
+use super::*;
+fn protocol(kind: Kind) -> Protocol {
+    let mut p = Protocol::new(Request {
+        kind,
+        binary: "unused".into(),
+        cwd: "/tmp".into(),
+        prompt: "hello".into(),
+        provider_id: Some("thread".into()),
+        model: None,
+        settings: Default::default(),
+    });
+    p.active_turn = Some("turn".into());
+    p.follow_up_ready = true;
+    p
+}
+#[test]
+fn derived_follow_up_source_cannot_start_a_new_ticket_lookup() {
+    for kind in [Kind::Claude, Kind::Pi] {
+        let mut protocol = protocol(kind);
+        let mut out = Vec::new();
+        let message = Message {
+                id:"source-only".into(),text:"Ordinary steer".into(),
+                prepared_prompt:Some("Ordinary steer\nQuoted source: vorkspace://context/github?url=https%3A%2F%2Fgithub.com%2Facme%2Fdemo%2Fissues%2F99".into()),
+                ..Default::default()
+            };
+        let mut admitted = 0;
+        protocol
+            .steer(message, &mut out, &AtomicBool::new(false), |_| {
+                admitted += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(admitted, 1);
+        assert!(!out.is_empty());
+    }
+}
+#[test]
+fn codex_keeps_messages_until_ack_and_rejection_does_not_end_the_turn() {
+    let mut p = protocol(Kind::Codex);
+    let message = Message {
+        id: "one".into(),
+        text: "new direction 🙂".into(),
+        ..Default::default()
+    };
+    let mut out = Vec::new();
+    assert!(p
+        .steer(message.clone(), &mut out, &AtomicBool::new(false), |_| Ok(
+            ()
+        ))
+        .unwrap()
+        .is_empty());
+    let wire: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(wire["method"], "turn/steer");
+    assert_eq!(wire["params"]["expectedTurnId"], "turn");
+    assert_eq!(wire["params"]["input"][0]["text"], message.text);
+    let events = p
+        .frame(
+            json!({"id":wire["id"],"error":{"message":"turn is closing"}}),
+            &mut out,
+        )
+        .unwrap();
+    assert!(
+        matches!(&events[0], Event::FollowUpFailed { id, error } if id == "one" && error == "turn is closing")
+    );
+    assert!(!p.done);
+    out.clear();
+    p.steer(message.clone(), &mut out, &AtomicBool::new(false), |_| {
+        Ok(())
+    })
+    .unwrap();
+    let retry: Value = serde_json::from_slice(&out).unwrap();
+    assert_ne!(retry["id"], wire["id"]);
+    assert!(p
+        .frame(json!({"id":wire["id"],"result":{}}), &mut out)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        p.frame(json!({"id":retry["id"],"result":{}}), &mut out)
+            .unwrap(),
+        vec![Event::FollowUp(message)]
+    );
+}
+#[test]
+fn claude_and_pi_use_their_existing_stream_protocols() {
+    for kind in [Kind::Claude, Kind::Pi, Kind::Omp] {
+        let mut p = protocol(kind);
+        let mut out = Vec::new();
+        let message = Message {
+            id: "two".into(),
+            text: "follow up".into(),
+            ..Default::default()
+        };
+        let events = p
+            .steer(message.clone(), &mut out, &AtomicBool::new(false), |_| {
+                Ok(())
+            })
+            .unwrap();
+        let wire: Value = serde_json::from_slice(&out).unwrap();
+        if kind == Kind::Claude {
+            assert_eq!(wire["type"], "user");
+            assert_eq!(events, vec![Event::FollowUp(message)]);
+        } else {
+            assert_eq!(wire["type"], "steer");
+            assert!(events.is_empty());
+            assert_eq!(
+                p.frame(
+                    json!({"type":"response","id":wire["id"],"success":true}),
+                    &mut out
+                )
+                .unwrap(),
+                vec![Event::FollowUp(message)]
+            );
+        }
+    }
+}
+
+#[test]
+fn running_process_waits_for_turn_readiness_and_streams_after_steering() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("provider");
+    std::fs::write(&binary, r##"#!/usr/bin/env python3
+import json, sys
+
+def send(value):
+    print(json.dumps(value), flush=True)
+
+for line in sys.stdin:
+    frame = json.loads(line)
+    method = frame.get('method')
+    if method == 'initialize':
+        send({'id': frame['id'], 'result': {}})
+    elif method == 'thread/start':
+        send({'id': frame['id'], 'result': {'thread': {'id': 'thread'}}})
+    elif method == 'turn/start':
+        send({'id': frame['id'], 'result': {'turn': {'id': 'turn'}}})
+        send({'method': 'item/agentMessage/delta', 'params': {'itemId': 'before', 'delta': 'Before'}})
+    elif method == 'turn/steer':
+        send({'id': frame['id'], 'result': {}})
+        send({'method': 'item/agentMessage/delta', 'params': {'itemId': 'after', 'delta': 'After'}})
+        send({'method': 'turn/completed', 'params': {'turn': {'status': 'completed'}}})
+"##).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let (controls, receive) = mpsc::channel();
+    let mut delivered = false;
+    let mut output = String::new();
+    run_with_controls(
+        Request {
+            kind: Kind::Codex,
+            binary,
+            cwd: temp.path().into(),
+            prompt: "hello".into(),
+            provider_id: None,
+            model: None,
+            settings: Default::default(),
+        },
+        Arc::new(AtomicBool::new(false)),
+        Some(receive),
+        |events| {
+            for event in events {
+                match event {
+                    Event::Ready => controls
+                        .send(Control {
+                            id: "test".into(),
+                            decision: Decision::Steer(Message {
+                                id: "test".into(),
+                                text: "new direction".into(),
+                                ..Default::default()
+                            }),
+                        })
+                        .unwrap(),
+                    Event::FollowUp(message) => {
+                        assert_eq!(message.id, "test");
+                        delivered = true;
+                    }
+                    Event::Text(text) => {
+                        if text == "After" {
+                            assert!(
+                                delivered,
+                                "the accepted user message must precede its response"
+                            );
+                        }
+                        output.push_str(&text);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert!(delivered);
+    assert_eq!(output, "BeforeAfter");
+}
