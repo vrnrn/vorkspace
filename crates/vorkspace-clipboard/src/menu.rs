@@ -1,6 +1,6 @@
 //! A thin main-thread bridge to the native AppKit menu. No original payloads
 //! cross this boundary, and closing it releases all presentation copies.
-use super::*;
+use crate::history::{Content, History};
 use std::ffi::{CStr, CString, c_char, c_void};
 
 pub(super) enum Event {
@@ -98,10 +98,10 @@ impl Menu {
     pub(super) fn hide(&self) {
         unsafe { vorkspace_clipboard_hide(self.handle) }
     }
-    pub(super) fn sync(&self, service: &Service) {
+    pub(super) fn sync(&self, history: &History, query: &str, enabled: bool) {
         unsafe { vorkspace_clipboard_begin(self.handle) };
-        for id in service.history.matching(&service.query) {
-            let item = service.history.get(id).unwrap();
+        for id in history.matching(query) {
+            let item = history.get(id).unwrap();
             let title = CString::new(item.content.label()).unwrap();
             let (pixels, width, height) = item
                 .preview
@@ -120,15 +120,15 @@ impl Menu {
                 )
             };
         }
-        let message = CString::new(if !service.enabled {
+        let message = CString::new(if !enabled {
             "Clipboard history is off"
-        } else if service.history.items.is_empty() {
+        } else if history.items.is_empty() {
             "Copy text or an image to get started"
         } else {
             "No matching text"
         })
         .unwrap();
-        unsafe { vorkspace_clipboard_end(self.handle, message.as_ptr(), service.enabled) };
+        unsafe { vorkspace_clipboard_end(self.handle, message.as_ptr(), enabled) };
     }
 }
 impl Drop for Menu {

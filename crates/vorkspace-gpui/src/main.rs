@@ -63,6 +63,7 @@ use std::{
 use vorkspace_core::{store::Store, transcript::Transcript};
 actions!(application, [Quit, Restart]);
 fn quit(cx: &mut App) {
+    clipboard::app_quitting(cx);
     let voice = vox::shutdown(cx);
     cx.spawn(async move |cx| {
         voice.await;

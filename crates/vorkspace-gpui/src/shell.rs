@@ -45,7 +45,7 @@ mod settings;
 mod shortcuts;
 mod sidebar_list;
 mod sidebar_peek;
-mod status_menu;
+pub(crate) mod status_menu;
 mod terminal_dock;
 mod terminal_tabs;
 mod title_tabs;
@@ -466,8 +466,6 @@ struct SessionPreview {
 }
 
 pub(crate) struct Shell {
-    #[cfg(not(test))]
-    status_menu: Option<vorkspace_macos::status_menu::Status>,
     bots: Option<Entity<crate::bots::Bots>>,
     vox: Option<Entity<crate::vox::Vox>>,
     quick_open: Option<quick_open::Open>,
@@ -827,8 +825,6 @@ impl Shell {
         let owner = cx.weak_entity();
         let live_agents = cx.new(|cx| live_agents::LiveAgents::new(owner, cx));
         let mut this = Self {
-            #[cfg(not(test))]
-            status_menu: None,
             bots: None,
             vox: None,
             quick_open: None,
@@ -1596,6 +1592,8 @@ impl Shell {
                 this.quit_prompted = false;
                 if matches!(answer, Ok(0)) {
                     crate::quit(cx);
+                } else {
+                    crate::clipboard::quit_cancelled(cx);
                 }
             });
         })
@@ -2340,8 +2338,6 @@ impl Render for Shell {
             m.read(cx).hide_html(cx);
             m.update(cx, |m, _| m.bind_window(window));
         }
-        #[cfg(not(test))]
-        self.sync_status_menu(window, cx);
         self.render_passes += 1;
         if let Some((id, tab)) = self.pending_review.take()
             && self.workspace.tab_of(id).is_some()
@@ -2429,7 +2425,7 @@ impl Render for Shell {
                     .update(cx, |shell, cx| {
                         #[cfg(not(test))]
                         if shell.workspace.preferences.close_to_tray
-                            && shell.status_menu.is_some()
+                            && crate::clipboard::menu_bar_ready(cx)
                             && !shell.unsaved_files(cx)
                         {
                             vorkspace_ui::traffic_lights::hide(window);
@@ -2670,17 +2666,7 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.open_settings(crate::settings::Section::General, window, cx)
             }))
-            .on_action(
-                cx.listener(|this, _: &crate::clipboard::Toggle, window, cx| {
-                    this.status_menu_action(
-                        vorkspace_macos::status_menu::Action::Clipboard {
-                            status_click: false,
-                        },
-                        window,
-                        cx,
-                    )
-                }),
-            )
+            .on_action(|_: &crate::clipboard::Toggle, _, cx| crate::clipboard::toggle(cx))
             .on_action(
                 cx.listener(|this, _: &session_groups::RenameSidebarItem, window, cx| {
                     this.rename_sidebar_item(window, cx)

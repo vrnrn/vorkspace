@@ -1,37 +1,14 @@
 use super::*;
-use vorkspace_macos::status_menu::Action;
+
+/// The clipboard panel's buttons that belong to the workspace.
+#[derive(Clone, Copy)]
+pub(crate) enum Action {
+    QuickComposer,
+    Settings,
+    Quit,
+}
 
 impl Shell {
-    #[cfg(not(test))]
-    pub(super) fn sync_status_menu(&mut self, window: &Window, cx: &mut Context<Self>) {
-        // Retain the saved preference key so existing users keep their choice.
-        if !self.workspace.preferences.bot_menu_bar_icon {
-            self.status_menu = None;
-            return;
-        }
-        if self.status_menu.is_some() {
-            return;
-        }
-        let owner = cx.weak_entity();
-        let target = window.window_handle();
-        let app = std::cell::RefCell::new(cx.to_async());
-        let run = std::rc::Rc::new(move |action| {
-            let owner = owner.clone();
-            app.borrow_mut().update(|cx| {
-                // AppKit must finish the status button's tracking callback
-                // before the popup claims key-window ownership.
-                cx.spawn(async move |cx| {
-                    let _ = target.update(cx, |_, window, cx| {
-                        let _ = owner
-                            .update(cx, |shell, cx| shell.status_menu_action(action, window, cx));
-                    });
-                })
-                .detach();
-            });
-        });
-        self.status_menu = vorkspace_macos::status_menu::Status::new(run);
-    }
-
     pub(crate) fn status_menu_action(
         &mut self,
         action: Action,
@@ -39,7 +16,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match action {
-            Action::Clipboard { status_click } => self.toggle_clipboard(status_click, window, cx),
             Action::QuickComposer => self.toggle_quick_composer(window, cx),
             Action::Settings => {
                 cx.activate(true);
@@ -50,38 +26,6 @@ impl Shell {
             // Keep the application action's unsaved-file and shutdown guards.
             Action::Quit => cx.defer(|cx| cx.dispatch_action(&crate::Quit)),
         }
-    }
-    pub(crate) fn toggle_clipboard(
-        &mut self,
-        status_click: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        #[cfg(not(test))]
-        if let Some(service) = crate::clipboard::get(cx) {
-            let anchor = self
-                .status_menu
-                .as_ref()
-                .and_then(|status| status.anchor())
-                .unwrap_or_else(|| {
-                    let screen = objc2_app_kit::NSScreen::mainScreen(
-                        objc2::MainThreadMarker::new().unwrap(),
-                    )
-                    .unwrap();
-                    let frame = screen.visibleFrame();
-                    objc2_foundation::NSRect::new(
-                        objc2_foundation::NSPoint::new(
-                            frame.origin.x + frame.size.width - 200.,
-                            frame.origin.y + frame.size.height,
-                        ),
-                        objc2_foundation::NSSize::ZERO,
-                    )
-                });
-            service.update(cx, |service, cx| {
-                service.toggle_menu(anchor, status_click, cx)
-            });
-        }
-        let _ = (status_click, window, cx);
     }
 }
 

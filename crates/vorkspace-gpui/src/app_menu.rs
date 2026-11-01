@@ -60,7 +60,7 @@ actions!(
     ]
 );
 
-fn clipboard_route(action: vorkspace_macos::status_menu::Action, cx: &mut App) {
+fn clipboard_route(action: shell::status_menu::Action, cx: &mut App) {
     let Some(target) = workspace_target(cx) else {
         return;
     };
@@ -75,27 +75,15 @@ fn clipboard_route(action: vorkspace_macos::status_menu::Action, cx: &mut App) {
 
 pub(crate) fn init(cx: &mut App) {
     crate::menu_bar::install(build, cx);
-    cx.on_action(|_: &crate::clipboard::Toggle, cx| {
-        let Some(target) = workspace_target(cx) else {
-            return;
-        };
-        // Preserve the external app that will receive the next Paste.
-        cx.defer(move |cx| {
-            let _ = target.update(cx, |root, window, cx| {
-                if let Ok(shell) = root.downcast::<shell::Shell>() {
-                    shell.update(cx, |shell, cx| shell.toggle_clipboard(false, window, cx));
-                }
-            });
-        });
-    });
+    cx.on_action(|_: &crate::clipboard::Reopen, cx| reopen_workspace(cx));
     cx.on_action(|_: &crate::clipboard::Settings, cx| {
-        clipboard_route(vorkspace_macos::status_menu::Action::Settings, cx)
+        clipboard_route(shell::status_menu::Action::Settings, cx)
     });
     cx.on_action(|_: &crate::clipboard::Quit, cx| {
-        clipboard_route(vorkspace_macos::status_menu::Action::Quit, cx)
+        clipboard_route(shell::status_menu::Action::Quit, cx)
     });
     cx.on_action(|_: &crate::clipboard::Composer, cx| {
-        clipboard_route(vorkspace_macos::status_menu::Action::QuickComposer, cx)
+        clipboard_route(shell::status_menu::Action::QuickComposer, cx)
     });
     macro_rules! workspace_commands {
         ($($action:ty),+ $(,)?) => { $(workspace_fallback::<$action>(cx);)+ };

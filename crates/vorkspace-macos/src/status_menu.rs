@@ -1,16 +1,8 @@
 //! Native menu-bar anchor; clipboard presentation uses native AppKit controls.
-#[derive(Clone, Copy)]
-pub enum Action {
-    Clipboard { status_click: bool },
-    QuickComposer,
-    Settings,
-    Quit,
-}
 #[cfg(not(test))]
 pub use native::Status;
 #[cfg(not(test))]
 mod native {
-    use super::Action;
     use objc2::runtime::AnyObject;
     use objc2::{
         AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
@@ -23,13 +15,13 @@ mod native {
         #[unsafe(super(NSObject))]
         #[name="VorkspaceClipboardStatusTarget"]
         #[thread_kind=MainThreadOnly]
-        #[ivars=Rc<dyn Fn(Action)>]
+        #[ivars=Rc<dyn Fn()>]
         struct Target;
         unsafe impl NSObjectProtocol for Target {}
         impl Target {
             #[unsafe(method(openClipboard:))]
             fn open(&self, _: Option<&AnyObject>) {
-                (self.ivars())(Action::Clipboard { status_click: true });
+                (self.ivars())();
             }
         }
     );
@@ -38,7 +30,7 @@ mod native {
         _target: Retained<Target>,
     }
     impl Status {
-        pub fn new(run: Rc<dyn Fn(Action)>) -> Option<Self> {
+        pub fn new(run: Rc<dyn Fn()>) -> Option<Self> {
             let mtm = MainThreadMarker::new()?;
             let item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.);
             let target: Retained<Target> =

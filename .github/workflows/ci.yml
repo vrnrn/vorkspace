@@ -34,7 +34,7 @@ jobs:
       - run: npm run check
         env:
           NEXTEST_PROFILE: ci
-      - run: cargo build --locked -p vorkspace-gpui --profile native-dev
+      - run: cargo build --locked -p vorkspace-gpui -p vorkspace-clipboard --profile native-dev
       - name: Package and verify native app signature
         run: |
           version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')

@@ -1,14 +1,13 @@
 //! A bounded, process-local clipboard owner. No database, files, or rich formats.
-mod history;
+use crate::history::{Content, History, Preview};
 #[cfg(not(test))]
-mod menu;
-mod native;
+use crate::{menu, native};
 #[cfg(not(test))]
 use gpui::Task;
 use gpui::{App, AppContext, Context, Entity, Global};
-use history::{Content, History, Preview};
 use std::sync::Arc;
-gpui::actions!(clipboard, [Toggle, Settings, Composer, Quit]);
+#[cfg(not(test))]
+use vorkspace_clipboard::Action;
 
 struct Clipboard(Entity<Service>);
 impl Global for Clipboard {}
@@ -57,7 +56,7 @@ pub(crate) fn configure(enabled: bool, cx: &mut App) {
                     Ok((registration, rx)) => {
                         let task = cx.spawn(async move |_, cx| {
                             while rx.recv().await.is_ok() {
-                                cx.update(|cx| cx.dispatch_action(&Toggle));
+                                cx.update(|cx| crate::toggle(false, cx));
                             }
                         });
                         s.hotkey = Some((registration, task));
@@ -124,7 +123,7 @@ impl Service {
         if let Some((menu, _)) = &self.menu
             && menu.visible()
         {
-            menu.sync(self);
+            menu.sync(&self.history, &self.query, self.enabled);
         }
     }
     #[cfg(not(test))]
@@ -147,9 +146,9 @@ impl Service {
                             s.query = query.to_lowercase();
                             s.sync_menu();
                         }
-                        menu::Event::Settings => cx.dispatch_action(&Settings),
-                        menu::Event::Composer => cx.dispatch_action(&Composer),
-                        menu::Event::Quit => cx.dispatch_action(&Quit),
+                        menu::Event::Settings => crate::action(Action::Settings, cx),
+                        menu::Event::Composer => crate::action(Action::Composer, cx),
+                        menu::Event::Quit => crate::action(Action::Quit, cx),
                         menu::Event::Closed => s.query.clear(),
                     });
                 }
@@ -163,7 +162,7 @@ impl Service {
         }
         if !menu.visible() {
             self.query.clear();
-            menu.sync(self);
+            menu.sync(&self.history, &self.query, self.enabled);
         }
         menu.toggle(anchor, status_click);
     }

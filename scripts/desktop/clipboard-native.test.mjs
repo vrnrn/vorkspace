@@ -10,8 +10,8 @@ const run = promisify(execFile);
 test("native clipboard preview deadline, cancellation and cleanup", { skip: process.platform !== "darwin" }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "vorkspace-native-clipboard-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const source = await readFile(new URL("../../crates/vorkspace-gpui/native/Clipboard.swift", import.meta.url), "utf8");
-  const tests = await readFile(new URL("../../crates/vorkspace-gpui/native/ClipboardTests.swift", import.meta.url), "utf8");
+  const source = await readFile(new URL("../../crates/vorkspace-clipboard/native/Clipboard.swift", import.meta.url), "utf8");
+  const tests = await readFile(new URL("../../crates/vorkspace-clipboard/native/ClipboardTests.swift", import.meta.url), "utf8");
   const file = join(directory, "ClipboardTests.swift");
   const binary = join(directory, "ClipboardTests");
   await writeFile(file, `${source}\n${tests}`);

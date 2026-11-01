@@ -13,4 +13,7 @@ if framework.exists():
                      key=lambda p: len(p.parts), reverse=True)
     for target in [*targets, framework]:
         subprocess.run(["codesign", "--force", "--timestamp", "--options", "runtime", "--sign", identity, str(target)], check=True)
+helper = bundle / "Contents/Helpers/vorkspace Clipboard.app"
+if helper.exists():
+    subprocess.run(["codesign", "--force", "--timestamp", "--options", "runtime", "--sign", identity, str(helper)], check=True)
 subprocess.run(["codesign", "--force", "--timestamp", "--options", "runtime", "--entitlements", str(Path(__file__).with_name("native-entitlements.plist")), "--sign", identity, str(bundle)], check=True)

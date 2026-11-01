@@ -1,7 +1,7 @@
 //! Maccy's change-count and confidential-type rules, adapted for RAM-only history.
 //! See licenses/LICENSE-MACCY-MIT. No clipboard payload is written to disk.
-use super::history::Preview;
-use super::history::{Content, MAX_IMAGE_BYTES, MAX_TEXT_BYTES, PREVIEW_SIDE};
+use crate::history::Preview;
+use crate::history::{Content, MAX_IMAGE_BYTES, MAX_TEXT_BYTES, PREVIEW_SIDE};
 use objc2_app_kit::NSPasteboard;
 use objc2_foundation::{NSData, NSString};
 use std::sync::Arc;

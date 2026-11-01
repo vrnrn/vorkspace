@@ -10,6 +10,7 @@ The desktop is a Rust workspace that runs as one process. The remote host is a s
 | `crates/vorkspace-runtime/` | Session execution, remote session binding, and persistence coalescing |
 | `crates/vorkspace-editor/` | Editor analysis (bounded QuickJS) and native syntax (tree-sitter grammars) |
 | `crates/vorkspace-model/` | Plain data models: pane layout, Markdown elements, Git graph and checkout cache |
+| `crates/vorkspace-clipboard/` | The clipboard helper process, which keeps history after the app quits, and its protocol |
 | `crates/vorkspace-macos/` | AppKit integrations, hotkeys, updater, relaunch, and hang diagnostics |
 | `host/` | Remote host service, authentication, SQLite store, session engine, SSH deployment package, and tests |
 | `embedded/editor/` | Editor parsing, diagnostics, completion, search, formatting, and syntax palettes for bounded QuickJS workers |

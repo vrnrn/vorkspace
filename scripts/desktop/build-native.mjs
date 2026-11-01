@@ -71,7 +71,7 @@ export function buildNative() {
   const app = metadata.packages.find((pkg) => pkg.name === "vorkspace-gpui");
   if (!app) throw new Error("The vorkspace-gpui package was not found.");
 
-  run("cargo", ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", app.name, "--release"]);
+  run("cargo", ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", app.name, "-p", "vorkspace-clipboard", "--release"]);
   const target = process.env.CARGO_BUILD_TARGET
     ? join(metadata.target_directory, process.env.CARGO_BUILD_TARGET)
     : metadata.target_directory;
