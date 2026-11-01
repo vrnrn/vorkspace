@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Instant;
 
 fn palette() -> Palette {
     Palette {
@@ -32,6 +33,94 @@ fn mermaid_renders_through_pele_and_resolves_its_theme() {
     );
     let error = mermaid_svg("notADiagram at all").unwrap_err();
     assert!(error.starts_with("Mermaid:"), "{error}");
+}
+
+/// The premise of budgeting CPU time: a render never waits, so it cannot sit
+/// off the CPU forever while its budget stands still. QuickJS refuses to block
+/// unless the embedder allows it, and the bundle has no timers to wait on.
+#[test]
+fn pele_cannot_block() {
+    let result = Pele::with_clock(thread_cpu_time)
+        .unwrap()
+        .run(|context| {
+            context.with(|ctx| {
+                ctx.eval::<String, _>(
+                    "let wait;\
+                     try{wait=Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,1)}\
+                     catch(e){wait=e.message}\
+                     [wait,typeof setTimeout].join()",
+                )
+                .map_err(|e| e.to_string())
+            })
+        })
+        .unwrap();
+    assert_eq!(result, "cannot block in this thread,undefined");
+}
+
+/// Every budget check once spending sees a whole budget gone, so a script that
+/// never finishes stops without the test burning real CPU.
+#[test]
+fn a_runaway_call_is_stopped_and_the_next_one_gets_a_fresh_budget() {
+    thread_local! {
+        static SPENDING: Cell<bool> = const { Cell::new(false) };
+        static SPENT: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    }
+    fn spending_clock() -> Duration {
+        if SPENDING.get() {
+            SPENT.set(SPENT.get() + CALL_BUDGET);
+        }
+        thread_cpu_time() + SPENT.get()
+    }
+    let pele = Pele::with_clock(spending_clock).unwrap();
+    let error = pele
+        .run(|context| {
+            SPENDING.set(true);
+            context.with(|ctx| {
+                let error = ctx.eval::<(), _>("for(;;){}").unwrap_err();
+                Err::<(), _>(
+                    ctx.catch()
+                        .as_exception()
+                        .and_then(|e| e.message())
+                        .unwrap_or_else(|| error.to_string()),
+                )
+            })
+        })
+        .unwrap_err();
+    assert_eq!(error, "interrupted");
+    SPENDING.set(false);
+    assert!(
+        pele.run(|context| render_mermaid(context, "flowchart LR\n  A --> B"))
+            .unwrap()
+            .starts_with("<svg")
+    );
+}
+
+/// The render's first budget check takes the thread off the CPU for a whole
+/// budget, and the real CPU clock must not charge the render for any of it.
+#[test]
+fn a_descheduled_render_is_not_charged_for_time_it_did_not_run() {
+    thread_local!(static STALL: Cell<bool> = const { Cell::new(false) });
+    fn descheduling_clock() -> Duration {
+        if STALL.replace(false) {
+            std::thread::sleep(CALL_BUDGET);
+        }
+        thread_cpu_time()
+    }
+    // Long enough that QuickJS polls for interrupts during the render.
+    let source = (0..200).fold("flowchart LR\n".to_string(), |source, n| {
+        source + &format!("  N{n} --> N{}\n", n + 1)
+    });
+    let pele = Pele::with_clock(descheduling_clock).unwrap();
+    let started = Instant::now();
+    let svg = pele
+        .run(|context| {
+            STALL.set(true);
+            render_mermaid(context, &source)
+        })
+        .unwrap();
+    assert!(svg.contains("N200"));
+    assert!(!STALL.get(), "the render never checked its budget");
+    assert!(started.elapsed() >= CALL_BUDGET);
 }
 
 #[test]
