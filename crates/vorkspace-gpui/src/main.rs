@@ -26,6 +26,7 @@ mod markdown;
 mod menu_bar;
 #[cfg(test)]
 mod metal_tests;
+mod native_view;
 mod notes;
 mod notifications;
 mod panel_kit;
@@ -366,6 +367,7 @@ fn main() {
             if let Some(path) = diagnostics_path {
                 vorkspace_macos::hang_diagnostics::start(cx, path);
             }
+            cx.set_reduce_motion(vorkspace_macos::accessibility::reduce_motion());
             dev_reload::install(cx);
             vorkspace_macos::updater::start(cx);
             app_menu::init(cx);

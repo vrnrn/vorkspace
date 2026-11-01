@@ -16,6 +16,8 @@ mod classic_rail;
 mod classic_sidebar;
 mod external_editor;
 mod file_panes;
+#[cfg(test)]
+mod hover_cursor_tests;
 mod idle_agents;
 #[cfg(test)]
 mod image_lightbox_tests;
@@ -2408,6 +2410,7 @@ impl Render for Shell {
             self.window_active = window.is_window_active();
             self.observations
                 .push(cx.observe_window_activation(window, |this, window, cx| {
+                    cx.set_reduce_motion(vorkspace_macos::accessibility::reduce_motion());
                     this.window_active = window.is_window_active();
                     if this.window_active {
                         crate::menu_bar::remember(window, cx);

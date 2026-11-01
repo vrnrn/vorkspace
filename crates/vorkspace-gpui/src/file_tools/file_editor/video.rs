@@ -1,4 +1,5 @@
 //! AVPlayerView hosts the platform playback controls in GPUI's clipped pane.
+use crate::native_view::invalidate_parent_cursor_rects;
 use gpui::{AnyElement, canvas, prelude::*};
 use objc2::{
     MainThreadMarker, MainThreadOnly, class, msg_send,
@@ -56,7 +57,11 @@ impl Video {
     pub(super) fn hide(&self) {
         self.pause();
         if let Some(host) = self.host.borrow().as_ref() {
+            if host.clip.isHidden() {
+                return;
+            }
             host.clip.setHidden(true);
+            invalidate_parent_cursor_rects(&host.clip);
         }
     }
     pub(super) fn metadata(&self) -> Option<(u32, u32, f64, bool)> {
@@ -93,7 +98,12 @@ impl Video {
             let clipped = bounds.intersect(&window.content_mask().bounds);
             let mut host = host.borrow_mut();
             if clipped.size.width <= gpui::px(0.) || clipped.size.height <= gpui::px(0.) {
-                if let Some(host) = host.as_ref() { host.clip.setHidden(true); }
+                if let Some(host) = host.as_ref()
+                    && !host.clip.isHidden()
+                {
+                    host.clip.setHidden(true);
+                    invalidate_parent_cursor_rects(&host.clip);
+                }
                 return;
             }
             let scale = f64::from(window.ui_scale());
@@ -121,12 +131,24 @@ impl Video {
             if let Some(host) = host.as_ref() {
                 // Reparenting or resetting an unchanged frame on every GPUI
                 // paint resets AVPlayerView's hover tracking and hides controls.
-                if unsafe { host.clip.superview() }.as_deref().is_none_or(|view| !std::ptr::eq(view, parent)) {
+                let mut cursor_rects_changed = unsafe { host.clip.superview() }
+                    .as_deref()
+                    .is_none_or(|view| !std::ptr::eq(view, parent));
+                if cursor_rects_changed {
                     parent.addSubview_positioned_relativeTo(&host.clip, NSWindowOrderingMode::Above, None);
                 }
-                if host.clip.frame() != rect { host.clip.setFrame(rect); }
+                if host.clip.frame() != rect {
+                    host.clip.setFrame(rect);
+                    cursor_rects_changed = true;
+                }
                 if host.view.frame() != video_rect { host.view.setFrame(video_rect); }
-                if host.clip.isHidden() { host.clip.setHidden(false); }
+                if host.clip.isHidden() {
+                    host.clip.setHidden(false);
+                    cursor_rects_changed = true;
+                }
+                if cursor_rects_changed {
+                    invalidate_parent_cursor_rects(&host.clip);
+                }
             }
         }).size_full().into_any_element()
     }

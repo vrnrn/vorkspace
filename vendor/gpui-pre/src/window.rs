@@ -1160,6 +1160,15 @@ impl Frame {
             .into_inner()
     }
 
+    #[cfg(feature = "test-support")]
+    fn cursor_style_request(&self, window: &Window) -> Option<&CursorStyleRequest> {
+        self.cursor_styles.iter().rev().find(|request| {
+            request
+                .hitbox_id
+                .is_none_or(|hitbox_id| hitbox_id.is_hovered_ignoring_last_input(window))
+        })
+    }
+
     pub(crate) fn hit_test(&self, position: Point<Pixels>) -> HitTest {
         let mut set_hover_hitbox_count = false;
         let mut hit_test = HitTest::default();
@@ -3522,6 +3531,20 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        #[cfg(feature = "test-support")]
+        let _cursor_trace_scope =
+            crate::cursor_diagnostic::frame_scope(self.handle.window_id().as_u64());
+        #[cfg(feature = "test-support")]
+        crate::cursor_diagnostic::record_current(
+            "gpui.draw.begin",
+            format!(
+                "mouse={:?} active={} hovered={}",
+                self.mouse_position,
+                self.is_window_active(),
+                self.is_window_hovered()
+            ),
+        );
+
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
         #[cfg(feature = "profiler")]
@@ -3652,7 +3675,7 @@ impl Window {
 
         debug_assert!(self.rendered_entity_stack.is_empty());
         self.record_entities_accessed(cx);
-        self.reset_cursor_style(cx);
+        self.reset_cursor_style(cx, "draw-frame-swap");
         self.refreshing = false;
         self.invalidator.set_phase(DrawPhase::None);
         // Focus listeners may move focus (e.g. a dock forwarding focus to its active
@@ -3663,6 +3686,8 @@ impl Window {
             self.refresh();
         }
         self.needs_present.set(true);
+        #[cfg(feature = "test-support")]
+        crate::cursor_diagnostic::record_current("gpui.draw.end", "scene-ready");
 
         #[cfg(feature = "profiler")]
         {
@@ -3707,7 +3732,19 @@ impl Window {
         let _foreground_turn = profiler::journal::foreground_turn();
         #[cfg(feature = "profiler")]
         let present_start = Instant::now();
+        #[cfg(feature = "test-support")]
+        crate::cursor_diagnostic::record_window(
+            self.handle.window_id().as_u64(),
+            "gpui.scene.present.begin",
+            format!("mouse={:?}", self.mouse_position),
+        );
         self.platform_window.draw(&self.rendered_frame.scene);
+        #[cfg(feature = "test-support")]
+        crate::cursor_diagnostic::record_window(
+            self.handle.window_id().as_u64(),
+            "gpui.scene.present.end",
+            "platform-window-draw-returned",
+        );
         #[cfg(feature = "profiler")]
         self.window_profiler.record_present(
             present_start,
@@ -5652,14 +5689,44 @@ impl Window {
         subscription
     }
 
-    fn reset_cursor_style(&self, cx: &mut App) {
-        // Set the cursor only if we're the active window.
-        if self.is_window_hovered() {
+    fn reset_cursor_style(&self, cx: &mut App, reason: &'static str) {
+        #[cfg(feature = "test-support")]
+        {
             let style = self
                 .rendered_frame
                 .cursor_style(self)
                 .unwrap_or(CursorStyle::Arrow);
-            cx.platform.set_cursor_style(style);
+            let request = self.rendered_frame.cursor_style_request(self);
+            crate::cursor_diagnostic::record_current(
+                "gpui.cursor.resolve",
+                format!(
+                    "reason={reason} style={style:?} source={:?} mouse={:?} hits={:?} hover_count={} captured={:?} active={} hovered={}",
+                    request.and_then(|request| request.hitbox_id),
+                    self.mouse_position,
+                    self.mouse_hit_test.ids,
+                    self.mouse_hit_test.hover_hitbox_count,
+                    self.captured_hitbox,
+                    self.is_window_active(),
+                    self.is_window_hovered(),
+                ),
+            );
+            // Set the cursor only if we're the active window.
+            if self.is_window_hovered() {
+                self.platform_window
+                    .set_cursor_style(style, cx.platform.as_ref());
+            }
+        }
+        #[cfg(not(feature = "test-support"))]
+        {
+            // Set the cursor only if we're the active window.
+            if self.is_window_hovered() {
+                let style = self
+                    .rendered_frame
+                    .cursor_style(self)
+                    .unwrap_or(CursorStyle::Arrow);
+                self.platform_window
+                    .set_cursor_style(style, cx.platform.as_ref());
+            }
         }
     }
 
@@ -6117,9 +6184,36 @@ impl Window {
     fn dispatch_mouse_event(&mut self, event: &dyn Any, cx: &mut App) {
         let hit_test = self.rendered_frame.hit_test(self.mouse_position());
         if hit_test != self.mouse_hit_test {
+            #[cfg(feature = "test-support")]
+            crate::cursor_diagnostic::record_current(
+                "gpui.mouse-hit-test.change",
+                format!(
+                    "mouse={:?} from={:?}/{} to={:?}/{}",
+                    self.mouse_position,
+                    self.mouse_hit_test.ids,
+                    self.mouse_hit_test.hover_hitbox_count,
+                    hit_test.ids,
+                    hit_test.hover_hitbox_count,
+                ),
+            );
             self.mouse_hit_test = hit_test;
-            self.reset_cursor_style(cx);
+            self.reset_cursor_style(cx, "mouse-hit-test-change");
         }
+
+        #[cfg(feature = "test-support")]
+        crate::cursor_diagnostic::record_current(
+            "gpui.mouse.dispatch",
+            format!(
+                "mouse={:?} style={:?} hits={:?} hover_count={} captured={:?}",
+                self.mouse_position,
+                self.rendered_frame
+                    .cursor_style(self)
+                    .unwrap_or(CursorStyle::Arrow),
+                self.mouse_hit_test.ids,
+                self.mouse_hit_test.hover_hitbox_count,
+                self.captured_hitbox,
+            ),
+        );
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         if self.is_inspector_picking(cx) {

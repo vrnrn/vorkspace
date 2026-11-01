@@ -60,6 +60,13 @@ mod util;
 mod view;
 mod window;
 
+/// Bounded cursor ownership tracing for isolated native fixtures.
+///
+/// This module is compiled only with `test-support`; it never logs in normal builds.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod cursor_diagnostic;
+
 #[cfg(any(test, feature = "test-support"))]
 pub use proptest;
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]

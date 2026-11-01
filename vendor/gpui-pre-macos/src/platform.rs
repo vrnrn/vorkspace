@@ -1,7 +1,6 @@
 use crate::{
     AppleActivity, AppleDispatcher, BoolExt, MacDisplay, MacKeyboardLayout, MacKeyboardMapper,
     MacWindow, events::key_to_native, ns_string, pasteboard::Pasteboard, renderer,
-    set_active_window_cursor_style,
 };
 use anyhow::{Context as _, anyhow};
 use block2::RcBlock;
@@ -1197,13 +1196,10 @@ impl Platform for MacPlatform {
         }
     }
 
-    /// Match cursor style to one of the styles available
-    /// in macOS's [NSCursor](https://developer.apple.com/documentation/appkit/nscursor).
-    fn set_cursor_style(&self, style: CursorStyle) {
-        unsafe {
-            set_active_window_cursor_style(style);
-        }
-    }
+    // Cursor shape requests need a PlatformWindow so they update that window's
+    // desired style and AppKit cursor rectangles. MacWindow implements the
+    // window-scoped path; the platform-wide fallback has no safe owner.
+    fn set_cursor_style(&self, _style: CursorStyle) {}
 
     fn hide_cursor_until_mouse_moves(&self) {
         let cursor_visible = self.0.lock().cursor_visible.clone();

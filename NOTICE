@@ -49,6 +49,9 @@ vendor/gpui-pre and vendor/gpui-pre-macos contain gpui-pre 0.3.9 components from
 the same Zed snapshot, copyright Zed Industries, licensed under Apache-2.0
 (LICENSE-APACHE included in each directory). Paths for platforms other than macOS
 are removed.
+The local macOS cursor bridge publishes hit-test requests synchronously while the
+GPUI view owns the pointer, and restores the stored style through AppKit cursor
+rectangles.
 The vendored manifests omit the unused zed-scap dependency and its feature links.
 The gpui-pre build script rejects screen-capture builds pending license review.
 Font fallback and text tests use the underlying Lilex family directly.

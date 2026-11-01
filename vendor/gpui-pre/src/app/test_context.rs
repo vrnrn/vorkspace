@@ -487,6 +487,11 @@ impl TestAppContext {
         &self.test_platform
     }
 
+    /// The cursor most recently dispatched to the test platform.
+    pub fn cursor_style(&self) -> crate::CursorStyle {
+        self.test_platform.cursor_style()
+    }
+
     /// Simulates disconnecting a display.
     pub fn simulate_display_removed(&self, display_id: DisplayId) {
         self.test_platform.simulate_display_removed(display_id);

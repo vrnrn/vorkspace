@@ -394,3 +394,79 @@ fn unicode_anchors_do_not_split_composed_graphemes() {
     assert_eq!(snap("e\u{301}🙂", 4), 3);
     assert_eq!(word("hello café", 7), 6..11);
 }
+
+#[gpui::test]
+fn hover_cursor_links_and_text_in_sessions_and_bots(cx: &mut TestAppContext) {
+    use gpui::{CursorStyle, VisualTestContext};
+    cx.update(|cx| cx.set_reduce_motion(true));
+    for bot in [false, true] {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|_| {
+                    let mut view = TranscriptView::new();
+                    if bot {
+                        view.bot_mode("bot", 0xffffff, "Bot");
+                    }
+                    view
+                })
+            })
+            .unwrap()
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.patch(
+                    0,
+                    vec![Row {
+                        role: "assistant".into(),
+                        text: "Plain [Website](https://example.invalid) `src/main.rs`".into(),
+                        first: true,
+                        sent_at: None,
+                    }],
+                    cx,
+                );
+                for reveal in view.reveals.values_mut() {
+                    reveal.settle(Instant::now());
+                }
+                view.motions.clear();
+                view.rebuild(0, cx);
+            })
+            .unwrap();
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.update(|w, _| w.activate_window());
+        visual.run_until_parked();
+        for width in [900., 320., 900.] {
+            visual.simulate_resize(size(px(width), px(600.)));
+            visual.run_until_parked();
+            let points = window
+                .update(visual, |view, _, _| {
+                    let state = view.selection.0.borrow();
+                    ["Plain", "Website", "src/main.rs"].map(|text| {
+                        let fragment = state
+                            .layouts
+                            .values()
+                            .find(|f| f.text.as_ref() == text)
+                            .expect(text);
+                        fragment.layout.bounds().center()
+                    })
+                })
+                .unwrap();
+            for (position, expected) in [
+                (points[0], CursorStyle::IBeam),
+                (points[1], CursorStyle::PointingHand),
+                (points[2], CursorStyle::PointingHand),
+                (points[0], CursorStyle::IBeam),
+                (gpui::point(px(width - 1.), px(599.)), CursorStyle::Arrow),
+            ] {
+                visual.simulate_mouse_move(position, None, Default::default());
+                visual.run_until_parked();
+                assert_eq!(
+                    visual.cursor_style(),
+                    expected,
+                    "Bot={bot}, width={width}, position={position:?}"
+                );
+                visual.refresh().unwrap();
+                assert_eq!(visual.cursor_style(), expected, "stationary repaint");
+            }
+        }
+    }
+}

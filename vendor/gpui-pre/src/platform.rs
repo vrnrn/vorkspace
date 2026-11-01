@@ -416,6 +416,9 @@ pub trait Platform: 'static {
     fn app_path(&self) -> Result<PathBuf>;
     fn path_for_auxiliary_executable(&self, name: &str) -> Result<PathBuf>;
 
+    /// Sets the cursor on platforms whose cursor target is not window-scoped.
+    /// GPUI normally calls [`PlatformWindow::set_cursor_style`] so native
+    /// backends can publish through the window that owns the pointer.
     fn set_cursor_style(&self, style: CursorStyle);
 
     /// Hides the mouse cursor until the user moves the mouse over one of
@@ -946,6 +949,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn is_maximized(&self) -> bool;
     fn window_bounds(&self) -> WindowBounds;
     fn content_size(&self) -> Size<Pixels>;
+    /// Sets the cursor style for this window. Backends with window-scoped cursor
+    /// ownership can override this; the default preserves the platform-wide path.
+    fn set_cursor_style(&self, style: CursorStyle, platform: &dyn Platform) {
+        platform.set_cursor_style(style);
+    }
+
     /// Returns the visible viewport in logical pixels relative to the content origin.
     ///
     /// This may be smaller or offset when a keyboard or zoom obscures content;

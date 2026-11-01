@@ -304,3 +304,9 @@ priority = -1
 [lints.rust.unexpected_cfgs]
 level = "allow"
 priority = 0
+
+[[test]]
+name = "native_cursor"
+path = "tests/native_cursor.rs"
+harness = false
+required-features = ["test-support"]
