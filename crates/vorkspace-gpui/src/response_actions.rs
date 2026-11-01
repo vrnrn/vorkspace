@@ -58,8 +58,7 @@ pub(crate) fn button(
     glyph: &'static str,
     active: bool,
 ) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id((action, turn))
+    vorkspace_ui::theme::keyboard_reachable(div().id((action, turn)))
         .role(Role::Button)
         .aria_label(label.into())
         .group("response-action")

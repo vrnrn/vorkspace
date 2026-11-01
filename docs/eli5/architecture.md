@@ -31,3 +31,5 @@ Bot cards save in the background, one card at a time. Repeated updates combine, 
 Every supported agent has an output size limit before it is buffered. A fast agent waits when the app is still handling earlier output. An individual response that is too large produces a clear error rather than silently losing part of its text. Stopping the connection also releases waiting readers.
 
 Interface zoom makes the whole workspace larger or smaller, from 60% to 160%. Clicking, typing, native previews, and screen-reader controls follow the same zoom level, including after moving the window to a different display.
+
+The app works with VoiceOver and the keyboard. VoiceOver says when a session finishes or needs you, Tab reaches tabs and the main buttons, and spinners stop when Reduce Motion is on.

@@ -741,8 +741,7 @@ impl Shell {
                     .tab_drag
                     .as_ref()
                     .is_some_and(|d| d.id == TitleTab::Session(id) && d.active);
-                let tab = div()
-                    .id(("tab", id as usize))
+                let tab = vorkspace_ui::theme::keyboard_reachable(div().id(("tab", id as usize)))
                     .debug_selector(move || format!("title-tab-{id}"))
                     .group("title-tab")
                     .role(Role::Tab)

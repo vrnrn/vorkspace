@@ -248,6 +248,11 @@ Behavior rules for controls:
 
 ## 8. Accessibility
 
+- Give every control a role and name. Wrap buttons that mouse users reach directly
+  in `keyboard_reachable` so they are Tab stops that Enter and Space activate. Its
+  focus ring is keyboard-only, and pointer presses leave focus alone.
+- Spinners and other GPUI animations follow macOS Reduce Motion.
+
 - Every interactive element sets a `Role` and an `aria_label`; icon-only
   controls always have a label.
 - State uses the matching attribute: `aria_toggled` for switches and checkboxes,

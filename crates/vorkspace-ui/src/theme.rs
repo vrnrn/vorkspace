@@ -339,6 +339,18 @@ pub fn icon_button_enabled(
 ) -> Stateful<Div> {
     chrome_button(id, label, path, enabled, 0.1)
 }
+/// A Tab stop that Enter and Space activate. The focus ring is keyboard-only, and
+/// pointer presses leave focus alone so clicking never pulls it out of the composer.
+pub fn keyboard_reachable(button: Stateful<Div>) -> Stateful<Div> {
+    button
+        .focusable()
+        .tab_stop(true)
+        .focus_visible(|style| style.bg(content(0.16)))
+        .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+            window.prevent_default()
+        })
+}
+
 fn chrome_button(
     id: &'static str,
     label: &'static str,
@@ -346,8 +358,7 @@ fn chrome_button(
     enabled: bool,
     hover_alpha: f32,
 ) -> Stateful<Div> {
-    div()
-        .id(id)
+    keyboard_reachable(div().id(id))
         .role(Role::Button)
         .aria_label(label)
         .group("chrome-button")
@@ -507,3 +518,83 @@ pub fn test_contrast(ink: Hsla, background: Hsla) -> f32 {
 
 #[cfg(test)]
 mod composer_tests;
+
+#[cfg(test)]
+mod keyboard_tests {
+    use super::*;
+    use gpui::{
+        App, Context, EventEmitter, FocusHandle, Focusable, Modifiers, Render, TestAppContext,
+        VisualTestContext, Window, px, size,
+    };
+    use std::{cell::Cell, rc::Rc};
+
+    struct Surface {
+        field: FocusHandle,
+        clicks: Rc<Cell<usize>>,
+    }
+    impl EventEmitter<()> for Surface {}
+    impl Focusable for Surface {
+        fn focus_handle(&self, _: &App) -> FocusHandle {
+            self.field.clone()
+        }
+    }
+    impl Render for Surface {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let clicks = self.clicks.clone();
+            div()
+                .size_full()
+                .child(
+                    div()
+                        .id("field")
+                        .track_focus(&self.field)
+                        .tab_stop(true)
+                        .size(px(40.)),
+                )
+                .child(
+                    keyboard_reachable(div().id("action"))
+                        .debug_selector(|| "action".into())
+                        .size(px(40.))
+                        .on_click(move |_, _, _| clicks.set(clicks.get() + 1)),
+                )
+        }
+    }
+
+    fn surface(cx: &mut TestAppContext) -> (&mut VisualTestContext, Rc<Cell<usize>>, FocusHandle) {
+        let clicks = Rc::new(Cell::new(0));
+        let shared = clicks.clone();
+        let (view, cx) = cx.add_window_view(|_, cx| Surface {
+            field: cx.focus_handle(),
+            clicks: shared,
+        });
+        let field = view.read_with(cx, |view, _| view.field.clone());
+        cx.update(|window, cx| window.focus(&field, cx));
+        cx.simulate_resize(size(px(200.), px(200.)));
+        cx.run_until_parked();
+        (cx, clicks, field)
+    }
+
+    #[gpui::test]
+    fn a_click_runs_the_action_and_leaves_focus_in_the_field(cx: &mut TestAppContext) {
+        let (cx, clicks, field) = surface(cx);
+        let bounds = cx.debug_bounds("action").unwrap();
+        cx.simulate_click(bounds.center(), Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(clicks.get(), 1);
+        cx.update(|window, _| assert!(field.is_focused(window)));
+    }
+
+    #[gpui::test]
+    fn tab_reaches_the_action_and_enter_runs_it(cx: &mut TestAppContext) {
+        let (cx, clicks, field) = surface(cx);
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(!field.is_focused(window)));
+        // GPUI clicks on release, once the press landed on the same focus.
+        cx.simulate_keystrokes("enter");
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+        });
+        cx.run_until_parked();
+        assert_eq!(clicks.get(), 1);
+    }
+}

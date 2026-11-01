@@ -56,3 +56,7 @@ A 500 ms timer reads only the native pasteboard change counter until it changes.
 The [repository map](repository.md) lists the source owners and generated assets.
 
 [Plain-English companion](eli5/architecture.md).
+
+## Accessibility
+
+GPUI publishes an AccessKit tree for every window. `vorkspace_macos::accessibility` reads the macOS Reduce Motion setting at launch and on window activation, and speaks through VoiceOver when a session finishes or needs input. Streaming output is not announced token by token; VoiceOver reads the transcript on navigation. `keyboard_reachable` in `vorkspace-ui` makes session tabs, titlebar controls, response actions, and the send button Tab stops. Contrast and text size remain app preferences, not macOS display settings.

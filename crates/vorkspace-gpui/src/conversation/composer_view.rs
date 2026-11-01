@@ -724,8 +724,7 @@ impl Conversation {
                     || (self.follow_ups.state.draft.is_none()
                         && (!self.is_remote() || (!self.busy && !self.stopping)))));
         let accent = primary_action(enabled);
-        div()
-            .id("send-or-stop")
+        vorkspace_ui::theme::keyboard_reachable(div().id("send-or-stop"))
             .debug_selector(|| "send-or-stop".into())
             .role(Role::Button)
             .aria_label(if busy {

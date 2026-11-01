@@ -156,6 +156,7 @@ impl Shell {
         }
         let summary = chat.summary.clone();
         let body = chat.notification_reply_body(cx);
+        vorkspace_macos::accessibility::announce(&format!("{} finished", summary.title));
         self.deliver_session_notice(
             &summary,
             "agentFinished",
@@ -504,6 +505,10 @@ impl Shell {
                 && let Some(view) = self.notification_chat(id, cx)
             {
                 let summary = view.read(cx).summary.clone();
+                vorkspace_macos::accessibility::announce(&format!(
+                    "{} needs your input: {}",
+                    summary.title, input.label
+                ));
                 self.deliver_session_notice(
                     &summary,
                     "agentInput",
@@ -514,6 +519,7 @@ impl Shell {
             }
         }
         for (summary, body) in completed {
+            vorkspace_macos::accessibility::announce(&format!("{} finished", summary.title));
             self.deliver_session_notice(
                 &summary,
                 "agentFinished",

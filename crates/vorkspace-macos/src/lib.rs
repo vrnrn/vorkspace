@@ -1,3 +1,4 @@
+pub mod accessibility;
 pub mod global_hotkey;
 pub mod hang_diagnostics;
 pub mod restart;
