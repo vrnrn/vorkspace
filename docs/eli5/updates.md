@@ -11,3 +11,5 @@ Publishing uses the manually started **Mac release** workflow and its two protec
 Published builds carry their own release notes. Local builds can fetch the matching published notes when you open **What's new**. The app remembers which version you last opened and shows an update notice once when that version changes. Opening a fresh installation does not show an update notice unless the older updater left a matching marker.
 
 See [release preparation](../updates.md).
+
+Updating also replaces the small clipboard helper, so clipboard history starts empty after an update.
