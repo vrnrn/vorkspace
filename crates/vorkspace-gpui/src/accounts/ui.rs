@@ -1,6 +1,6 @@
 use super::masked::masked_text;
 use super::*;
-use crate::settings::widgets::{primary_button, secondary_button};
+use crate::controls::{primary_button, secondary_button};
 use gpui::{
     AnimationExt, AnyElement, App, Div, FontWeight, MouseButton, Role, SharedString, div, px,
 };

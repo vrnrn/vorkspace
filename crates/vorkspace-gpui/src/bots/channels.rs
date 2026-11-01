@@ -27,7 +27,7 @@ struct ChannelLookEditor {
     dragging_grid: bool,
     grid_bounds: AnchorSlot,
     editing_color: Option<EditingChannelColor>,
-    color_picker: Entity<super::color_picker::ColorPicker>,
+    color_picker: Entity<crate::color_picker::ColorPicker>,
     _events: Vec<Subscription>,
 }
 impl EventEmitter<ChannelLookChanged> for ChannelLookEditor {}
@@ -44,7 +44,7 @@ impl ChannelLookEditor {
             field
         });
         let initial_bg = channel.resolved_color();
-        let color_picker = cx.new(|cx| super::color_picker::ColorPicker::new(initial_bg, cx));
+        let color_picker = cx.new(|cx| crate::color_picker::ColorPicker::new(initial_bg, cx));
         let changed = cx.subscribe(&name, |this, _, _: &input::Changed, cx| {
             let next: String = this.name.read(cx).content.trim().chars().take(40).collect();
             if !next.is_empty() {
@@ -57,7 +57,7 @@ impl ChannelLookEditor {
         });
         let picked = cx.subscribe(
             &color_picker,
-            |this, _, event: &super::color_picker::Picked, cx| {
+            |this, _, event: &crate::color_picker::Picked, cx| {
                 match this
                     .editing_color
                     .unwrap_or(EditingChannelColor::Background)
@@ -854,7 +854,7 @@ impl Bots {
         let owner = self.owner.clone();
         let manager = cx.weak_entity();
         window.defer(cx, move |window, cx| {
-            let _ = owner.update(cx, |shell, cx| shell.open_classic_channels(window, cx));
+            owner.open_channels(window, cx);
             let _ = manager.update(cx, |this, cx| {
                 if this.channels.selected.is_some() {
                     this.focus_channel_composer(window, cx);
@@ -1189,8 +1189,7 @@ impl Bots {
                 let id = summary.id;
                 let existing = this
                     .owner
-                    .upgrade()
-                    .and_then(|owner| owner.read(cx).bot_session_entity(id))
+                    .session_entity(id, cx)
                     .filter(|view| view.read(cx).settings.bot.is_none());
                 let view = existing.unwrap_or_else(|| {
                     cx.new(|cx| Conversation::new(summary, this.store.clone(), cx))

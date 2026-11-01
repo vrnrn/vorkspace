@@ -63,7 +63,8 @@ pub(crate) struct ProjectGit {
     pub statuses: StatusMap,
     /// Bumped on every observed change, for views that reread on it.
     pub epoch: u64,
-    pub review_cache: crate::git_tools::review::ReviewCache,
+    /// Owned by the review surface, which outlives none of its project's tabs.
+    pub review_cache: Option<Box<dyn std::any::Any>>,
     versions: Option<HashMap<String, scm::FileDiffVersion>>,
     remembered: HashMap<String, (u64, DiffIndex)>,
     clock: u64,
@@ -83,7 +84,7 @@ impl ProjectGit {
             stats: None,
             statuses: StatusMap::default(),
             epoch: 0,
-            review_cache: Default::default(),
+            review_cache: None,
             versions: None,
             remembered: HashMap::new(),
             clock: 0,

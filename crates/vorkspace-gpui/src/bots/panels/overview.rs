@@ -96,7 +96,7 @@ impl Bots {
                 )
                 .on_click(cx.listener(move |this, _, _, cx| this.select_overview(tab, cx)))
             }))
-            .child(crate::shell::titlebar_drag_area().flex_1().min_w_0())
+            .child(crate::popover::titlebar_drag_area().flex_1().min_w_0())
             .when(self.overview_tab == OverviewTab::Habits, |d| {
                 d.child(
                     icon_button("bot-new-habit", "New habit", "plus")
@@ -188,11 +188,7 @@ impl Bots {
             cx,
         );
         let query = filter.read(cx).content.to_lowercase();
-        let views = self
-            .owner
-            .upgrade()
-            .map(|owner| owner.read(cx).bot_session_views(cx))
-            .unwrap_or_default();
+        let views = self.owner.session_views(cx);
         let launches: Vec<_> = bot
             .launches
             .iter()
@@ -223,7 +219,7 @@ impl Bots {
             .h(px(36.))
             .px_2()
             .border_b_1()
-            .border_color(crate::right_panel::stroke())
+            .border_color(crate::panel_kit::stroke())
             .flex()
             .items_center()
             .gap_2()
@@ -424,9 +420,7 @@ impl Bots {
                 })
                 .into_any_element(),
             Route::Session(id) => {
-                let view = self.owner.upgrade().and_then(|owner| {
-                    owner.update(cx, |owner, cx| owner.bot_ensure_session(id, cx))
-                });
+                let view = self.owner.ensure_session(id, cx);
                 if let Some(view) = &view {
                     view.update(cx, |v, cx| v.load(cx));
                 }

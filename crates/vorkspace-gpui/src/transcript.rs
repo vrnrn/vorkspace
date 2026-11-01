@@ -1,4 +1,5 @@
 pub(crate) mod attachments;
+pub(crate) mod bot_cards;
 mod bot_rows;
 #[cfg(test)]
 mod bot_tests;
@@ -27,7 +28,7 @@ mod outline;
 mod peers;
 pub(crate) use peers::peer_looks;
 pub(crate) mod phases;
-mod remote_plans;
+pub(crate) mod remote_plans;
 pub(crate) mod selection;
 pub(crate) mod tasks;
 mod tools;
@@ -128,7 +129,7 @@ struct Message {
 }
 #[derive(Clone)]
 enum Body {
-    RemotePlan(crate::conversation::remote_plans::Plan),
+    RemotePlan(remote_plans::Plan),
     OlderHistory,
     SavedDraft,
     Markdown(MarkdownRow),
@@ -417,9 +418,9 @@ pub(crate) struct TranscriptView {
     bot: bool,
     bot_groups: std::cell::RefCell<HashMap<usize, usize>>,
     /// The Bot's look configuration and name, which sign its turns.
-    bot_look: Option<(crate::bots::avatar::BotLookConfig, SharedString)>,
+    bot_look: Option<(crate::avatar::BotLookConfig, SharedString)>,
     /// Roster looks by unique Bot name, for avatars on peer-message senders.
-    peer_looks: HashMap<String, crate::bots::avatar::BotLookConfig>,
+    peer_looks: HashMap<String, crate::avatar::BotLookConfig>,
     /// The turn whose actions show, and since when, as `.turn-actions-hover`.
     hovered_turn: Option<(usize, Instant)>,
     /// The prompt message whose copy action shows.
@@ -554,15 +555,11 @@ impl TranscriptView {
     #[cfg(test)]
     pub(crate) fn bot_mode(&mut self, mascot: &str, color: u32, name: &str) {
         self.bot_mode_with_look(
-            crate::bots::avatar::BotLookConfig::from_legacy(mascot, color),
+            crate::avatar::BotLookConfig::from_legacy(mascot, color),
             name,
         );
     }
-    pub(crate) fn bot_mode_with_look(
-        &mut self,
-        look: crate::bots::avatar::BotLookConfig,
-        name: &str,
-    ) {
+    pub(crate) fn bot_mode_with_look(&mut self, look: crate::avatar::BotLookConfig, name: &str) {
         self.bot_look = Some((look, name.to_owned().into()));
         if self.bot {
             return;
@@ -863,7 +860,7 @@ impl TranscriptView {
     }
     pub(crate) fn apply_preferences(
         &mut self,
-        p: &crate::settings::Preferences,
+        p: &vorkspace_ui::preferences::Preferences,
         cx: &mut Context<Self>,
     ) {
         let chat = p.transcript_layout == "chat" || self.bot;

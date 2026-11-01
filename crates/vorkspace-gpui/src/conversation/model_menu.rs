@@ -213,8 +213,8 @@ impl Conversation {
             .retain(|key, _| !is_effort_key(key));
         self.settings.effort = (!effort.is_empty()).then(|| effort.to_owned());
         let provider = self.summary.provider.clone();
-        if cx.has_global::<crate::settings::Preferences>() {
-            cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+        if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
+            cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
                 if effort.is_empty() {
                     prefs.provider_efforts.remove(&provider);
                 } else {
@@ -489,7 +489,7 @@ impl Conversation {
 
         if kind == ComposerMenu::Model
             && cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_some_and(|p| p.model_controls == "beside")
         {
             self.toggle_bot_models(window, cx);
@@ -652,7 +652,7 @@ impl Conversation {
                 let (_, model, _, _) = self.menu_items(ComposerMenu::Model, events, window, cx);
                 // Combined mode already contains model options; beside mode must expose them here too.
                 if cx
-                    .try_global::<crate::settings::Preferences>()
+                    .try_global::<vorkspace_ui::preferences::Preferences>()
                     .is_some_and(|p| p.model_controls == "beside")
                 {
                     items.extend(self.bot_model_options());
@@ -826,7 +826,7 @@ impl Conversation {
             ComposerMenu::Model => {
                 let list = cx.new(|cx| {
                     let hidden = cx
-                        .try_global::<crate::settings::Preferences>()
+                        .try_global::<vorkspace_ui::preferences::Preferences>()
                         .map(|p| p.hidden_providers.clone())
                         .unwrap_or_default();
                     ModelList::new_for(
@@ -850,7 +850,7 @@ impl Conversation {
                 ));
                 let focus = list.read(cx).search_focus(cx);
                 let mut items = if cx
-                    .try_global::<crate::settings::Preferences>()
+                    .try_global::<vorkspace_ui::preferences::Preferences>()
                     .is_none_or(|p| p.model_controls != "beside")
                 {
                     self.bot_model_options()
@@ -925,11 +925,11 @@ impl Conversation {
         let provider = Kind::from_id(&self.summary.provider);
         let current = (provider, self.model.clone());
         let hidden = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .map(|p| p.hidden_providers.clone())
             .unwrap_or_default();
         let mut choices: Vec<(Kind, Option<String>)> = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .into_iter()
             .flat_map(|p| &p.recent_models)
             .filter_map(|choice| {
@@ -937,7 +937,7 @@ impl Conversation {
                 choice.model.as_ref()?;
                 let selected = (kind, choice.model.clone()) == current;
                 let model_hidden = cx
-                    .try_global::<crate::settings::Preferences>()
+                    .try_global::<vorkspace_ui::preferences::Preferences>()
                     .is_some_and(|p| p.model_hidden(kind.id(), choice.model.as_deref().unwrap()));
                 ((kind == provider || !hidden.iter().any(|id| id == kind.id()))
                     && (selected || !model_hidden))

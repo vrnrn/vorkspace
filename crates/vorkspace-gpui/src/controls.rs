@@ -137,3 +137,91 @@ impl Render for Tooltip {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// SecondaryButton.tsx.
+pub(crate) fn secondary_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    danger: bool,
+    disabled: bool,
+) -> Stateful<Div> {
+    button_base(id, label, !disabled).map(|d| {
+        if disabled {
+            d.opacity(0.4)
+                .text_color(if danger { red(1.) } else { content(0.7) })
+        } else if danger {
+            d.cursor_pointer()
+                .text_color(red(1.))
+                .hover(|s| s.border_color(red(0.4)).bg(red(0.1)))
+        } else {
+            d.cursor_pointer()
+                .text_color(content(0.7))
+                .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+        }
+    })
+}
+
+fn button_base(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    enabled: bool,
+) -> Stateful<Div> {
+    button(id, label, enabled)
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(6.))
+        .rounded_md()
+        .border_1()
+        .border_color(content(0.1))
+        .px(px(10.))
+        .py_1()
+        .text_size(px(12.))
+        .line_height(px(16.))
+        .whitespace_nowrap()
+}
+
+pub(crate) fn primary_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    disabled: bool,
+) -> Stateful<Div> {
+    let mut ink = shell_fill();
+    ink.a = 1.;
+    button_base(id, label, !disabled)
+        .border_0()
+        .bg(content(1.))
+        .text_color(ink)
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .map(|d| {
+            if disabled {
+                d.opacity(0.4)
+            } else {
+                d.cursor_pointer()
+                    .hover(move |s| s.bg(content(0.85)).text_color(ink))
+            }
+        })
+}
+
+pub(crate) fn red(alpha: f32) -> gpui::Hsla {
+    vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Danger, alpha)
+}
+
+pub(crate) fn bot_button(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+) -> Stateful<Div> {
+    let label = label.into();
+    crate::controls::button(id, label.clone(), true)
+        .cursor(gpui::CursorStyle::Arrow)
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .px_2p5()
+        .py_1p5()
+        .rounded_md()
+        .text_size(px(12.))
+        .text_color(content(0.8))
+        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+        .child(label)
+}

@@ -165,7 +165,7 @@ impl Shell {
                         div()
                             .size_full()
                             .border_b_1()
-                            .border_color(crate::right_panel::stroke()),
+                            .border_color(crate::panel_kit::stroke()),
                     )
                     .into_any_element()
             } else {
@@ -177,7 +177,7 @@ impl Shell {
                     .h_full()
                     .flex_shrink_0()
                     .when(classic, |d| {
-                        d.border_b_1().border_color(crate::right_panel::stroke())
+                        d.border_b_1().border_color(crate::panel_kit::stroke())
                     })
                     .into_any_element()
             } else {
@@ -198,7 +198,7 @@ impl Shell {
                     .h_full()
                     .flex_shrink_0()
                     .border_b_1()
-                    .border_color(crate::right_panel::stroke())
+                    .border_color(crate::panel_kit::stroke())
                     .into_any_element()
             } else {
                 self.panel_toggle(window, cx)
@@ -360,7 +360,7 @@ impl Shell {
                                 .top(px((TITLE_BAR_HEIGHT - 16.) / 2.))
                                 .w(px(1.))
                                 .h(px(16.))
-                                .bg(crate::right_panel::stroke())
+                                .bg(crate::panel_kit::stroke())
                                 .when(self.right_resize.is_some(), |d| d.bg(content(0.16)))
                                 .group_hover("resize-handle", |s| s.bg(content(0.16))),
                         ),
@@ -371,7 +371,7 @@ impl Shell {
     pub(super) fn project_diff_stat(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let width = self.diff_stat_room(cx);
         (width > 0.).then(|| {
-            crate::right_panel::diff_stat(self.git.read(cx).stats.as_ref(), width)
+            crate::panel_kit::diff_stat(self.git.read(cx).stats.as_ref(), width)
                 .when(!self.app_view_open(), |d| {
                     d.cursor(CursorStyle::Arrow)
                         .hover(|s| s.bg(content(0.1)))
@@ -380,7 +380,7 @@ impl Shell {
                             this.ensure_right_panel(window, cx);
                             let panel = this.right_panel.clone().unwrap();
                             let previous = panel.read(cx).tab();
-                            let changes = crate::right_panel::RightTab::Changes;
+                            let changes = crate::panel_kit::RightTab::Changes;
                             if previous != changes {
                                 this.corner_reveal =
                                     Some(crate::project_tabs::TabReveal::new(changes, previous));
@@ -407,7 +407,7 @@ impl Shell {
         if self.bot_active(cx) || !self.git.read(cx).available() {
             return 0.;
         }
-        let natural = crate::right_panel::diff_stat_width(self.git.read(cx).stats.as_ref());
+        let natural = crate::panel_kit::diff_stat_width(self.git.read(cx).stats.as_ref());
         if !self.workspace.right_panel_open || self.app_view_open() {
             return natural;
         }

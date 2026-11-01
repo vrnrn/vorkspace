@@ -27,8 +27,8 @@ pub(crate) fn run() {
                 },
                 move |window, cx| {
                     let voice = cx.new(|_| {
-                        let prefs = crate::settings::Preferences { vox_enabled: true, ..Default::default() };
-                        let mut voice = Vox::new(WeakEntity::new_invalid(), store, &prefs, "/preview".into());
+                        let prefs = vorkspace_ui::preferences::Preferences { vox_enabled: true, ..Default::default() };
+                        let mut voice = Vox::new(std::rc::Rc::new(NoHost), store, &prefs, "/preview".into());
                         voice.notch.open(geometry);
                         voice.face = "o-o".into();
                         voice.state = "connecting".into();

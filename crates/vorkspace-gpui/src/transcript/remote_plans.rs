@@ -1,7 +1,83 @@
 //! The original PlanPreview actions, backed by host-owned plan identities.
 use super::*;
-use crate::conversation::remote_plans::Plan;
 use gpui::AnyElement;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub(crate) struct Plan {
+    pub id: String,
+    pub text: String,
+    #[serde(default)]
+    pub streaming: bool,
+    #[serde(default)]
+    pub status: String,
+}
+impl Plan {
+    pub(crate) fn can_build(&self, busy: bool) -> bool {
+        !busy
+            && !self.streaming
+            && !self.text.trim().is_empty()
+            && !matches!(self.status.as_str(), "streaming" | "building" | "built")
+    }
+    pub(crate) fn build_label(&self) -> &'static str {
+        match self.status.as_str() {
+            "building" => "Building…",
+            "built" => "Built",
+            _ => "Build",
+        }
+    }
+    pub(crate) fn title(&self) -> String {
+        self.text
+            .lines()
+            .find_map(|line| {
+                let line = line.trim();
+                if line.starts_with('#') {
+                    Some(line.trim_start_matches('#').trim().to_owned())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                self.text
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty() && !line.starts_with("```") && *line != "---")
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "Plan".into())
+            .chars()
+            .take(80)
+            .collect()
+    }
+    pub(crate) fn summary(&self) -> String {
+        let title = self.title();
+        let text = self
+            .text
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                !line.is_empty()
+                    && !line.starts_with('#')
+                    && !line.starts_with("```")
+                    && *line != title
+            })
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if text.chars().count() > 140 {
+            format!("{}…", text.chars().take(139).collect::<String>())
+        } else {
+            text
+        }
+    }
+    pub(crate) fn command(&self) -> Value {
+        json!({"type":"send","intent":"build","planBlockId":self.id})
+    }
+    pub(crate) fn prompt(&self) -> String {
+        format!("Build the approved plan:\n\n{}", self.text)
+    }
+}
 
 impl TranscriptView {
     pub(super) fn remote_plan_card(&self, plan: &Plan, cx: &mut Context<Self>) -> AnyElement {
@@ -62,7 +138,7 @@ impl TranscriptView {
                             .justify_end()
                             .gap_2()
                             .child(
-                                crate::settings::widgets::secondary_button(
+                                crate::controls::secondary_button(
                                     SharedString::from(format!("open-plan-{}", plan.id)),
                                     "Open plan",
                                     false,
@@ -80,7 +156,7 @@ impl TranscriptView {
                                 )),
                             )
                             .child(
-                                crate::settings::widgets::secondary_button(
+                                crate::controls::secondary_button(
                                     SharedString::from(format!("build-plan-{}", plan.id)),
                                     "Build approved plan",
                                     false,

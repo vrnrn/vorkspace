@@ -169,9 +169,12 @@ impl TranscriptView {
             .py(px(2.))
             .pl_2()
             .pr_3()
-            .child(div().size(px(14.)).flex_shrink_0().child(
-                crate::bots::avatar::avatar_with_look(look, "idle", 14., true),
-            ))
+            .child(
+                div()
+                    .size(px(14.))
+                    .flex_shrink_0()
+                    .child(crate::avatar::avatar_with_look(look, "idle", 14., true)),
+            )
             .child(
                 div()
                     .min_w_0()

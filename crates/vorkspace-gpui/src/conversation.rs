@@ -134,6 +134,28 @@ pub(crate) struct SessionActivityChanged;
 pub(crate) struct ChooseFolder(pub(crate) AnchorSlot);
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::git_tools::review::ReviewTab);
+/// A minion session's context and app environment.
+pub(crate) type MinionAttachment = (
+    vorkspace_core::agent::MinionContext,
+    std::collections::HashMap<String, String>,
+);
+/// Minion sessions by ID, shared with the shell so it can attach them to
+/// their views without reading `Bots`, which may be mid-update.
+pub(crate) type MinionRegistry =
+    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<i64, MinionAttachment>>>;
+
+/// UI admission follows durable identity, including retired members and
+/// disabled Minions. Shared snapshots avoid reborrowing Bots from a chat.
+#[derive(Clone)]
+pub(crate) struct TeamHistory {
+    pub actor: vorkspace_core::bot::Bot,
+    pub parent: Option<vorkspace_core::bot::Bot>,
+}
+pub(crate) type TeamHistories =
+    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<i64, TeamHistory>>>;
+pub(crate) type BotConversations =
+    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<i64, gpui::WeakEntity<Conversation>>>>;
+
 pub(crate) struct Conversation {
     editing_last_turn: edit_last_turn::State,
     btw: Option<Entity<btw::Btw>>,
@@ -169,10 +191,10 @@ pub(crate) struct Conversation {
     /// Bots' minion sessions. A minion's turns take its parent's context
     /// and capability from here as each turn starts, so turning Minions on
     /// or off reaches sessions that are already open. Never saved.
-    pub(crate) minions: Option<crate::bots::MinionRegistry>,
-    pub(crate) team_histories: Option<crate::bots::TeamHistories>,
+    pub(crate) minions: Option<MinionRegistry>,
+    pub(crate) team_histories: Option<TeamHistories>,
     team_dispatch: bool,
-    team_look: Option<(crate::bots::avatar::BotLookConfig, String)>,
+    team_look: Option<(crate::avatar::BotLookConfig, String)>,
     planning_orchestration: bool,
     pub(crate) orchestration_plan: Option<vorkspace_core::orchestration::Plan>,
     orchestration_error: Option<String>,
@@ -613,14 +635,14 @@ impl Conversation {}
 
 /// The access mode the last composer pick left as the default for new chats.
 pub(crate) fn default_access(cx: &gpui::App) -> AccessMode {
-    cx.try_global::<crate::settings::Preferences>()
+    cx.try_global::<vorkspace_ui::preferences::Preferences>()
         .and_then(|prefs| prefs.default_access.as_deref())
         .map(AccessMode::from_id)
         .unwrap_or_default()
 }
 pub(crate) fn remember_access(mode: AccessMode, cx: &mut gpui::App) {
-    if cx.has_global::<crate::settings::Preferences>() {
-        cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+    if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
+        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
             prefs.default_access = Some(mode.id().into());
         });
     }
@@ -632,7 +654,7 @@ fn is_effort_key(key: &str) -> bool {
     )
 }
 pub(crate) fn preferred_effort(provider: &str, cx: &gpui::App) -> Option<String> {
-    cx.try_global::<crate::settings::Preferences>()
+    cx.try_global::<vorkspace_ui::preferences::Preferences>()
         .and_then(|prefs| prefs.provider_efforts.get(provider).cloned())
 }
 fn effort_name(value: &str) -> String {
@@ -690,11 +712,13 @@ impl Render for Conversation {
         }
         self.attachment_drop_target("session-chat", cx)
             .relative()
-            .capture_action(cx.listener(|this, _: &crate::shell::DismissMenu, _, cx| {
-                if this.close_remote_plan(cx) {
-                    cx.stop_propagation();
-                }
-            }))
+            .capture_action(
+                cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, _, cx| {
+                    if this.close_remote_plan(cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .flex()
             .flex_col()
             .size_full()

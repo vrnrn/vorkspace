@@ -268,12 +268,12 @@ fn closed_diff_cache_is_scoped_and_bounded(cx: &mut gpui::TestAppContext) {
         for i in 0..=MAX_CACHED_SOURCES {
             let mut source = pane.source(tab(i.to_string()), cx);
             source.files = Some(Vec::new());
-            git.update(cx, |git, _| git.review_cache.remember(&source));
+            git.update(cx, |git, _| review_cache(git).remember(&source));
         }
         git.update(cx, |git, _| {
-            assert_eq!(git.review_cache.sources.len(), MAX_CACHED_SOURCES);
-            assert!(git.review_cache.take(&tab("0".into())).is_none());
-            assert!(git.review_cache.take(&tab("1".into())).is_some());
+            assert_eq!(review_cache(git).sources.len(), MAX_CACHED_SOURCES);
+            assert!(review_cache(git).take(&tab("0".into())).is_none());
+            assert!(review_cache(git).take(&tab("1".into())).is_some());
             assert!(!ReviewCache::matches(
                 &ReviewTab::Changes {
                     cwd: "/r".into(),
@@ -314,8 +314,8 @@ fn closed_diff_cache_is_scoped_and_bounded(cx: &mut gpui::TestAppContext) {
             }),
         );
         git.update(cx, |git, _| {
-            git.review_cache.remember(&source);
-            assert!(git.review_cache.take(&source.tab).is_none());
+            review_cache(git).remember(&source);
+            assert!(review_cache(git).take(&source.tab).is_none());
         });
     });
 }
@@ -325,7 +325,7 @@ fn file_reviews_are_editable_and_view_switches_preserve_the_unsaved_document(
 ) {
     use gpui::EntityInputHandler;
     let repo = Repo::new();
-    cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+    cx.update(|cx| cx.set_global(vorkspace_ui::preferences::Preferences::default()));
     let cwd = repo.cwd();
     let path = repo.0.join("a.txt").to_string_lossy().into_owned();
     let window = cx.update(|cx| {
@@ -361,7 +361,9 @@ fn file_reviews_are_editable_and_view_switches_preserve_the_unsaved_document(
         .unwrap();
     cx.run_until_parked();
     cx.update(|cx| {
-        cx.update_global::<crate::settings::Preferences, _>(|p, _| p.diff_view = "unified".into())
+        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|p, _| {
+            p.diff_view = "unified".into()
+        })
     });
     cx.run_until_parked();
     window
@@ -371,7 +373,9 @@ fn file_reviews_are_editable_and_view_switches_preserve_the_unsaved_document(
         })
         .unwrap();
     cx.update(|cx| {
-        cx.update_global::<crate::settings::Preferences, _>(|p, _| p.diff_view = "split".into())
+        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|p, _| {
+            p.diff_view = "split".into()
+        })
     });
     cx.run_until_parked();
     window

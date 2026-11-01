@@ -390,7 +390,7 @@ impl Completion {
             return;
         }
         let disabled = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .map(|p| p.disabled_skill_paths.clone())
             .unwrap_or_default();
         if self.disabled_paths != disabled {
@@ -986,7 +986,7 @@ impl Render for Completion {
                                                 || format!("@{}", bot.id) == choice.insertion
                                         })
                                     }) {
-                                        crate::bots::avatar::avatar(
+                                        crate::avatar::avatar(
                                             &bot.mascot,
                                             bot.color,
                                             "idle",

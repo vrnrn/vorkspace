@@ -24,7 +24,7 @@ fn combined_picker_paints_effort_and_beside_mode_moves_it_to_its_own_control(
                 tiers: Vec::new(),
                 controls: Vec::new(),
             }];
-            cx.set_global(crate::settings::Preferences::default());
+            cx.set_global(vorkspace_ui::preferences::Preferences::default());
             cx.notify();
         })
         .unwrap();
@@ -39,7 +39,7 @@ fn combined_picker_paints_effort_and_beside_mode_moves_it_to_its_own_control(
     assert!(effort.left() > model.left() && effort.right() < model.right());
     window
         .update(visual, |_, _, cx| {
-            cx.global_mut::<crate::settings::Preferences>()
+            cx.global_mut::<vorkspace_ui::preferences::Preferences>()
                 .model_controls = "beside".into();
             cx.notify();
         })
@@ -260,7 +260,7 @@ fn picked_access_becomes_the_default_for_new_chats(cx: &mut TestAppContext) {
     let first = store.create("codex", "/work").unwrap();
     let second = store.create("codex", "/work").unwrap();
     let store = Arc::new(Mutex::new(store));
-    cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+    cx.update(|cx| cx.set_global(vorkspace_ui::preferences::Preferences::default()));
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
             cx.new(|cx| Conversation::new(first, store.clone(), cx))
@@ -275,7 +275,7 @@ fn picked_access_becomes_the_default_for_new_chats(cx: &mut TestAppContext) {
         .unwrap();
     cx.update(|cx| {
         assert_eq!(
-            cx.global::<crate::settings::Preferences>()
+            cx.global::<vorkspace_ui::preferences::Preferences>()
                 .default_access
                 .as_deref(),
             Some("auto")
@@ -287,7 +287,7 @@ fn picked_access_becomes_the_default_for_new_chats(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn effort_choices_survive_provider_switches_and_new_projects(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+    cx.update(|cx| cx.set_global(vorkspace_ui::preferences::Preferences::default()));
     let window = conversation(cx);
     window
         .update(cx, |c, _, cx| {
@@ -303,8 +303,10 @@ fn effort_choices_survive_provider_switches_and_new_projects(cx: &mut TestAppCon
             assert_eq!(c.settings.effort.as_deref(), Some("xhigh"));
             c.menu_choice("access:auto", cx);
             let encoded =
-                serde_json::to_string(cx.global::<crate::settings::Preferences>()).unwrap();
-            let restored: crate::settings::Preferences = serde_json::from_str(&encoded).unwrap();
+                serde_json::to_string(cx.global::<vorkspace_ui::preferences::Preferences>())
+                    .unwrap();
+            let restored: vorkspace_ui::preferences::Preferences =
+                serde_json::from_str(&encoded).unwrap();
             assert_eq!(restored.provider_efforts["claude"], "medium");
             assert_eq!(restored.provider_efforts["codex"], "xhigh");
             assert_eq!(restored.default_access.as_deref(), Some("auto"));
@@ -643,7 +645,7 @@ fn recent_models_open_on_right_click_and_pick_by_keyboard(cx: &mut TestAppContex
     window
         .update(cx, |c, _, cx| {
             c.model = Some("opus".into());
-            let prefs = crate::settings::Preferences {
+            let prefs = vorkspace_ui::preferences::Preferences {
                 recent_models: [
                     ("codex", Some("gpt-6.1-sol")),
                     ("claude", Some("opus")),
@@ -651,14 +653,14 @@ fn recent_models_open_on_right_click_and_pick_by_keyboard(cx: &mut TestAppContex
                     ("codex", Some("gpt-6-luna")),
                 ]
                 .into_iter()
-                .map(|(provider, model)| crate::settings::ModelChoice {
+                .map(|(provider, model)| vorkspace_ui::preferences::ModelChoice {
                     provider: provider.into(),
                     model: model.map(Into::into),
                 })
                 .collect(),
                 hidden_models: vec![
-                    crate::settings::model_key("codex", "gpt-6.1-sol"),
-                    crate::settings::model_key("claude", "opus"),
+                    vorkspace_ui::preferences::model_key("codex", "gpt-6.1-sol"),
+                    vorkspace_ui::preferences::model_key("claude", "opus"),
                 ],
                 ..Default::default()
             };
@@ -709,7 +711,9 @@ fn recent_models_open_on_right_click_and_pick_by_keyboard(cx: &mut TestAppContex
             assert!(c.menu.is_none());
             assert_eq!(c.summary.provider, "codex");
             assert_eq!(c.model.as_deref(), Some("gpt-6-luna"));
-            let recent = &cx.global::<crate::settings::Preferences>().recent_models[0];
+            let recent = &cx
+                .global::<vorkspace_ui::preferences::Preferences>()
+                .recent_models[0];
             assert_eq!(recent.model.as_deref(), Some("gpt-6-luna"));
             // App: Switch Model toggles the same menu.
         })

@@ -11,7 +11,7 @@ pub(super) struct ChatState {
     /// Standalone Bot chats opt into identity decoration. Channels keep None;
     /// Some(false) retains the header but freezes it beneath a host modal.
     pub(super) header_animation: Option<bool>,
-    pub(super) header: Option<Entity<crate::bots::ChatHeader>>,
+    pub(super) header: Option<Entity<crate::bot_header::ChatHeader>>,
     pub(super) pending: Vec<Message>,
     pub(super) card_versions: std::collections::HashMap<String, u64>,
     /// The next message waits for the current reply instead of steering it.
@@ -470,7 +470,7 @@ impl Conversation {
             || self.settings.pending_provider_switch.is_some()
             || self.is_remote()
             || !cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_none_or(|p| p.follow_up == "steer")
             || !Kind::from_id(&self.summary.provider).can_steer()
             || self
@@ -837,7 +837,7 @@ impl Conversation {
                 // Conversation owns the transcript/composer boundary. Keep the
                 // floating identity inside that viewport, including when a
                 // draft or attention control makes the composer grow.
-                crate::bots::chat_surface(
+                crate::bot_header::chat_surface(
                     body,
                     &bot,
                     self.bot_status(),
@@ -973,7 +973,7 @@ impl Conversation {
         let provider = Kind::from_id(&self.summary.provider);
         let list = cx.new(|cx| {
             let hidden = cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .map(|p| p.hidden_providers.clone())
                 .unwrap_or_default();
             ModelList::new_for(

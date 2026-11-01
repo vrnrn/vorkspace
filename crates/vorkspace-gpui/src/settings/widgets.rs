@@ -1,6 +1,7 @@
 //! SettingsView.tsx's building blocks: PageHeader, Group, Row, Toggle,
 //! Segmented, Slider, Select and SecondaryButton, at their Tailwind metrics.
 use super::{SettingsView, SliderKind};
+pub(crate) use crate::controls::{primary_button, secondary_button};
 use crate::popover::{Align, Anchor, AnchorSlot, Side, popover};
 use gpui::{
     AnyElement, Context, Div, ElementId, FontWeight, Hsla, MouseButton, MouseDownEvent, Role,
@@ -11,9 +12,7 @@ use vorkspace_ui::theme::*;
 /// `text-[12px] leading-relaxed` and `text-[13px]` line boxes.
 const RELAXED_12: f32 = 19.5;
 
-pub(super) fn red(alpha: f32) -> Hsla {
-    status(StatusColor::Danger, alpha)
-}
+pub(super) use crate::controls::red;
 pub(super) fn accent(alpha: f32) -> Hsla {
     let mut color: Hsla = accent_color();
     color.a = alpha;
@@ -56,49 +55,6 @@ pub(super) fn note(text: impl Into<SharedString>) -> AnyElement {
         .into_any_element()
 }
 
-/// SecondaryButton.tsx.
-pub(crate) fn secondary_button(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    danger: bool,
-    disabled: bool,
-) -> Stateful<Div> {
-    button_base(id, label, !disabled).map(|d| {
-        if disabled {
-            d.opacity(0.4)
-                .text_color(if danger { red(1.) } else { content(0.7) })
-        } else if danger {
-            d.cursor_pointer()
-                .text_color(red(1.))
-                .hover(|s| s.border_color(red(0.4)).bg(red(0.1)))
-        } else {
-            d.cursor_pointer()
-                .text_color(content(0.7))
-                .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
-        }
-    })
-}
-
-fn button_base(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    enabled: bool,
-) -> Stateful<Div> {
-    crate::controls::button(id, label, enabled)
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(6.))
-        .rounded_md()
-        .border_1()
-        .border_color(content(0.1))
-        .px(px(10.))
-        .py_1()
-        .text_size(px(12.))
-        .line_height(px(16.))
-        .whitespace_nowrap()
-}
-
 /// Borderless, square icon actions used by SkillsPage and BotRow.
 pub(super) fn icon_action(
     id: impl Into<ElementId>,
@@ -132,28 +88,6 @@ pub(super) fn icon_action(
                     i.group_hover("settings-icon-action", |s| s.text_color(content(1.)))
                 }),
         )
-}
-
-pub(crate) fn primary_button(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    disabled: bool,
-) -> Stateful<Div> {
-    let mut ink = shell_fill();
-    ink.a = 1.;
-    button_base(id, label, !disabled)
-        .border_0()
-        .bg(content(1.))
-        .text_color(ink)
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .map(|d| {
-            if disabled {
-                d.opacity(0.4)
-            } else {
-                d.cursor_pointer()
-                    .hover(move |s| s.bg(content(0.85)).text_color(ink))
-            }
-        })
 }
 
 impl SettingsView {

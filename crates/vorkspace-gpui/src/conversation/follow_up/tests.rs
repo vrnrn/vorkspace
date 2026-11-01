@@ -8,7 +8,7 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     let summary = store.create("codex", "/tmp").unwrap();
     cx.update(|cx| {
         input::bind(cx);
-        cx.set_global(crate::settings::Preferences {
+        cx.set_global(vorkspace_ui::preferences::Preferences {
             follow_up: "queue".into(),
             ..Default::default()
         });
@@ -164,7 +164,7 @@ fn voice_send_is_durable_before_acceptance_and_never_consumes_drafts(cx: &mut Te
     let window = conversation(cx);
     cx.run_until_parked();
     cx.update(|cx| {
-        let prefs = crate::settings::Preferences {
+        let prefs = vorkspace_ui::preferences::Preferences {
             follow_up: "queue".into(),
             ..Default::default()
         };
@@ -296,7 +296,7 @@ fn stop_pauses_the_queue_and_retires_its_controls(cx: &mut TestAppContext) {
 fn a_rejected_steer_keeps_its_text_for_retry(cx: &mut TestAppContext) {
     let window = conversation(cx);
     cx.update(|cx| {
-        cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
             prefs.follow_up = "steer".into()
         });
     });
@@ -459,7 +459,7 @@ fn draft_commands_save_without_starting_an_agent_and_remove_restores_a_blank(
 fn sending_a_saved_draft_preserves_the_new_composer(cx: &mut TestAppContext) {
     let window = conversation(cx);
     cx.update(|cx| {
-        cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
             prefs.follow_up = "steer".into()
         })
     });

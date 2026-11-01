@@ -170,7 +170,7 @@ impl SettingsView {
                     .child("Version")
                     .child(
                         div()
-                            .font_family(crate::markdown::FIXED_FONT)
+                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
                             .text_size(px(12.))
                             .font_weight(FontWeight::NORMAL)
                             .text_color(content(0.45))

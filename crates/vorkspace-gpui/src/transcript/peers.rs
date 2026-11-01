@@ -1,7 +1,7 @@
 //! Peer provenance is derived from saved internal prompts, independently of
 //! delivery cursors and the provider's conversation state.
 use super::*;
-use crate::bots::avatar::BotLookConfig;
+use crate::avatar::BotLookConfig;
 use std::collections::HashMap;
 use vorkspace_core::bot::{
     Bot,
@@ -87,9 +87,7 @@ impl TranscriptView {
                         .debug_selector(|| "bot-peer-chip-avatar".into())
                         .size(px(14.))
                         .flex_shrink_0()
-                        .child(crate::bots::avatar::avatar_with_look(
-                            look, "idle", 14., true,
-                        )),
+                        .child(crate::avatar::avatar_with_look(look, "idle", 14., true)),
                 )
             })
             .when(!self.peer_looks.contains_key(name.trim()), |d| d.pl_3())

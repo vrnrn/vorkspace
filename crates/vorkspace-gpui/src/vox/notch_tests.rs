@@ -6,12 +6,12 @@ fn voice(_cx: &mut gpui::Context<Vox>) -> Vox {
     let store = Arc::new(std::sync::Mutex::new(
         vorkspace_core::store::Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap(),
     ));
-    let prefs = crate::settings::Preferences {
+    let prefs = vorkspace_ui::preferences::Preferences {
         vox_enabled: true,
         vox_silent: true,
         ..Default::default()
     };
-    let mut voice = Vox::new(WeakEntity::new_invalid(), store, &prefs, "/project".into());
+    let mut voice = Vox::new(std::rc::Rc::new(NoHost), store, &prefs, "/project".into());
     voice.state = "live".into();
     voice.face = "o-o".into();
     voice.active.store(true, Ordering::Relaxed);

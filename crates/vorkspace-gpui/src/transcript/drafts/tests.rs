@@ -114,7 +114,7 @@ fn restored_drafts_do_not_replay_submission_or_override_the_anchor_preference(
         assert!(view.prompt_rise.is_none());
         view.set_saved_draft(None, cx);
         view.apply_preferences(
-            &crate::settings::Preferences {
+            &vorkspace_ui::preferences::Preferences {
                 anchor_prompts: false,
                 ..Default::default()
             },

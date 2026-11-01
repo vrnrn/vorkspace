@@ -6,7 +6,7 @@ fn existing_field_and_composer_reink_after_theme_changes_without_losing_text(
     cx: &mut TestAppContext,
 ) {
     cx.update(|cx| {
-        let mut preferences = crate::settings::Preferences::default();
+        let mut preferences = vorkspace_ui::preferences::Preferences::default();
         vorkspace_ui::theme::configure(&preferences, false, true);
         let field = cx.new(|cx| {
             Input::field(

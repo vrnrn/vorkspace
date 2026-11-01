@@ -5,8 +5,8 @@
 //! the UI thread, one file at a time, only for files that are on screen.
 use crate::{
     input::{self, Input},
+    panel_kit::{format_integer, stroke, tabular},
     popover::{AnchorSlot, Side, popover},
-    right_panel::{format_integer, stroke, tabular},
     syntax::{HighlightRequest, HighlightSpan},
 };
 use gpui::{
@@ -44,7 +44,7 @@ enum Layout {
 impl Layout {
     fn current(cx: &App) -> Self {
         if cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_some_and(|p| p.diff_view == "split")
         {
             Self::Split
@@ -424,16 +424,18 @@ impl DiffView {
         });
         Self {
             layout: Layout::current(cx),
-            _preferences: cx.observe_global::<crate::settings::Preferences>(|this, cx| {
-                let layout = Layout::current(cx);
-                if layout != this.layout {
-                    this.layout = layout;
-                    this.thumb_drag = None;
-                    this.overview_drag = None;
-                    this.rebuild(cx);
-                }
-                cx.notify();
-            }),
+            _preferences: cx.observe_global::<vorkspace_ui::preferences::Preferences>(
+                |this, cx| {
+                    let layout = Layout::current(cx);
+                    if layout != this.layout {
+                        this.layout = layout;
+                        this.thumb_drag = None;
+                        this.overview_drag = None;
+                        this.rebuild(cx);
+                    }
+                    cx.notify();
+                },
+            ),
             files: Vec::new(),
             by_id: HashMap::new(),
             open: HashSet::new(),
@@ -687,8 +689,8 @@ impl DiffView {
         let top = self.list.logical_scroll_top();
         self.offsets.get(top.item_ix).copied().unwrap_or(0.) + top.offset_in_item.as_f32()
     }
-    fn overview_metrics(&self, height: f32) -> crate::file_tools::editor_scrollbar::Metrics {
-        crate::file_tools::editor_scrollbar::Metrics::new(self.top_px(), self.total, height, height)
+    fn overview_metrics(&self, height: f32) -> vorkspace_ui::editor_scrollbar::Metrics {
+        vorkspace_ui::editor_scrollbar::Metrics::new(self.top_px(), self.total, height, height)
     }
     fn overview_scroll(&mut self, y: Pixels, cx: &mut Context<Self>) {
         let Some(bounds) = self.overview_bounds.get() else {
@@ -703,7 +705,7 @@ impl DiffView {
         cx.notify();
     }
     fn overview(&self, cx: &mut Context<Self>) -> AnyElement {
-        use crate::file_tools::editor_scrollbar::WIDTH;
+        use vorkspace_ui::editor_scrollbar::WIDTH;
         let total = self.total.max(1.);
         let top = self.top_px();
         let active = self.overview_drag.is_some() || self.overview_hovered;
@@ -721,7 +723,7 @@ impl DiffView {
                 canvas(
                     move |bounds, _, _| bounds,
                     move |bounds, _, window, _| {
-                        let m = crate::file_tools::editor_scrollbar::Metrics::new(
+                        let m = vorkspace_ui::editor_scrollbar::Metrics::new(
                             top,
                             total,
                             bounds.size.height.as_f32(),
@@ -830,7 +832,7 @@ impl DiffView {
             return width;
         }
         let mut font = window.text_style().font();
-        font.family = crate::markdown::FIXED_FONT.into();
+        font.family = vorkspace_ui::fonts::FIXED_FONT.into();
         let run = gpui::TextRun {
             len: 10,
             font,
@@ -1307,7 +1309,7 @@ impl DiffView {
                         .min_w_0()
                         .truncate()
                         .px_3()
-                        .font_family(crate::markdown::FIXED_FONT)
+                        .font_family(vorkspace_ui::fonts::FIXED_FONT)
                         .text_size(px(11.))
                         .text_color(content(0.5))
                         .child(text),
@@ -1607,7 +1609,7 @@ impl DiffView {
                             .pl_3()
                             .pr_6()
                             .whitespace_nowrap()
-                            .font_family(crate::markdown::FIXED_FONT)
+                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
                             .text_size(px(CODE_SIZE))
                             .text_color(content(0.92))
                             .child(StyledText::new(text).with_highlights(styles)),
@@ -1832,7 +1834,7 @@ impl Render for DiffView {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
-                                    .font_family(crate::markdown::FIXED_FONT)
+                                    .font_family(vorkspace_ui::fonts::FIXED_FONT)
                                     .text_size(px(11.))
                                     .text_color(content(0.55))
                                     .child(location),
@@ -1885,12 +1887,12 @@ impl Render for DiffView {
                                     .bg(content(1.))
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(crate::right_panel::BACKGROUND_BASE))
+                                    .text_color(rgb(crate::panel_kit::BACKGROUND_BASE))
                                     .when(!can_add, |d| d.opacity(0.4))
                                     .when(can_add, |d| d.hover(|s| s.opacity(0.8)))
                                     .child(
                                         icon("comment-add", 14.)
-                                            .text_color(rgb(crate::right_panel::BACKGROUND_BASE)),
+                                            .text_color(rgb(crate::panel_kit::BACKGROUND_BASE)),
                                     )
                                     .child("Add to chat")
                                     .when(can_add, |d| {
@@ -1983,7 +1985,7 @@ impl Render for DiffView {
                     .min_h_0()
                     // The pinned header slides up under the toolbar, never over it.
                     .overflow_hidden()
-                    .pr(px(crate::file_tools::editor_scrollbar::WIDTH))
+                    .pr(px(vorkspace_ui::editor_scrollbar::WIDTH))
                     .child(
                         canvas(
                             move |bounds, _, cx| {

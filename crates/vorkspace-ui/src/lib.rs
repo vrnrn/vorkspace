@@ -1,6 +1,8 @@
+pub mod actions;
 pub mod clock;
 pub mod composer_motion;
 pub mod context_meter;
+pub mod editor_scrollbar;
 pub mod file_icons;
 pub mod fonts;
 pub mod palettes;

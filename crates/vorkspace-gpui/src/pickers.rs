@@ -75,9 +75,9 @@ pub(crate) fn cached_model_name(kind: Kind, id: Option<&str>) -> SharedString {
 }
 /// saveRecentModelChoice: the pick moves to the front of the six recents.
 pub(crate) fn remember_model(kind: Kind, model: Option<String>, cx: &mut gpui::App) {
-    if cx.has_global::<crate::settings::Preferences>() {
-        cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
-            let choice = crate::settings::ModelChoice {
+    if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
+        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
+            let choice = vorkspace_ui::preferences::ModelChoice {
                 provider: kind.id().into(),
                 model,
             };
@@ -191,7 +191,7 @@ impl ModelList {
             switch_allowed: true,
             hidden: Vec::new(),
             tab: cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .and_then(|prefs| prefs.model_picker_tab.as_deref())
                 .map(|tab| {
                     if tab == "favorites" {
@@ -373,7 +373,7 @@ impl ModelList {
         let ModelTab::Harness(kind) = self.tab else {
             let query = self.query(cx);
             return cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .into_iter()
                 .flat_map(|prefs| &prefs.favorite_models)
                 .filter_map(|choice| {
@@ -384,7 +384,7 @@ impl ModelList {
                     let current = kind == self.provider && choice.model == self.current;
                     if !current
                         && choice.model.as_deref().is_some_and(|id| {
-                            cx.global::<crate::settings::Preferences>()
+                            cx.global::<vorkspace_ui::preferences::Preferences>()
                                 .model_hidden(kind.id(), id)
                         })
                     {
@@ -411,7 +411,7 @@ impl ModelList {
             name: "Default".into(),
             enabled,
         }];
-        if let Some(prefs) = cx.try_global::<crate::settings::Preferences>() {
+        if let Some(prefs) = cx.try_global::<vorkspace_ui::preferences::Preferences>() {
             for choice in &prefs.recent_models {
                 if choice.provider == kind.id()
                     && choice.model.is_some()
@@ -471,7 +471,7 @@ impl ModelList {
         }
         let query = self.query(cx);
         let hidden = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .map(|prefs| prefs.hidden_models.clone())
             .unwrap_or_default();
         entries
@@ -482,7 +482,7 @@ impl ModelList {
                 let current = kind == self.provider && e.id == self.current;
                 current
                     || e.id.as_deref().is_none_or(|id| {
-                        !hidden.contains(&crate::settings::model_key(kind.id(), id))
+                        !hidden.contains(&vorkspace_ui::preferences::model_key(kind.id(), id))
                     })
             })
             .filter(|e| {
@@ -521,8 +521,8 @@ impl ModelList {
             return;
         }
         self.tab = tab;
-        if cx.has_global::<crate::settings::Preferences>() {
-            cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+        if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
+            cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
                 prefs.model_picker_tab = Some(
                     match tab {
                         ModelTab::Favorites => "favorites",

@@ -1,5 +1,5 @@
 use super::FileEditor;
-use crate::right_panel::{stroke, tabular};
+use crate::panel_kit::{stroke, tabular};
 use gpui::{AnyElement, App, Context, Role, div, prelude::*, px};
 use std::path::{Component, Path};
 use vorkspace_ui::{file_icons::file_type_icon, theme::*};

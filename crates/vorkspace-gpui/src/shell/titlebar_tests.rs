@@ -430,7 +430,7 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
     visual.simulate_keystrokes(&format!("{modifier}-0 {modifier}-="));
     settle(visual);
     assert_titlebar(window, visual, 110, false);
-    let menus = crate::app_menu::build(&crate::settings::Preferences::default());
+    let menus = crate::app_menu::build(&vorkspace_ui::preferences::Preferences::default());
     let action = menus
         .iter()
         .flat_map(|m| &m.items)

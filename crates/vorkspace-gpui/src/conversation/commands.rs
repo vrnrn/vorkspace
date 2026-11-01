@@ -89,7 +89,7 @@ impl Conversation {
         let mut settings = self.settings.clone();
         settings.environment.extend(self.app_environment.clone());
         settings.disable_claude_hooks = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_some_and(|preferences| !preferences.claude_hooks);
         let cwd = self.execution_cwd().to_owned();
         let provider_id = self.summary.provider_id.clone();

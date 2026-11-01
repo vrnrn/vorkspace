@@ -1,7 +1,7 @@
 //! Opt-in pixel parity. Renders the main surfaces offscreen so a refactor can be
 //! compared byte for byte against the captures of the commit before it.
 use super::*;
-use crate::{right_panel::RightTab, settings::Section};
+use crate::{panel_kit::RightTab, settings::Section};
 use vorkspace_core::store::Store;
 
 const PROJECT: &str = "/tmp/vorkspace-ui-parity";

@@ -13,7 +13,7 @@ pub(crate) mod widgets;
 
 pub(crate) use keymap::apply as apply_keybindings;
 pub(crate) use model::Section;
-pub(crate) use vorkspace_ui::preferences::{ModelChoice, Preferences, model_key};
+pub(crate) use vorkspace_ui::preferences::Preferences;
 
 use crate::{
     input::{self, Input},
@@ -30,24 +30,6 @@ use vorkspace_ui::theme::*;
 
 /// Every window takes its initial scale from the same live preference owner.
 /// Keep the subscription on its root so closing the window releases it.
-pub(crate) fn observe_window_scale<T: 'static>(
-    window: &mut Window,
-    cx: &mut Context<T>,
-) -> Subscription {
-    apply_window_scale(window, cx);
-    cx.observe_global_in::<Preferences>(window, |_, window, cx| apply_window_scale(window, cx))
-}
-
-fn apply_window_scale<T: 'static>(window: &mut Window, cx: &mut Context<T>) {
-    let scale = cx
-        .try_global::<Preferences>()
-        .map_or(1., Preferences::interface_scale);
-    if window.ui_scale() != scale {
-        window.set_ui_scale(scale, cx);
-        cx.notify();
-    }
-}
-
 /// A session the Archive page lists.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ArchivedSession {

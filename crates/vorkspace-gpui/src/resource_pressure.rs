@@ -1,6 +1,6 @@
 // A sidebar warning while the machine is under pressure, opening the running
 // work vorkspace owns so it can be stopped.
-use crate::{popover::AnchorSlot, right_panel::spinner};
+use crate::{panel_kit::spinner, popover::AnchorSlot};
 use gpui::{
     AnyElement, Context, EventEmitter, FocusHandle, FontWeight, Role, ScrollHandle, SharedString,
     Task, Window, div, prelude::*, px,
@@ -646,7 +646,7 @@ impl ResourceMonitor {
                     .child(
                         div()
                             .truncate()
-                            .font_family(crate::markdown::FIXED_FONT)
+                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
                             .text_size(px(11.))
                             .text_color(content(0.65))
                             .child(process.command.clone()),

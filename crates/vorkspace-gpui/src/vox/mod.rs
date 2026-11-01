@@ -6,9 +6,8 @@ mod notch;
 mod notch_tests;
 #[cfg(debug_assertions)]
 pub(crate) mod preview;
-pub(crate) use controller::{configure, error as shortcut_error, toggle};
+pub(crate) use controller::{configure, error as shortcut_error, set_workspace_toggle, toggle};
 mod web;
-use crate::shell::Shell;
 use gpui::{Context, WeakEntity, Window, div, prelude::*, px};
 use serde_json::{Value, json};
 use std::{
@@ -21,8 +20,41 @@ use std::{
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
 
+/// What Vox needs from its workspace. The shell implements this, so Vox has no
+/// dependency on the shell's type.
+pub(crate) trait VoxHost {
+    fn alive(&self) -> bool;
+    fn action(
+        &self,
+        action: &str,
+        input: &serde_json::Value,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> Result<serde_json::Value, String>;
+}
+pub(crate) type Host = std::rc::Rc<dyn VoxHost>;
+
+/// A display-only Vox with no workspace behind it.
+#[cfg(any(test, debug_assertions))]
+pub(crate) struct NoHost;
+#[cfg(any(test, debug_assertions))]
+impl VoxHost for NoHost {
+    fn alive(&self) -> bool {
+        false
+    }
+    fn action(
+        &self,
+        _: &str,
+        _: &serde_json::Value,
+        _: &mut Window,
+        _: &mut gpui::App,
+    ) -> Result<serde_json::Value, String> {
+        Err("Workspace closed".into())
+    }
+}
+
 pub(crate) struct Vox {
-    owner: WeakEntity<Shell>,
+    owner: Host,
     store: Database,
     host: Option<host::Host>,
     generation: u64,
@@ -54,7 +86,7 @@ struct Calls(Vec<WeakEntity<Vox>>);
 impl gpui::Global for Calls {}
 pub(crate) fn register(
     voice: &gpui::Entity<Vox>,
-    prefs: &crate::settings::Preferences,
+    prefs: &vorkspace_ui::preferences::Preferences,
     cx: &mut gpui::App,
 ) {
     configure(prefs, cx);
@@ -173,9 +205,9 @@ impl Vox {
     }
 
     pub(crate) fn new(
-        owner: WeakEntity<Shell>,
+        owner: Host,
         store: Database,
-        prefs: &crate::settings::Preferences,
+        prefs: &vorkspace_ui::preferences::Preferences,
         cwd: String,
     ) -> Self {
         Self {
@@ -209,7 +241,7 @@ impl Vox {
     }
     pub(crate) fn preferences(
         &mut self,
-        prefs: &crate::settings::Preferences,
+        prefs: &vorkspace_ui::preferences::Preferences,
         cx: &mut Context<Self>,
     ) {
         configure(prefs, cx);
@@ -267,7 +299,7 @@ impl Vox {
         self.notch.hearing = false;
         self.notch.activity = "listening".into();
         self.face = "o-o".into();
-        if self.error.is_some() && self.enabled && self.owner.upgrade().is_some() {
+        if self.error.is_some() && self.enabled && self.owner.alive() {
             self.notch.closing = false;
             self.touch(cx);
         } else {
@@ -502,12 +534,7 @@ impl Vox {
                     .detach();
                     return;
                 } else {
-                    let result = self
-                        .owner
-                        .update_in(cx, |owner, owner_window, cx| {
-                            owner.vox_action(action, input, owner_window, cx)
-                        })
-                        .unwrap_or(Err("Workspace closed".into()));
+                    let result = self.owner.action(action, input, window, cx);
                     self.receipts.insert(request, (signature, result.clone()));
                     result
                 }
@@ -579,13 +606,13 @@ mod tests {
             crate::input::bind(cx);
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| {
-                    let prefs = crate::settings::Preferences {
+                    let prefs = vorkspace_ui::preferences::Preferences {
                         vox_enabled: true,
                         vox_silent: true,
                         ..Default::default()
                     };
                     let mut voice =
-                        Vox::new(WeakEntity::new_invalid(), store, &prefs, "/project".into());
+                        Vox::new(std::rc::Rc::new(NoHost), store, &prefs, "/project".into());
                     voice.active.store(true, Ordering::Relaxed);
                     voice.reply = "Completed reply 🙂".into();
                     voice

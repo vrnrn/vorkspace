@@ -324,7 +324,7 @@ impl Automations {
         .detach();
     }
     fn begin(&mut self, template: Option<Template>, cx: &mut Context<Self>) {
-        let preferences = cx.try_global::<crate::settings::Preferences>();
+        let preferences = cx.try_global::<vorkspace_ui::preferences::Preferences>();
         let kind = preferences
             .and_then(|p| p.default_provider.as_deref())
             .map(Kind::from_id)

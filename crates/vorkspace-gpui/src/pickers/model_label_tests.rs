@@ -27,16 +27,16 @@ fn local_inventory_hides_missing_tabs_but_preserves_current_and_successful_catal
 #[gpui::test]
 fn hidden_models_leave_the_picker_but_the_current_model_stays(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        cx.set_global(crate::settings::Preferences {
+        cx.set_global(vorkspace_ui::preferences::Preferences {
             hidden_models: vec![
-                crate::settings::model_key("codex", "a"),
-                crate::settings::model_key("codex", "b"),
+                vorkspace_ui::preferences::model_key("codex", "a"),
+                vorkspace_ui::preferences::model_key("codex", "b"),
                 // Another provider's model with the same id is unaffected.
-                crate::settings::model_key("claude", "c"),
+                vorkspace_ui::preferences::model_key("claude", "c"),
             ],
             favorite_models: ["a", "b", "c"]
                 .into_iter()
-                .map(|model| crate::settings::ModelChoice {
+                .map(|model| vorkspace_ui::preferences::ModelChoice {
                     provider: "codex".into(),
                     model: Some(model.into()),
                 })
@@ -158,19 +158,19 @@ fn remembered_favorites_and_recents_keep_provider_identity_and_busy_rules(
     cx: &mut gpui::TestAppContext,
 ) {
     cx.update(|cx| {
-        let prefs = crate::settings::Preferences {
+        let prefs = vorkspace_ui::preferences::Preferences {
             model_picker_tab: Some("favorites".into()),
             favorite_models: vec![
-                crate::settings::ModelChoice {
+                vorkspace_ui::preferences::ModelChoice {
                     provider: "codex".into(),
                     model: Some("gpt-saved".into()),
                 },
-                crate::settings::ModelChoice {
+                vorkspace_ui::preferences::ModelChoice {
                     provider: "claude".into(),
                     model: Some("opus".into()),
                 },
             ],
-            recent_models: vec![crate::settings::ModelChoice {
+            recent_models: vec![vorkspace_ui::preferences::ModelChoice {
                 provider: "codex".into(),
                 model: Some("gpt-recent".into()),
             }],

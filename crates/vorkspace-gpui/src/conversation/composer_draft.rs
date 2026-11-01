@@ -370,7 +370,7 @@ impl Conversation {
                         .flex()
                         .gap_2()
                         .child(
-                            crate::settings::widgets::secondary_button(
+                            crate::controls::secondary_button(
                                 "composer-recover",
                                 "Restore recovered input",
                                 true,
@@ -382,7 +382,7 @@ impl Conversation {
                             })),
                         )
                         .child(
-                            crate::settings::widgets::secondary_button(
+                            crate::controls::secondary_button(
                                 "composer-use-saved",
                                 "Use saved input",
                                 false,

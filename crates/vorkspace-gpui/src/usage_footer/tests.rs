@@ -289,7 +289,7 @@ fn subscriptions_keep_account_usage_separate_from_the_active_conversation(
         .unwrap();
     assert_eq!(cx.opened_url(), None);
     cx.update(|cx| {
-        cx.set_global(crate::settings::Preferences {
+        cx.set_global(vorkspace_ui::preferences::Preferences {
             bedrock_cost_url: " https://console.aws.amazon.com/costmanagement/ ".into(),
             ..Default::default()
         })
@@ -309,7 +309,7 @@ fn subscriptions_keep_account_usage_separate_from_the_active_conversation(
 #[test]
 fn cost_link_accepts_only_plain_web_links() {
     let link = |url: &str| {
-        crate::settings::Preferences {
+        vorkspace_ui::preferences::Preferences {
             bedrock_cost_url: url.into(),
             ..Default::default()
         }

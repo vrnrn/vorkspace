@@ -258,7 +258,7 @@ impl UsageFooter {
         });
         if bedrock
             && let Some(url) = cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .and_then(|p| p.cost_link().map(str::to_owned))
         {
             cx.open_url(&url);
@@ -984,7 +984,7 @@ impl UsageFooter {
                         ),
                 )
                 .child(
-                    crate::settings::widgets::primary_button(
+                    crate::controls::primary_button(
                         "switch-suggested-account",
                         "Switch account",
                         false,

@@ -16,7 +16,7 @@ impl Filters {
     pub(super) fn matches(
         &self,
         launch: &bot::Launch,
-        view: Option<&crate::shell::bots::BotSession>,
+        view: Option<&super::host_api::BotSession>,
     ) -> bool {
         if self.show_unavailable {
             return view.is_none();

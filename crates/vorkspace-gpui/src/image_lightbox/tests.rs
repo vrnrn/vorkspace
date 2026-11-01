@@ -57,7 +57,9 @@ fn native_annotation_capture() {
                             alt: "Fixture".into(),
                             draft_session: Some(session.id),
                         },
-                        Some(owner),
+                        (Some(owner))
+                            .as_ref()
+                            .map(crate::conversation::composer_features::annotation_owner),
                         window,
                         cx,
                     )
@@ -169,7 +171,9 @@ fn annotation_preview_matches_flattened_text_at_zoom() {
                         alt: "Text fixture".into(),
                         draft_session: Some(session.id),
                     },
-                    Some(owner),
+                    (Some(owner))
+                        .as_ref()
+                        .map(crate::conversation::composer_features::annotation_owner),
                     window,
                     cx,
                 )
@@ -333,7 +337,9 @@ fn drawing_tracks_image_coordinates_and_clear_across_zoom_and_resize(cx: &mut Te
                             alt: "Sample".into(),
                             draft_session: Some(1),
                         },
-                        Some(owner),
+                        (Some(owner))
+                            .as_ref()
+                            .map(crate::conversation::composer_features::annotation_owner),
                         window,
                         cx,
                     )
@@ -655,7 +661,7 @@ fn lightbox_handles_keyboard_pinch_wheel_drag_double_click_and_resize(cx: &mut T
         .update(visual, |view, _, _| assert_eq!(view.view, View::IDENTITY))
         .unwrap();
     visual.update(|_, cx| {
-        let mut prefs = crate::settings::Preferences::default();
+        let mut prefs = vorkspace_ui::preferences::Preferences::default();
         prefs
             .keybindings
             .insert("View: Zoom In".into(), Some("alt-z".into()));

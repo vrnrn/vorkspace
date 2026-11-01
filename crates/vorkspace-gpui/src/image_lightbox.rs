@@ -119,7 +119,7 @@ pub(crate) struct ImageLightbox {
     view: View,
     transition: Option<(View, Instant)>,
     drag: Option<(View, Point<Pixels>)>,
-    owner: Option<gpui::WeakEntity<crate::conversation::Conversation>>,
+    owner: Option<DraftOwner>,
     generation: Option<u64>,
     original: Option<Arc<image::RgbaImage>>,
     strokes: Vec<annotation::Stroke>,
@@ -130,7 +130,7 @@ pub(crate) struct ImageLightbox {
     close_after_save: bool,
     color: u32,
     palette_open: bool,
-    picker: Entity<crate::bots::color_picker::ColorPicker>,
+    picker: Entity<crate::color_picker::ColorPicker>,
     _picker_subscription: gpui::Subscription,
     saving: bool,
     cancelled: bool,
@@ -138,23 +138,37 @@ pub(crate) struct ImageLightbox {
 }
 impl EventEmitter<Closed> for ImageLightbox {}
 
+/// The draft an annotated image returns to. Conversations implement this, so the
+/// lightbox has no dependency on them.
+pub(crate) trait AnnotationDraft {
+    /// The draft's generation, once its current edits are saved.
+    fn begin(&self, cx: &mut App) -> Option<u64>;
+    /// Replaces the source while `generation` still owns it.
+    fn apply(
+        &self,
+        source: &std::path::Path,
+        generation: u64,
+        bytes: &[u8],
+        cx: &mut App,
+    ) -> Result<(PathBuf, u64), String>;
+}
+pub(crate) type DraftOwner = std::rc::Rc<dyn AnnotationDraft>;
+
 impl ImageLightbox {
     pub(crate) fn new(
         open: Open,
-        owner: Option<Entity<crate::conversation::Conversation>>,
+        owner: Option<DraftOwner>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let generation = owner
-            .as_ref()
-            .map(|owner| owner.update(cx, |owner, cx| owner.annotation_draft_generation(cx)));
+        let generation = owner.as_ref().and_then(|owner| owner.begin(cx));
         let restore = window.focused(cx);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        let picker = cx.new(|cx| crate::bots::color_picker::ColorPicker::new(0xff3b30, cx));
+        let picker = cx.new(|cx| crate::color_picker::ColorPicker::new(0xff3b30, cx));
         let picker_subscription = cx.subscribe(
             &picker,
-            |this, _, picked: &crate::bots::color_picker::Picked, cx| {
+            |this, _, picked: &crate::color_picker::Picked, cx| {
                 this.color = picked.0;
                 cx.notify();
             },
@@ -221,7 +235,7 @@ impl ImageLightbox {
             view: View::IDENTITY,
             transition: None,
             drag: None,
-            owner: owner.map(|owner| owner.downgrade()),
+            owner,
             generation,
             original: None,
             strokes: Vec::new(),
@@ -310,11 +324,7 @@ impl ImageLightbox {
                     return;
                 }
                 let result = result.and_then(|(bytes, image, pixels)| {
-                    let owner = owner.upgrade().ok_or("The draft was closed")?;
-                    let path = owner.update(cx, |owner, cx| {
-                        owner.apply_annotated_attachment(&path, generation, &bytes, cx)
-                    })?;
-                    let generation = owner.read(cx).attachment_draft_generation();
+                    let (path, generation) = owner.apply(&path, generation, &bytes, cx)?;
                     Ok::<_, String>((path, image, pixels, generation))
                 });
                 this.saving = false;

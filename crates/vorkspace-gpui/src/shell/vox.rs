@@ -393,6 +393,22 @@ fn validate_voice_input(action: &str, input: &Value) -> Result<(), String> {
     Ok(())
 }
 
+impl crate::vox::VoxHost for gpui::WeakEntity<Shell> {
+    fn alive(&self) -> bool {
+        self.upgrade().is_some()
+    }
+    fn action(
+        &self,
+        action: &str,
+        input: &Value,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<Value, String> {
+        self.update(cx, |shell, cx| shell.vox_action(action, input, window, cx))
+            .unwrap_or(Err("Workspace closed".into()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -468,7 +468,9 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
                         alt: "Draft image".into(),
                         draft_session: Some(session),
                     },
-                    Some(owner.clone()),
+                    (Some(owner.clone()))
+                        .as_ref()
+                        .map(crate::conversation::composer_features::annotation_owner),
                     window,
                     cx,
                 )
@@ -781,7 +783,7 @@ fn native_bot_draft_and_add_menu_capture() {
     );
     vorkspace_ui::clock::use_test_clock(&cx);
     for light in [false, true] {
-        let prefs = crate::settings::Preferences {
+        let prefs = vorkspace_ui::preferences::Preferences {
             theme: if light { "light" } else { "dark" }.into(),
             ..Default::default()
         };

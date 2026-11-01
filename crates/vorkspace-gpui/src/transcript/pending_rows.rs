@@ -156,7 +156,7 @@ impl TranscriptView {
                     .px_4()
                     .pt(px(if first { 4. } else { 0. }))
                     .pb(px(if card_after { 8. } else { 12. }))
-                    .child(crate::bots::cards::launch(id, view.as_ref(), spin, cx)),
+                    .child(bot_cards::launch(id, view.as_ref(), spin, cx)),
             )
             .into_any_element()
     }

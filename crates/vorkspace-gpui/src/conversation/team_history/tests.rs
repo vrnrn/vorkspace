@@ -32,7 +32,7 @@ fn fixture(cx: &mut TestAppContext, configured: bool, retired: bool) -> WindowHa
         }),
         ..Default::default()
     };
-    let histories: crate::bots::TeamHistories = Default::default();
+    let histories: crate::conversation::TeamHistories = Default::default();
     histories.borrow_mut().insert(
         summary.id,
         crate::bots::TeamHistory {

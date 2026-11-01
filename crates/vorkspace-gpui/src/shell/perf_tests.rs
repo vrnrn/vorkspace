@@ -10,7 +10,7 @@ const FRAMES: usize = 60;
 const PROJECT: &str = "/tmp/vorkspace-perf";
 
 fn row(index: usize) -> Row {
-    let text = if index % 2 == 0 {
+    let text = if index.is_multiple_of(2) {
         format!("Please review change {index} and explain what it affects.")
     } else {
         format!(
@@ -19,7 +19,12 @@ fn row(index: usize) -> Row {
         )
     };
     Row {
-        role: if index % 2 == 0 { "user" } else { "assistant" }.into(),
+        role: if index.is_multiple_of(2) {
+            "user"
+        } else {
+            "assistant"
+        }
+        .into(),
         text,
         first: true,
         sent_at: None,
@@ -60,7 +65,7 @@ fn native_perf_sample() {
     drop(store);
 
     let start = Instant::now();
-    let mut store = Store::open(&database).unwrap();
+    let store = Store::open(&database).unwrap();
     metrics.push(("store_open", ms(start)));
     let start = Instant::now();
     store.sessions().unwrap();
@@ -131,8 +136,8 @@ fn native_perf_sample() {
         "the benchmark must measure a drawn transcript"
     );
 
-    let mut frame = |cx: &mut gpui::HeadlessAppContext,
-                     act: &dyn Fn(&mut Shell, &mut Context<Shell>)| {
+    let frame = |cx: &mut gpui::HeadlessAppContext,
+                 act: &dyn Fn(&mut Shell, &mut Context<Shell>)| {
         let start = Instant::now();
         window
             .update(cx, |shell, window, cx| {
@@ -155,7 +160,7 @@ fn native_perf_sample() {
             let text = "typing in the composer ".repeat(1 + index / 4);
             frame(&mut cx, &move |shell, cx| {
                 let input = shell.sessions[&id].read(cx).input.clone();
-                input.update(cx, |input, cx| input.set_text(text.clone().into(), cx));
+                input.update(cx, |input, cx| input.set_text(text.clone(), cx));
             })
         })
         .collect();

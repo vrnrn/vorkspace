@@ -32,7 +32,7 @@ impl Conversation {
         self.make_response_menu(turn, kind, anchor.clone(), None, window, cx);
         let remote = self.is_remote().then(|| self.summary.cwd.clone());
         let hidden = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .map(|prefs| prefs.hidden_providers.clone())
             .unwrap_or_default();
         let work = cx.background_executor().spawn(async move {
@@ -290,7 +290,7 @@ impl Conversation {
         let mut options = Vec::new();
         for model in models {
             if cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_some_and(|prefs| prefs.model_hidden(provider.id(), &model.id))
             {
                 continue;

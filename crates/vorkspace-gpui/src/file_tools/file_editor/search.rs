@@ -77,7 +77,7 @@ impl FileEditor {
             .py_1()
             .border_b_1()
             .border_color(stroke())
-            .font_family(crate::markdown::FIXED_FONT)
+            .font_family(vorkspace_ui::fonts::FIXED_FONT)
             .child(
                 icon_action(
                     "toggle-replace",

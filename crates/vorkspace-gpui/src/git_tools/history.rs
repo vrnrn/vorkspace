@@ -1,9 +1,9 @@
 //! GitHistoryGraph.tsx's standalone History tab: its toolbar, search and
 //! 44px rows with the swimlane graph painted per row.
 use crate::{
-    git_tools::git_status::{GitChanged, ProjectGit},
+    git_status::{GitChanged, ProjectGit},
     input::{self, Input},
-    right_panel::*,
+    panel_kit::*,
 };
 use gpui::{
     App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla, KeyBinding, Role,
@@ -480,7 +480,7 @@ impl History {
                             .child(
                                 div()
                                     .flex_shrink_0()
-                                    .font_family(crate::markdown::FIXED_FONT)
+                                    .font_family(vorkspace_ui::fonts::FIXED_FONT)
                                     .text_color(content(0.3))
                                     .child(commit.short_sha.clone()),
                             ),

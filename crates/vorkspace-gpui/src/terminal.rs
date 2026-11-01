@@ -1029,7 +1029,7 @@ fn cell_rect(
 }
 
 fn fixed_font() -> Font {
-    gpui::font(crate::markdown::FIXED_FONT)
+    gpui::font(vorkspace_ui::fonts::FIXED_FONT)
 }
 fn selection_fill() -> Hsla {
     content(0.18)

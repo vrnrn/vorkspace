@@ -9,7 +9,7 @@ enum Effect {
     None,
     /// A board changed; open views reload.
     Todos,
-    Start(Box<crate::shell::AppStart>),
+    Start(Box<super::host_api::AppStart>),
     Groups(String, Groups),
 }
 fn text(v: &Value, key: &str, max: usize) -> Result<String, String> {
@@ -119,9 +119,7 @@ impl Bots {
                             this.save(cx);
                         }
                         Effect::Groups(project, groups) => {
-                            let _ = this.owner.update(cx, |owner, cx| {
-                                owner.bot_apply_groups(project, groups, cx)
-                            });
+                            this.owner.apply_groups(project, groups, cx);
                         }
                         Effect::Start(_) => unreachable!(),
                     }
@@ -139,7 +137,7 @@ impl Bots {
         call: Call,
         bot_id: String,
         value: Value,
-        start: crate::shell::AppStart,
+        start: super::host_api::AppStart,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
@@ -170,9 +168,7 @@ impl Bots {
         app.defer(move |cx| {
             let result = handle
                 .update(cx, |_, window, cx| {
-                    owner.update(cx, |shell, cx| {
-                        shell.app_install_start(caller, start, window, cx)
-                    })
+                    owner.install_start(caller, start, window, cx)
                 })
                 .map_err(|e| e.to_string())
                 .and_then(|r| r.map_err(|e| e.to_string()))
@@ -394,7 +390,7 @@ impl Bots {
         let result=match action.as_str(){
             "models.list"=>Ok(json!(Kind::ALL.into_iter().map(|kind|json!({"harness":kind.id(),"name":kind.label(),"models":self.chats.values().find(|v|{let v=v.read(cx);let profile=source.as_ref().filter(|s|s.read(cx).summary.provider==kind.id()).map(|s|s.read(cx).settings.account.clone()).unwrap_or_else(||crate::accounts::get(cx).map(|center|center.read(cx).selected(kind,&project)).unwrap_or_default());v.summary.provider==kind.id()&&v.settings.account.id==profile.id}).map(|v|v.read(cx).settings_models()).unwrap_or_default()})).collect::<Vec<_>>())),
             "sessions.start"=>{
-                let placement=match self.owner.upgrade().ok_or_else(||"Workspace is unavailable".to_string()).and_then(|owner|owner.read(cx).app_placement(call.session,&project,&input,cx)){Ok(placement)=>placement,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
+                let placement=match self.owner.placement(call.session,&project,&input,cx){Ok(placement)=>placement,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
 
                 let source_provider=source.as_ref().map(|v|v.read(cx).summary.provider.clone()).unwrap_or_else(||"codex".into());
                 let source_project=source.as_ref().map(|v|v.read(cx).summary.cwd.clone()).unwrap_or_else(||project.clone());
@@ -404,7 +400,7 @@ impl Bots {
                 self.call_work(call,&actor.id,target,move|store|{
                     let mut store=locked(&store)?;
                     let summary=launch.create(&mut store,&project)?;
-                    Ok((json!({"sessionId":summary.id,"accepted":true,"project":project}),Effect::Start(Box::new(crate::shell::AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
+                    Ok((json!({"sessionId":summary.id,"accepted":true,"project":project}),Effect::Start(Box::new(super::host_api::AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
                 },cx);return;
             }
             "minions.list"=>{
@@ -498,7 +494,7 @@ impl Bots {
                 app.defer(move|cx|{
                     // The Bot update has returned, so the Shell can inspect its
                     // current live ownership without reborrowing this entity.
-                    let result=handle.update(cx,|_,window,cx|owner.update(cx,|shell,cx|shell.app_session_action(call.session,session,&project,&action,window,cx))).map_err(|e|e.to_string()).and_then(|r|r.map_err(|e|e.to_string())).and_then(|r|r);
+                    let result=handle.update(cx,|_,window,cx|owner.session_action(call.session,session,&project,&action,window,cx)).map_err(|e|e.to_string()).and_then(|r|r.map_err(|e|e.to_string())).and_then(|r|r);
                     let _=manager.update(cx,|this,cx|{
                         if result.is_ok() && let Some(bot)=this.roster.get_mut(&bot_id) {
                             for launch in &mut bot.launches { if launch.session_id==session { launch.dismissed=true; } }
@@ -512,7 +508,7 @@ impl Bots {
                 let session=match id(&input,"sessionId"){Ok(id)=>id,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
                 if let Err(error)=locked(&self.store).and_then(|store|store.check_app_target(call.session,session,&project)) { self.finish_call(call,Err(error),cx);return; }
                 if self.protected_app_target(session,cx) { self.finish_call(call,Err("Protected sessions cannot receive app-directed input".into()),cx);return; }
-                let view=self.owner.upgrade().and_then(|owner|owner.update(cx,|owner,cx|owner.bot_ensure_session(session,cx)));
+                let view=self.owner.ensure_session(session,cx);
                 let Some(view)=view else {self.finish_call(call,Err("Session is unavailable".into()),cx);return;};
                 view.update(cx,|view,cx|view.load(cx));
                 if !view.read(cx).ready_for_external(cx) {self.finish_call(call,Err("Session is busy, loading, or has an unsent draft".into()),cx);return;}
@@ -530,12 +526,12 @@ impl Bots {
                     Err(error)=>Err(error),
                 }
             }
-            "folders.list"=>Ok(json!(self.owner.upgrade().map(|o|o.read(cx).bot_groups(&project)).unwrap_or_default().folders)),
+            "folders.list"=>Ok(json!(self.owner.groups(&project,cx).folders)),
             "folders.move"=>{
                 let session=match id(&input,"sessionId"){Ok(id)=>id,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
-                let allowed=self.owner.upgrade().and_then(|o|o.update(cx, |owner, cx| owner.bot_ensure_session(session, cx))).is_some_and(|v|v.read(cx).summary.cwd==project);
+                let allowed=self.owner.ensure_session(session,cx).is_some_and(|v|v.read(cx).summary.cwd==project);
                 if !allowed{self.finish_call(call,Err("Session is outside this project".into()),cx);return;}
-                let mut groups=self.owner.upgrade().map(|o|o.read(cx).bot_groups(&project)).unwrap_or_default();
+                let mut groups=self.owner.groups(&project,cx);
                 if let Some(name)=input.get("newFolderName").and_then(Value::as_str){if let Some(folder)=groups.create_folder(&[session],bot::new_id()){groups.rename_folder(&folder,name);}}
                 else if let Some(folder)=input.get("folderId").and_then(Value::as_str){if groups.folder(folder).is_none(){self.finish_call(call,Err("Folder not found".into()),cx);return;}groups.add_to_folder(folder,session);}else{groups.remove_sessions(&[session]);}
                 self.call_work(call,&actor.id,target,move|store|{locked(&store)?.save_groups(&project,&groups)?;Ok((json!({"moved":true}),Effect::Groups(project,groups)))},cx);return;
@@ -547,7 +543,7 @@ impl Bots {
                 card["id"]=json!(bot::new_id());
                 if card["type"]=="session"{
                     let session=card["sessionId"].as_i64().unwrap();
-                    let view=self.owner.upgrade().and_then(|o|o.update(cx, |owner, cx| owner.bot_ensure_session(session, cx))).filter(|v|bot.works_on(&v.read(cx).summary.cwd));
+                    let view=self.owner.ensure_session(session,cx).filter(|v|bot.works_on(&v.read(cx).summary.cwd));
                     let Some(view)=view else{self.finish_call(call,Err("Session is outside assigned projects".into()),cx);return;};
                     card["title"]=json!(view.read(cx).summary.title);card["state"]=json!(if view.read(cx).busy{"Working"}else{"Saved"});
                 }
@@ -613,11 +609,7 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
             return;
         };
         let project = launch.cwd.clone();
-        let mut groups = self
-            .owner
-            .upgrade()
-            .map(|o| o.read(cx).bot_groups(&project))
-            .unwrap_or_default();
+        let mut groups = self.owner.groups(&project, cx);
         let folder = groups
             .folders
             .iter()
@@ -633,9 +625,7 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
             groups.set_color(&folder, color);
             groups.add_to_folder(&folder, session);
         }
-        let _ = self.owner.update(cx, |o, cx| {
-            o.bot_apply_groups(project.clone(), groups.clone(), cx)
-        });
+        self.owner.apply_groups(project.clone(), groups.clone(), cx);
         let store = self.store.clone();
         cx.background_executor()
             .spawn(async move {
@@ -644,11 +634,7 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
             .detach();
     }
     pub(super) fn check_completions(&mut self, cx: &mut Context<Self>) {
-        let views = self
-            .owner
-            .upgrade()
-            .map(|o| o.read(cx).bot_session_views(cx))
-            .unwrap_or_default();
+        let views = self.owner.session_views(cx);
         let mut ready = Vec::new();
         for bot in &self.roster.bots {
             let groups: HashSet<_> = bot

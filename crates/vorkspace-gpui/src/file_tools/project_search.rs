@@ -1,7 +1,7 @@
 //! ProjectSearch.tsx: content search inside the Explorer, scoped to its checkout.
 use crate::{
     input::{self, Input},
-    right_panel::{spinner, stroke, tabular},
+    panel_kit::{spinner, stroke, tabular},
 };
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle, Role,
@@ -464,12 +464,14 @@ impl Render for ProjectSearch {
                     cx.propagate();
                 }
             }))
-            .on_action(cx.listener(|this, _: &crate::shell::DismissMenu, _, cx| {
-                if !this.is_composing(cx) {
-                    cx.emit(SearchEvent::Close);
-                }
-                cx.stop_propagation();
-            }))
+            .on_action(
+                cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, _, cx| {
+                    if !this.is_composing(cx) {
+                        cx.emit(SearchEvent::Close);
+                    }
+                    cx.stop_propagation();
+                }),
+            )
             .child(
                 div()
                     .flex_shrink_0()

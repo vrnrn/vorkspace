@@ -155,7 +155,7 @@ impl Shell {
                 self.liquid.surface(cap_top, true)
             })
             .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0())
-            .child(crate::bots::avatar::sidebar_cursor_tracker());
+            .child(crate::avatar::sidebar_cursor_tracker());
 
         self.resources.update(cx, |resources, cx| {
             resources.set_compact(
@@ -783,7 +783,7 @@ impl Shell {
                                 .justify_center()
                                 .when(selected, |d| d.bg(content(0.1)))
                                 .hover(|s| s.bg(content(0.08)))
-                                .child(crate::bots::avatar::bot_avatar(bot, "idle", 18., true))
+                                .child(crate::avatar::bot_avatar(bot, "idle", 18., true))
                                 .on_click(move |_, window, cx| {
                                     manager.update(cx, |manager, cx| manager.open(&id, window, cx));
                                 })

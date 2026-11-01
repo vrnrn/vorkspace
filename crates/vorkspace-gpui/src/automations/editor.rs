@@ -232,7 +232,7 @@ impl Automations {
             return div().into_any_element();
         };
         if cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_some_and(|p| p.model_controls == "beside")
             || self.model_controls.is_empty()
         {
@@ -773,7 +773,7 @@ impl Automations {
             _ => "Auto",
         };
         let beside = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_some_and(|p| p.model_controls == "beside");
         let effort_label = (!beside)
             .then(|| {

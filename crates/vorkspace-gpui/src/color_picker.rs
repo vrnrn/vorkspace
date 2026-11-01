@@ -1,6 +1,14 @@
 //! ColorPickerPopover.tsx's saturation/value surface, hue track and hex field.
-use super::*;
+use crate::{
+    input::{self, Input},
+    popover::AnchorSlot,
+};
+use gpui::{
+    Context, Entity, EventEmitter, MouseButton, Role, Subscription, Window, div, prelude::*, px,
+    rgb,
+};
 use gpui::{DispatchPhase, canvas, linear_color_stop, linear_gradient};
+use vorkspace_ui::theme::*;
 
 pub(crate) struct Picked(pub u32);
 #[derive(Clone, Copy)]
@@ -292,7 +300,7 @@ impl gpui::Render for ColorPicker {
                             .border_1()
                             .border_color(content(0.1))
                             .bg(content(0.05))
-                            .font_family(crate::markdown::FIXED_FONT)
+                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
                             .child(self.hex.clone()),
                     ),
             )

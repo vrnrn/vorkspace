@@ -8,7 +8,7 @@ mod right_panel_host;
 mod session_rows;
 mod tab_strip;
 mod titlebar;
-pub(crate) use app_commands::AppStart;
+pub(crate) use crate::bots::host_api::AppStart;
 mod app_views;
 mod automation_runs;
 pub(crate) mod bots;
@@ -54,6 +54,7 @@ mod ui_parity_tests;
 mod vox;
 mod worktrees;
 
+use crate::popover::titlebar_drag_area;
 use crate::{
     conversation::{Conversation, SessionChanged},
     input,
@@ -76,8 +77,7 @@ use gpui::{
     AnyElement, App, Bounds, BoxShadow, ClipboardItem, Context, CursorStyle, DispatchPhase, Entity,
     FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, PathPromptOptions, Pixels, Point, Role, ScrollHandle, SharedString,
-    StyleRefinement, Subscription, Window, WindowControlArea, actions, canvas, div, prelude::*, px,
-    rgb, rgba,
+    StyleRefinement, Subscription, Window, actions, canvas, div, prelude::*, px, rgb, rgba,
 };
 use session_groups::local_reminder_label;
 use std::{
@@ -106,7 +106,6 @@ actions!(
         CloseAllTabs,
         VisitBack,
         VisitForward,
-        DismissMenu,
         NextTab,
         PreviousTab,
         ToggleSidebar,
@@ -219,7 +218,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new(&format!("{modifier}-shift-w"), CloseAllTabs, context),
         KeyBinding::new(&format!("{modifier}-["), VisitBack, context),
         KeyBinding::new(&format!("{modifier}-]"), VisitForward, context),
-        KeyBinding::new("escape", DismissMenu, context),
+        KeyBinding::new("escape", vorkspace_ui::actions::DismissMenu, context),
         KeyBinding::new(&format!("{modifier}-b"), ToggleSidebar, context),
         KeyBinding::new(&format!("{modifier}-k"), FocusSearch, context),
         KeyBinding::new(&format!("{modifier}-shift-f"), SearchFiles, context),
@@ -258,29 +257,6 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("tab", FocusNext, context),
         KeyBinding::new("shift-tab", FocusPrevious, context),
     ]);
-}
-
-/// macOS must receive button clicks as app content. Only blank titlebar
-/// regions initiate native dragging or the system double-click action.
-pub(crate) fn titlebar_drag_area() -> gpui::Div {
-    let bounds = AnchorSlot::default();
-    div()
-        .relative()
-        .h_full()
-        .child(bounds.probe())
-        .window_control_area(WindowControlArea::Drag)
-        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-            if bounds.get().is_some_and(|b| b.contains(&event.position)) {
-                // Check the measured spacer as well as GPUI's cached hit test:
-                // native gestures must never start over a neighboring control.
-                cx.stop_propagation();
-                if event.click_count == 2 {
-                    window.titlebar_double_click();
-                } else if event.click_count == 1 {
-                    window.start_window_move();
-                }
-            }
-        })
 }
 
 /// tabKeys.ts's `adjacentItemId`: the next or previous item, wrapping; from
@@ -566,8 +542,8 @@ pub(crate) struct Shell {
     /// The project sidebar's board; it follows the current project.
     project_todos: Option<Entity<crate::todos::TodoBoardView>>,
     /// Minion sessions' context and capability, shared with Bots.
-    minion_registry: crate::bots::MinionRegistry,
-    team_histories: crate::bots::TeamHistories,
+    minion_registry: crate::conversation::MinionRegistry,
+    team_histories: crate::conversation::TeamHistories,
     bot_conversations: crate::bots::BotConversations,
     inbox: Option<Entity<crate::inbox::Inbox>>,
     connector_pages: HashMap<crate::workspace::Connector, Entity<crate::inbox::Inbox>>,
@@ -649,7 +625,7 @@ pub(crate) struct Shell {
     tab_scroll: ScrollHandle,
     tab_scroll_task: Option<gpui::Task<()>>,
     resize: Option<(Pixels, f32)>,
-    pub(crate) git: Entity<crate::git_tools::git_status::ProjectGit>,
+    pub(crate) git: Entity<crate::git_status::ProjectGit>,
     pub(crate) right_panel: Option<Entity<RightPanel>>,
     right_resize: Option<(Pixels, f32)>,
     right_slide: Option<PaneSlide>,
@@ -828,7 +804,7 @@ impl Shell {
             }
         });
         let git_project = workspace.project.clone();
-        let git = cx.new(|cx| crate::git_tools::git_status::ProjectGit::new(git_project, cx));
+        let git = cx.new(|cx| crate::git_status::ProjectGit::new(git_project, cx));
         let git_observation = cx.observe(&git, |this, _, cx| {
             // The title bar's dot and the panel's tab label follow its stats.
             let _ = this;
@@ -961,8 +937,8 @@ impl Shell {
             backgrounds: HashMap::new(),
             background_card: AnchorSlot::default(),
             liquid: Default::default(),
-            tab_liquid: crate::liquid::Liquid::below(crate::right_panel::stroke()),
-            sidebar_tab_liquid: crate::liquid::Liquid::below(crate::right_panel::stroke()),
+            tab_liquid: crate::liquid::Liquid::below(crate::panel_kit::stroke()),
+            sidebar_tab_liquid: crate::liquid::Liquid::below(crate::panel_kit::stroke()),
             project_marks: HashMap::new(),
 
             project_anchor: AnchorSlot::default(),
@@ -1034,7 +1010,8 @@ impl Shell {
         this.scan_external_editors(cx);
         this.observe_accounts(cx);
         this.observe_picker_preferences(cx);
-        let bot_owner = cx.weak_entity();
+        let bot_owner: std::rc::Rc<dyn crate::bots::host_api::BotsHost> =
+            std::rc::Rc::new(cx.weak_entity());
         let bot_active =
             this.workspace
                 .scope_focus
@@ -1123,7 +1100,20 @@ impl Shell {
                 }
             }));
         this.bots = Some(bots);
-        let voice_owner = cx.weak_entity();
+        let voice_owner: crate::vox::Host = std::rc::Rc::new(cx.weak_entity());
+        crate::vox::set_workspace_toggle(
+            |cx| {
+                let Some(target) = workspace_target(cx) else {
+                    return;
+                };
+                let _ = target.update(cx, |root, window, cx| {
+                    if let Ok(shell) = root.downcast::<Shell>() {
+                        shell.update(cx, |shell, cx| shell.toggle_vox(window, cx));
+                    }
+                });
+            },
+            cx,
+        );
         this.vox = Some(cx.new(|_| {
             crate::vox::Vox::new(
                 voice_owner,
@@ -1567,8 +1557,8 @@ impl Shell {
                 .ui_scale
                 .saturating_add_signed(delta)
                 .clamp(
-                    crate::settings::Preferences::MIN_UI_SCALE_PERCENT,
-                    crate::settings::Preferences::MAX_UI_SCALE_PERCENT,
+                    vorkspace_ui::preferences::Preferences::MIN_UI_SCALE_PERCENT,
+                    vorkspace_ui::preferences::Preferences::MAX_UI_SCALE_PERCENT,
                 )
         };
         if self.workspace.preferences.ui_scale == scale {
@@ -2403,7 +2393,7 @@ impl Render for Shell {
         let sidebar_width = self.workspace.right_panel_width * self.sidebar_fraction;
         if !self.window_observed {
             self.window_observed = true;
-            crate::app_menu::remember(window, cx);
+            crate::menu_bar::remember(window, cx);
             self.shortcuts = Some(shortcuts::install(cx.weak_entity(), window, cx));
             self.observations
                 .push(cx.on_focus_lost(window, |this, window, cx| {
@@ -2420,7 +2410,7 @@ impl Render for Shell {
                 .push(cx.observe_window_activation(window, |this, window, cx| {
                     this.window_active = window.is_window_active();
                     if this.window_active {
-                        crate::app_menu::remember(window, cx);
+                        crate::menu_bar::remember(window, cx);
                         let sessions: Vec<_> = this.sessions.values().cloned().collect();
                         for view in sessions {
                             view.update(cx, |v, cx| v.refresh_if_stale(cx));
@@ -2567,6 +2557,9 @@ impl Render for Shell {
                                 .and_then(|bots| bots.read(cx).conversation_for_session(id, cx))
                         })
                     });
+                    let owner = owner
+                        .as_ref()
+                        .map(crate::conversation::composer_features::annotation_owner);
                     let view = cx.new(|cx| {
                         crate::image_lightbox::ImageLightbox::new(open.clone(), owner, window, cx)
                     });
@@ -2789,72 +2782,75 @@ impl Render for Shell {
                     view.update(cx, |v, cx| v.toggle_recent_models(window, cx));
                 }
             }))
-            .on_action(cx.listener(|this, _: &DismissMenu, window, cx| {
-                if this.remote_project_picker.is_some() {
-                    this.close_remote_project(window, cx);
-                    return;
-                }
-                if this.quick_open.is_some() {
-                    this.close_quick_open(window, cx);
-                    return;
-                }
-                if this.app_search.is_some() {
-                    this.close_app_search(window, cx);
-                    return;
-                }
-                if this.link_dialog.is_some() {
-                    this.close_link_dialog(window, cx);
-                    return;
-                }
-                if let Some(settings) = this.settings.clone() {
-                    if !settings.update(cx, |s, cx| s.dismiss_transient(window, cx)) {
-                        this.close_settings(window, cx);
-                    }
-                    return;
-                }
-                if let Some(bots) = this.bots.clone()
-                    && bots.update(cx, |m, cx| m.dismiss_settings(window, cx))
-                {
-                    return;
-                }
-                if this.app_view_open() {
-                    this.close_app_view(window, cx);
-                    return;
-                }
-                if this.session_preview.is_some() {
-                    this.close_preview(cx);
-                    return;
-                }
-                if this.peek_open() && this.menu.is_none() {
-                    this.set_peek(false, cx);
-                    return;
-                }
-                if this.menu.is_none()
-                    && this.right_panel_shown(cx)
-                    && !this.bot_active(cx)
-                    && let Some(panel) = &this.right_panel
-                    && panel.read(cx).tab() == crate::right_panel::RightTab::Files
-                {
-                    let explorer = panel.read(cx).explorer.clone();
-                    if explorer.update(cx, |explorer, cx| explorer.close_search(window, cx)) {
-                        cx.stop_propagation();
+            .on_action(
+                cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
+                    if this.remote_project_picker.is_some() {
+                        this.close_remote_project(window, cx);
                         return;
                     }
-                }
-                // `Session: Stop` when no menu is open to close.
-                if this.menu.is_none()
-                    && let Some(view) = this.workspace.active.and_then(|id| this.sessions.get(&id))
-                {
-                    view.update(cx, |v, cx| v.stop_if_busy(cx));
-                }
-                this.close_menu(cx);
-                this.tab_drag = None;
-                this.folder_drag = None;
-                this.cancel_pane_drag(cx);
-                this.pane_sash = None;
-                this.invalidate_chrome(cx);
-                cx.notify();
-            }))
+                    if this.quick_open.is_some() {
+                        this.close_quick_open(window, cx);
+                        return;
+                    }
+                    if this.app_search.is_some() {
+                        this.close_app_search(window, cx);
+                        return;
+                    }
+                    if this.link_dialog.is_some() {
+                        this.close_link_dialog(window, cx);
+                        return;
+                    }
+                    if let Some(settings) = this.settings.clone() {
+                        if !settings.update(cx, |s, cx| s.dismiss_transient(window, cx)) {
+                            this.close_settings(window, cx);
+                        }
+                        return;
+                    }
+                    if let Some(bots) = this.bots.clone()
+                        && bots.update(cx, |m, cx| m.dismiss_settings(window, cx))
+                    {
+                        return;
+                    }
+                    if this.app_view_open() {
+                        this.close_app_view(window, cx);
+                        return;
+                    }
+                    if this.session_preview.is_some() {
+                        this.close_preview(cx);
+                        return;
+                    }
+                    if this.peek_open() && this.menu.is_none() {
+                        this.set_peek(false, cx);
+                        return;
+                    }
+                    if this.menu.is_none()
+                        && this.right_panel_shown(cx)
+                        && !this.bot_active(cx)
+                        && let Some(panel) = &this.right_panel
+                        && panel.read(cx).tab() == crate::panel_kit::RightTab::Files
+                    {
+                        let explorer = panel.read(cx).explorer.clone();
+                        if explorer.update(cx, |explorer, cx| explorer.close_search(window, cx)) {
+                            cx.stop_propagation();
+                            return;
+                        }
+                    }
+                    // `Session: Stop` when no menu is open to close.
+                    if this.menu.is_none()
+                        && let Some(view) =
+                            this.workspace.active.and_then(|id| this.sessions.get(&id))
+                    {
+                        view.update(cx, |v, cx| v.stop_if_busy(cx));
+                    }
+                    this.close_menu(cx);
+                    this.tab_drag = None;
+                    this.folder_drag = None;
+                    this.cancel_pane_drag(cx);
+                    this.pane_sash = None;
+                    this.invalidate_chrome(cx);
+                    cx.notify();
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &crate::git_tools::diff_view::Unified, _, cx| {
                     this.workspace.preferences.diff_view = "unified".into();
@@ -2885,7 +2881,7 @@ impl Render for Shell {
                 if let Some(panel) = &this.right_panel {
                     let explorer = panel.read(cx).explorer.clone();
                     panel.update(cx, |panel, cx| {
-                        panel.select(crate::right_panel::RightTab::Files, cx)
+                        panel.select(crate::panel_kit::RightTab::Files, cx)
                     });
                     explorer.update(cx, |explorer, cx| explorer.open_search(window, cx));
                 }
@@ -3018,6 +3014,21 @@ impl Render for Shell {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) fn workspace_target(cx: &App) -> Option<gpui::AnyWindowHandle> {
+    let windows = cx.windows();
+    let live = |handle: &gpui::AnyWindowHandle| {
+        handle.downcast::<Shell>().is_some() && windows.contains(handle)
+    };
+    cx.active_window()
+        .filter(live)
+        .or_else(|| {
+            cx.try_global::<crate::menu_bar::WorkspaceTarget>()
+                .and_then(|target| target.0)
+                .filter(live)
+        })
+        .or_else(|| cx.windows().into_iter().find(live))
+}
 
 #[cfg(test)]
 mod app_menu_tests {

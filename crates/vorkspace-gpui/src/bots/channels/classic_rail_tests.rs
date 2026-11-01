@@ -1,4 +1,5 @@
 use super::*;
+use crate::shell::Shell;
 use gpui::{TestAppContext, VisualTestContext};
 use std::sync::{Arc, Mutex};
 use vorkspace_core::{bot::channels::Channel, store::Store};

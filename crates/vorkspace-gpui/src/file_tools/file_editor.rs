@@ -1,9 +1,9 @@
 //! Native FileEditor/FilePane previews. Disk work and syntax parsing stay off
 //! the UI thread; drafts, selections and scrolling belong to each live tab.
 use crate::{
-    git_tools::git_status::{GitChanged, ProjectGit},
+    git_status::{GitChanged, ProjectGit},
     input::{self, Input},
-    right_panel::{icon_action, stroke},
+    panel_kit::{icon_action, stroke},
     transcript::TranscriptView,
 };
 use gpui::{
@@ -64,9 +64,6 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new(&format!("{m}-shift-g"), FindPrevious, Some("FileEditor")),
         KeyBinding::new("escape", DismissSearch, Some("FileEditor")),
     ]);
-}
-pub(crate) fn menus(prefs: &crate::settings::Preferences, cx: &mut App) {
-    cx.set_menus(crate::app_menu::build(prefs));
 }
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
 #[action(namespace = file_editor, no_json)]
@@ -238,8 +235,10 @@ impl FileEditor {
                     this.refresh_git(cx);
                 }
             }),
-            cx.observe_global::<crate::settings::Preferences>(|this, cx| {
-                let wrap = cx.global::<crate::settings::Preferences>().file_word_wrap;
+            cx.observe_global::<vorkspace_ui::preferences::Preferences>(|this, cx| {
+                let wrap = cx
+                    .global::<vorkspace_ui::preferences::Preferences>()
+                    .file_word_wrap;
                 this.input
                     .update(cx, |input, cx| input.set_word_wrap(wrap, cx));
                 this.schedule_autosave(cx);
@@ -411,7 +410,7 @@ impl FileEditor {
                         this.dirty = false;
                         if first && (this.is_markdown() || this.is_svg()) {
                             this.preview = cx
-                                .try_global::<crate::settings::Preferences>()
+                                .try_global::<vorkspace_ui::preferences::Preferences>()
                                 .is_none_or(|prefs| prefs.file_view_mode != "source");
                         }
                         this.apply_navigation(cx);
@@ -650,7 +649,7 @@ impl FileEditor {
         if !self.dirty
             || self.disk_changed
             || !cx
-                .try_global::<crate::settings::Preferences>()
+                .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_some_and(|p| p.autosave)
         {
             return;
@@ -661,7 +660,7 @@ impl FileEditor {
                 if this.dirty
                     && !this.disk_changed
                     && cx
-                        .try_global::<crate::settings::Preferences>()
+                        .try_global::<vorkspace_ui::preferences::Preferences>()
                         .is_some_and(|p| p.autosave)
                 {
                     if this.input.read(cx).is_composing() || this.saving {
@@ -707,7 +706,7 @@ impl FileEditor {
         let at = self.input.read(cx).selection_range().end;
         let path = self.path.clone();
         let format = cx
-            .try_global::<crate::settings::Preferences>()
+            .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_none_or(|p| p.format_on_save);
         self.saving = true;
         self.error = None;
@@ -863,8 +862,8 @@ impl FileEditor {
     fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.dismiss();
         self.preview = !self.preview;
-        if cx.has_global::<crate::settings::Preferences>() {
-            cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+        if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
+            cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
                 prefs.file_view_mode = if self.preview { "preview" } else { "source" }.into();
             });
         }
@@ -1436,7 +1435,7 @@ mod tests {
             .unwrap();
             let file = path.to_string_lossy().into_owned();
             let window = cx.update(|cx| {
-                let prefs = crate::settings::Preferences {
+                let prefs = vorkspace_ui::preferences::Preferences {
                     file_view_mode: if source_mode { "source" } else { "preview" }.into(),
                     ..Default::default()
                 };

@@ -1871,3 +1871,26 @@ pub(crate) fn menu_popover(menu: &Entity<Menu>, anchor: Anchor, cx: &App) -> Pop
 
 #[cfg(test)]
 mod tests;
+
+/// macOS must receive button clicks as app content. Only blank titlebar
+/// regions initiate native dragging or the system double-click action.
+pub(crate) fn titlebar_drag_area() -> gpui::Div {
+    let bounds = AnchorSlot::default();
+    div()
+        .relative()
+        .h_full()
+        .child(bounds.probe())
+        .window_control_area(gpui::WindowControlArea::Drag)
+        .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+            if bounds.get().is_some_and(|b| b.contains(&event.position)) {
+                // Check the measured spacer as well as GPUI's cached hit test:
+                // native gestures must never start over a neighboring control.
+                cx.stop_propagation();
+                if event.click_count == 2 {
+                    window.titlebar_double_click();
+                } else if event.click_count == 1 {
+                    window.start_window_move();
+                }
+            }
+        })
+}

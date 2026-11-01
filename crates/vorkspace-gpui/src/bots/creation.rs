@@ -343,15 +343,15 @@ impl Bots {
             div()
                 .absolute()
                 .size_full()
-                .on_action(
-                    cx.listener(|this, _: &crate::shell::DismissMenu, window, cx| {
+                .on_action(cx.listener(
+                    |this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
                         if this.picker.take().is_none() && this.menu.take().is_none() {
                             this.cancel_creation(window, cx);
                         }
                         cx.stop_propagation();
                         cx.notify();
-                    }),
-                )
+                    },
+                ))
                 .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape"
                         && this.picker.is_none()
