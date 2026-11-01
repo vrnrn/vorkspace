@@ -855,21 +855,7 @@ pub(crate) fn observe_power(cx: &App) {
     .detach();
 }
 
-/// Total time the system has spent suspended since boot, or `None` where no
-/// clock provides it: the difference between a clock that counts suspended
-/// time and one that doesn't. The suspend-excluding clock is read first so
-/// read latency can't make the difference negative. Every read is served from
-/// memory the kernel maps into the process, without a syscall.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn system_suspended_time() -> Option<Duration> {
-    // CLOCK_BOOTTIME is CLOCK_MONOTONIC plus time spent suspended:
-    // https://man7.org/linux/man-pages/man2/clock_gettime.2.html
-    let awake = read_clock(libc::CLOCK_MONOTONIC)?;
-    let total = read_clock(libc::CLOCK_BOOTTIME)?;
-    Some(total.saturating_sub(awake))
-}
 
-#[cfg(target_os = "macos")]
 fn system_suspended_time() -> Option<Duration> {
     use std::sync::OnceLock;
 
@@ -904,51 +890,8 @@ fn system_suspended_time() -> Option<Duration> {
     Some(Duration::from_nanos(u64::try_from(nanos).ok()?))
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn read_clock(clock: libc::clockid_t) -> Option<Duration> {
-    let mut time = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: `time` is a valid, writable timespec.
-    if unsafe { libc::clock_gettime(clock, &mut time) } != 0 {
-        return None;
-    }
-    Some(Duration::new(
-        u64::try_from(time.tv_sec).ok()?,
-        u32::try_from(time.tv_nsec).ok()?,
-    ))
-}
 
-#[cfg(target_os = "windows")]
-fn system_suspended_time() -> Option<Duration> {
-    use windows::Win32::System::WindowsProgramming::{
-        QueryInterruptTime, QueryUnbiasedInterruptTime,
-    };
-    let mut awake = 0;
-    // SAFETY: `awake` is a valid, writable u64.
-    if !unsafe { QueryUnbiasedInterruptTime(&mut awake) }.as_bool() {
-        return None;
-    }
-    // SAFETY: no preconditions.
-    let total = unsafe { QueryInterruptTime() };
-    // Both count 100 ns units; unbiased interrupt time excludes sleep and
-    // hibernation:
-    // https://learn.microsoft.com/en-us/windows/win32/sysinfo/interrupt-time
-    Some(Duration::from_nanos(
-        total.saturating_sub(awake).saturating_mul(100),
-    ))
-}
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "macos",
-    target_os = "windows"
-)))]
-fn system_suspended_time() -> Option<Duration> {
-    None
-}
 
 pub(crate) fn record_power_transition(state: PowerState) {
     with_journal(|journal| journal.power_transition(state, Instant::now()));

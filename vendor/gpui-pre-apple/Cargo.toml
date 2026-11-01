@@ -40,7 +40,6 @@ font-kit = [
     "dep:objc2-core-text",
     "dep:pathfinder_geometry",
 ]
-runtime_shaders = []
 test-support = ["gpui/test-support"]
 
 [lib]
@@ -261,10 +260,6 @@ features = [
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies.thiserror]
 version = "2.0.12"
-
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.build-dependencies.cbindgen]
-version = "0.28.0"
-default-features = false
 
 [lints.clippy]
 dbg_macro = "deny"

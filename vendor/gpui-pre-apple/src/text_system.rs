@@ -50,7 +50,6 @@ use pathfinder_geometry::{
 use smallvec::SmallVec;
 use std::{borrow::Cow, char, convert::TryFrom, sync::Arc};
 
-#[cfg(target_os = "macos")]
 use {
     core_foundation::base::CFType,
     gpui::{Hsla, Rgba},
@@ -231,7 +230,6 @@ impl PlatformTextSystem for AppleTextSystem {
         TextRenderingMode::Grayscale
     }
 
-    #[cfg(target_os = "macos")]
     fn glyph_dilation_for_color(&self, color: Hsla) -> u8 {
         // When font smoothing is enabled, CoreGraphics thickens glyph strokes by an amount that
         // depends on the foreground color's luminance. We replicate the logic used by CoreGraphics
@@ -246,7 +244,6 @@ impl PlatformTextSystem for AppleTextSystem {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn font_smoothing_allowed_by_user() -> bool {
     static ALLOWED: OnceLock<bool> = OnceLock::new();
     *ALLOWED.get_or_init(|| {

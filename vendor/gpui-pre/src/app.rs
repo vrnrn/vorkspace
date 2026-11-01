@@ -37,7 +37,7 @@ use smallvec::SmallVec;
 pub use test_app::*;
 #[cfg(any(test, feature = "test-support"))]
 pub use test_context::*;
-#[cfg(all(target_os = "macos", any(test, feature = "test-support")))]
+#[cfg(any(test, feature = "test-support"))]
 pub use visual_test_context::*;
 
 #[cfg(any(feature = "inspector", debug_assertions))]
@@ -71,7 +71,7 @@ mod headless_app_context;
 mod test_app;
 #[cfg(any(test, feature = "test-support"))]
 mod test_context;
-#[cfg(all(target_os = "macos", any(test, feature = "test-support")))]
+#[cfg(any(test, feature = "test-support"))]
 mod visual_test_context;
 
 /// The duration for which native applications wait for futures returned from
@@ -259,8 +259,6 @@ impl Application {
             on_finish_launching(cx);
         }));
 
-        #[cfg(target_family = "wasm")]
-        std::mem::forget(self);
     }
 
     /// Start the application for an embedder that drives the run loop itself.
@@ -825,7 +823,7 @@ pub struct App {
     pub(crate) foreground_executor: ForegroundExecutor,
     #[cfg(feature = "profiler")]
     foreground_journal: crate::profiler::journal::ForegroundJournal,
-    #[cfg(all(feature = "profiler", not(target_family = "wasm")))]
+    #[cfg(feature = "profiler")]
     hang_monitor: Option<crate::profiler::hang::HangMonitor>,
     pub(crate) entities: EntityMap,
     pub(crate) new_entity_observers: SubscriberSet<TypeId, NewEntityListener>,
@@ -955,7 +953,7 @@ impl App {
                 foreground_executor,
                 #[cfg(feature = "profiler")]
                 foreground_journal,
-                #[cfg(all(feature = "profiler", not(target_family = "wasm")))]
+                #[cfg(feature = "profiler")]
                 hang_monitor: None,
                 svg_renderer: SvgRenderer::new(asset_source.clone()),
                 loading_assets: Default::default(),
@@ -1157,7 +1155,7 @@ impl App {
     pub fn shutdown(&mut self) {
         // Requested first so the final hang poll overlaps with the quit
         // handlers. It's awaited alongside them, within `SHUTDOWN_TIMEOUT`.
-        #[cfg(all(feature = "profiler", not(target_family = "wasm")))]
+        #[cfg(feature = "profiler")]
         let hang_monitor_flush = self
             .hang_monitor
             .as_ref()
@@ -1169,7 +1167,7 @@ impl App {
             futures.push(observer(self));
         }
 
-        #[cfg(all(feature = "profiler", not(target_family = "wasm")))]
+        #[cfg(feature = "profiler")]
         if let Some(flushed) = hang_monitor_flush {
             futures.push(
                 async move {
@@ -1187,7 +1185,6 @@ impl App {
         self.quitting = true;
 
         let futures = futures::future::join_all(futures);
-        #[cfg(not(target_family = "wasm"))]
         if self
             .foreground_executor
             .block_with_timeout(SHUTDOWN_TIMEOUT, futures)
@@ -1195,8 +1192,6 @@ impl App {
         {
             log::error!("timed out waiting on app_will_quit");
         }
-        #[cfg(target_family = "wasm")]
-        self.foreground_executor.spawn(futures).detach();
 
         self.quitting = false;
     }
@@ -1751,26 +1746,13 @@ impl App {
         self.platform.write_to_clipboard(item)
     }
 
-    /// Reads data from the primary selection buffer.
-    /// Only available on Linux.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    pub fn read_from_primary(&self) -> Option<ClipboardItem> {
-        self.platform.read_from_primary()
-    }
 
-    /// Writes data to the primary selection buffer.
-    /// Only available on Linux.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    pub fn write_to_primary(&self, item: ClipboardItem) {
-        self.platform.write_to_primary(item)
-    }
 
     /// Reads data from macOS's "Find" pasteboard.
     ///
     /// Used to share the current search string between apps.
     ///
     /// https://developer.apple.com/documentation/appkit/nspasteboard/name-swift.struct/find
-    #[cfg(target_os = "macos")]
     pub fn read_from_find_pasteboard(&self) -> Option<ClipboardItem> {
         self.platform.read_from_find_pasteboard()
     }
@@ -1780,7 +1762,6 @@ impl App {
     /// Used to share the current search string between apps.
     ///
     /// https://developer.apple.com/documentation/appkit/nspasteboard/name-swift.struct/find
-    #[cfg(target_os = "macos")]
     pub fn write_to_find_pasteboard(&self, item: ClipboardItem) {
         self.platform.write_to_find_pasteboard(item)
     }
@@ -2267,7 +2248,7 @@ impl App {
     /// spawned.
     ///
     /// [`HangMonitorPollReason::Flush`]: crate::profiler::hang::HangMonitorPollReason::Flush
-    #[cfg(all(feature = "profiler", not(target_family = "wasm")))]
+    #[cfg(feature = "profiler")]
     pub fn start_hang_monitor(
         &mut self,
         config: crate::profiler::hang::HangMonitorConfig,
@@ -3193,7 +3174,7 @@ impl App {
                     let quit_on_empty = match cx.quit_mode {
                         QuitMode::Explicit => false,
                         QuitMode::LastWindowClosed => true,
-                        QuitMode::Default => cfg!(not(target_os = "macos")),
+                        QuitMode::Default => false,
                     };
 
                     if quit_on_empty && cx.windows.is_empty() {
@@ -3588,7 +3569,6 @@ mod test {
         rc::Rc,
     };
 
-    #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
 
     use crate::{
@@ -3714,10 +3694,7 @@ mod test {
 
     #[gpui::test]
     async fn test_restart_preserves_path_and_arguments(cx: &mut TestAppContext) {
-        #[cfg(unix)]
         let user_data_dir = OsString::from_vec(b"/tmp/zed data/\xff".to_vec());
-        #[cfg(not(unix))]
-        let user_data_dir = OsString::from("C:\\zed data");
         let arguments = vec![OsString::from("--user-data-dir"), user_data_dir];
         let restart_path = PathBuf::from("updated-zed");
         let _application =

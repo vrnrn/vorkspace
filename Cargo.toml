@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-exclude = ["vendor/gpui-pre", "vendor/gpui-pre-apple"]
+exclude = ["vendor/gpui-pre", "vendor/gpui-pre-apple", "vendor/gpui-pre-macos"]
 
 [workspace.package]
 version = "1.1.0"
@@ -18,6 +18,7 @@ rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-featur
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 
 # QuickJS deadlines assume the shipped interpreter. An unoptimized one is about
 # five times slower, so it fails work that a release build finishes in budget.

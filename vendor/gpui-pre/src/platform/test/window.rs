@@ -576,10 +576,6 @@ impl PlatformWindow for TestWindow {
         Some(self)
     }
 
-    #[cfg(target_os = "windows")]
-    fn get_raw_handle(&self) -> windows::Win32::Foundation::HWND {
-        unimplemented!()
-    }
 
     fn show_window_menu(&self, _position: Point<Pixels>) {
         unimplemented!()

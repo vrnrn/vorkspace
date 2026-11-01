@@ -20,7 +20,7 @@ pulldown-cmark = "0.13"
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 # The bounded foreground journal and native hang-monitor worker.
 gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false, features = ["profiler"] }
-gpui_macos = { package = "gpui-pre-macos", version = "=0.3.9", default-features = false, features = ["font-kit", "runtime_shaders"] }
+gpui_macos = { package = "gpui-pre-macos", version = "=0.3.9", default-features = false, features = ["font-kit"] }
 unicode-segmentation = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 async-channel = "2"
@@ -48,5 +48,5 @@ vorkspace-ui = { path = "../vorkspace-ui", features = ["test-support"] }
 vorkspace-runtime = { path = "../vorkspace-runtime", features = ["test-support"] }
 gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false, features = ["test-support"] }
 rusqlite.workspace = true
-gpui_apple = { package = "gpui-pre-apple", version = "=0.3.9", features = ["test-support", "runtime_shaders"] }
+gpui_apple = { package = "gpui-pre-apple", version = "=0.3.9", features = ["test-support"] }
 parking_lot = "0.12"

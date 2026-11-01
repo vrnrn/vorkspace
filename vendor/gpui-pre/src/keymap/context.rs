@@ -30,19 +30,7 @@ impl KeyContext {
     /// Initialize a new [`KeyContext`] that contains an `os` key set to either `macos`, `linux`, `windows` or `unknown`.
     pub fn new_with_defaults() -> Self {
         let mut context = Self::default();
-        #[cfg(target_os = "macos")]
         context.set("os", "macos");
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        context.set("os", "linux");
-        #[cfg(target_os = "windows")]
-        context.set("os", "windows");
-        #[cfg(not(any(
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "freebsd",
-            target_os = "windows"
-        )))]
-        context.set("os", "unknown");
         context
     }
 
