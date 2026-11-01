@@ -61,4 +61,6 @@ The [repository map](repository.md) lists the source owners and generated assets
 
 GPUI publishes an AccessKit tree for every window. `vorkspace_macos::accessibility` reads the macOS Reduce Motion setting at launch and on window activation, and speaks through VoiceOver when a session finishes or needs input. Streaming output is not announced token by token; VoiceOver reads the transcript on navigation. `keyboard_reachable` in `vorkspace-ui` makes session tabs, titlebar controls, response actions, and the send button Tab stops. Contrast and text size remain app preferences, not macOS display settings.
 
+## Cursors
+
 On macOS the window bridge owns cursor state per window. A hit test publishes its cursor as soon as GPUI requests it, and AppKit cursor rectangles restore the stored style after a native reset. Native child views such as WebKit and video panes sit outside those rectangles, so `native_view::invalidate_parent_cursor_rects` must run whenever one moves, hides, or appears.
