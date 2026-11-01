@@ -28,7 +28,6 @@ pub(crate) trait VoxHost {
         &self,
         action: &str,
         input: &serde_json::Value,
-        window: &mut Window,
         cx: &mut gpui::App,
     ) -> Result<serde_json::Value, String>;
 }
@@ -46,7 +45,6 @@ impl VoxHost for NoHost {
         &self,
         _: &str,
         _: &serde_json::Value,
-        _: &mut Window,
         _: &mut gpui::App,
     ) -> Result<serde_json::Value, String> {
         Err("Workspace closed".into())
@@ -534,7 +532,7 @@ impl Vox {
                     .detach();
                     return;
                 } else {
-                    let result = self.owner.action(action, input, window, cx);
+                    let result = self.owner.action(action, input, cx);
                     self.receipts.insert(request, (signature, result.clone()));
                     result
                 }

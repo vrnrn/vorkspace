@@ -397,15 +397,12 @@ impl crate::vox::VoxHost for gpui::WeakEntity<Shell> {
     fn alive(&self) -> bool {
         self.upgrade().is_some()
     }
-    fn action(
-        &self,
-        action: &str,
-        input: &Value,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Result<Value, String> {
-        self.update(cx, |shell, cx| shell.vox_action(action, input, window, cx))
-            .unwrap_or(Err("Workspace closed".into()))
+    fn action(&self, action: &str, input: &Value, cx: &mut App) -> Result<Value, String> {
+        // Vox calls from its own window, but focus changes belong to the workspace's.
+        self.update_in(cx, |shell, window, cx| {
+            shell.vox_action(action, input, window, cx)
+        })
+        .unwrap_or(Err("Workspace closed".into()))
     }
 }
 
@@ -438,6 +435,50 @@ mod tests {
         assert_eq!(voice_window, panel.window_id());
         assert_eq!(workspace_window, workspace.window_id());
         assert_ne!(voice_window, workspace_window);
+    }
+
+    #[gpui::test]
+    fn vox_host_actions_run_in_the_workspace_window(cx: &mut gpui::TestAppContext) {
+        use crate::vox::VoxHost;
+
+        let (workspace, _, _) = crate::shell::tests::window(cx);
+        let (owner, session) = workspace
+            .update(cx, |shell, _, cx| {
+                (cx.weak_entity(), shell.sessions.keys().next().copied())
+            })
+            .unwrap();
+        let session = session.expect("the fixture has a session");
+        let panel = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| cx.new(|_| gpui::Empty))
+                .unwrap()
+        });
+        cx.run_until_parked();
+        workspace
+            .update(cx, |_, window, cx| window.blur(cx))
+            .unwrap();
+        panel
+            .update(cx, |_, _, cx| {
+                owner
+                    .action("workspace.open", &json!({"sessionId": session}), cx)
+                    .expect("workspace.open succeeds");
+            })
+            .unwrap();
+        workspace
+            .update(cx, |_, window, cx| {
+                assert!(
+                    window.focused(cx).is_some(),
+                    "the action focuses the workspace window"
+                );
+            })
+            .unwrap();
+        panel
+            .update(cx, |_, window, cx| {
+                assert!(
+                    window.focused(cx).is_none(),
+                    "the Vox window keeps no focus"
+                );
+            })
+            .unwrap();
     }
 
     #[gpui::test]

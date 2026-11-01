@@ -1,5 +1,7 @@
-//! Opt-in end-to-end cost samples for `npm run benchmark:native`. The real shell
-//! renders offscreen through Metal against generated history in temporary data.
+//! Opt-in cost samples for `npm run benchmark:native`. The real shell builds its
+//! scenes against generated history in temporary data. `scene_*` is main-thread CPU
+//! time. Only `metal_render_readback` reaches the GPU, and appends here extend
+//! settled history rather than a live streaming turn.
 use super::*;
 use std::{fmt::Write, time::Instant};
 use vorkspace_core::{store::Store, transcript::Row};
@@ -153,7 +155,7 @@ fn native_perf_sample() {
         ms(start)
     };
     let idle: Vec<_> = (0..FRAMES).map(|_| frame(&mut cx, &|_, _| {})).collect();
-    metrics.push(("frame_redraw", median(idle)));
+    metrics.push(("scene_redraw", median(idle)));
     let typed = (0..FRAMES)
         .map(|index| {
             let id = large.id;
@@ -164,7 +166,7 @@ fn native_perf_sample() {
             })
         })
         .collect();
-    metrics.push(("frame_composer_input", median(typed)));
+    metrics.push(("scene_composer_input", median(typed)));
     let appended = (0..FRAMES)
         .map(|index| {
             let transcript = transcript.clone();
@@ -176,7 +178,18 @@ fn native_perf_sample() {
             })
         })
         .collect();
-    metrics.push(("frame_stream_append", median(appended)));
+    metrics.push(("scene_history_append", median(appended)));
+
+    // Window::draw only builds the scene, so `scene_*` is CPU time. Metal runs
+    // here, and this figure also includes copying the pixels back.
+    let rendered = (0..FRAMES / 4)
+        .map(|_| {
+            let start = Instant::now();
+            cx.capture_screenshot(window.into()).unwrap();
+            ms(start)
+        })
+        .collect();
+    metrics.push(("metal_render_readback", median(rendered)));
 
     if let Some(path) = std::env::var_os("VORKSPACE_PERF_CAPTURE") {
         cx.capture_screenshot(window.into())

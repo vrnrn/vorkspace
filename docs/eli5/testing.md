@@ -12,4 +12,4 @@ Automated checks use pretend provider processes to test voice recovery, Stop, an
 
 The startup benchmark under `scripts/benchmarks/` makes pretend history in a temporary folder. It can compare an older commit with the current code, using a fresh process for each measurement. This checks one part of startup, not every part of the app's responsiveness.
 
-`npm run benchmark:native` times the real app drawing into an invisible window, using a big pretend history. It shows how long opening a long chat and drawing a frame take, so you can compare before and after a change.
+`npm run benchmark:native` times the real app drawing into an invisible window, using a big pretend history. It shows how long opening a long chat takes and how long the app spends working out each frame, so you can compare before and after a change. Most of the numbers stop before the graphics card; one, `metal_render_readback`, includes it. None of them run a live streaming reply.
