@@ -2,11 +2,7 @@ import { createReadStream } from "node:fs";
 import { access, readFile, realpath, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, extname, join, basename } from "node:path";
-const npmEntries = {
-  codex: "node_modules/@openai/codex/bin/codex.js",
-  claude: "node_modules/@anthropic-ai/claude-code/cli.js",
-};
+import { delimiter, dirname, join } from "node:path";
 const binaryNames = {
   codex: ["codex"],
   claude: ["claude"],
@@ -32,9 +28,10 @@ const providerDirectories = (provider) => {
       join(home, "n", "bin"),
       join(home, ".bun", "bin"),
       ...(extra[provider] ?? []),
-      ...(process.platform === "win32"
-        ? [join(process.env.APPDATA ?? join(home, "AppData", "Roaming"), "npm")]
-        : ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin"]),
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/snap/bin",
     ]),
   ];
 };
@@ -113,28 +110,18 @@ async function isPiLaunchCandidate(candidate) {
 }
 /** Resolve executable launcher for remote provider without running it. */
 export async function resolveProvider(provider) {
-  const windows = process.platform === "win32";
-  if (windows && provider === "antigravity")
-    throw new Error("Antigravity ACP is not available on Windows");
   for (const directory of providerDirectories(provider)) {
     if (!directory) continue;
     for (const name of binaryNames[provider]) {
-      for (const extension of windows
-        ? [".exe", ".cmd", ".bat", ".com"]
-        : [""]) {
-        const candidate = join(
-          directory.replace(/^"|"$/g, ""),
-          name + extension,
-        );
-        try {
-          await access(candidate, windows ? constants.F_OK : constants.X_OK);
-          if (!(await stat(candidate)).isFile()) continue;
-          await providerLaunch(candidate, []);
-          if (!(await matchesProvider(candidate, provider, name))) continue;
-          return candidate;
-        } catch {
-          /* try the next installed launcher */
-        }
+      const candidate = join(directory.replace(/^"|"$/g, ""), name);
+      try {
+        await access(candidate, constants.X_OK);
+        if (!(await stat(candidate)).isFile()) continue;
+        await providerLaunch(candidate, []);
+        if (!(await matchesProvider(candidate, provider, name))) continue;
+        return candidate;
+      } catch {
+        /* try the next installed launcher */
       }
     }
   }
@@ -142,23 +129,8 @@ export async function resolveProvider(provider) {
     `${provider} is not installed on this host or is missing from its PATH. Install its native CLI or standard npm package.`,
   );
 }
-/** npm's Windows .cmd wrappers cannot be spawned directly. Run their known
- * package entry point with the bundled Node, preserving argv without a shell.
- * Custom .cmd/.bat wrappers are deliberately not interpreted as shell text. */
-export async function providerLaunch(
-  command,
-  args,
-  platform = process.platform,
-) {
-  if (platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
-    const provider = basename(command, extname(command)).toLowerCase();
-    const relative = npmEntries[provider];
-    if (!relative) throw new Error("Unsupported Windows provider launcher");
-    const entry = join(dirname(command), relative);
-    if (!(await stat(entry)).isFile())
-      throw new Error("Missing npm provider entry point");
-    return { command: process.execPath, args: [entry, ...args] };
-  }
+/** Script launchers run with the bundled Node, preserving argv without a shell. */
+export async function providerLaunch(command, args) {
   if (/\.(cjs|mjs|js)$/i.test(command))
     return { command: process.execPath, args: [command, ...args] };
   return { command, args };

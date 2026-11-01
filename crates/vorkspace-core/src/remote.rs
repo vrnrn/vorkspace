@@ -510,12 +510,11 @@ impl Connections {
                 let mut target = target;
                 let mut machine = if let Some(mut existing) = existing {
                     if upgrade {
-                        let platform = ssh::detect_platform(&target, &job, &askpass)?;
+                        ssh::detect_platform(&target, &job, &askpass)?;
                         job.message("Updating vorkspace Host on the machine…");
                         let output = ssh::run_script(
                             &target,
-                            platform,
-                            ssh::upgrade_script(platform, target.remote_port),
+                            ssh::upgrade_script(target.remote_port),
                             &job,
                             &askpass,
                         )?;
@@ -533,15 +532,9 @@ impl Connections {
                     }
                     existing
                 } else {
-                    let platform = ssh::detect_platform(&target, &job, &askpass)?;
+                    ssh::detect_platform(&target, &job, &askpass)?;
                     job.message("Installing or starting vorkspace Host…");
-                    let output = ssh::run_script(
-                        &target,
-                        platform,
-                        ssh::bootstrap_script(platform),
-                        &job,
-                        &askpass,
-                    )?;
+                    let output = ssh::run_script(&target, ssh::bootstrap_script(), &job, &askpass)?;
                     let info: Value = serde_json::from_str(output.lines().last().unwrap_or(""))
                         .map_err(|_| "Host setup returned an invalid response")?;
                     target.remote_port = info
@@ -553,8 +546,7 @@ impl Connections {
                     job.message("Pairing this desktop with the host…");
                     let pair = ssh::run_script(
                         &target,
-                        platform,
-                        ssh::pairing_script(platform, &ssh::device_name()),
+                        ssh::pairing_script(&ssh::device_name()),
                         &job,
                         &askpass,
                     )?;

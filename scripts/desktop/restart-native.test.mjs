@@ -25,7 +25,7 @@ test("restart waits for process exit and preserves arguments without inheriting 
   // This never builds, installs, opens, or restarts the desktop application.
   const source = fileURLToPath(new URL("../../crates/vorkspace-gpui/src/restart.rs", import.meta.url));
   const harness = join(root, "restart.rs");
-  const executable = join(root, process.platform === "win32" ? "restart.exe" : "restart");
+  const executable = join(root, "restart");
   await writeFile(harness, `
     #[allow(dead_code)]
     #[path = ${JSON.stringify(source)}] mod restart;

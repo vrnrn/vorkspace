@@ -21,8 +21,7 @@ it("persists generated images privately and cancels only files issued by this ow
   expect(asset.path.startsWith(join(directory, "generated-images"))).toBe(true);
   expect(await readFile(asset.path)).toEqual(png);
   expect(asset.mimeType).toBe("image/png");
-  if (process.platform !== "win32")
-    expect((await stat(asset.path)).mode & 0o777).toBe(0o600);
+  expect((await stat(asset.path)).mode & 0o777).toBe(0o600);
   await expect(
     deleteGeneratedImages([join(directory, "unrelated")]),
   ).rejects.toThrow("Invalid");

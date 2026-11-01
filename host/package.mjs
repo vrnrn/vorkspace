@@ -22,33 +22,7 @@ const runtimes = {
     "724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5",
   "linux-x64":
     "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff",
-  "win32-x64":
-    "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
-  "win32-arm64":
-    "8779b1bde1d39f8d420e3b57aa657b39891af434d3de44a919044cec06785921",
 };
-const psQuote = (value) => `'${value.replaceAll("'", "''")}'`;
-const ps = (script) =>
-  execFileSync(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(
-        `$ErrorActionPreference = 'Stop'; ${script}`,
-        "utf16le",
-      ).toString("base64"),
-    ],
-    {
-      // Avoid loading inherited PowerShell 7 modules in Windows PowerShell 5.1.
-      env: Object.fromEntries(
-        Object.entries(process.env).filter(
-          ([key]) => key.toUpperCase() !== "PSMODULEPATH",
-        ),
-      ),
-    },
-  );
 const args = process.argv.slice(2);
 const target = args.includes("--target")
   ? args[args.indexOf("--target") + 1]
@@ -62,9 +36,8 @@ const { version } = JSON.parse(await readFile("package.json", "utf8"));
 for (const target of targets) {
   if (!(target in runtimes))
     throw new Error(`Unsupported host target: ${target}`);
-  const windows = target.startsWith("win32-");
-  const extension = windows ? "zip" : "tar.gz";
-  const stem = `node-v${nodeVersion}-${target.replace("win32-", "win-")}`;
+  const extension = "tar.gz";
+  const stem = `node-v${nodeVersion}-${target}`;
   const archive = join(cache, `${stem}.${extension}`);
   let bytes;
   try {
@@ -90,39 +63,15 @@ for (const target of targets) {
   const folder = join(output, target);
   await rm(folder, { recursive: true, force: true });
   await mkdir(folder, { recursive: true });
-  if (windows) {
-    if (process.platform === "win32") {
-      const unpacked = join(folder, "runtime");
-      ps(
-        `Expand-Archive -LiteralPath ${psQuote(archive)} -DestinationPath ${psQuote(unpacked)}`,
-      );
-      await copyFile(
-        join(unpacked, stem, "node.exe"),
-        join(folder, "node.exe"),
-      );
-      await copyFile(join(unpacked, stem, "LICENSE"), join(folder, "LICENSE"));
-      await rm(unpacked, { recursive: true, force: true });
-    } else {
-      execFileSync("unzip", [
-        "-q",
-        "-j",
-        archive,
-        `${stem}/node.exe`,
-        `${stem}/LICENSE`,
-        "-d",
-        folder,
-      ]);
-    }
-  } else
-    execFileSync("tar", [
-      "-xzf",
-      archive,
-      "-C",
-      folder,
-      "--strip-components=1",
-      `${stem}/bin/node`,
-      `${stem}/LICENSE`,
-    ]);
+  execFileSync("tar", [
+    "-xzf",
+    archive,
+    "-C",
+    folder,
+    "--strip-components=1",
+    `${stem}/bin/node`,
+    `${stem}/LICENSE`,
+  ]);
   await copyFile("build/host/vorkspace-host.mjs", join(folder, "host.mjs"));
   await copyFile("host/provider-guard.mjs", join(folder, "provider-guard.mjs"));
   await copyFile("host/claude-copilot.mjs", join(folder, "claude-copilot.mjs"));
@@ -131,22 +80,13 @@ for (const target of targets) {
     join(folder, "version.json"),
     JSON.stringify({ version, nodeVersion, target }),
   );
-  if (windows) {
-    await writeFile(
-      join(folder, "vorkspace-host.cmd"),
-      '@echo off\r\nsetlocal DisableDelayedExpansion\r\n"%~dp0node.exe" "%~dp0host.mjs" %*\r\nexit /b %errorlevel%\r\n',
-    );
-  } else {
-    await writeFile(
-      join(folder, "vorkspace-host"),
-      '#!/bin/sh\nset -eu\nDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$DIR/bin/node" "$DIR/host.mjs" "$@"\n',
-    );
-    await chmod(join(folder, "vorkspace-host"), 0o755);
-  }
+  await writeFile(
+    join(folder, "vorkspace-host"),
+    '#!/bin/sh\nset -eu\nDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$DIR/bin/node" "$DIR/host.mjs" "$@"\n',
+  );
+  await chmod(join(folder, "vorkspace-host"), 0o755);
   if (target === `${process.platform}-${process.arch}`) {
-    const executable = windows
-      ? join(folder, "node.exe")
-      : join(folder, "bin/node");
+    const executable = join(folder, "bin/node");
     const actual = execFileSync(
       executable,
       [join(folder, "host.mjs"), "--version"],
@@ -159,17 +99,7 @@ for (const target of targets) {
   }
   const filename = `vorkspace-host-${target}.${extension}`;
   await rm(join(output, filename), { force: true });
-  if (windows) {
-    if (process.platform === "win32")
-      ps(
-        `Compress-Archive -Path ${psQuote(join(folder, "*"))} -DestinationPath ${psQuote(join(output, filename))}`,
-      );
-    else
-      execFileSync("zip", ["-q", "-r", join(output, filename), "."], {
-        cwd: folder,
-      });
-  } else
-    execFileSync("tar", ["-czf", join(output, filename), "-C", folder, "."]);
+  execFileSync("tar", ["-czf", join(output, filename), "-C", folder, "."]);
   const hash = createHash("sha256")
     .update(await readFile(join(output, filename)))
     .digest("hex");

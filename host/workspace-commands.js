@@ -728,10 +728,7 @@ export class WorkspaceCommands {
     const root = await this.gitRoot(top);
     return {
       root: slashed(root),
-      relative:
-        process.platform === "win32"
-          ? slashed(relative(root, actual))
-          : relative(root, actual),
+      relative: relative(root, actual),
     };
   }
   async gitSelectedPaths(root, paths) {
@@ -743,7 +740,7 @@ export class WorkspaceCommands {
         typeof path !== "string" ||
         isAbsolute(path) ||
         path.includes("\0") ||
-        (process.platform === "win32" ? slashed(path) : path)
+        path
           .split("/")
           .some(
             (part) =>

@@ -33,7 +33,7 @@ it("keeps paths and environment content from injecting service configuration", (
   expect(unit).toContain("$$name");
   expect(unit).toContain("KillMode=control-group");
 });
-it.skipIf(process.platform === "win32").each(["darwin", "linux"])(
+it.each(["darwin", "linux"])(
   "removes the %s service registration but keeps host data",
   async (platform) => {
     const home = mkdtempSync(join(tmpdir(), "vorkspace-service-test-"));
@@ -149,7 +149,7 @@ console.log("started");
     }
   },
 );
-it.skipIf(process.platform === "win32")(
+it(
   "records why the host could not be started",
   async () => {
     const directory = mkdtempSync(join(tmpdir(), "vorkspace-detached-test-"));
@@ -176,13 +176,3 @@ it.skipIf(process.platform === "win32")(
     }
   },
 );
-it("unregisters only this user's Windows task", async () => {
-  const scripts = [];
-  await uninstallService({
-    platform: "win32",
-    powershell: async (script) => scripts.push(script),
-  });
-  expect(scripts[0]).toContain('"Vorkspace Host-$sid"');
-  expect(scripts[0]).toContain("Unregister-ScheduledTask");
-  expect(scripts[0]).not.toMatch(/Remove-Item|\.vorkspace-host/);
-});

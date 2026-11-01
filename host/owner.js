@@ -3,7 +3,6 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { runPowerShell } from "./windows.js";
 const exec = promisify(execFile);
 /** Kernel-backed SQLite locking survives neither crashes nor PID reuse. The
  * PID file remains for compatibility with hosts installed before this lock. */
@@ -41,16 +40,11 @@ export async function acquireHostOwner(directory) {
         if (alive) {
           // Never treat an unresponsive host as dead. For legacy locks, check
           // the process command, conservatively refusing if it cannot be read.
-          const command =
-            process.platform === "win32"
-              ? await runPowerShell(
-                  `$p = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'; if ($null -eq $p.CommandLine) { throw 'Cannot inspect host lock owner' }; $p.CommandLine`,
-                )
-              : (
-                  await exec("ps", ["-ww", "-p", String(pid), "-o", "args="], {
-                    timeout: 5_000,
-                  })
-                ).stdout;
+          const { stdout: command } = await exec(
+            "ps",
+            ["-ww", "-p", String(pid), "-o", "args="],
+            { timeout: 5_000 },
+          );
           if (
             !command.trim() ||
             /(?:vorkspace|vorkspace)-host.*\bserve\b/.test(command)

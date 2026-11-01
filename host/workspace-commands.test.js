@@ -66,7 +66,7 @@ function fixture() {
   return { home, commands, repo };
 }
 const apiRoot = (path) =>
-  process.platform === "win32" ? path.replace(/\\/g, "/") : path;
+  path;
 it("invalidates the cached project index after rename and delete", async () => {
   const { commands, repo } = fixture();
   const a = repo("a");
@@ -200,7 +200,7 @@ it("rejects invalid and cross-repo selections before touching staging", async ()
     }),
   ).rejects.toThrow("cannot amend");
 });
-it.skipIf(process.platform === "win32")(
+it(
   "treats wildcard, pathspec, newline and backslash filenames literally",
   async () => {
     const { commands, repo } = fixture();
@@ -261,7 +261,7 @@ it("locates each checkout and deleted parents while enforcing host boundaries", 
     }),
   ).toEqual([null]);
 });
-it.skipIf(process.platform === "win32")(
+it(
   "keeps file symlinks in their checkout and rejects traversal through outside directories",
   async () => {
     const { home, commands, repo } = fixture();
@@ -335,7 +335,7 @@ it("advances successful editor baselines and preserves CRLF and file permissions
   const { cwd, write } = repo();
   const path = join(cwd, "chosen.txt");
   write("chosen.txt", "before\r\n");
-  if (process.platform !== "win32") chmodSync(path, 0o751);
+  chmodSync(path, 0o751);
   const baseline = await commands.run("read_editor_text_file", {
     path,
   });
@@ -346,8 +346,7 @@ it("advances successful editor baselines and preserves CRLF and file permissions
   });
   expect(saved).toEqual({ status: "saved", path, hash: digest("after\r\n") });
   expect(readFileSync(path, "utf8")).toBe("after\r\n");
-  if (process.platform !== "win32")
-    expect(statSync(path).mode & 0o777).toBe(0o751);
+  expect(statSync(path).mode & 0o777).toBe(0o751);
   expect(
     await commands.run("write_editor_text_file", {
       path,
@@ -397,7 +396,7 @@ it("rechecks external changes made during temporary preparation and cleans up", 
     false,
   );
 });
-it.skipIf(process.platform === "win32")(
+it(
   "preserves in-project symlinks and rejects editor access outside host projects",
   async () => {
     const { home, commands, repo } = fixture();

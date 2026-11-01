@@ -70,7 +70,6 @@ async function fixture(t, env = {}, options = {}) {
   `);
   dev = await startDev({
     root,
-    platform: "linux",
     args: ["--dev-data", "--cwd", "a project with spaces"],
     debounce: 40,
     installBundle: (source) => { installs.push(source); return false; },
@@ -125,7 +124,7 @@ test("manual restart keeps the app on a failed build and shuts it down after a s
   const f = await fixture(t);
   await f.until((events) => f.starts(events) === 1);
   assert.deepEqual(f.calls.find((call) => call.args[0] === "build").args, ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", "vorkspace-gpui", "--bin", "vorkspace-gpui", "--release"]);
-  const launch = f.calls.find((call) => call.command !== "cargo");
+  const launch = f.calls.find((call) => !["cargo", "bash"].includes(call.command));
   assert.ok(launch.command.startsWith(join(f.root, "custom-target")));
   assert.equal(launch.options.env.VORKSPACE_DEV_RELOAD, "1");
   assert.deepEqual(launch.args, ["--dev-data", "--cwd", "a project with spaces"]);
@@ -168,7 +167,7 @@ test("macOS bundles automatically and preserves the selected data mode for Finde
     [["--vorkspace-data", "--dev-data", "--cwd", "--vorkspace-data"], "dev-data"],
   ]) {
     await t.test(`${mode}: ${JSON.stringify(args)}`, async (t) => {
-      const f = await fixture(t, {}, { platform: "darwin", args });
+      const f = await fixture(t, {}, { args });
       await f.until((events) => f.starts(events) === 1);
       const packaged = f.calls.find((call) => call.command === "bash");
       assert.deepEqual(packaged.args, ["scripts/desktop/bundle-native-macos.sh", "release", join(f.root, "custom-target"), "0.15.0", mode]);
@@ -183,7 +182,7 @@ test("macOS bundles automatically and preserves the selected data mode for Finde
 });
 
 test("failed macOS packaging keeps the current app running", async (t) => {
-  const f = await fixture(t, {}, { platform: "darwin" });
+  const f = await fixture(t);
   await f.until((events) => f.starts(events) === 1);
   await writeFile(join(f.root, "fail-package"), "");
   f.dev.requestBuild();
@@ -197,7 +196,6 @@ test("macOS launches the fresh bundle when installation fails and the installed 
     await t.test(`installed: ${installed}`, async (t) => {
       const installs = [];
       const f = await fixture(t, { CI: "", VORKSPACE_NO_INSTALL: "" }, {
-        platform: "darwin",
         installBundle: (source) => { installs.push(source); return installed; },
       });
       await f.until((events) => f.starts(events) === 1);
@@ -220,7 +218,7 @@ test("CI, explicit no-install, and native-dev launch without attempting installa
     [{ CI: "", VORKSPACE_NO_INSTALL: "" }, "native-dev"],
   ]) {
     await t.test(`${profile}: ${JSON.stringify(env)}`, async (t) => {
-      const f = await fixture(t, env, { platform: "darwin", profile });
+      const f = await fixture(t, env, { profile });
       await f.until((events) => f.starts(events) === 1);
       assert.deepEqual(f.installs, []);
       const app = f.calls.find((call) => !["cargo", "bash"].includes(call.command));
@@ -229,44 +227,26 @@ test("CI, explicit no-install, and native-dev launch without attempting installa
   }
 });
 
-test("Windows launches the executable from the configured build target", async (t) => {
-  const f = await fixture(t, { CARGO_BUILD_TARGET: "x86_64-pc-windows-msvc" }, { platform: "win32" });
-  await f.until((events) => f.starts(events) === 1);
-  assert.equal(f.calls.some((call) => call.command === "bash"), false);
-  const app = f.calls.find((call) => call.command !== "cargo");
-  assert.equal(app.command, join(f.root, "custom-target/x86_64-pc-windows-msvc/release/vorkspace-gpui.exe"));
-  assert.equal(app.options.detached, false);
-});
-
-test("the dev profile packages and launches Cargo's debug artifacts on every platform", async (t) => {
+test("the dev profile packages and launches Cargo's debug artifacts", async (t) => {
   assert.deepEqual(parseDevArgs(["--profile", "dev"]), { args: [], profile: "dev" });
   assert.deepEqual(parseDevArgs(["--profile=dev"]), { args: [], profile: "dev" });
-  for (const platform of ["darwin", "linux", "win32"]) {
-    await t.test(platform, async (t) => {
-      const triple = platform === "win32" ? "x86_64-pc-windows-msvc" : "";
-      const f = await fixture(t, { CARGO_BUILD_TARGET: triple }, { platform, profile: "dev" });
-      await f.until((events) => f.starts(events) === 1);
-      const build = f.calls.find((call) => call.command === "cargo" && call.args[0] === "build");
-      assert.deepEqual(build.args.slice(-2), ["--profile", "dev"]);
-      const target = join(f.root, "custom-target", triple);
-      const executable = platform === "darwin"
-        ? "vorkspace.app/Contents/MacOS/vorkspace-gpui"
-        : platform === "win32" ? "vorkspace-gpui.exe" : "vorkspace-gpui";
-      const launches = () => f.calls.filter((call) => !["cargo", "bash"].includes(call.command));
-      assert.equal(launches()[0].command, join(target, "debug", executable));
-      if (platform === "darwin") {
-        assert.deepEqual(f.calls.find((call) => call.command === "bash").args,
-          ["scripts/desktop/bundle-native-macos.sh", "debug", target, "0.15.0", "dev-data"]);
-        assert.deepEqual(f.installs, []);
-      }
-      f.dev.requestBuild();
-      await f.until((events) => f.starts(events) === 2);
-      assert.equal(launches()[1].command, join(target, "debug", executable));
-      const events = await f.events();
-      assert.ok(events.lastIndexOf("built") < events.indexOf("quit"));
-      assert.ok(events.indexOf("quit") < events.findLastIndex((event) => event.startsWith("start:")));
-    });
-  }
+  const f = await fixture(t, {}, { profile: "dev" });
+  await f.until((events) => f.starts(events) === 1);
+  const build = f.calls.find((call) => call.command === "cargo" && call.args[0] === "build");
+  assert.deepEqual(build.args.slice(-2), ["--profile", "dev"]);
+  const target = join(f.root, "custom-target");
+  const executable = "vorkspace.app/Contents/MacOS/vorkspace-gpui";
+  const launches = () => f.calls.filter((call) => !["cargo", "bash"].includes(call.command));
+  assert.equal(launches()[0].command, join(target, "debug", executable));
+  assert.deepEqual(f.calls.find((call) => call.command === "bash").args,
+    ["scripts/desktop/bundle-native-macos.sh", "debug", target, "0.15.0", "dev-data"]);
+  assert.deepEqual(f.installs, []);
+  f.dev.requestBuild();
+  await f.until((events) => f.starts(events) === 2);
+  assert.equal(launches()[1].command, join(target, "debug", executable));
+  const events = await f.events();
+  assert.ok(events.lastIndexOf("built") < events.indexOf("quit"));
+  assert.ok(events.indexOf("quit") < events.findLastIndex((event) => event.startsWith("start:")));
 });
 
 test("closing during compilation terminates Cargo and never launches an app", { timeout: 10_000 }, async (t) => {

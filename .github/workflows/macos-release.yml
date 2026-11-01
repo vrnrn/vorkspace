@@ -77,11 +77,10 @@ jobs:
           ln -s /Applications build/dmg-root/Applications
           hdiutil create -volname vorkspace -srcfolder build/dmg-root -format UDZO build/native-updates/vorkspace_aarch64.dmg
           rm -rf build/dmg-root
-      - name: Package Apple Silicon and Intel remote hosts
+      - name: Package macOS and Linux remote hosts
         run: |
           npm run host:build
-          node host/package.mjs --target darwin-arm64
-          node host/package.mjs --target darwin-x64
+          node host/package.mjs --all
       - name: Verify release metadata before creating a draft
         run: |
           APP=target/aarch64-apple-darwin/release/vorkspace.app
@@ -117,8 +116,8 @@ jobs:
           read_release
           node scripts/release/verify-release-draft.mjs "$RUNNER_TEMP/release-state.json"
           gh release upload "$RELEASE_TAG" --clobber build/native-updates/* \
-            build/host-packages/vorkspace-host-darwin-{arm64,x64}.tar.gz \
-            build/host-packages/vorkspace-host-darwin-{arm64,x64}.tar.gz.sha256 LICENSE
+            build/host-packages/vorkspace-host-{darwin,linux}-{arm64,x64}.tar.gz \
+            build/host-packages/vorkspace-host-{darwin,linux}-{arm64,x64}.tar.gz.sha256 LICENSE
           read_release
           node scripts/release/verify-release-draft.mjs "$RUNNER_TEMP/release-state.json"
           gh release edit "$RELEASE_TAG" --draft=false --latest --notes-file "$RUNNER_TEMP/macos-release-notes.md"

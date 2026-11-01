@@ -228,36 +228,31 @@ fn capture(mut reader: impl Read + Send + 'static) -> std::thread::JoinHandle<Ve
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HostPlatform {
-    Unix,
-    Windows,
-}
-
 const PLATFORM_PROBE: &[&str] = &["echo", "VORKSPACE_PLATFORM", "$env:OS", "%OS%", "$OS"];
 
-fn parse_platform(output: &str) -> Result<HostPlatform, String> {
+/// Windows machines answer the probe from cmd.exe or PowerShell; refuse them
+/// here so the failure names the cause instead of a broken bootstrap script.
+fn parse_platform(output: &str) -> Result<(), String> {
     let marker = output
         .rsplit_once("VORKSPACE_PLATFORM")
-        .ok_or("Could not identify the remote shell. Use cmd.exe, PowerShell, or a Unix shell.")?
+        .ok_or("Could not identify the remote shell. Use a Unix shell.")?
         .1;
-    Ok(
-        if marker
-            .split_whitespace()
-            .any(|word| word.eq_ignore_ascii_case("Windows_NT"))
-        {
-            HostPlatform::Windows
-        } else {
-            HostPlatform::Unix
-        },
-    )
+    if marker
+        .split_whitespace()
+        .any(|word| word.eq_ignore_ascii_case("Windows_NT"))
+    {
+        return Err(
+            "vorkspace hosts run on macOS or Linux. Windows machines are not supported.".into(),
+        );
+    }
+    Ok(())
 }
 
 pub fn detect_platform(
     target: &SshTarget,
     job: &Arc<Job>,
     askpass: &Askpass,
-) -> Result<HostPlatform, String> {
+) -> Result<(), String> {
     job.message("Checking the remote machine…");
     let output = run_remote_command(
         target,
@@ -270,46 +265,13 @@ pub fn detect_platform(
     parse_platform(&output)
 }
 
-fn powershell_encoded(script: &str) -> String {
-    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-    base64::engine::general_purpose::STANDARD.encode(bytes)
-}
-
-/// Keep the remote command below cmd.exe's length limit. The actual script is
-/// read from UTF-8 stdin as a single block, rather than evaluated line by line.
-fn powershell_reader() -> String {
-    // Prefer this shell's built-in modules if the SSH environment inherited
-    // PowerShell 7 module paths through an intermediate process.
-    powershell_encoded("$env:PSModulePath = $PSHOME + '\\Modules;' + $env:PSModulePath; $ErrorActionPreference = 'Stop'; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); try { & ([ScriptBlock]::Create([Console]::In.ReadToEnd())) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }")
-}
-
 pub fn run_script(
     target: &SshTarget,
-    platform: HostPlatform,
     script: String,
     job: &Arc<Job>,
     askpass: &Askpass,
 ) -> Result<String, String> {
-    if platform == HostPlatform::Windows {
-        let encoded = powershell_reader();
-        run_remote_command(
-            target,
-            script,
-            job,
-            askpass,
-            command(target, true),
-            &[
-                "powershell.exe",
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-EncodedCommand",
-                &encoded,
-            ],
-        )
-    } else {
-        run_script_with_command(target, script, job, askpass, command(target, true))
-    }
+    run_script_with_command(target, script, job, askpass, command(target, true))
 }
 
 fn run_script_with_command(
@@ -379,51 +341,31 @@ fn run_remote_command(
 pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
-fn powershell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
+
+pub fn bootstrap_script() -> String {
+    bootstrap_script_from_template(include_str!("remote_bootstrap.sh"))
 }
 
-pub fn bootstrap_script(platform: HostPlatform) -> String {
-    let template = match platform {
-        HostPlatform::Unix => include_str!("remote_bootstrap.sh"),
-        HostPlatform::Windows => include_str!("remote_bootstrap.ps1"),
-    };
-    bootstrap_script_from_template(platform, template)
-}
-
-fn bootstrap_script_from_template(platform: HostPlatform, template: &str) -> String {
+fn bootstrap_script_from_template(template: &str) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let url = format!("https://github.com/vrnrn/vorkspace/releases/download/mac-v{version}");
-    match platform {
-        // include_str! preserves checkout line endings, including Windows CRLF.
-        HostPlatform::Unix => template
-            .replace("\r\n", "\n")
-            .replace("@@VERSION@@", &shell_quote(version))
-            .replace("@@RELEASE@@", &shell_quote(&url)),
-        HostPlatform::Windows => template
-            .replace("@@VERSION@@", &powershell_quote(version))
-            .replace("@@RELEASE@@", &powershell_quote(&url))
-            .replace("@@ACL@@", include_str!("windows-acl.ps1")),
-    }
+    // include_str! preserves checkout line endings, including CRLF.
+    template
+        .replace("\r\n", "\n")
+        .replace("@@VERSION@@", &shell_quote(version))
+        .replace("@@RELEASE@@", &shell_quote(&url))
 }
 
-pub fn upgrade_script(platform: HostPlatform, port: u16) -> String {
-    let script = bootstrap_script(platform);
-    match platform {
-        HostPlatform::Unix => {
-            format!("VORKSPACE_HOST_FORCE_UPGRADE=1\nVORKSPACE_HOST_PORT={port}\n{script}")
-        }
-        HostPlatform::Windows => format!(
-            "$env:VORKSPACE_HOST_FORCE_UPGRADE = '1'\n$env:VORKSPACE_HOST_PORT = '{port}'\n{script}"
-        ),
-    }
+pub fn upgrade_script(port: u16) -> String {
+    let script = bootstrap_script();
+    format!("VORKSPACE_HOST_FORCE_UPGRADE=1\nVORKSPACE_HOST_PORT={port}\n{script}")
 }
 
-pub fn pairing_script(platform: HostPlatform, name: &str) -> String {
-    match platform {
-        HostPlatform::Unix => format!("set -eu\n\"$HOME/.vorkspace-host/bin/vorkspace-host\" pair --name {} --json\n", shell_quote(name)),
-        HostPlatform::Windows => format!("$ErrorActionPreference = 'Stop'\n$base = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.vorkspace-host'\n$runtime = [IO.File]::ReadAllText((Join-Path $base 'runtime-path')).Trim()\n& (Join-Path $runtime 'node.exe') (Join-Path $runtime 'host.mjs') pair --name {} --json\nif ($LASTEXITCODE -ne 0) {{ throw 'Host pairing failed.' }}\n", powershell_quote(name)),
-    }
+pub fn pairing_script(name: &str) -> String {
+    format!(
+        "set -eu\n\"$HOME/.vorkspace-host/bin/vorkspace-host\" pair --name {} --json\n",
+        shell_quote(name)
+    )
 }
 
 pub struct Tunnel {
@@ -722,7 +664,7 @@ mod tests {
             PLATFORM_PROBE,
         )
         .unwrap();
-        assert_eq!(parse_platform(&detected).unwrap(), HostPlatform::Unix);
+        parse_platform(&detected).unwrap();
         let output = run_script_with_command(
             &target,
             "printf 'remote-script-ok\\n'\n".into(),
@@ -779,51 +721,35 @@ mod tests {
     fn unix_bootstrap_accepts_windows_checkout_line_endings() {
         let lf_template = include_str!("remote_bootstrap.sh").replace("\r\n", "\n");
         let crlf_template = lf_template.replace('\n', "\r\n");
-        let script = bootstrap_script_from_template(HostPlatform::Unix, &crlf_template);
+        let script = bootstrap_script_from_template(&crlf_template);
         assert!(script.starts_with("set -eu\n"));
         assert!(!script.contains('\r'));
-        assert_eq!(
-            script,
-            bootstrap_script_from_template(HostPlatform::Unix, &lf_template)
-        );
+        assert_eq!(script, bootstrap_script_from_template(&lf_template));
     }
     #[test]
     fn bootstrap_is_versioned_and_only_explicit_upgrade_restarts_the_host() {
-        let script = bootstrap_script(HostPlatform::Unix);
+        let script = bootstrap_script();
         assert!(!script.contains('\r'));
         assert!(!script.contains("@@"));
         assert!(script.contains("--proto '=https'"));
         assert!(script.contains("checksum mismatch"));
         assert!(script.contains("\"$FORCE_UPGRADE\" = 1"));
         assert!(script.contains("service uninstall"));
-        assert!(
-            upgrade_script(HostPlatform::Unix, 3774).starts_with("VORKSPACE_HOST_FORCE_UPGRADE=1")
-        );
-        assert!(!upgrade_script(HostPlatform::Unix, 3774).contains('\r'));
-        assert!(upgrade_script(HostPlatform::Windows, 3774)
-            .starts_with("$env:VORKSPACE_HOST_FORCE_UPGRADE = '1'"));
+        assert!(upgrade_script(3774).starts_with("VORKSPACE_HOST_FORCE_UPGRADE=1"));
+        assert!(!upgrade_script(3774).contains('\r'));
     }
     #[test]
-    fn remote_platform_probe_handles_cmd_powershell_and_unix() {
-        assert_eq!(
-            parse_platform("VORKSPACE_PLATFORM $env:OS Windows_NT $OS\r\n").unwrap(),
-            HostPlatform::Windows
-        );
-        assert_eq!(
-            parse_platform("VORKSPACE_PLATFORM\r\nWindows_NT\r\n%OS%\r\n").unwrap(),
-            HostPlatform::Windows
-        );
-        assert_eq!(
-            parse_platform("VORKSPACE_PLATFORM :OS %OS%\n").unwrap(),
-            HostPlatform::Unix
-        );
+    fn remote_platform_probe_refuses_windows_and_accepts_unix() {
+        for output in [
+            "VORKSPACE_PLATFORM $env:OS Windows_NT $OS\r\n",
+            "VORKSPACE_PLATFORM\r\nWindows_NT\r\n%OS%\r\n",
+        ] {
+            assert!(parse_platform(output)
+                .unwrap_err()
+                .contains("not supported"));
+        }
+        parse_platform("VORKSPACE_PLATFORM :OS %OS%\n").unwrap();
         assert!(parse_platform("unrecognized shell").is_err());
-        assert!(powershell_reader().len() < 4096);
-        let script = bootstrap_script(HostPlatform::Windows);
-        assert!(!script.contains("@@"));
-        assert!(script.contains("checksum mismatch"));
-        assert!(script.contains("Protect-vorkspaceDirectory"));
-        assert!(pairing_script(HostPlatform::Windows, "Nick's $PC").contains("'Nick''s $PC'"));
     }
     #[test]
     fn device_names_are_bounded_single_lines() {

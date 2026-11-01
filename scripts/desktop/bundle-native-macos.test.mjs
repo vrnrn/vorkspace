@@ -8,9 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
-test("Finder launches use normal desktop data by default and honor explicit isolation in either profile", {
-  skip: process.platform === "win32",
-}, async (t) => {
+test("Finder launches use normal desktop data by default and honor explicit isolation in either profile", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "vorkspace-bundle-data-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const bin = join(directory, "bin");
