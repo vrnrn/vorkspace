@@ -73,3 +73,5 @@ The focused checks create artificial timing events and temporary files. They
 verify the recorded numbers, privacy limits, file-size limits and failure
 behavior without deliberately freezing or restarting your installed app. A
 successful test does not prove that every real beachball will leave a record.
+This code lives in `crates/vorkspace-macos`, so its checks can run without
+building the whole app.
