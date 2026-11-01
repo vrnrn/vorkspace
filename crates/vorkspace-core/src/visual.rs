@@ -7,20 +7,30 @@ mod model;
 pub use model::*;
 
 use rquickjs::{Context, Function, Object, Persistent, Runtime};
-use std::{
-    cell::Cell,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{cell::Cell, rc::Rc, time::Duration};
 
 /// Conservative per-interpreter bound for transcript cache accounting.
 pub const MEMORY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 const TREE_BYTES: usize = 1024 * 1024;
-const CALL_DEADLINE: Duration = Duration::from_millis(60);
+const CALL_BUDGET: Duration = Duration::from_millis(60);
 
-/// The deadline's time source. `Instant::now` bills a program for any stall of
-/// its thread, so only tests of the deadline itself may run on it unchanged.
-type Clock = fn() -> Instant;
+/// The budget's time source. Readings are only compared on one thread: a
+/// `VisualRuntime` is not `Send`, so it never leaves the thread it started on.
+type Clock = fn() -> Duration;
+
+/// CPU time used by this thread. A program runs to completion on the calling
+/// thread and cannot block, so limiting this stops a runaway script as a wall
+/// clock would, without charging a valid one for time a busy machine gave to
+/// other work.
+fn thread_cpu_time() -> Duration {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: a valid out-pointer for a clock id that every Unix target provides.
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+    Duration::new(time.tv_sec as u64, time.tv_nsec as u32)
+}
 
 /// An isolated program. Keep it alive to preserve state between native events.
 /// Field order ensures all persistent JS values are dropped before their VM.
@@ -29,7 +39,7 @@ pub struct VisualRuntime {
     context: Context,
     _runtime: Runtime,
     clock: Clock,
-    deadline: Rc<Cell<Instant>>,
+    deadline: Rc<Cell<Duration>>,
     interrupted: Rc<Cell<bool>>,
     stopped: bool,
     current: Option<Node>,
@@ -37,7 +47,7 @@ pub struct VisualRuntime {
 
 impl VisualRuntime {
     pub fn new(source: &str) -> Result<Self, String> {
-        Self::with_clock(source, Instant::now)
+        Self::with_clock(source, thread_cpu_time)
     }
 
     fn with_clock(source: &str, clock: Clock) -> Result<Self, String> {
@@ -45,7 +55,7 @@ impl VisualRuntime {
         let runtime = Runtime::new().map_err(|e| format!("Could not start visual runtime: {e}"))?;
         runtime.set_memory_limit(MEMORY_LIMIT_BYTES);
         runtime.set_max_stack_size(256 * 1024);
-        let deadline = Rc::new(Cell::new(clock() + CALL_DEADLINE));
+        let deadline = Rc::new(Cell::new(clock() + CALL_BUDGET));
         let interrupted = Rc::new(Cell::new(false));
         let interrupt_deadline = deadline.clone();
         let interrupt_flag = interrupted.clone();
@@ -105,7 +115,7 @@ impl VisualRuntime {
         if self.stopped {
             return Err("Visual stopped after an execution error; reload it to continue".into());
         }
-        self.deadline.set((self.clock)() + CALL_DEADLINE);
+        self.deadline.set((self.clock)() + CALL_BUDGET);
         self.interrupted.set(false);
         let result = self.context.with(|ctx| {
             let result = (|| -> rquickjs::Result<String> {
@@ -179,7 +189,7 @@ fn validate_event(node: &Node, id: &str, value: &serde_json::Value) -> Option<Re
 /// Validate the initial view and a bounded sample of its interactive controls.
 /// Each event runs in a fresh VM so checking never changes the published state.
 pub fn check(source: &str) -> Result<Node, String> {
-    check_with_clock(source, Instant::now)
+    check_with_clock(source, thread_cpu_time)
 }
 
 fn check_with_clock(source: &str, clock: Clock) -> Result<Node, String> {
@@ -246,7 +256,7 @@ fn execution_error(
     if interrupted.get() {
         // Clear the exception without invoking an untrusted exception accessor.
         let _ = ctx.catch();
-        return "Visual execution exceeded its 60 ms time budget".into();
+        return "Visual execution exceeded its 60 ms CPU time budget".into();
     }
     let message = if error.is_exception() {
         let exception = ctx.catch();
@@ -261,7 +271,7 @@ fn execution_error(
     // the same interrupt deadline as the operation that threw the exception.
     if interrupted.get() {
         let _ = ctx.catch();
-        return "Visual execution exceeded its 60 ms time budget".into();
+        return "Visual execution exceeded its 60 ms CPU time budget".into();
     }
     format!(
         "Visual execution failed: {}",

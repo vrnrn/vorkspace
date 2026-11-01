@@ -1,14 +1,14 @@
 use super::*;
 use serde_json::json;
-use std::sync::LazyLock;
+use std::time::Instant;
 
-/// Advances once per read, so a call's budget counts interrupt polls and a
-/// stalled test thread cannot spend it. Runaway scripts still stop eventually.
-fn poll_clock() -> Instant {
-    static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+/// Advances once per read, so a call's budget counts interrupt polls and the
+/// verdict does not depend on how fast the test machine is. Runaway scripts
+/// still stop eventually.
+fn poll_clock() -> Duration {
     thread_local!(static READS: Cell<u32> = const { Cell::new(0) });
     let reads = READS.replace(READS.get() + 1);
-    *START + Duration::from_micros(reads.into())
+    Duration::from_micros(reads.into())
 }
 /// A program that loops forever or misses the budget uses the real clock below.
 fn runtime(source: &str) -> VisualRuntime {
@@ -185,19 +185,19 @@ fn native_blocking_primitives_are_unavailable() {
 }
 
 #[test]
-fn exception_message_accessors_share_the_execution_deadline() {
-    let started = Instant::now();
+fn exception_message_accessors_share_the_execution_budget() {
+    let started = thread_cpu_time();
     let error = super::check(
         "const e=new Error();Object.defineProperty(e,'message',{get(){while(true){}}});throw e;",
     )
     .unwrap_err();
     assert!(error.contains("time budget"));
-    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(thread_cpu_time() - started < Duration::from_secs(2));
 }
 
 #[test]
 fn runaway_initialization_render_and_handler_are_interrupted() {
-    let started = Instant::now();
+    let started = thread_cpu_time();
     assert!(
         VisualRuntime::new("while(true){} return () => visual.text('No');")
             .err()
@@ -212,23 +212,45 @@ fn runaway_initialization_render_and_handler_are_interrupted() {
             .unwrap_err()
             .contains("time budget")
     );
-    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(thread_cpu_time() - started < Duration::from_secs(3));
 }
 
-/// The deadline is wall-clock time: a stalled thread spends it without running
-/// any script, which is why the other tests must not read the real clock.
+/// Every budget check sees a whole budget spent, so even a trivial program stops.
 #[test]
-fn a_stall_between_interrupt_polls_spends_the_budget_of_a_trivial_program() {
-    fn stalling_clock() -> Instant {
-        static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+fn a_program_that_spends_its_budget_between_polls_is_stopped() {
+    fn spending_clock() -> Duration {
         thread_local!(static READS: Cell<u32> = const { Cell::new(0) });
         let reads = READS.replace(READS.get() + 1);
-        *START + CALL_DEADLINE * reads
+        CALL_BUDGET * reads
     }
-    let error = VisualRuntime::with_clock("return () => visual.text('ok');", stalling_clock)
+    let error = VisualRuntime::with_clock("return () => visual.text('ok');", spending_clock)
         .and_then(|mut vm| vm.render())
         .unwrap_err();
-    assert_eq!(error, "Visual execution exceeded its 60 ms time budget");
+    assert_eq!(error, "Visual execution exceeded its 60 ms CPU time budget");
+}
+
+/// Each budget check first takes the thread off the CPU for a whole budget, and
+/// the real CPU clock must not charge the program for any of it.
+#[test]
+fn a_descheduled_program_is_not_charged_for_time_it_did_not_run() {
+    thread_local!(static READS: Cell<u32> = const { Cell::new(0) });
+    fn descheduling_clock() -> Duration {
+        READS.set(READS.get() + 1);
+        std::thread::sleep(CALL_BUDGET);
+        thread_cpu_time()
+    }
+    let started = Instant::now();
+    let node = VisualRuntime::with_clock(
+        "return () => {let n=0;for(let i=0;i<50000;i++)n+=i;return visual.text(n);};",
+        descheduling_clock,
+    )
+    .and_then(|mut vm| vm.render())
+    .unwrap();
+    assert!(matches!(node, Node::Text { text, .. } if text == "1249975000"));
+    // Two reads set the budget; the rest are interrupt polls during execution.
+    let polls = READS.get() - 2;
+    assert!(polls > 0);
+    assert!(started.elapsed() >= CALL_BUDGET * READS.get());
 }
 
 #[test]
