@@ -361,9 +361,11 @@ fn main() {
     let diagnostics_path = std::path::absolute(&database)
         .ok()
         .and_then(|path| path.parent().map(|root| root.join("diagnostics")));
-    gpui::Application::with_platform(std::rc::Rc::new(gpui_macos::MacPlatform::new(false)))
-        .with_assets(assets::Assets)
-        .run(move |cx: &mut App| {
+    let application =
+        gpui::Application::with_platform(std::rc::Rc::new(gpui_macos::MacPlatform::new(false)))
+            .with_assets(assets::Assets);
+    application.on_reopen(app_menu::reopen_workspace);
+    application.run(move |cx: &mut App| {
             if let Some(path) = diagnostics_path {
                 vorkspace_macos::hang_diagnostics::start(cx, path);
             }

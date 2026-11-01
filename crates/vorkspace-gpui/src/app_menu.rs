@@ -34,6 +34,18 @@ fn workspace_fallback<A: Action>(cx: &mut App) {
     });
 }
 
+/// A Dock click brings back the workspace that Close to Tray hid.
+pub(crate) fn reopen_workspace(cx: &mut App) {
+    let Some(target) = workspace_target(cx) else {
+        return;
+    };
+    cx.activate(true);
+    let _ = target.update(cx, |_, window, _| {
+        window.activate_window();
+        vorkspace_ui::traffic_lights::show(window);
+    });
+}
+
 actions!(
     application_menu,
     [

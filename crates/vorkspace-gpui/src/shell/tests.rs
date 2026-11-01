@@ -4187,3 +4187,21 @@ fn settled_title_does_not_schedule_decorative_redraws(cx: &mut TestAppContext) {
         before.2
     );
 }
+
+#[gpui::test]
+fn reopening_activates_the_workspace_over_a_floating_window(cx: &mut TestAppContext) {
+    let (workspace, _, _) = window(cx);
+    let panel = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| cx.new(|_| gpui::Empty))
+            .unwrap()
+    });
+    panel
+        .update(cx, |_, window, _| window.activate_window())
+        .unwrap();
+    cx.run_until_parked();
+    let active = |cx: &mut TestAppContext| cx.update(|cx| workspace.is_active(cx));
+    assert_eq!(active(cx), Some(false));
+    cx.update(crate::app_menu::reopen_workspace);
+    cx.run_until_parked();
+    assert_eq!(active(cx), Some(true));
+}
