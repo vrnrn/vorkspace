@@ -2588,11 +2588,10 @@ impl Render for Shell {
                     this.close_preview(cx);
                 }
             }))
-            .on_action(cx.listener(
-                |this, event: &crate::file_tools::file_editor::OpenPath, window, cx| {
+            .on_action(
+                cx.listener(|this, event: &crate::file_link::OpenPath, window, cx| {
                     let cwd = this.git.read(cx).project().to_owned();
-                    let (path, location) =
-                        crate::file_tools::file_editor::file_location(&event.0, &cwd);
+                    let (path, location) = crate::file_link::file_location(&event.0, &cwd);
                     this.open_review(
                         crate::git_tools::review::ReviewTab::File { cwd, path },
                         window,
@@ -2612,8 +2611,8 @@ impl Render for Shell {
                     {
                         pane.update(cx, |pane, cx| pane.navigate_file(line, column, cx));
                     }
-                },
-            ))
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &crate::Quit, window, cx| this.request_quit(window, cx)),
             )

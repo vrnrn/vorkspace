@@ -137,7 +137,7 @@ impl TranscriptView {
         let is_file = matches!(shown.action.as_str(), "Read" | "Edit" | "Write" | "List");
         let target_path = if is_file {
             shown.file_path.as_deref().map(|path| {
-                let (path, location) = crate::file_tools::file_editor::file_location(
+                let (path, location) = crate::file_link::file_location(
                     path,
                     self.file_link_base.as_deref().unwrap_or(""),
                 );
@@ -153,10 +153,8 @@ impl TranscriptView {
             None
         };
         let link = |path: &str, line: Option<u64>| {
-            let (path, location) = crate::file_tools::file_editor::file_location(
-                path,
-                self.file_link_base.as_deref().unwrap_or(""),
-            );
+            let (path, location) =
+                crate::file_link::file_location(path, self.file_link_base.as_deref().unwrap_or(""));
             match location {
                 Some((line, col)) => format!("{path}:{line}:{col}"),
                 None => line.map_or(path.clone(), |line| format!("{path}:{line}")),
@@ -262,7 +260,8 @@ impl TranscriptView {
                         .gap_1()
                         // A chain's description is prose; only its chips are code.
                         .when(!chain, |d| {
-                            d.font_family(vorkspace_ui::fonts::FIXED_FONT).text_size(px(12.))
+                            d.font_family(vorkspace_ui::fonts::FIXED_FONT)
+                                .text_size(px(12.))
                         })
                         .text_color(if failed {
                             rgb(0xff6467).into()
@@ -323,7 +322,7 @@ impl TranscriptView {
                                 .on_click(move |_, window, cx| {
                                     cx.stop_propagation();
                                     window.dispatch_action(
-                                        Box::new(crate::file_tools::file_editor::OpenPath(path.clone())),
+                                        Box::new(crate::file_link::OpenPath(path.clone())),
                                         cx,
                                     );
                                 })
@@ -403,7 +402,7 @@ impl TranscriptView {
                                                     .on_click(move |_, window, cx| {
                                                         cx.stop_propagation();
                                                         window.dispatch_action(
-                                                            Box::new(crate::file_tools::file_editor::OpenPath(
+                                                            Box::new(crate::file_link::OpenPath(
                                                                 path.clone(),
                                                             )),
                                                             cx,
@@ -538,11 +537,9 @@ impl TranscriptView {
                                             .on_click(move |_, window, cx| {
                                                 cx.stop_propagation();
                                                 window.dispatch_action(
-                                                    Box::new(
-                                                        crate::file_tools::file_editor::OpenPath(
-                                                            path.clone(),
-                                                        ),
-                                                    ),
+                                                    Box::new(crate::file_link::OpenPath(
+                                                        path.clone(),
+                                                    )),
                                                     cx,
                                                 );
                                             })
