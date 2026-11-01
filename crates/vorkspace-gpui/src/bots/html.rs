@@ -310,7 +310,13 @@ impl gpui::Render for Html {
                         let mut cursor_rects_changed = unsafe { view.clip.superview() }
                             .as_deref()
                             .is_none_or(|superview| !std::ptr::eq(superview, parent));
-                        if cursor_rects_changed {
+                        // Paint order is stacking order: a departing page painted last
+                        // has to rise back above the page that arrived after it.
+                        let frontmost = parent
+                            .subviews()
+                            .lastObject()
+                            .is_some_and(|last| std::ptr::eq(&*last, &**view.clip));
+                        if !frontmost {
                             parent.addSubview_positioned_relativeTo(
                                 &view.clip,
                                 NSWindowOrderingMode::Above,

@@ -1396,6 +1396,12 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Mark this element disabled, which also withdraws its accessible click.
+    fn aria_disabled(mut self, disabled: bool) -> Self {
+        self.interactivity().aria.disabled = disabled;
+        self
+    }
+
     /// Set the expanded state for this element.
     fn aria_expanded(mut self, expanded: bool) -> Self {
         self.interactivity().aria.expanded = Some(expanded);
@@ -2109,6 +2115,7 @@ pub(crate) struct AriaProperties {
     pub(crate) description: Option<SharedString>,
     pub(crate) keyshortcuts: Option<SharedString>,
     pub(crate) selected: Option<bool>,
+    pub(crate) disabled: bool,
     pub(crate) expanded: Option<bool>,
     pub(crate) toggled: Option<accesskit::Toggled>,
     pub(crate) numeric_value: Option<f64>,
@@ -3591,7 +3598,9 @@ impl Interactivity {
         if let Some(count) = self.aria.column_count {
             node.set_column_count(count);
         }
-        if !self.click_listeners.is_empty() {
+        if self.aria.disabled {
+            node.set_disabled();
+        } else if !self.click_listeners.is_empty() {
             node.add_action(accesskit::Action::Click);
         }
         if self.tracked_focus_handle.is_some() || self.focusable {

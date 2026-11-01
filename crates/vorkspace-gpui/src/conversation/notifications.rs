@@ -7,6 +7,15 @@ impl Conversation {
     pub(crate) fn notification_was_cancelled(&self) -> bool {
         self.notification_cancelled
     }
+    #[cfg(test)]
+    pub(crate) fn request_approval_for_test(&mut self, id: &str, title: &str) {
+        self.approvals.push_back(Approval {
+            id: id.into(),
+            title: title.into(),
+            detail: String::new(),
+            can_remember: false,
+        });
+    }
     pub(crate) fn pending_notification_inputs(&self, cx: &gpui::App) -> Vec<PendingInput> {
         self.approvals
             .iter()

@@ -709,39 +709,42 @@ impl Shell {
                 copies.insert(id, (copy, tick));
             }
         }
-        let mut session_elements: HashMap<i64, AnyElement> = tabs
-            .iter()
-            .enumerate()
-            .filter_map(|(ix, tab)| {
-                tab.session().and_then(|id| {
-                    self.session_summaries
-                        .contains_key(&self.workspace.session_for_pane(id))
-                        .then_some((ix, id))
+        let mut session_elements: HashMap<i64, AnyElement> =
+            tabs.iter()
+                .enumerate()
+                .filter_map(|(ix, tab)| {
+                    tab.session().and_then(|id| {
+                        self.session_summaries
+                            .contains_key(&self.workspace.session_for_pane(id))
+                            .then_some((ix, id))
+                    })
                 })
-            })
-            .filter_map(|(ix, id)| {
-                let (copy, (leaving, dir, progress)) = copies.remove(&id)?;
-                let active = self.workspace.active_tab() == Some(id)
-                    && !self.app_view_open()
-                    && !self.bot_active(cx)
-                    && self.app_search.is_none();
-                // The press itself redraws the strip to arm tab dragging.
-                // Keep its ink stable until that press is released, even if
-                // hover hitboxes are being replaced during that redraw.
-                let hovered = self.tab_hover == Some(id)
-                    || self
+                .filter_map(|(ix, id)| {
+                    let (copy, (leaving, dir, progress)) = copies.remove(&id)?;
+                    let active = self.workspace.active_tab() == Some(id)
+                        && !self.app_view_open()
+                        && !self.bot_active(cx)
+                        && self.app_search.is_none();
+                    // The press itself redraws the strip to arm tab dragging.
+                    // Keep its ink stable until that press is released, even if
+                    // hover hitboxes are being replaced during that redraw.
+                    let hovered = self.tab_hover == Some(id)
+                        || self
+                            .tab_drag
+                            .as_ref()
+                            .is_some_and(|drag| drag.id == TitleTab::Session(id) && !drag.active);
+                    // A collapsed tab drops its close button, so a click anywhere
+                    // on it selects it; selected, it is wide enough to show it again.
+                    let close = self.tab_can_close(id, cx)
+                        && (active || tab_width(&TitleTab::Session(id)) >= TAB_CLOSE_MIN_WIDTH);
+                    let dragging = self
                         .tab_drag
                         .as_ref()
-                        .is_some_and(|drag| drag.id == TitleTab::Session(id) && !drag.active);
-                // A collapsed tab drops its close button, so a click anywhere
-                // on it selects it; selected, it is wide enough to show it again.
-                let close = self.tab_can_close(id, cx)
-                    && (active || tab_width(&TitleTab::Session(id)) >= TAB_CLOSE_MIN_WIDTH);
-                let dragging = self
-                    .tab_drag
-                    .as_ref()
-                    .is_some_and(|d| d.id == TitleTab::Session(id) && d.active);
-                let tab = vorkspace_ui::theme::keyboard_reachable(div().id(("tab", id as usize)))
+                        .is_some_and(|d| d.id == TitleTab::Session(id) && d.active);
+                    let tab = vorkspace_ui::theme::keyboard_reachable(
+                        div().id(("tab", id as usize)),
+                        true,
+                    )
                     .debug_selector(move || format!("title-tab-{id}"))
                     .group("title-tab")
                     .role(Role::Tab)
@@ -882,14 +885,14 @@ impl Shell {
                         }
                         this.open_title_tab(&TitleTab::Session(id), window, cx);
                     }));
-                let element = if dragging {
-                    gpui::deferred(tab).with_priority(1).into_any()
-                } else {
-                    tab.into_any()
-                };
-                Some((id, element))
-            })
-            .collect();
+                    let element = if dragging {
+                        gpui::deferred(tab).with_priority(1).into_any()
+                    } else {
+                        tab.into_any()
+                    };
+                    Some((id, element))
+                })
+                .collect();
         let elements: Vec<AnyElement> = tabs
             .iter()
             .enumerate()

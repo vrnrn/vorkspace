@@ -35,6 +35,8 @@ pub(super) struct State {
     permission: Permission,
     permission_probe: Option<Receiver<Permission>>,
     announcements: approvals::InputAnnouncements,
+    #[cfg(test)]
+    spoken: Vec<String>,
     responding: HashSet<i64>,
     sequence: u64,
     badge: usize,
@@ -67,6 +69,8 @@ impl State {
             permission: Permission::Unsupported,
             permission_probe: None,
             announcements: Default::default(),
+            #[cfg(test)]
+            spoken: Vec::new(),
             responding: HashSet::new(),
             sequence: 0,
             badge: 0,
@@ -156,7 +160,7 @@ impl Shell {
         }
         let summary = chat.summary.clone();
         let body = chat.notification_reply_body(cx);
-        vorkspace_macos::accessibility::announce(&format!("{} finished", summary.title));
+        self.announce(format!("{} finished", summary.title));
         self.deliver_session_notice(
             &summary,
             "agentFinished",
@@ -364,6 +368,16 @@ impl Shell {
             .or_else(|| self.bots.as_ref()?.read(cx).notification_entity(id, cx))
     }
 
+    fn announce(&mut self, message: String) {
+        #[cfg(test)]
+        self.notification_state.spoken.push(message.clone());
+        vorkspace_macos::accessibility::announce(&message);
+    }
+
+    fn announce_input(&mut self, title: &str, label: &str) {
+        self.announce(format!("{title} needs your input: {label}"));
+    }
+
     /// Advance banners and the Dock badge while an occluded window skips render.
     fn process_notification_inputs(&mut self, cx: &mut Context<Self>) {
         let snapshots: Vec<_> = self
@@ -400,6 +414,7 @@ impl Shell {
                 && let Some(view) = self.notification_chat(id, cx)
             {
                 let summary = view.read(cx).summary.clone();
+                self.announce_input(&summary.title, &input.label);
                 let body = if input.kind == approvals::InputKind::Approval {
                     format!("Approve: {}", input.label)
                 } else {
@@ -505,10 +520,7 @@ impl Shell {
                 && let Some(view) = self.notification_chat(id, cx)
             {
                 let summary = view.read(cx).summary.clone();
-                vorkspace_macos::accessibility::announce(&format!(
-                    "{} needs your input: {}",
-                    summary.title, input.label
-                ));
+                self.announce_input(&summary.title, &input.label);
                 self.deliver_session_notice(
                     &summary,
                     "agentInput",
@@ -519,7 +531,7 @@ impl Shell {
             }
         }
         for (summary, body) in completed {
-            vorkspace_macos::accessibility::announce(&format!("{} finished", summary.title));
+            self.announce(format!("{} finished", summary.title));
             self.deliver_session_notice(
                 &summary,
                 "agentFinished",
@@ -1303,5 +1315,7 @@ impl Shell {
     }
 }
 
+#[cfg(test)]
+mod announcement_tests;
 #[cfg(test)]
 mod error_tests;
