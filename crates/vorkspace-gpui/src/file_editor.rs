@@ -137,7 +137,7 @@ pub(crate) struct FileEditor {
     git_task: Option<Task<()>>,
     analysis: Option<Task<()>>,
     /// The Tree-sitter parser and last tree, reused by each incremental pass.
-    syntax: Arc<std::sync::Mutex<Option<crate::editor_syntax::Session>>>,
+    syntax: Arc<std::sync::Mutex<Option<vorkspace_editor::editor_syntax::Session>>>,
     focus: FocusHandle,
     pub input: Entity<Input>,
     selection: selection::Selection,
@@ -150,7 +150,7 @@ pub(crate) struct FileEditor {
     regex: bool,
     search_invalid: bool,
     search_task: Option<Task<()>>,
-    matches: Vec<crate::editor_analysis::SearchMatch>,
+    matches: Vec<vorkspace_editor::editor_analysis::SearchMatch>,
     autosave: Option<Task<()>>,
     formatting: Option<Task<()>>,
     change_index: usize,
@@ -600,7 +600,7 @@ impl FileEditor {
         let text = self.input.read(cx).content.clone();
         let original = self.git_original.clone();
         let path = self.path.clone();
-        let syntax = crate::editor_syntax::supports(&path).then(|| self.syntax.clone());
+        let syntax = vorkspace_editor::editor_syntax::supports(&path).then(|| self.syntax.clone());
         self.analysis = Some(cx.spawn(async move |this, cx| {
             // An incremental parse costs about a frame, so native analysis
             // runs per edit. The QuickJS fallback reparses everything, so it
@@ -614,10 +614,15 @@ impl FileEditor {
             let base = original.clone();
             let work = cx.background_executor().spawn(async move {
                 match syntax {
-                    Some(syntax) => {
-                        crate::editor_syntax::analyze(&syntax, &path, &source, base.as_deref())
+                    Some(syntax) => vorkspace_editor::editor_syntax::analyze(
+                        &syntax,
+                        &path,
+                        &source,
+                        base.as_deref(),
+                    ),
+                    None => {
+                        vorkspace_editor::editor_analysis::analyze(&path, &source, base.as_deref())
                     }
-                    None => crate::editor_analysis::analyze(&path, &source, base.as_deref()),
                 }
             });
             let result = work.await;
@@ -679,7 +684,7 @@ impl FileEditor {
             let text = source.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { crate::editor_analysis::format(&path, &text, at) })
+                .spawn(async move { vorkspace_editor::editor_analysis::format(&path, &text, at) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.input.read(cx).content == source
@@ -711,7 +716,9 @@ impl FileEditor {
                 let text = source.clone();
                 let result = cx
                     .background_executor()
-                    .spawn(async move { crate::editor_analysis::format(&path, &text, at) })
+                    .spawn(
+                        async move { vorkspace_editor::editor_analysis::format(&path, &text, at) },
+                    )
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     if this.input.read(cx).content == source
@@ -897,7 +904,14 @@ impl FileEditor {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    crate::editor_analysis::search(&text, &query, &replacement, case, word, regex)
+                    vorkspace_editor::editor_analysis::search(
+                        &text,
+                        &query,
+                        &replacement,
+                        case,
+                        word,
+                        regex,
+                    )
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {

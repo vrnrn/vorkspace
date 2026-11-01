@@ -37,7 +37,6 @@ use crate::{
         menu_popover, popover,
     },
     response_actions::{Request as ResponseRequest, Transfer},
-    runtime::{Database, locked, run_turn},
     theme::*,
     transcript::TranscriptView,
 };
@@ -61,6 +60,7 @@ use vorkspace_core::{
     catalog::{self, Model},
 };
 use vorkspace_core::{provider::Kind, store::Session};
+use vorkspace_runtime::runtime::{Database, locked, run_turn};
 // Keep empty and docked composers aligned with the transcript column. Below
 // this width the empty session drops its title.
 const COMPOSER_COLUMN: f32 = COLUMN;
@@ -264,7 +264,7 @@ impl Conversation {
                 .settings
                 .worktree_cwd
                 .as_deref()
-                .and_then(crate::git_cache::get);
+                .and_then(vorkspace_model::git_cache::get);
             self.branch = branch.or_else(|| self.git.as_ref().and_then(|s| s.current.clone()));
             self.sync_tool_paths(cx);
             cx.notify();
@@ -466,7 +466,7 @@ impl Conversation {
         // A new tab shows its folder's checkout from the first frame; the
         // load below confirms it rather than popping it in.
         let git = (!summary.has_messages)
-            .then(|| crate::git_cache::get(&summary.cwd))
+            .then(|| vorkspace_model::git_cache::get(&summary.cwd))
             .flatten();
         let completion = cx.new(|cx| {
             crate::composer_completion::Completion::new(input.clone(), summary.cwd.clone(), cx)
@@ -756,7 +756,7 @@ impl Conversation {
                 .and_then(|s| s.as_ref())
                 .and_then(|s| s.worktree_cwd.as_deref())
                 .unwrap_or(&cwd);
-            let git = crate::git_cache::load(Path::new(execution_cwd)).ok();
+            let git = vorkspace_model::git_cache::load(Path::new(execution_cwd)).ok();
             let rev = locked(&store)
                 .and_then(|s| s.session_history_revision(id))
                 .unwrap_or(0);
@@ -1452,7 +1452,7 @@ impl Conversation {
         cx.background_executor()
             .spawn(async move {
                 if let Some(client) = remote_client {
-                    crate::runtime::remote::run_with_client(
+                    vorkspace_runtime::runtime::remote::run_with_client(
                         client, summary, prompt, settings, control_rx, store, cancel, tx,
                     );
                 } else {
@@ -1473,7 +1473,7 @@ impl Conversation {
     }
     fn receive_turn_updates(
         &mut self,
-        rx: async_channel::Receiver<crate::runtime::Update>,
+        rx: async_channel::Receiver<vorkspace_runtime::runtime::Update>,
         generation: u64,
         source_provider: String,
         source_account: String,
@@ -2128,7 +2128,7 @@ impl Conversation {
         let work_cwd = cwd.clone();
         let work = cx
             .background_executor()
-            .spawn(async move { crate::git_cache::load(Path::new(&work_cwd)).ok() });
+            .spawn(async move { vorkspace_model::git_cache::load(Path::new(&work_cwd)).ok() });
         cx.spawn(async move |this, cx| {
             let git = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -2347,7 +2347,7 @@ impl Conversation {
                     Ok(())
                 });
                 if saved.is_ok() && remote && !cancelled.load(Ordering::Acquire) {
-                    let _ = crate::runtime::remote::configure_saved(store, id);
+                    let _ = vorkspace_runtime::runtime::remote::configure_saved(store, id);
                 }
             })
             .detach();
@@ -5213,7 +5213,7 @@ mod menu_tests {
 
     #[gpui::test]
     fn new_tab_shows_its_folders_branch_at_once_and_no_loading_status(cx: &mut TestAppContext) {
-        crate::git_cache::remember(
+        vorkspace_model::git_cache::remember(
             "/work/remembered",
             &vorkspace_core::git::Snapshot {
                 current: Some("main".into()),
@@ -5361,7 +5361,7 @@ mod menu_tests {
         });
         let cwd = "/nonexistent/vorkspace-composer-existing-submenu";
         let feature = format!("{cwd}-feature-b");
-        crate::git_cache::remember(
+        vorkspace_model::git_cache::remember(
             cwd,
             &Snapshot {
                 current: Some("main".into()),

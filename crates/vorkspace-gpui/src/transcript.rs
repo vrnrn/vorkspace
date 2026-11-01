@@ -27,7 +27,6 @@ mod tools;
 mod visuals;
 
 use crate::clock::Instant;
-use crate::markdown_model::MarkdownParser;
 use crate::popover::{Anchor, AnchorSlot, Side, popover};
 use crate::response_actions::{self, Request as ResponseRequest};
 use crate::syntax::{HighlightRequest, HighlightedDocument};
@@ -47,6 +46,7 @@ use std::{
 };
 use vorkspace_core::tool::{ToolCall, ToolState, tasks::Panel};
 use vorkspace_core::transcript::Row;
+use vorkspace_model::markdown_model::MarkdownParser;
 /// Where a launched session stands, for its card in the chat.
 #[derive(Clone, PartialEq)]
 pub(crate) struct LaunchView {

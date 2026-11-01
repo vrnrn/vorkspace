@@ -2,10 +2,10 @@
 //! A title tab is keyed by one of its sessions; a tab holding more than one
 //! pane keeps its split tree in `layouts` and its last focused pane in
 //! `focused`. `active` is always the focused session.
-use crate::pane_layout::{Edge, PaneNode, SplitDir, leaf};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
+use vorkspace_model::pane_layout::{Edge, PaneNode, SplitDir, leaf};
 
 static NEXT_TERMINAL_TAB_ID: AtomicU64 = AtomicU64::new(1);
 

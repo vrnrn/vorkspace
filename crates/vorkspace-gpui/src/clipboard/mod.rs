@@ -26,7 +26,7 @@ pub(crate) struct Service {
     #[cfg(not(test))]
     poll: Option<Task<()>>,
     #[cfg(not(test))]
-    hotkey: Option<(crate::global_hotkey::Registration, Task<()>)>,
+    hotkey: Option<(vorkspace_macos::global_hotkey::Registration, Task<()>)>,
 }
 pub(crate) fn get(cx: &App) -> Option<Entity<Service>> {
     cx.try_global::<Clipboard>().map(|c| c.0.clone())
@@ -53,7 +53,7 @@ pub(crate) fn configure(enabled: bool, cx: &mut App) {
             s.hotkey = None;
             s.last = native::revision();
             if enabled {
-                match crate::global_hotkey::Registration::new("cmd-shift-c") {
+                match vorkspace_macos::global_hotkey::Registration::new("cmd-shift-c") {
                     Ok((registration, rx)) => {
                         let task = cx.spawn(async move |_, cx| {
                             while rx.recv().await.is_ok() {
@@ -149,9 +149,10 @@ impl Service {
                         }
                         menu::Event::Settings => cx.dispatch_action(&Settings),
                         menu::Event::Composer => cx.dispatch_action(&Composer),
-                        menu::Event::Quit => {
-                            crate::app_menu::clipboard_route(crate::status_menu::Action::Quit, cx)
-                        }
+                        menu::Event::Quit => crate::app_menu::clipboard_route(
+                            vorkspace_macos::status_menu::Action::Quit,
+                            cx,
+                        ),
                         menu::Event::Closed => s.query.clear(),
                     });
                 }

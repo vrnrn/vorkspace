@@ -10,12 +10,12 @@ use vorkspace_core::{
     transcript::{Row, Transcript},
 };
 mod activity;
-pub(crate) mod card_persistence;
+pub mod card_persistence;
 #[cfg(test)]
 mod follow_up_tests;
 mod handoff;
 mod persistence;
-pub(crate) mod remote;
+pub mod remote;
 mod submissions;
 #[cfg(test)]
 mod ticket_context_tests;
@@ -23,40 +23,40 @@ mod visual_discovery;
 #[cfg(test)]
 mod visual_tests;
 use persistence::PendingSave;
-pub(crate) type Database = Arc<Mutex<Store>>;
+pub type Database = Arc<Mutex<Store>>;
 struct TurnInput {
     summary: Session,
     prompt: String,
     settings: Settings,
 }
-pub(crate) struct Update {
+pub struct Update {
     /// Full, bounded latest-tool label for this run; None means no known tool.
-    pub(crate) activity: Option<String>,
+    pub activity: Option<String>,
     /// Present only when rows describe the complete authoritative snapshot tail.
-    pub(crate) source_len: Option<usize>,
-    pub(crate) worktree_cwd: Option<String>,
-    pub(crate) commands: Option<Vec<provider::NativeCommand>>,
-    pub(crate) provider_turn_id: Option<String>,
-    pub(crate) turn_ready: bool,
-    pub(crate) follow_up_delivered: Vec<String>,
-    pub(crate) follow_up_errors: Vec<(String, String)>,
-    pub(crate) delivered: Option<String>,
-    pub(crate) start: usize,
-    pub(crate) rows: Vec<Row>,
-    pub(crate) provider_id: Option<String>,
-    pub(crate) model: Option<String>,
-    pub(crate) config_model: Option<String>,
-    pub(crate) config_settings: Option<std::collections::HashMap<String, String>>,
-    pub(crate) context: Option<vorkspace_core::context::Usage>,
-    pub(crate) metrics: Option<vorkspace_core::agent::TurnMetrics>,
-    pub(crate) usage_limit: Option<vorkspace_core::usage::Limit>,
-    pub(crate) approvals: Vec<Approval>,
-    pub(crate) approvals_resolved: Vec<String>,
-    pub(crate) questions: Vec<vorkspace_core::agent::Question>,
-    pub(crate) questions_resolved: Vec<String>,
-    pub(crate) handoff: Option<Option<vorkspace_core::agent::Handoff>>,
-    pub(crate) status: String,
-    pub(crate) finished: bool,
+    pub source_len: Option<usize>,
+    pub worktree_cwd: Option<String>,
+    pub commands: Option<Vec<provider::NativeCommand>>,
+    pub provider_turn_id: Option<String>,
+    pub turn_ready: bool,
+    pub follow_up_delivered: Vec<String>,
+    pub follow_up_errors: Vec<(String, String)>,
+    pub delivered: Option<String>,
+    pub start: usize,
+    pub rows: Vec<Row>,
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+    pub config_model: Option<String>,
+    pub config_settings: Option<std::collections::HashMap<String, String>>,
+    pub context: Option<vorkspace_core::context::Usage>,
+    pub metrics: Option<vorkspace_core::agent::TurnMetrics>,
+    pub usage_limit: Option<vorkspace_core::usage::Limit>,
+    pub approvals: Vec<Approval>,
+    pub approvals_resolved: Vec<String>,
+    pub questions: Vec<vorkspace_core::agent::Question>,
+    pub questions_resolved: Vec<String>,
+    pub handoff: Option<Option<vorkspace_core::agent::Handoff>>,
+    pub status: String,
+    pub finished: bool,
 }
 fn publish(
     tx: &async_channel::Sender<Update>,
@@ -75,13 +75,13 @@ fn publish(
         std::thread::sleep(Duration::from_millis(4));
     }
 }
-pub(crate) fn locked(store: &Database) -> Result<std::sync::MutexGuard<'_, Store>, String> {
+pub fn locked(store: &Database) -> Result<std::sync::MutexGuard<'_, Store>, String> {
     store
         .lock()
         .map_err(|_| "Native session store unavailable".into())
 }
 
-pub(crate) fn run_turn(
+pub fn run_turn(
     summary: Session,
     prompt: String,
     settings: Settings,

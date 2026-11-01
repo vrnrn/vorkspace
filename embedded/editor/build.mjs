@@ -6,7 +6,7 @@ import vm from "node:vm";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
-const asset = path.join(root, "crates/vorkspace-gpui/assets/native-editor.js");
+const asset = path.join(root, "crates/vorkspace-editor/assets/native-editor.js");
 const options = {
   absWorkingDir: here,
   entryPoints: ["index.js"],
@@ -101,7 +101,7 @@ const paletteBuild = await build({
 const palettes = vm.createContext({});
 vm.runInContext(paletteBuild.outputFiles[0].text, palettes);
 await writeFile(
-  asset.replace("native-editor.js", "editor-palettes.json"),
+  path.join(root, "crates/vorkspace-gpui/assets/editor-palettes.json"),
   JSON.stringify(palettes.palettes, null, 2) + "\n",
 );
 const notices = [

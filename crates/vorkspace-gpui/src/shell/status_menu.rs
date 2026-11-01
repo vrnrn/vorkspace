@@ -1,5 +1,5 @@
 use super::*;
-use crate::status_menu::Action;
+use vorkspace_macos::status_menu::Action;
 
 impl Shell {
     #[cfg(not(test))]
@@ -29,7 +29,7 @@ impl Shell {
                 .detach();
             });
         });
-        self.status_menu = crate::status_menu::Status::new(run);
+        self.status_menu = vorkspace_macos::status_menu::Status::new(run);
     }
 
     pub(crate) fn status_menu_action(

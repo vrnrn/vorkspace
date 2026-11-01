@@ -43,7 +43,7 @@ unsafe extern "C" {
     ) -> i32;
     fn UnregisterEventHotKey(reference: *mut c_void) -> i32;
 }
-pub(crate) struct Registration {
+pub struct Registration {
     hotkey: *mut c_void,
     handler: *mut c_void,
     state: Box<State>,

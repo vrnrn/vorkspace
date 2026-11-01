@@ -1,7 +1,6 @@
 //! Native SearchView.tsx, including its compact rows and dotted empty state.
 use crate::{
     input::{self, Input},
-    runtime::{Database, locked},
     theme::*,
 };
 use gpui::{
@@ -22,6 +21,7 @@ use vorkspace_core::{
     store::Session,
     transcript::Row,
 };
+use vorkspace_runtime::runtime::{Database, locked};
 
 pub(crate) enum Event {
     Open(Target, String),

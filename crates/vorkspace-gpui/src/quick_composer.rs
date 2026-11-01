@@ -1,6 +1,4 @@
 //! The floating prompt window opened by the Settings global shortcut.
-#[cfg(not(test))]
-use crate::global_hotkey as hotkey;
 use crate::{
     input::{self, Input},
     pickers::{
@@ -14,6 +12,8 @@ use gpui::{
     Window, WindowHandle, div, prelude::*, px,
 };
 use vorkspace_core::{agent::AccessMode, provider::Kind};
+#[cfg(not(test))]
+use vorkspace_macos::global_hotkey as hotkey;
 #[derive(Clone)]
 pub(crate) struct Launch {
     pub cwd: String,
@@ -93,7 +93,7 @@ impl QuickComposer {
     pub fn new(
         projects: Vec<String>,
         choice: Launch,
-        store: crate::runtime::Database,
+        store: vorkspace_runtime::runtime::Database,
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(|cx| {

@@ -11,7 +11,7 @@ struct Controller {
     config: String,
     error: Option<String>,
     #[cfg(not(test))]
-    registration: Option<crate::global_hotkey::Registration>,
+    registration: Option<vorkspace_macos::global_hotkey::Registration>,
     #[cfg(not(test))]
     task: Option<gpui::Task<()>>,
 }
@@ -42,7 +42,7 @@ pub(crate) fn configure(prefs: &crate::settings::Preferences, cx: &mut App) {
     }
     #[cfg(not(test))]
     if prefs.vox_enabled && !shortcut.is_empty() {
-        match crate::global_hotkey::Registration::new(shortcut) {
+        match vorkspace_macos::global_hotkey::Registration::new(shortcut) {
             Ok((registration, receiver)) => {
                 let task = cx.spawn(async move |cx| {
                     while receiver.recv().await.is_ok() {

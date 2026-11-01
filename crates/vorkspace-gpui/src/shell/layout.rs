@@ -991,7 +991,7 @@ mod tests {
             .update(visual, |shell, _, _| {
                 assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Files);
                 assert_eq!(shell.workspace.right_panel_width, width);
-                let saved = crate::runtime::locked(&shell.store)
+                let saved = vorkspace_runtime::runtime::locked(&shell.store)
                     .unwrap()
                     .ui_state()
                     .unwrap()

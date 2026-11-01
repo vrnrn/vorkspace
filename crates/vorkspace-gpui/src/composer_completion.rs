@@ -50,7 +50,7 @@ pub(crate) struct Completion {
     input: Entity<input::Input>,
     bots: Option<Vec<BotMention>>,
     bot_chat: bool,
-    store: Option<crate::runtime::Database>,
+    store: Option<vorkspace_runtime::runtime::Database>,
     notes: Vec<vorkspace_core::notes::Note>,
     cwd: String,
     token: Option<Token>,
@@ -168,7 +168,7 @@ impl Completion {
             cx.notify();
         }
     }
-    pub(crate) fn with_store(mut self, store: crate::runtime::Database) -> Self {
+    pub(crate) fn with_store(mut self, store: vorkspace_runtime::runtime::Database) -> Self {
         self.store = Some(store);
         self
     }
@@ -313,7 +313,7 @@ impl Completion {
         let text = self
             .store
             .as_ref()
-            .and_then(|store| crate::runtime::locked(store).ok())
+            .and_then(|store| vorkspace_runtime::runtime::locked(store).ok())
             .and_then(|store| store.apply_notes_to_turn(&text).ok())
             .unwrap_or(text);
         let servers = self
@@ -498,7 +498,7 @@ impl Completion {
         let work = cx.background_executor().spawn(async move {
             let notes = store
                 .and_then(|s| {
-                    crate::runtime::locked(&s)
+                    vorkspace_runtime::runtime::locked(&s)
                         .ok()
                         .and_then(|s| s.list_notes().ok())
                 })

@@ -56,10 +56,10 @@ mod macos {
         true
     }
 }
-pub(crate) fn start(_cx: &mut gpui::App) {
+pub fn start(_cx: &mut gpui::App) {
     macos::start(_cx);
 }
-pub(crate) fn check(cx: &mut gpui::App) {
+pub fn check(cx: &mut gpui::App) {
     if macos::check(cx) {
         return;
     }

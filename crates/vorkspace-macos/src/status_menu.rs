@@ -1,13 +1,13 @@
 //! Native menu-bar anchor; clipboard presentation uses native AppKit controls.
 #[derive(Clone, Copy)]
-pub(crate) enum Action {
+pub enum Action {
     Clipboard { status_click: bool },
     QuickComposer,
     Settings,
     Quit,
 }
 #[cfg(not(test))]
-pub(crate) use native::Status;
+pub use native::Status;
 #[cfg(not(test))]
 mod native {
     use super::Action;
@@ -33,12 +33,12 @@ mod native {
             }
         }
     );
-    pub(crate) struct Status {
+    pub struct Status {
         item: Retained<NSStatusItem>,
         _target: Retained<Target>,
     }
     impl Status {
-        pub(crate) fn new(run: Rc<dyn Fn(Action)>) -> Option<Self> {
+        pub fn new(run: Rc<dyn Fn(Action)>) -> Option<Self> {
             let mtm = MainThreadMarker::new()?;
             let item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.);
             let target: Retained<Target> =
@@ -65,7 +65,7 @@ mod native {
                 _target: target,
             })
         }
-        pub(crate) fn anchor(&self) -> Option<NSRect> {
+        pub fn anchor(&self) -> Option<NSRect> {
             let mtm = MainThreadMarker::new()?;
             let button = self.item.button(mtm)?;
             let window = button.window()?;

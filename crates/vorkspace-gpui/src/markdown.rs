@@ -1,6 +1,5 @@
 //! GPUI port of AgentMarkdown.tsx and its .agent-markdown CSS.
 mod search;
-use crate::markdown_model::{Block, InlineRun, TableAlign};
 use crate::syntax::HighlightedDocument;
 use crate::theme::*;
 use crate::transcript::selection::TextSelection;
@@ -11,6 +10,7 @@ use gpui::{
     prelude::*, px, rgb,
 };
 pub(crate) use search::{mark_row, mark_styles, row_text};
+use vorkspace_model::markdown_model::{Block, InlineRun, TableAlign};
 
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
 #[action(namespace = markdown, no_json)]
@@ -1050,7 +1050,7 @@ pub(crate) fn selection_text(row: &MarkdownRow) -> String {
 #[cfg(test)]
 mod file_link_tests {
     use super::*;
-    use crate::markdown_model::InlineStyle;
+    use vorkspace_model::markdown_model::InlineStyle;
     #[test]
     fn preview_links_keep_their_document_base_and_display_text() {
         let runs = vec![
@@ -1175,7 +1175,8 @@ mod file_link_tests {
 #[cfg(test)]
 mod diagram_tests {
     use super::*;
-    use crate::{diagrams::DiagramKind, markdown_model::parse_full};
+    use crate::diagrams::DiagramKind;
+    use vorkspace_model::markdown_model::parse_full;
 
     fn parts(text: &str) -> Vec<Part> {
         parse_full(text)

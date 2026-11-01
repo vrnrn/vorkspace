@@ -30,7 +30,7 @@ jobs:
       - run: npm ci
       - run: npm run assets
       - name: Verify generated assets
-        run: git diff --exit-code -- crates/vorkspace-gpui/assets/ crates/vorkspace-core/assets/
+        run: git diff --exit-code -- crates/*/assets/
       - run: npm run check
         env:
           NEXTEST_PROFILE: ci

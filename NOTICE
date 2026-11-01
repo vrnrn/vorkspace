@@ -61,7 +61,7 @@ notices are included alongside the assets in crates/vorkspace-gpui/assets.
 
 The native editor's analysis and formatting bundles reuse CodeMirror, Lezer,
 the Replit Svelte grammar and Prettier under their MIT licenses. Package versions and complete license notices are included in
-crates/vorkspace-gpui/assets/native-editor.LICENSE.txt. The bundle is generated
+crates/vorkspace-editor/assets/native-editor.LICENSE.txt. The bundle is generated
 from embedded/editor. Prettier dependency notices are
 included alongside the package licenses.
 

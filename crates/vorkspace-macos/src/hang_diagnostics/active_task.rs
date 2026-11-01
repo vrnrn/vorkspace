@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(value["threshold_ms"], 5000);
         assert_eq!(
             value["source"]["file"],
-            "vorkspace-gpui/src/hang_diagnostics/active_task.rs"
+            "vorkspace-macos/src/hang_diagnostics/active_task.rs"
         );
         assert!(value.get("sealed_by").is_none());
         assert!(value.get("during_active_use").is_none());

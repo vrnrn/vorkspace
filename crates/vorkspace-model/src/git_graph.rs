@@ -5,22 +5,22 @@
 use gpui::{Hsla, PathBuilder, Pixels, Point, Window, point, px};
 use std::collections::HashMap;
 
-pub(crate) const SWIMLANE_HEIGHT: f32 = 22.;
-pub(crate) const SWIMLANE_WIDTH: f32 = 11.;
+pub const SWIMLANE_HEIGHT: f32 = 22.;
+pub const SWIMLANE_WIDTH: f32 = 11.;
 const SWIMLANE_CURVE_RADIUS: f32 = 5.;
 const CIRCLE_RADIUS: f32 = 4.;
 const CIRCLE_STROKE_WIDTH: f32 = 2.;
 
 /// Lane colors, cycled as new branches appear.
-pub(crate) const COLOR_REGISTRY: [u32; 5] = [0xFFB000, 0xDC267F, 0x994F00, 0x40B0A6, 0xB66DFF];
+pub const COLOR_REGISTRY: [u32; 5] = [0xFFB000, 0xDC267F, 0x994F00, 0x40B0A6, 0xB66DFF];
 /// Current branch.
-pub(crate) const HISTORY_ITEM_REF_COLOR: u32 = 0x75BEFF;
+pub const HISTORY_ITEM_REF_COLOR: u32 = 0x75BEFF;
 /// Upstream of the current branch.
-pub(crate) const HISTORY_ITEM_REMOTE_REF_COLOR: u32 = 0xB180D7;
+pub const HISTORY_ITEM_REMOTE_REF_COLOR: u32 = 0xB180D7;
 const FALLBACK: u32 = HISTORY_ITEM_REF_COLOR;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct GraphCommit {
+pub struct GraphCommit {
     pub sha: String,
     pub parents: Vec<String>,
     pub head: bool,
@@ -28,23 +28,23 @@ pub(crate) struct GraphCommit {
     pub refs: Vec<(String, String)>,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct GraphRef {
+pub struct GraphRef {
     pub name: String,
     pub kind: String,
     pub color: Option<u32>,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Swimlane {
+pub struct Swimlane {
     pub id: String,
     pub color: u32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NodeKind {
+pub enum NodeKind {
     Head,
     Node,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Row {
+pub struct Row {
     pub sha: String,
     pub parent_ids: Vec<String>,
     pub kind: NodeKind,
@@ -53,13 +53,13 @@ pub(crate) struct Row {
     pub refs: Vec<GraphRef>,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct GraphPath {
+pub struct GraphPath {
     pub d: String,
     pub color: u32,
     pub stroke_width: f32,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Circle {
+pub struct Circle {
     pub cx: f32,
     pub cy: f32,
     pub r: f32,
@@ -67,7 +67,7 @@ pub(crate) struct Circle {
     pub fill: Option<u32>,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct RowGraph {
+pub struct RowGraph {
     pub width: f32,
     pub height: f32,
     pub paths: Vec<GraphPath>,
@@ -114,7 +114,7 @@ fn label_color(refs: &[(String, String)], map: &HashMap<String, Option<u32>>) ->
 }
 
 /// Assign swimlanes for `git log --topo-order` (newest first).
-pub(crate) fn layout(commits: &[GraphCommit]) -> Vec<Row> {
+pub fn layout(commits: &[GraphCommit]) -> Vec<Row> {
     let colors = build_color_map(commits);
     let (current_local, current_remote) = current_ref_ids(commits);
     let by_sha: HashMap<&str, &GraphCommit> = commits.iter().map(|c| (c.sha.as_str(), c)).collect();
@@ -224,7 +224,7 @@ pub(crate) fn layout(commits: &[GraphCommit]) -> Vec<Row> {
 
 /// One row of graph paths and circles. Taller rows extend lanes above and
 /// below the node while keeping the circles and curve radii at their size.
-pub(crate) fn row_graph(row: &Row, row_height: f32) -> RowGraph {
+pub fn row_graph(row: &Row, row_height: f32) -> RowGraph {
     const W: f32 = SWIMLANE_WIDTH;
     const R: f32 = SWIMLANE_CURVE_RADIUS;
     let center = row_height / 2.;
@@ -352,13 +352,7 @@ fn fmt(v: f32) -> String {
 }
 
 /// Strokes the `M`/`V`/`H`/`A` subset `row_graph` emits, relative to `origin`.
-pub(crate) fn stroke_path(
-    d: &str,
-    origin: Point<Pixels>,
-    width: f32,
-    color: Hsla,
-    window: &mut Window,
-) {
+pub fn stroke_path(d: &str, origin: Point<Pixels>, width: f32, color: Hsla, window: &mut Window) {
     let mut builder = PathBuilder::stroke(px(width));
     let mut tokens = d.split_whitespace();
     let mut at = point(0f32, 0f32);

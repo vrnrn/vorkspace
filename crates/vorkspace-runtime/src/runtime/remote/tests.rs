@@ -1,5 +1,4 @@
 use super::*;
-use gpui::AppContext;
 #[test]
 fn ticket_context_requires_explicit_host_support() {
     for descriptor in [
@@ -233,10 +232,8 @@ fn unchanged_versioned_snapshots_skip_projection_and_empty_history_has_an_end() 
     assert_eq!(updates[2].start, 0);
 }
 
-#[gpui::test]
-fn unversioned_snapshots_project_initial_and_changed_rows_then_remove_a_stale_tail(
-    cx: &mut gpui::TestAppContext,
-) {
+#[test]
+fn unversioned_snapshots_project_initial_and_changed_rows_then_remove_a_stale_tail() {
     let mut first = snapshot("running", 1);
     first.as_object_mut().unwrap().remove("revision");
     first["session"]["blocks"]
@@ -258,23 +255,6 @@ fn unversioned_snapshots_project_initial_and_changed_rows_then_remove_a_stale_ta
     assert!(updates[0].rows.iter().any(|r| r.text == "First answer"));
     assert!(updates[1].rows.iter().any(|r| r.text == "Changed answer"));
     assert!(updates.iter().all(|u| u.source_len.is_some()));
-    for bot in [false, true] {
-        let view = cx.new(|_| crate::transcript::TranscriptView::new());
-        view.update(cx, |view, cx| {
-            if bot {
-                view.bot_mode("bot", 0xffffff, "Bot");
-            }
-            for update in &updates {
-                let len = update.source_len.unwrap();
-                view.patch_snapshot(update.start, update.rows.clone(), len, cx);
-                assert_eq!(view.source_rows().len(), len);
-                if len == 1 {
-                    assert_eq!(view.source_rows()[0].text, "Original message");
-                }
-            }
-            assert!(view.source_rows().is_empty());
-        });
-    }
 }
 
 #[test]

@@ -118,9 +118,10 @@ impl Conversation {
             }
             let changed = initial
                 || match snapshot.as_ref() {
-                    Some(snapshot) => {
-                        crate::runtime::remote::snapshot_changed(known.as_ref(), snapshot)
-                    }
+                    Some(snapshot) => vorkspace_runtime::runtime::remote::snapshot_changed(
+                        known.as_ref(),
+                        snapshot,
+                    ),
                     None => known.is_some(),
                 };
             let history = if changed {

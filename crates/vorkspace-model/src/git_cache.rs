@@ -57,15 +57,15 @@ fn memory() -> &'static Mutex<Memory> {
     static MEMORY: OnceLock<Mutex<Memory>> = OnceLock::new();
     MEMORY.get_or_init(Default::default)
 }
-pub(crate) fn get(cwd: &str) -> Option<Snapshot> {
+pub fn get(cwd: &str) -> Option<Snapshot> {
     memory().lock().ok()?.get(cwd)
 }
-pub(crate) fn remember(cwd: &str, state: &Snapshot) {
+pub fn remember(cwd: &str, state: &Snapshot) {
     if let Ok(mut memory) = memory().lock() {
         memory.remember(cwd, state);
     }
 }
-pub(crate) fn load(cwd: &Path) -> Result<Snapshot, String> {
+pub fn load(cwd: &Path) -> Result<Snapshot, String> {
     let state = git::snapshot(cwd)?;
     // Failure leaves the last successful list intact.
     remember(&cwd.to_string_lossy(), &state);

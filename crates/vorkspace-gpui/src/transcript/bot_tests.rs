@@ -360,3 +360,39 @@ fn bot_continuation_search_and_pinned_reports_use_their_own_run(cx: &mut TestApp
         assert!(!view.list.is_following_tail());
     });
 }
+
+#[gpui::test]
+fn snapshot_patches_replace_changed_rows_and_remove_a_stale_tail(cx: &mut gpui::TestAppContext) {
+    let row = |role: &str, text: &str| vorkspace_core::transcript::Row {
+        role: role.into(),
+        text: text.into(),
+        first: true,
+        sent_at: None,
+    };
+    let original = row("user", "Original message");
+    for bot in [false, true] {
+        let view = cx.new(|_| crate::transcript::TranscriptView::new());
+        view.update(cx, |view, cx| {
+            if bot {
+                view.bot_mode("bot", 0xffffff, "Bot");
+            }
+            for (start, rows, len) in [
+                (
+                    0,
+                    vec![original.clone(), row("assistant", "First answer")],
+                    2,
+                ),
+                (1, vec![row("assistant", "Changed answer")], 2),
+                (1, vec![], 1),
+                (0, vec![], 0),
+            ] {
+                view.patch_snapshot(start, rows, len, cx);
+                assert_eq!(view.source_rows().len(), len);
+                if len == 1 {
+                    assert_eq!(view.source_rows()[0].text, "Original message");
+                }
+            }
+            assert!(view.source_rows().is_empty());
+        });
+    }
+}

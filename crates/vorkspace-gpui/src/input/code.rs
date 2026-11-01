@@ -1,12 +1,10 @@
 //! The editor shares native selection/IME handling with Input and retains glyph
 //! runs for visible lines. Scroll position is independent of the caret.
 use super::*;
-use crate::{
-    editor_analysis::Analysis,
-    editor_scrollbar::{Metrics, WIDTH},
-};
+use crate::editor_scrollbar::{Metrics, WIDTH};
 use gpui::{AnyElement, Task};
 use std::{cell::Cell, sync::Arc};
+use vorkspace_editor::editor_analysis::Analysis;
 
 const TOP_PADDING: f32 = 8.;
 const BOTTOM_PADDING: f32 = 32.;
@@ -24,13 +22,19 @@ pub(super) struct Code {
     can_stage: bool,
     suppress_completion: bool,
     diff: bool,
-    deleted_rows: Vec<(f32, f32, String, usize, Vec<crate::editor_analysis::Token>)>,
+    deleted_rows: Vec<(
+        f32,
+        f32,
+        String,
+        usize,
+        Vec<vorkspace_editor::editor_analysis::Token>,
+    )>,
     path: String,
-    completions: Vec<crate::editor_analysis::Completion>,
+    completions: Vec<vorkspace_editor::editor_analysis::Completion>,
     completion_index: usize,
     completion_task: Option<Task<()>>,
     completion_source: Option<(SharedString, usize)>,
-    folded: Vec<crate::editor_analysis::Fold>,
+    folded: Vec<vorkspace_editor::editor_analysis::Fold>,
     search_matches: Vec<Range<usize>>,
     offsets: Vec<usize>,
     visible: Vec<(usize, WrappedLine)>,
@@ -90,7 +94,7 @@ impl Code {
             .partition_point(|start| *start <= offset)
             .saturating_sub(1)
     }
-    fn fold_at(&self, row: usize) -> Option<&crate::editor_analysis::Fold> {
+    fn fold_at(&self, row: usize) -> Option<&vorkspace_editor::editor_analysis::Fold> {
         self.folded.iter().find(|f| self.row(f.from) == row)
     }
     fn hidden(&self, row: usize) -> bool {
@@ -272,7 +276,9 @@ impl Input {
             let text = source.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { crate::editor_analysis::complete(&path, &text, at, explicit) })
+                .spawn(async move {
+                    vorkspace_editor::editor_analysis::complete(&path, &text, at, explicit)
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.content == source
@@ -380,7 +386,7 @@ impl Input {
             let text = source.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { crate::editor_analysis::emmet(&path, &text, at) })
+                .spawn(async move { vorkspace_editor::editor_analysis::emmet(&path, &text, at) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.content == source && this.cursor() == at && !this.is_composing() {
@@ -722,7 +728,9 @@ impl Input {
             // Carry the last results through the edit until fresh analysis
             // lands; clearing them would flash the whole buffer uncoloured.
             let previous = std::mem::replace(&mut code.text, self.content.clone());
-            if let Some(edit) = crate::editor_analysis::Edit::between(&previous, &self.content) {
+            if let Some(edit) =
+                vorkspace_editor::editor_analysis::Edit::between(&previous, &self.content)
+            {
                 code.analysis = Arc::new(code.analysis.remapped(edit));
             }
             code.markers.clear();
@@ -1349,7 +1357,7 @@ fn plain_line(
 }
 fn token_line(
     text: &str,
-    tokens: &[crate::editor_analysis::Token],
+    tokens: &[vorkspace_editor::editor_analysis::Token],
     width: Option<Pixels>,
     font_size: f32,
     w: &mut Window,
@@ -1638,7 +1646,7 @@ impl Element for CodeElement {
                                     .tokens
                                     .iter()
                                     .filter(|t| t.to > offset && t.from < offset + text.len())
-                                    .map(|t| crate::editor_analysis::Token {
+                                    .map(|t| vorkspace_editor::editor_analysis::Token {
                                         from: t.from.saturating_sub(offset),
                                         to: t.to.min(offset + text.len()) - offset,
                                         kind: t.kind.clone(),
@@ -2138,7 +2146,7 @@ mod tests {
     fn overview_markers_jump_and_the_thumb_drags_without_editing_or_selecting(
         cx: &mut TestAppContext,
     ) {
-        use crate::editor_analysis::{Change, Diagnostic};
+        use vorkspace_editor::editor_analysis::{Change, Diagnostic};
         let window = cx.update(|cx| {
             bind(cx);
             cx.open_window(
@@ -2355,7 +2363,7 @@ mod feature_tests {
             .update(cx, |i, _, cx| {
                 i.set_text(source.into(), cx);
                 i.set_editor_analysis(
-                    crate::editor_analysis::analyze("a.js", source, None).unwrap(),
+                    vorkspace_editor::editor_analysis::analyze("a.js", source, None).unwrap(),
                     cx,
                 );
                 i.toggle_fold_row(0, cx);
@@ -2415,9 +2423,12 @@ mod feature_tests {
                 assert_eq!(i.content.as_ref(), "cons");
                 i.set_text("const value = 2;\n".into(), cx);
                 i.set_editor_diff(true, true);
-                let analysis =
-                    crate::editor_analysis::analyze("a.ts", &i.content, Some("const value = 1;\n"))
-                        .unwrap();
+                let analysis = vorkspace_editor::editor_analysis::analyze(
+                    "a.ts",
+                    &i.content,
+                    Some("const value = 1;\n"),
+                )
+                .unwrap();
                 i.set_editor_analysis(analysis, cx);
             })
             .unwrap();

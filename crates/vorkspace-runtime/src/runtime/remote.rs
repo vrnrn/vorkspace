@@ -56,7 +56,7 @@ fn update(status: impl Into<String>, finished: bool) -> Update {
 }
 /// Only matching, present host revisions prove that projection is unchanged.
 /// Older hosts without revisions can change their blocks on every observation.
-pub(crate) fn snapshot_changed(known: Option<&Value>, snapshot: &Value) -> bool {
+pub fn snapshot_changed(known: Option<&Value>, snapshot: &Value) -> bool {
     match (
         known.and_then(|s| s["revision"].as_u64()),
         snapshot["revision"].as_u64(),
@@ -72,7 +72,7 @@ fn command(kind: &str, session_id: Option<&str>) -> Value {
     }
     value
 }
-pub(crate) fn host_model(provider: &str, model: Option<&str>) -> Result<String, String> {
+pub fn host_model(provider: &str, model: Option<&str>) -> Result<String, String> {
     let model = model
         .filter(|value| !value.trim().is_empty())
         .ok_or("Choose a model on the remote machine before sending")?;
@@ -117,7 +117,7 @@ fn configure_command(
 /// Called off-thread after saving an idle remote conversation's settings.
 /// Read the latest settings after acquiring the operation lock so an older
 /// background callback cannot overwrite a more recent model/access choice.
-pub(crate) fn configure_saved(store: Database, id: i64) -> Result<(), String> {
+pub fn configure_saved(store: Database, id: i64) -> Result<(), String> {
     let lock = operation_lock(&store, id);
     let _guard = lock.lock().map_err(|_| "Remote session is unavailable")?;
     let (mut binding, settings) = {
@@ -409,7 +409,7 @@ fn accounting(
     (context, metrics)
 }
 
-pub(crate) fn question(snapshot: &Value) -> Option<Question> {
+pub fn question(snapshot: &Value) -> Option<Question> {
     let prompt = &snapshot["session"]["pendingQuestion"];
     let id = prompt["requestId"].as_i64()?;
     let items = prompt["questions"]
@@ -439,7 +439,7 @@ pub(crate) fn question(snapshot: &Value) -> Option<Question> {
         auto_resolve_at: prompt["autoResolveAt"].as_u64(),
     })
 }
-pub(crate) fn approvals(snapshot: &Value) -> Vec<Approval> {
+pub fn approvals(snapshot: &Value) -> Vec<Approval> {
     snapshot["session"]["blocks"]
         .as_array()
         .into_iter()
@@ -493,7 +493,7 @@ fn reply(question: &Question, answers: Vec<Vec<String>>) -> Value {
     }
     json!({"kind":"answered","answers":selected,"custom":custom})
 }
-pub(crate) fn run(
+pub fn run(
     summary: Session,
     prompt: String,
     settings: Settings,
@@ -515,7 +515,7 @@ pub(crate) fn run(
     clippy::too_many_arguments,
     reason = "Mirrors the turn worker inputs while injecting the remote transport for isolation"
 )]
-pub(crate) fn run_with_client(
+pub fn run_with_client(
     client: Arc<vorkspace_core::remote::Connections>,
     summary: Session,
     prompt: String,

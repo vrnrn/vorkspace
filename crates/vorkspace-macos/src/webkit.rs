@@ -4,7 +4,7 @@ use objc2::{msg_send, sel};
 use objc2_foundation::NSString;
 use objc2_web_kit::WKWebViewConfiguration;
 
-pub(crate) fn name_process(configuration: &WKWebViewConfiguration) {
+pub fn name_process(configuration: &WKWebViewConfiguration) {
     unsafe {
         let supported: bool =
             msg_send![configuration, respondsToSelector: sel!(_setProcessDisplayName:)];

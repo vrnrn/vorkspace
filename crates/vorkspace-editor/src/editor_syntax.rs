@@ -75,7 +75,7 @@ fn language_for_path(path: &str) -> Option<Lang> {
 }
 
 /// Whether `path` is analysed natively; everything else uses QuickJS.
-pub(crate) fn supports(path: &str) -> bool {
+pub fn supports(path: &str) -> bool {
     language_for_path(path).is_some()
 }
 
@@ -728,7 +728,7 @@ fn splice(tokens: Vec<Token>, dirty: &[Range<usize>], fresh: Vec<Token>) -> Vec<
 }
 
 /// One open file's parser, last tree and tokens.
-pub(crate) struct Session {
+pub struct Session {
     path: String,
     lang: Lang,
     grammar: &'static Grammar,
@@ -740,7 +740,7 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) fn new(path: &str) -> Option<Self> {
+    pub fn new(path: &str) -> Option<Self> {
         let lang = language_for_path(path)?;
         let grammar = grammar(lang)?;
         let mut parser = Parser::new();
@@ -757,7 +757,7 @@ impl Session {
         })
     }
 
-    pub(crate) fn path(&self) -> &str {
+    pub fn path(&self) -> &str {
         &self.path
     }
 
@@ -841,7 +841,7 @@ impl Session {
         &self.original.as_ref().unwrap().1
     }
 
-    pub(crate) fn analyze(&mut self, text: &str, original: Option<&str>) -> Analysis {
+    pub fn analyze(&mut self, text: &str, original: Option<&str>) -> Analysis {
         let Some(tree) = self.update(text).cloned() else {
             return Analysis::default();
         };
@@ -868,7 +868,7 @@ impl Session {
 
 /// Analyses `text` in the session held for a file, starting one for `path`
 /// (or replacing a renamed file's) as needed.
-pub(crate) fn analyze(
+pub fn analyze(
     session: &Mutex<Option<Session>>,
     path: &str,
     text: &str,

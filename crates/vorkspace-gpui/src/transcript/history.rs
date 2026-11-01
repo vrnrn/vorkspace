@@ -4,7 +4,7 @@ use super::*;
 const PAGE_TURNS: usize = 10;
 
 pub(super) struct StorageHistory {
-    store: crate::runtime::Database,
+    store: vorkspace_runtime::runtime::Database,
     session: i64,
     origin: usize,
     cursor: Option<vorkspace_core::store::IndexedHistoryCursor>,
@@ -75,7 +75,7 @@ impl TranscriptView {
         &mut self,
         page: vorkspace_core::store::IndexedHistoryPage,
         prepared: PreparedHistory,
-        store: crate::runtime::Database,
+        store: vorkspace_runtime::runtime::Database,
         session: i64,
         cx: &mut Context<Self>,
     ) {
@@ -432,7 +432,7 @@ impl TranscriptView {
         self.history_loading = true;
         self.list.pause_following_tail();
         let work = cx.background_executor().spawn(async move {
-            let page = crate::runtime::locked(&store)?
+            let page = vorkspace_runtime::runtime::locked(&store)?
                 .indexed_history_page(session, Some(&cursor), PAGE_TURNS)?
                 .ok_or_else(|| "Indexed history is no longer available".to_owned())?;
             let parsers = prepare_parsers(&page.rows, 0);

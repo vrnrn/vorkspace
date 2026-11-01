@@ -139,7 +139,7 @@ impl Bots {
                     .message_cache
                     .entry(key.clone())
                     .or_insert_with(|| {
-                        let mut parser = crate::markdown_model::MarkdownParser::new();
+                        let mut parser = vorkspace_model::markdown_model::MarkdownParser::new();
                         parser.set_text(message["text"].as_str().unwrap_or_default());
                         Arc::new(
                             parser

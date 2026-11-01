@@ -205,7 +205,7 @@ impl SettingsView {
                             secondary_button("check-updates", "Check for updates", false, false)
                                 .child(icon("refresh-cw", 14.).text_color(content(0.7)))
                                 .child("Check for updates")
-                                .on_click(|_, _, cx| crate::updater::check(cx)),
+                                .on_click(|_, _, cx| vorkspace_macos::updater::check(cx)),
                         )
                         .into_any_element(),
                 ],

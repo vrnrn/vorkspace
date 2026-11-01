@@ -1,7 +1,6 @@
 //! GitHistoryGraph.tsx's standalone History tab: its toolbar, search and
 //! 44px rows with the swimlane graph painted per row.
 use crate::{
-    git_graph::{self, GraphCommit, NodeKind, Row, RowGraph, SWIMLANE_WIDTH},
     git_status::{GitChanged, ProjectGit},
     input::{self, Input},
     right_panel::*,
@@ -14,6 +13,7 @@ use gpui::{
 };
 use std::{collections::HashMap, path::PathBuf};
 use vorkspace_core::scm::{self, HistoryCommit};
+use vorkspace_model::git_graph::{self, GraphCommit, NodeKind, Row, RowGraph, SWIMLANE_WIDTH};
 
 const ROW: f32 = 44.;
 actions!(history, [CloseSearch]);

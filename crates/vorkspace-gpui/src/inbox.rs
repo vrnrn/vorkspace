@@ -9,7 +9,6 @@ use crate::{
     diff_view::{DiffEvent, DiffView},
     input::{self, Input},
     popover::AnchorSlot,
-    runtime::{Database, locked},
     theme::*,
 };
 use gpui::{
@@ -22,6 +21,7 @@ use vorkspace_core::{
     inbox::{self as model, Checks, Details, Diff, Item, Service, Snapshot, Thread, ViewState},
     store::Session,
 };
+use vorkspace_runtime::runtime::{Database, locked};
 
 pub(crate) enum Event {
     Close,

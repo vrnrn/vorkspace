@@ -4,7 +4,6 @@ use crate::{
     input::{self, Input},
     pickers::{ModelList, ModelPicked, ProjectPicked, ProjectPicker, cached_model_name},
     popover::{Anchor, AnchorSlot, popover},
-    runtime::{Database, locked},
     theme::*,
 };
 use gpui::{
@@ -24,6 +23,7 @@ use vorkspace_core::{
     provider::Kind,
     session_groups::Folder,
 };
+use vorkspace_runtime::runtime::{Database, locked};
 
 mod editor;
 mod gallery;

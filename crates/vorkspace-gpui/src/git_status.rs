@@ -169,7 +169,7 @@ impl ProjectGit {
         let project = self.project.clone();
         cx.background_executor()
             .spawn(async move {
-                let _ = crate::git_cache::load(std::path::Path::new(&project));
+                let _ = vorkspace_model::git_cache::load(std::path::Path::new(&project));
             })
             .detach();
     }

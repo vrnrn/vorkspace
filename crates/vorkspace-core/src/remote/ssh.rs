@@ -1,5 +1,4 @@
 use super::ssh_askpass::Askpass;
-use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};

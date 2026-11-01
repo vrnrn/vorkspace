@@ -6,7 +6,7 @@ use super::{
 use crate::clock::Instant;
 use crate::theme::*;
 use crate::{
-    markdown, markdown_model,
+    markdown,
     reveal::{Disclosure, Motion},
 };
 use gpui::{
@@ -21,6 +21,7 @@ use vorkspace_core::tool::{
     ToolCall, ToolState,
     tasks::{AgentRun, AgentStep, Panel, TaskList, TaskStatus},
 };
+use vorkspace_model::markdown_model;
 
 pub(super) fn render(
     view: &mut TranscriptView,

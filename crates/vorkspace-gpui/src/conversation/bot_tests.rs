@@ -1252,7 +1252,7 @@ fn card_save_admission_stays_responsive_and_publishes_latest_at_the_current_row(
         })
         .unwrap();
     drop(guard);
-    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+    cx.update(|cx| vorkspace_runtime::runtime::card_persistence::finish_for_test(cx));
     cx.run_until_parked();
     window
         .update(cx, |view, _, cx| {
@@ -1299,7 +1299,7 @@ fn committed_card_refresh_survives_a_new_submission_and_the_next_refresh(cx: &mu
         drop(guard);
         // Wait for the actual worker's commit without handling the UI receipt
         // or closing the worker that must perform the following refresh.
-        cx.update(|cx| crate::runtime::card_persistence::wait_for_saves_for_test(cx));
+        cx.update(|cx| vorkspace_runtime::runtime::card_persistence::wait_for_saves_for_test(cx));
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(
                 &locked(&store).unwrap().load(session).unwrap().rows[index].text
@@ -1356,7 +1356,7 @@ fn committed_card_refresh_survives_a_new_submission_and_the_next_refresh(cx: &mu
                 assert!(!view.bot_ui.card_versions.is_empty());
             })
             .unwrap();
-        cx.update(|cx| crate::runtime::card_persistence::wait_for_saves_for_test(cx));
+        cx.update(|cx| vorkspace_runtime::runtime::card_persistence::wait_for_saves_for_test(cx));
         cx.run_until_parked();
         window
             .update(cx, |view, _, cx| {
@@ -1375,7 +1375,7 @@ fn committed_card_refresh_survives_a_new_submission_and_the_next_refresh(cx: &mu
             "Latest"
         );
     }
-    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+    cx.update(|cx| vorkspace_runtime::runtime::card_persistence::finish_for_test(cx));
 }
 
 #[gpui::test]
@@ -1414,7 +1414,7 @@ fn card_save_completion_keeps_replacements_and_reconciles_new_submissions(cx: &m
     }
     drop(guard1);
     drop(guard2);
-    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+    cx.update(|cx| vorkspace_runtime::runtime::card_persistence::finish_for_test(cx));
     cx.run_until_parked();
     for (fixture, replacement) in [(&first, true), (&second, false)] {
         let (window, store, id, index, _) = fixture;

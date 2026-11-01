@@ -5,7 +5,6 @@ use crate::{
     explorer::DraggedFile,
     input::{self, Input},
     popover::{Anchor, AnchorSlot, popover},
-    runtime::{Database, locked},
     theme::*,
 };
 use gpui::{
@@ -15,6 +14,7 @@ use gpui::{
 };
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 use vorkspace_core::notes::{self, Note};
+use vorkspace_runtime::runtime::{Database, locked};
 
 pub(crate) enum Event {
     Close,
@@ -159,7 +159,7 @@ impl Notes {
     fn highlight_source(&self, cx: &mut Context<Self>) {
         let text = self.body.read(cx).content.clone();
         let mut at = 0;
-        let mut analysis = crate::editor_analysis::Analysis::default();
+        let mut analysis = vorkspace_editor::editor_analysis::Analysis::default();
         for line in text.split_inclusive('\n') {
             let start = at;
             at += line.len();
@@ -169,11 +169,13 @@ impl Notes {
                 && (1..=6).contains(&count)
                 && trimmed[count..].starts_with(char::is_whitespace)
             {
-                analysis.tokens.push(crate::editor_analysis::Token {
-                    from: start,
-                    to: at - usize::from(line.ends_with('\n')),
-                    kind: "var(--color-markdown-heading)".into(),
-                });
+                analysis
+                    .tokens
+                    .push(vorkspace_editor::editor_analysis::Token {
+                        from: start,
+                        to: at - usize::from(line.ends_with('\n')),
+                        kind: "var(--color-markdown-heading)".into(),
+                    });
             }
         }
         self.body

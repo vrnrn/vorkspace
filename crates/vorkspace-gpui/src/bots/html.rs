@@ -264,7 +264,7 @@ impl gpui::Render for Html {
                             clip.setWantsLayer(true);
                             clip.setClipsToBounds(true);
                             let config = WKWebViewConfiguration::new(mtm);
-                            crate::webkit::name_process(&config);
+                            vorkspace_macos::webkit::name_process(&config);
                             config
                                 .preferences()
                                 .setJavaScriptCanOpenWindowsAutomatically(false);

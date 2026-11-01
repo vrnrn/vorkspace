@@ -3,7 +3,7 @@ use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Par
 use std::{iter::Peekable, sync::Arc};
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct InlineStyle {
+pub struct InlineStyle {
     pub bold: bool,
     pub italic: bool,
     pub code: bool,
@@ -14,23 +14,23 @@ pub(crate) struct InlineStyle {
     pub search: Option<bool>,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TaskMarker {
+pub struct TaskMarker {
     pub checked: bool,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct InlineRun {
+pub struct InlineRun {
     pub text: String,
     pub style: InlineStyle,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum TableAlign {
+pub enum TableAlign {
     Left,
     Center,
     Right,
 }
 #[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::enum_variant_names)] // Markdown terms: code block and block quote.
-pub(crate) enum Block {
+pub enum Block {
     Paragraph {
         runs: Vec<InlineRun>,
     },
@@ -63,15 +63,15 @@ pub(crate) enum Block {
     },
 }
 #[derive(Clone)]
-pub(crate) struct TopBlock {
+pub struct TopBlock {
     pub block: Block,
 }
 #[derive(Clone, Default)]
-pub(crate) struct BlockTree {
+pub struct BlockTree {
     pub blocks: Vec<Arc<TopBlock>>,
 }
 #[derive(Default)]
-pub(crate) struct MarkdownParser {
+pub struct MarkdownParser {
     source: String,
     tree: BlockTree,
 }
@@ -274,12 +274,12 @@ fn mend_prose(source: &str) -> String {
     text
 }
 type Events<'a> = Peekable<std::vec::IntoIter<Event<'a>>>;
-pub(crate) fn parse_full(text: &str) -> BlockTree {
+pub fn parse_full(text: &str) -> BlockTree {
     parse_with_breaks(text, false)
 }
 
 /// Notes preserve prose line breaks, matching AgentMarkdown's hardBreaks flag.
-pub(crate) fn parse_full_hard_breaks(text: &str) -> BlockTree {
+pub fn parse_full_hard_breaks(text: &str) -> BlockTree {
     parse_with_breaks(text, true)
 }
 

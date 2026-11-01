@@ -23,7 +23,7 @@ mod tests {
     #[gpui::test]
     fn clicking_base_choices_keeps_the_exact_remote_or_local_ref(cx: &mut TestAppContext) {
         let cwd = "/nonexistent/vorkspace-base-picker-test";
-        crate::git_cache::remember(
+        vorkspace_model::git_cache::remember(
             cwd,
             &Snapshot {
                 branches: vec![
@@ -100,7 +100,7 @@ mod tests {
         git(&["switch", "-c", "feature"]);
         let mut state = git::snapshot(cwd).unwrap();
         state.branches.sort_by_key(|branch| branch.remote.is_some());
-        crate::git_cache::remember(&cwd.to_string_lossy(), &state);
+        vorkspace_model::git_cache::remember(&cwd.to_string_lossy(), &state);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|cx| GitPicker::new(cwd.to_owned(), Mode::Branch, None, cx))
@@ -170,7 +170,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let cwd = "/nonexistent/vorkspace-cached-git-picker";
-        crate::git_cache::remember(
+        vorkspace_model::git_cache::remember(
             cwd,
             &Snapshot {
                 current: Some("main".into()),
@@ -220,7 +220,7 @@ mod tests {
                 );
             });
         }
-        assert!(crate::git_cache::get(cwd).is_some());
+        assert!(vorkspace_model::git_cache::get(cwd).is_some());
     }
 }
 pub(crate) enum Picked {
@@ -275,11 +275,11 @@ impl GitPicker {
             this.active = 0;
             cx.notify();
         });
-        let state = crate::git_cache::get(&cwd.to_string_lossy());
+        let state = vorkspace_model::git_cache::get(&cwd.to_string_lossy());
         let load_cwd = cwd.clone();
         let work = cx
             .background_executor()
-            .spawn(async move { crate::git_cache::load(&load_cwd) });
+            .spawn(async move { vorkspace_model::git_cache::load(&load_cwd) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {

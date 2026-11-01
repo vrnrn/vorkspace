@@ -7,27 +7,27 @@ use serde::Deserialize;
 use std::{ops::Range, time::Duration};
 
 #[derive(Clone, Debug, Default, Deserialize)]
-pub(crate) struct Analysis {
+pub struct Analysis {
     pub diagnostics: Vec<Diagnostic>,
     pub changes: Vec<Change>,
     pub folds: Vec<Fold>,
     pub tokens: Vec<Token>,
 }
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct Token {
+pub struct Token {
     pub from: usize,
     pub to: usize,
     pub kind: SharedString,
 }
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct Diagnostic {
+pub struct Diagnostic {
     pub from: usize,
     pub to: usize,
     pub severity: String,
     pub message: String,
 }
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct Change {
+pub struct Change {
     pub kind: String,
     pub from: usize,
     pub to: usize,
@@ -37,12 +37,12 @@ pub(crate) struct Change {
     pub tokens: Vec<Token>,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-pub(crate) struct Fold {
+pub struct Fold {
     pub from: usize,
     pub to: usize,
 }
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct Completion {
+pub struct Completion {
     pub label: String,
     pub detail: String,
     pub kind: String,
@@ -52,18 +52,18 @@ pub(crate) struct Completion {
     pub cursor: usize,
 }
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct SearchMatch {
+pub struct SearchMatch {
     pub from: usize,
     pub to: usize,
     pub insert: String,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
-pub(crate) struct SearchResult {
+pub struct SearchResult {
     pub matches: Vec<SearchMatch>,
     pub invalid: bool,
 }
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct Formatted {
+pub struct Formatted {
     pub formatted: String,
     #[serde(rename = "cursorOffset")]
     pub cursor: usize,
@@ -103,7 +103,7 @@ fn runtime() -> Result<(Runtime, Context), String> {
     let context = Context::full(&runtime).map_err(|e| e.to_string())?;
     Ok((runtime, context))
 }
-pub(crate) fn complete(
+pub fn complete(
     path: &str,
     source: &str,
     at: usize,
@@ -127,7 +127,7 @@ pub(crate) fn complete(
     }
     Ok(options)
 }
-pub(crate) fn search(
+pub fn search(
     source: &str,
     query: &str,
     replacement: &str,
@@ -152,7 +152,7 @@ pub(crate) fn search(
     }
     Ok(result)
 }
-pub(crate) fn chunk_action(
+pub fn chunk_action(
     original: &str,
     current: &str,
     at: usize,
@@ -176,7 +176,7 @@ pub(crate) fn chunk_action(
         .map_err(|e| e.to_string())?;
     serde_json::from_str(&json).map_err(|e| e.to_string())
 }
-pub(crate) fn format(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
+pub fn format(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
     transform(
         "vorkspaceFormat",
         path,
@@ -185,7 +185,7 @@ pub(crate) fn format(path: &str, source: &str, at: usize) -> Result<Option<Forma
         include_str!("../assets/native-format.js"),
     )
 }
-pub(crate) fn emmet(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
+pub fn emmet(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
     transform(
         "vorkspaceEmmet",
         path,
@@ -232,13 +232,13 @@ fn byte_offsets(source: &str) -> Vec<usize> {
 /// The one contiguous replacement between two texts, found by trimming their
 /// common prefix and suffix. Typing, undo, reloads and IME all reduce to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Edit {
+pub struct Edit {
     pub start: usize,
     pub old_end: usize,
     pub new_end: usize,
 }
 impl Edit {
-    pub(crate) fn between(old: &str, new: &str) -> Option<Self> {
+    pub fn between(old: &str, new: &str) -> Option<Self> {
         if old == new {
             return None;
         }
@@ -270,7 +270,7 @@ impl Edit {
     /// Where `from..to` lands after the edit. Ranges around the edit stretch
     /// over the new text, ranges cut by it are trimmed, and ranges inside the
     /// replaced text are gone.
-    pub(crate) fn map(&self, from: usize, to: usize) -> Option<(usize, usize)> {
+    pub fn map(&self, from: usize, to: usize) -> Option<(usize, usize)> {
         let shift = |at: usize| at - self.old_end + self.new_end;
         if to <= self.start {
             return Some((from, to));
@@ -294,7 +294,7 @@ impl Edit {
 impl Analysis {
     /// Last results moved through an edit, so the buffer keeps its colours,
     /// markers and gutter until fresh analysis arrives instead of flashing.
-    pub(crate) fn remapped(&self, edit: Edit) -> Self {
+    pub fn remapped(&self, edit: Edit) -> Self {
         let tokens = self
             .tokens
             .iter()
@@ -361,11 +361,7 @@ impl Diagnostic {
     }
 }
 
-pub(crate) fn analyze(
-    path: &str,
-    source: &str,
-    original: Option<&str>,
-) -> Result<Analysis, String> {
+pub fn analyze(path: &str, source: &str, original: Option<&str>) -> Result<Analysis, String> {
     // A headless worker must finish parsing the whole document. A fixed two
     // seconds interrupts large TSX files (and their diff baseline) before the
     // complete tree can be published. Keep small requests short and all work

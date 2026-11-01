@@ -173,7 +173,7 @@ fn paged_visible_card_restores_then_refreshes_without_losing_history(cx: &mut Te
         assert_eq!(m.chats[&s.id].read(cx).bot_row_origin(cx), 0);
         m.refresh_cards(cx);
     });
-    cx.update(|cx| crate::runtime::card_persistence::finish_for_test(cx));
+    cx.update(|cx| vorkspace_runtime::runtime::card_persistence::finish_for_test(cx));
     cx.run_until_parked();
     let db = locked(&store).unwrap();
     let session = db.sessions().unwrap()[0].id;

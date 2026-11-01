@@ -2,7 +2,6 @@
 use crate::clock::Instant;
 use crate::{
     markdown::{self, MarkdownRow, Part, Tone},
-    markdown_model,
     theme::*,
 };
 use gpui::{
@@ -12,6 +11,7 @@ use gpui::{
 };
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::{path::PathBuf, sync::Arc};
+use vorkspace_model::markdown_model;
 
 enum Row {
     Markdown(MarkdownRow, Pixels),

@@ -26,7 +26,7 @@ const MAX_RECORDS_PER_POLL: usize = 8;
 
 /// Called exactly once, at the beginning of the native application callback.
 /// GPUI owns thread lifetime and the final worker flush (200ms shutdown budget).
-pub(super) fn start(cx: &mut App, path: PathBuf) {
+pub fn start(cx: &mut App, path: PathBuf) {
     let callback = callback(cx, path);
     // Errors are deliberately silent: never expose paths/payloads or interrupt UI.
     let _ = cx.start_hang_monitor(config(), callback);

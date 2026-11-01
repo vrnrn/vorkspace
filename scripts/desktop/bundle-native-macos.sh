@@ -36,7 +36,7 @@ mkdir -p "$native_licenses"
 cp LICENSE NOTICE licenses/LICENSE-GPUI-APACHE licenses/LICENSE-UPSTREAM-MIT licenses/LICENSE-MACCY-MIT "$native_licenses/"
 cp crates/vorkspace-gpui/assets/hugeicons.LICENSE \
   crates/vorkspace-gpui/assets/dark-plus.LICENSE \
-  crates/vorkspace-gpui/assets/native-editor.LICENSE.txt "$native_licenses/"
+  crates/vorkspace-editor/assets/native-editor.LICENSE.txt "$native_licenses/"
 cp crates/vorkspace-gpui/assets/material/LICENSE "$native_licenses/material-icons.LICENSE"
 # Launch the binary itself: an exec'ing launcher changes the pid version, and macOS
 # then refuses the menu bar item. The app reads VorkspaceDataMode from Info.plist.

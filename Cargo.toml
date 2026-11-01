@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/vorkspace-core", "crates/vorkspace-gpui"]
+members = ["crates/*"]
 exclude = ["vendor/gpui-pre", "vendor/gpui-pre-apple"]
 
 [workspace.package]
@@ -33,4 +33,16 @@ incremental = true
 opt-level = 1
 
 [profile.native-dev.package.vorkspace-gpui]
+opt-level = 1
+
+[profile.native-dev.package.vorkspace-model]
+opt-level = 1
+
+[profile.native-dev.package.vorkspace-macos]
+opt-level = 1
+
+[profile.native-dev.package.vorkspace-editor]
+opt-level = 1
+
+[profile.native-dev.package.vorkspace-runtime]
 opt-level = 1

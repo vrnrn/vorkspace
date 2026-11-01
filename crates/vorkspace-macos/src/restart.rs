@@ -6,7 +6,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-pub(crate) fn relaunch_self() -> io::Result<()> {
+pub fn relaunch_self() -> io::Result<()> {
     let exe = std::env::current_exe()?;
     let args: Vec<_> = std::env::args_os().skip(1).collect();
 
@@ -33,7 +33,7 @@ pub(crate) fn relaunch_self() -> io::Result<()> {
     wait_and_relaunch(std::process::id(), &exe, &args)
 }
 
-pub(crate) fn wait_and_relaunch(pid: u32, exe: &Path, args: &[OsString]) -> io::Result<()> {
+pub fn wait_and_relaunch(pid: u32, exe: &Path, args: &[OsString]) -> io::Result<()> {
     let mut command = {
         let mut command = Command::new("/bin/sh");
         // Paths and app arguments are positional parameters, never shell source.

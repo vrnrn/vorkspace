@@ -45,7 +45,9 @@ impl FileEditor {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    crate::editor_analysis::chunk_action(&original, &text, at, selection, stage)
+                    vorkspace_editor::editor_analysis::chunk_action(
+                        &original, &text, at, selection, stage,
+                    )
                 })
                 .await;
             let Ok(Some(mut text)) = result else {

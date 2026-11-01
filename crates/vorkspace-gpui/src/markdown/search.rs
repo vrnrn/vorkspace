@@ -127,7 +127,7 @@ mod tests {
                     },
                     InlineRun {
                         text: "fé here".into(),
-                        style: crate::markdown_model::InlineStyle {
+                        style: vorkspace_model::markdown_model::InlineStyle {
                             bold: true,
                             ..Default::default()
                         },

@@ -3,11 +3,11 @@
 use crate::clock::Instant;
 use crate::{
     markdown::{self, MarkdownRow, Tone},
-    markdown_model,
     theme::*,
 };
 use gpui::{Context, EventEmitter, FontWeight, Render, Role, Window, div, img, prelude::*, px};
 use vorkspace_core::store::Store;
+use vorkspace_model::markdown_model;
 const MARKER: &str = "vorkspace.installedUpdate";
 const VERSION: &str = "vorkspace.lastSeenAppVersion";
 

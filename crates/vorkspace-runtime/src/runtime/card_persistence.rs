@@ -165,7 +165,7 @@ impl Worker {
                     };
                     let result = job.save();
                     work.queue.lock().unwrap().finish(job, result);
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     work.wake.notify_all();
                 }
                 let _ = done.try_send(());
@@ -182,7 +182,7 @@ impl Worker {
         self.shared.wake.notify_one();
         self.finished.clone()
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn shutdown(&self) {
         let _ = self.close().recv_blocking();
         if let Some(thread) = self.thread.lock().unwrap().take() {
@@ -229,14 +229,14 @@ fn install(cx: &mut App) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) struct Ticket {
-    pub(crate) version: u64,
+pub struct Ticket {
+    pub version: u64,
     key: Key,
     shared: Arc<Shared>,
     receiver: async_channel::Receiver<Reply>,
 }
 impl Ticket {
-    pub(crate) async fn recv(&self) -> Result<Reply, async_channel::RecvError> {
+    pub async fn recv(&self) -> Result<Reply, async_channel::RecvError> {
         self.receiver.recv().await
     }
 }
@@ -254,7 +254,7 @@ impl Drop for Ticket {
     }
 }
 
-pub(crate) fn admit(
+pub fn admit(
     cx: &mut App,
     store: Database,
     session: i64,
@@ -289,8 +289,8 @@ pub(crate) fn admit(
     }))
 }
 
-#[cfg(test)]
-pub(crate) fn wait_for_saves_for_test(cx: &App) {
+#[cfg(any(test, feature = "test-support"))]
+pub fn wait_for_saves_for_test(cx: &App) {
     if let Some(owner) = cx.try_global::<Owner>() {
         let shared = &owner.worker.shared;
         let mut queue = shared.queue.lock().unwrap();
@@ -300,8 +300,8 @@ pub(crate) fn wait_for_saves_for_test(cx: &App) {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn finish_for_test(cx: &App) {
+#[cfg(any(test, feature = "test-support"))]
+pub fn finish_for_test(cx: &App) {
     if let Some(owner) = cx.try_global::<Owner>() {
         owner.worker.shutdown();
     }

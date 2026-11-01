@@ -15,33 +15,24 @@ mod conversation;
 mod dev_reload;
 mod diagrams;
 mod diff_view;
-mod editor_analysis;
 mod editor_scrollbar;
-mod editor_syntax;
 mod explorer;
 mod file_editor;
 mod file_icons;
 mod fixtures;
 mod fonts;
-mod git_cache;
-mod git_graph;
 mod git_picker;
 mod git_status;
-#[cfg(not(test))]
-mod global_hotkey;
-mod hang_diagnostics;
 mod history;
 mod image_lightbox;
 mod inbox;
 mod input;
 mod liquid;
 mod markdown;
-mod markdown_model;
 #[cfg(test)]
 mod metal_tests;
 mod notes;
 mod notifications;
-mod pane_layout;
 mod pane_motion;
 mod pickers;
 mod popover;
@@ -55,18 +46,15 @@ mod quick_open;
 mod reflow_motion;
 mod resource_pressure;
 mod response_actions;
-mod restart;
 mod reveal;
 mod review;
 mod right_panel;
-mod runtime;
 mod search;
 mod session_mark;
 mod session_review;
 mod settings;
 mod shell;
 mod sound;
-mod status_menu;
 mod syntax;
 mod tab_label;
 mod tab_motion;
@@ -75,12 +63,9 @@ mod theme;
 mod todos;
 mod traffic_lights;
 mod transcript;
-mod updater;
 mod usage_footer;
 mod visuals;
 mod vox;
-mod webkit;
-mod window_appearance;
 mod workspace;
 mod worktree_switcher;
 
@@ -114,7 +99,7 @@ fn restart(cx: &mut App) {
         cx.background_executor()
             .spawn(async { vorkspace_core::process::shutdown_all() })
             .await;
-        if let Err(error) = restart::relaunch_self() {
+        if let Err(error) = vorkspace_macos::restart::relaunch_self() {
             eprintln!("Could not schedule restart: {error}");
             return;
         }
@@ -398,10 +383,10 @@ fn main() {
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             if let Some(path) = diagnostics_path {
-                hang_diagnostics::start(cx, path);
+                vorkspace_macos::hang_diagnostics::start(cx, path);
             }
             dev_reload::install(cx);
-            updater::start(cx);
+            vorkspace_macos::updater::start(cx);
             app_menu::init(cx);
             input::bind(cx);
             image_lightbox::bind(cx);

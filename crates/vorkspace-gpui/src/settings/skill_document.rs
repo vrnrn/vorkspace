@@ -2,7 +2,6 @@
 use crate::clock::Instant;
 use crate::{
     markdown::{self, MarkdownRow, Part, Tone},
-    markdown_model,
     theme::*,
 };
 use gpui::{
@@ -10,6 +9,7 @@ use gpui::{
     prelude::*, px,
 };
 use std::sync::Arc;
+use vorkspace_model::markdown_model;
 
 pub(super) struct DocumentData {
     metadata: Option<String>,

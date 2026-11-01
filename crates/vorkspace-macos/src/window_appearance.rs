@@ -1,7 +1,7 @@
 //! The window owns desktop blur; the renderer owns its saved color and opacity.
 use gpui::{Window, WindowBackgroundAppearance};
 
-pub(crate) fn apply(window: &mut Window, glass: bool, radius: u32) {
+pub fn apply(window: &mut Window, glass: bool, radius: u32) {
     if macos::set_blur(window, if glass { radius.min(100) } else { 0 }) {
         // A native material would add another fixed blur over the user's radius.
         window.set_background_appearance(if glass {

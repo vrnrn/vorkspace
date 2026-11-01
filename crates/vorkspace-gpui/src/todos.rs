@@ -4,7 +4,6 @@
 use crate::{
     input::{self, Input},
     popover::{Anchor, AnchorSlot, popover},
-    runtime::{Database, locked},
     theme::*,
 };
 use gpui::{
@@ -12,6 +11,7 @@ use gpui::{
     Role, SharedString, Subscription, Window, div, prelude::*, px,
 };
 use vorkspace_core::todos::{TodoBoard, TodoItem, TodoStatus};
+use vorkspace_runtime::runtime::{Database, locked};
 
 /// Bumped after any board changes, so every open view of it reloads.
 #[derive(Default)]

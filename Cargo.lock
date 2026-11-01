@@ -4480,6 +4480,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "vorkspace-editor"
+version = "1.1.0"
+dependencies = [
+ "gpui-pre",
+ "libc",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "similar",
+ "streaming-iterator",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-c",
+ "tree-sitter-cpp",
+ "tree-sitter-css",
+ "tree-sitter-go",
+ "tree-sitter-html",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-language",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-toml-ng",
+ "tree-sitter-typescript",
+ "tree-sitter-yaml",
+]
+
+[[package]]
 name = "vorkspace-gpui"
 version = "1.1.0"
 dependencies = [
@@ -4510,27 +4540,54 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
- "streaming-iterator",
  "syntect",
  "tempfile",
- "tree-sitter",
- "tree-sitter-bash",
- "tree-sitter-c",
- "tree-sitter-cpp",
- "tree-sitter-css",
- "tree-sitter-go",
- "tree-sitter-html",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-json",
- "tree-sitter-language",
- "tree-sitter-python",
- "tree-sitter-ruby",
- "tree-sitter-rust",
- "tree-sitter-toml-ng",
- "tree-sitter-typescript",
- "tree-sitter-yaml",
  "unicode-segmentation",
+ "vorkspace-core",
+ "vorkspace-editor",
+ "vorkspace-macos",
+ "vorkspace-model",
+ "vorkspace-runtime",
+]
+
+[[package]]
+name = "vorkspace-macos"
+version = "1.1.0"
+dependencies = [
+ "async-channel",
+ "gpui-pre",
+ "libc",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "objc2-web-kit",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "vorkspace-model"
+version = "1.1.0"
+dependencies = [
+ "gpui-pre",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "vorkspace-core",
+]
+
+[[package]]
+name = "vorkspace-runtime"
+version = "1.1.0"
+dependencies = [
+ "async-channel",
+ "base64 0.22.1",
+ "gpui-pre",
+ "serde_json",
+ "tempfile",
  "vorkspace-core",
 ]
 

@@ -7,26 +7,26 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum SplitDir {
+pub enum SplitDir {
     Right,
     Down,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Edge {
+pub enum Edge {
     Left,
     Right,
     Top,
     Bottom,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Place {
+pub enum Place {
     Before,
     After,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub(crate) enum PaneNode {
+pub enum PaneNode {
     Leaf {
         id: i64,
     },
@@ -38,7 +38,7 @@ pub(crate) enum PaneNode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub(crate) struct Rect {
+pub struct Rect {
     pub x: f32,
     pub y: f32,
     pub w: f32,
@@ -76,14 +76,14 @@ impl Rect {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct LayoutLeaf {
+pub struct LayoutLeaf {
     pub id: i64,
     pub rect: Rect,
     /// The axis its parent split runs along.
     pub axis: SplitDir,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct LayoutSash {
+pub struct LayoutSash {
     pub path: Vec<usize>,
     pub index: usize,
     pub dir: SplitDir,
@@ -93,7 +93,7 @@ pub(crate) struct LayoutSash {
 
 const MIN_SIZE: f32 = 0.08;
 
-pub(crate) fn leaf(id: i64) -> PaneNode {
+pub fn leaf(id: i64) -> PaneNode {
     PaneNode::Leaf { id }
 }
 fn split(dir: SplitDir, children: Vec<PaneNode>) -> PaneNode {
@@ -124,7 +124,7 @@ fn edge_split(edge: Edge) -> (SplitDir, Place) {
 }
 
 /// The edge nearest the point, from the pane's centre.
-pub(crate) fn edge_from_point(x: f32, y: f32, rect: Rect) -> Edge {
+pub fn edge_from_point(x: f32, y: f32, rect: Rect) -> Edge {
     let nx = if rect.w <= 0. {
         0.
     } else {
@@ -780,12 +780,7 @@ impl PaneNode {
     }
 }
 
-pub(crate) fn sizes_at_boundary(
-    current: &[f32],
-    index: usize,
-    boundary: f32,
-    min_size: f32,
-) -> Vec<f32> {
+pub fn sizes_at_boundary(current: &[f32], index: usize, boundary: f32, min_size: f32) -> Vec<f32> {
     if index + 1 >= current.len() {
         return current.to_vec();
     }

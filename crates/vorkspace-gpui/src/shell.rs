@@ -48,7 +48,6 @@ use crate::{
     conversation::{Conversation, SessionChanged},
     input,
     notes::Notes,
-    pane_layout::{Edge, LayoutLeaf, PaneNode, Rect, SplitDir},
     pane_motion::{PaneSlide, ResizeSettle},
     pickers::{ProjectPicked, ProjectPicker},
     popover::{
@@ -58,7 +57,6 @@ use crate::{
     resource_pressure::{ResourceMonitor, StopSession},
     response_actions::Transfer,
     right_panel::{PanelEvent, RightPanel},
-    runtime::{Database, locked},
     session_mark::{SessionMark, State as MarkState},
     terminal::{Terminal, TerminalEvent},
     theme::*,
@@ -83,6 +81,8 @@ use std::{
     },
 };
 use vorkspace_core::{provider::Kind, store::Session};
+use vorkspace_model::pane_layout::{Edge, LayoutLeaf, PaneNode, Rect, SplitDir};
+use vorkspace_runtime::runtime::{Database, locked};
 
 actions!(
     workspace,
@@ -477,7 +477,7 @@ struct SessionPreview {
 
 pub(crate) struct Shell {
     #[cfg(not(test))]
-    status_menu: Option<crate::status_menu::Status>,
+    status_menu: Option<vorkspace_macos::status_menu::Status>,
     bots: Option<Entity<crate::bots::Bots>>,
     vox: Option<Entity<crate::vox::Vox>>,
     quick_open: Option<quick_open::Open>,
@@ -3765,8 +3765,12 @@ impl Shell {
                     w: leaf.rect.w * w,
                     h: leaf.rect.h * h,
                 };
-                (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)
-                    .then(|| (leaf.id, crate::pane_layout::edge_from_point(x, y, r)))
+                (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h).then(|| {
+                    (
+                        leaf.id,
+                        vorkspace_model::pane_layout::edge_from_point(x, y, r),
+                    )
+                })
             })
     }
     /// titleTabDropFromPoint: the strip slot nearest the pointer.
@@ -7762,7 +7766,7 @@ impl Render for Shell {
         if self.window_glass != Some(glass) || self.window_blur != Some(blur) {
             self.window_glass = Some(glass);
             self.window_blur = Some(blur);
-            crate::window_appearance::apply(window, glass, blur);
+            vorkspace_macos::window_appearance::apply(window, glass, blur);
         }
         self.sync_settings(cx);
         self.sidebar_fraction = match &self.sidebar_slide {
@@ -8063,7 +8067,7 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &crate::clipboard::Toggle, window, cx| {
                     this.status_menu_action(
-                        crate::status_menu::Action::Clipboard {
+                        vorkspace_macos::status_menu::Action::Clipboard {
                             status_click: false,
                         },
                         window,
@@ -11671,7 +11675,7 @@ mod tests {
         cx.run_until_parked();
         window
             .update(cx, |shell, window, cx| {
-                shell.status_menu_action(crate::status_menu::Action::Quit, window, cx);
+                shell.status_menu_action(vorkspace_macos::status_menu::Action::Quit, window, cx);
             })
             .unwrap();
         cx.run_until_parked();

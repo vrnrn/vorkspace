@@ -1,10 +1,6 @@
 //! SidebarWorktreeSwitcher.tsx's Working copies flyout. The composer keeps its
 //! own branch picker; this panel selects the project's workspace scope.
-use crate::{
-    input, popover,
-    runtime::{Database, locked},
-    theme::*,
-};
+use crate::{input, popover, theme::*};
 use gpui::{
     Context, Entity, EventEmitter, FocusHandle, Focusable, Role, ScrollHandle, Subscription,
     Window, div, prelude::*, px,
@@ -17,6 +13,7 @@ use vorkspace_core::{
     files::path_key,
     git::{self, Snapshot},
 };
+use vorkspace_runtime::runtime::{Database, locked};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct WorktreeFocus {
@@ -150,12 +147,12 @@ impl WorktreeSwitcher {
             this.error = None;
             cx.notify();
         });
-        let state = crate::git_cache::get(&cwd);
+        let state = vorkspace_model::git_cache::get(&cwd);
         let tabs = tab_stats(&sessions, None, &cwd);
         let folder = cwd.clone();
         let work = cx
             .background_executor()
-            .spawn(async move { crate::git_cache::load(Path::new(&folder)) });
+            .spawn(async move { vorkspace_model::git_cache::load(Path::new(&folder)) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -598,7 +595,7 @@ mod tests {
     ) {
         let cwd = "/nonexistent/vorkspace-cached-worktree-menu";
         let feature = format!("{cwd}-feature");
-        crate::git_cache::remember(
+        vorkspace_model::git_cache::remember(
             cwd,
             &Snapshot {
                 worktrees: vec![

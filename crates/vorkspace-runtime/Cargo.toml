@@ -1,0 +1,20 @@
+[package]
+name = "vorkspace-runtime"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[features]
+test-support = []
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
+serde_json.workspace = true
+base64 = "0.22"
+async-channel = "2"
+vorkspace-core = { path = "../vorkspace-core" }
+
+[dev-dependencies]
+tempfile = "3"
+gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false, features = ["test-support"] }

@@ -31,7 +31,6 @@ use crate::{
     conversation::{BotSubmitted, Conversation, SessionChanged},
     input::{self, Input},
     popover::{Anchor, AnchorSlot, Menu, MenuEvent, menu_popover, popover},
-    runtime::{Database, locked},
     shell::Shell,
     theme::*,
 };
@@ -55,6 +54,7 @@ use vorkspace_core::{
     provider::Kind,
     store::Session,
 };
+use vorkspace_runtime::runtime::{Database, locked};
 pub(crate) struct Changed;
 pub(crate) struct TabOpened(pub String);
 pub(crate) struct ShowDetails(pub String);

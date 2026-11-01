@@ -42,7 +42,7 @@ impl Shell {
         let x = (position.x - bounds.left()).as_f32();
         let y = (position.y - bounds.top()).as_f32();
         (bounds.contains(&position) && x >= rect.x)
-            .then(|| crate::pane_layout::edge_from_point(x, y, rect))
+            .then(|| vorkspace_model::pane_layout::edge_from_point(x, y, rect))
     }
 
     fn take_review_pane(&mut self, id: i64, cx: &mut Context<Self>) -> Option<i64> {
