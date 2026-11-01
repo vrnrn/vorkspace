@@ -5,7 +5,7 @@ use gpui::{App, Global};
 use serde_json::Value;
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, PoisonError},
 };
 use vorkspace_core::transcript::Row;
 
@@ -153,7 +153,7 @@ impl Worker {
             .spawn(move || {
                 loop {
                     let job = {
-                        let mut queue = work.queue.lock().unwrap();
+                        let mut queue = work.queue.lock().unwrap_or_else(PoisonError::into_inner);
                         while queue.order.is_empty() && !queue.closed {
                             queue = work.wake.wait(queue).unwrap();
                         }
@@ -164,7 +164,10 @@ impl Worker {
                         }
                     };
                     let result = job.save();
-                    work.queue.lock().unwrap().finish(job, result);
+                    work.queue
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .finish(job, result);
                     #[cfg(any(test, feature = "test-support"))]
                     work.wake.notify_all();
                 }
@@ -178,14 +181,23 @@ impl Worker {
         }))
     }
     fn close(&self) -> async_channel::Receiver<()> {
-        self.shared.queue.lock().unwrap().closed = true;
+        self.shared
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .closed = true;
         self.shared.wake.notify_one();
         self.finished.clone()
     }
     #[cfg(any(test, feature = "test-support"))]
     fn shutdown(&self) {
         let _ = self.close().recv_blocking();
-        if let Some(thread) = self.thread.lock().unwrap().take() {
+        if let Some(thread) = self
+            .thread
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
             let _ = thread.join();
         }
     }
@@ -196,7 +208,10 @@ impl Drop for Worker {
         // Dropping a JoinHandle detaches; the consumer owns its queue and can
         // finish independently. Never wait for storage on the foreground,
         // including owner destruction after GPUI's quit deadline expires.
-        self.thread.lock().unwrap().take();
+        self.thread
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
     }
 }
 struct Owner {
@@ -243,7 +258,11 @@ impl Ticket {
 impl Drop for Ticket {
     fn drop(&mut self) {
         self.receiver.close();
-        let mut queue = self.shared.queue.lock().unwrap();
+        let mut queue = self
+            .shared
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if queue
             .entries
             .get(&self.key)
@@ -293,7 +312,7 @@ pub fn admit(
 pub fn wait_for_saves_for_test(cx: &App) {
     if let Some(owner) = cx.try_global::<Owner>() {
         let shared = &owner.worker.shared;
-        let mut queue = shared.queue.lock().unwrap();
+        let mut queue = shared.queue.lock().unwrap_or_else(PoisonError::into_inner);
         while !queue.order.is_empty() || queue.entries.values().any(|entry| !entry.settled) {
             queue = shared.wake.wait(queue).unwrap();
         }
