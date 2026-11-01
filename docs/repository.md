@@ -21,7 +21,7 @@ The desktop is a Rust workspace that runs as one process. The remote host is a s
 | `scripts/benchmarks/` | Reproducible synthetic measurements with isolated data |
 | `scripts/assets/` | Icon generation tools, run by hand when an upstream icon set changes |
 | `crates/vorkspace-gpui/fixtures/` | Visual SDK sample programs embedded as development fixtures |
-| `vendor/` | The project's own GPUI fork for macOS: framework, Metal renderer, and platform layer. It no longer tracks upstream, so fix GPUI problems here directly |
+| `vendor/` | The project's own GPUI fork for macOS: framework, Metal renderer, and platform layer. Also a patched `block` crate, which that layer's dependencies need to keep compiling. It no longer tracks upstream, so fix GPUI problems here directly |
 | `licenses/` | Third-party license texts included in the app bundle |
 | `docs/` and `docs/eli5/` | Technical guides and matching plain-English companions |
 

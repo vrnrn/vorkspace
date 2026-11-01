@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-exclude = ["vendor/gpui-pre", "vendor/gpui-pre-apple", "vendor/gpui-pre-macos"]
+exclude = ["vendor/block", "vendor/gpui-pre", "vendor/gpui-pre-apple", "vendor/gpui-pre-macos"]
 
 [workspace.package]
 version = "1.1.0"
@@ -16,7 +16,9 @@ rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-featur
 # Exclude the unused screen-capture dependency.
 # Keep the Apple renderer's alpha and font-matching fixes.
 # The macOS bridge owns per-window cursor state and AppKit cursor rectangles.
+# `block` is patched so cocoa and metal keep compiling on future Rust releases.
 [patch.crates-io]
+block = { path = "vendor/block" }
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
 gpui-pre-macos = { path = "vendor/gpui-pre-macos" }

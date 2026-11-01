@@ -301,6 +301,12 @@ type_complexity = "allow"
 level = "allow"
 priority = -1
 
+# The window layer is written against the deprecated cocoa bindings. Moving it to
+# objc2 would rewrite this crate for no change in behavior.
+[lints.rust.deprecated]
+level = "allow"
+priority = 0
+
 [lints.rust.unexpected_cfgs]
 level = "allow"
 priority = 0
