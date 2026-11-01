@@ -5,12 +5,9 @@
 use crate::{
     diff_view::{DiffEvent, DiffFile, DiffView},
     file_editor::{FileEditor, FileEvent},
-    file_icons::file_type_icon,
     git_status::{GitChanged, ProjectGit},
-    pane_motion::PaneReveal,
     popover::{Anchor, Menu, MenuAction, MenuEvent, menu_popover},
     right_panel::{selection, spinner, stroke},
-    theme::*,
 };
 use gpui::{
     AnyElement, Bounds, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable,
@@ -30,6 +27,7 @@ use vorkspace_core::{
     diff,
     scm::{self, ChangedFile, FileDiff, FileDiffVersion},
 };
+use vorkspace_ui::{file_icons::file_type_icon, pane_motion::PaneReveal, theme::*};
 
 const CONCURRENCY: usize = 4;
 const MAX_CACHED_SOURCES: usize = 8;
@@ -279,7 +277,7 @@ pub(crate) struct ReviewPane {
     pub(crate) pane_draggable: bool,
     tab_scroll: ScrollHandle,
     /// Tab animations: opening and closing file tabs, with each tab's last look.
-    tab_motion: crate::tab_motion::TabMotion<String, ReviewTab>,
+    tab_motion: vorkspace_ui::tab_motion::TabMotion<String, ReviewTab>,
     tab_drag: Option<FileTabDrag>,
     skip_tab_click: bool,
     pending_close: Option<(usize, bool)>,
@@ -1464,9 +1462,9 @@ impl ReviewPane {
             .iter()
             .map(|s| (format!("{:?}", s.tab), s.tab.clone()))
             .collect();
-        let (slots, moving) = self
-            .tab_motion
-            .sync(keyed, animate, crate::clock::Instant::now());
+        let (slots, moving) =
+            self.tab_motion
+                .sync(keyed, animate, vorkspace_ui::clock::Instant::now());
         if moving {
             window.request_animation_frame();
         }
@@ -1484,14 +1482,14 @@ impl ReviewPane {
                 .w(px(224. * open))
                 .min_w_0()
                 .flex_shrink(1.)
-                .mr(px(-crate::tab_motion::GAP * (1. - open)))
+                .mr(px(-vorkspace_ui::tab_motion::GAP * (1. - open)))
                 .overflow_hidden()
                 .flex()
         };
         let elements: Vec<AnyElement> = slots
             .into_iter()
             .filter_map(|s| match s {
-                crate::tab_motion::Slot::Live { key, open } => {
+                vorkspace_ui::tab_motion::Slot::Live { key, open } => {
                     let ix = keys.iter().position(|k| *k == key)?;
                     let element = live.get_mut(ix)?.take()?;
                     Some(if open >= 1. {
@@ -1500,7 +1498,7 @@ impl ReviewPane {
                         slot(open).child(element).into_any_element()
                     })
                 }
-                crate::tab_motion::Slot::Closing { ghost, open, .. } => {
+                vorkspace_ui::tab_motion::Slot::Closing { ghost, open, .. } => {
                     let label: SharedString = ghost.label().into();
                     Some(
                         slot(open)
@@ -1762,7 +1760,7 @@ impl Render for ReviewPane {
         // PaneTree's reveal: the files fade in once the pane has arrived.
         let fade = match &self.revealed {
             Some(reveal) => {
-                let (opacity, done) = reveal.opacity(crate::clock::Instant::now());
+                let (opacity, done) = reveal.opacity(vorkspace_ui::clock::Instant::now());
                 if !done {
                     window.request_animation_frame();
                 } else {

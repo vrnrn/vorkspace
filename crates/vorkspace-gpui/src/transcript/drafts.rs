@@ -211,10 +211,10 @@ impl TranscriptView {
         let (mut rise, mut opacity) = (0., 1.);
         if let Some((SAVED_DRAFT_START, born)) = self.prompt_rise {
             let elapsed = born.elapsed().as_secs_f32();
-            let progress = crate::reveal::ease_move((elapsed / 0.56).min(1.));
+            let progress = vorkspace_ui::reveal::ease_move((elapsed / 0.56).min(1.));
             rise =
                 (f32::from(self.viewport.size.height) * 0.3 - TOP_INSET).max(0.) * (1. - progress);
-            opacity = crate::reveal::ease_out((elapsed / 0.48).min(1.));
+            opacity = vorkspace_ui::reveal::ease_out((elapsed / 0.48).min(1.));
         }
         div()
             .id("saved-message-draft")

@@ -147,7 +147,7 @@ mod tests {
     fn global_shortcut_stops_the_existing_panel_without_activating_the_workspace(
         cx: &mut gpui::TestAppContext,
     ) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let store = Arc::new(std::sync::Mutex::new(
             vorkspace_core::store::Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap(),
         ));

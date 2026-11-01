@@ -1,8 +1,9 @@
 //! Compact semantic tool captions with clickable file targets.
 use super::{TranscriptView, tasks};
-use crate::{markdown, theme::*};
+use crate::markdown;
 use gpui::{Animation, AnimationExt, AnyElement, Context, Div, Role, div, prelude::*, px, rgb};
 use vorkspace_core::tool::{CommandStep, ToolCall, ToolState};
+use vorkspace_ui::theme::*;
 
 /// Shell plumbing that says nothing about what a chained command was for.
 fn is_noise(step: &CommandStep) -> bool {
@@ -95,13 +96,15 @@ impl TranscriptView {
                         .items_center()
                         .justify_center()
                         .child(
-                            crate::session_mark::spinner_dots(0).with_animation(
+                            vorkspace_ui::session_mark::spinner_dots(0).with_animation(
                                 gpui::SharedString::from(format!("compaction-loader:{identity}")),
                                 Animation::new(std::time::Duration::from_millis(1_200))
                                     .repeat()
                                     .with_max_fps(30.),
                                 |_, phase| {
-                                    crate::session_mark::spinner_dots((phase * 1_200.) as u64)
+                                    vorkspace_ui::session_mark::spinner_dots(
+                                        (phase * 1_200.) as u64,
+                                    )
                                 },
                             ),
                         )
@@ -576,7 +579,7 @@ mod tests {
 
     #[gpui::test]
     fn search_pills_and_overflow_count_share_a_single_compact_row(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| TranscriptView::new())
@@ -627,7 +630,7 @@ mod tests {
 
     #[gpui::test]
     fn chained_commands_show_step_chips_and_expand_into_steps(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| TranscriptView::new())
@@ -679,7 +682,7 @@ mod tests {
 
     #[gpui::test]
     fn grouped_tool_rows_stay_compact_when_clicked(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| TranscriptView::new())
@@ -750,7 +753,7 @@ mod tests {
 
     #[gpui::test]
     fn reasoning_and_tools_share_the_phase_rail_and_command_count(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| TranscriptView::new())
@@ -833,7 +836,7 @@ mod tests {
 
     #[gpui::test]
     fn first_assistant_prose_replaces_all_streamed_initial_thoughts(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let view = cx.new(|_| TranscriptView::new());
         view.update(cx, |view, cx| {
             let row = |role: &str, text: &str| Row {

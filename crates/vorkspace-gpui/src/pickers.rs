@@ -1,13 +1,14 @@
 // The pickers that open as flyouts beside a menu row: ModelPicker.tsx's
 // ModelFlyout and SearchableProjectPicker.tsx's ProjectPickerPopover. Each
 // owns a search field; arrows and Enter in it move and pick in the list.
-use crate::{input, theme::*, workspace::project_name};
+use crate::{input, workspace::project_name};
 use gpui::{
     AnyElement, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable, Role,
     SharedString, Subscription, Window, div, prelude::*, px,
 };
 use vorkspace_core::catalog::{self, Model};
 use vorkspace_core::provider::Kind;
+use vorkspace_ui::theme::*;
 
 /// Friendly names used before a provider's live catalog arrives.
 pub(crate) const CLAUDE_MODELS: &[(&str, &str)] = &[

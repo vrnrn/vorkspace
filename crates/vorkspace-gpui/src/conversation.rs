@@ -24,9 +24,7 @@ mod submission_tests;
 mod team_history;
 mod ticket_context;
 mod title;
-use crate::clock::Instant;
 use crate::{
-    composer_motion::ComposerMotion,
     git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
     input,
     pickers::{
@@ -37,7 +35,6 @@ use crate::{
         menu_popover, popover,
     },
     response_actions::{Request as ResponseRequest, Transfer},
-    theme::*,
     transcript::TranscriptView,
 };
 pub(crate) use accounts::UsageResumed;
@@ -61,6 +58,8 @@ use vorkspace_core::{
 };
 use vorkspace_core::{provider::Kind, store::Session};
 use vorkspace_runtime::runtime::{Database, locked, run_turn};
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::{composer_motion::ComposerMotion, theme::*};
 // Keep empty and docked composers aligned with the transcript column. Below
 // this width the empty session drops its title.
 const COMPOSER_COLUMN: f32 = COLUMN;
@@ -461,7 +460,7 @@ impl Conversation {
 
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
         #[cfg(test)]
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let input = cx.new(input::Input::composer);
         // A new tab shows its folder's checkout from the first frame; the
         // load below confirms it rather than popping it in.
@@ -3886,7 +3885,7 @@ impl Conversation {
                     this.context_hovered = *hovered;
                     cx.notify();
                 }))
-                .child(crate::context_meter::ring(ratio.unwrap_or(0.)))
+                .child(vorkspace_ui::context_meter::ring(ratio.unwrap_or(0.)))
                 .when(self.context_hovered, |d| {
                     d.child(
                         popover("context-tooltip", Anchor::Slot(self.context_anchor.clone()))
@@ -4156,10 +4155,10 @@ mod composer_motion_tests {
     }
     #[gpui::test]
     fn composer_toolbar_selects_one_row_during_resize_and_preserves_draft(cx: &mut TestAppContext) {
-        crate::theme::configure(&Default::default(), false, true);
+        vorkspace_ui::theme::configure(&Default::default(), false, true);
         cx.update(|cx| {
             cx.set_global(crate::settings::Preferences::default());
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
             input::bind(cx);
             crate::popover::bind(cx);
         });
@@ -4251,7 +4250,7 @@ mod composer_motion_tests {
     fn compact_settings_keep_existing_actions_focus_and_anchor_on_resize(cx: &mut TestAppContext) {
         cx.update(|cx| {
             cx.set_global(crate::settings::Preferences::default());
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
             input::bind(cx);
             crate::popover::bind(cx);
         });
@@ -4507,13 +4506,13 @@ mod composer_motion_tests {
                 )))
             },
         );
-        crate::clock::use_test_clock(&cx);
+        vorkspace_ui::clock::use_test_clock(&cx);
         for light in [false, true] {
             let prefs = crate::settings::Preferences {
                 theme: if light { "light" } else { "dark" }.into(),
                 ..Default::default()
             };
-            crate::theme::configure(&prefs, false, true);
+            vorkspace_ui::theme::configure(&prefs, false, true);
             cx.update(|cx| cx.set_global(prefs));
             for width in [260., 360., 480., 760.] {
                 let store = Store::open(Path::new(":memory:")).unwrap();
@@ -4547,7 +4546,7 @@ mod composer_motion_tests {
                     })
                     .unwrap();
                 cx.run_until_parked();
-                crate::clock::settle_headless_animations(window, &mut cx);
+                vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
                 cx.capture_screenshot(window.into())
                     .unwrap()
                     .save(output.join(format!(
@@ -4565,7 +4564,7 @@ mod composer_motion_tests {
                     })
                     .unwrap();
                     cx.run_until_parked();
-                    crate::clock::settle_headless_animations(window, &mut cx);
+                    vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
                     cx.capture_screenshot(window.into())
                         .unwrap()
                         .save(output.join(format!(
@@ -4593,7 +4592,7 @@ mod composer_motion_tests {
                     })
                     .unwrap();
                     cx.run_until_parked();
-                    crate::clock::settle_headless_animations(window, &mut cx);
+                    vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
                     cx.capture_screenshot(window.into())
                         .unwrap()
                         .save(output.join(format!(
@@ -4609,7 +4608,7 @@ mod composer_motion_tests {
                     })
                     .unwrap();
                     cx.run_until_parked();
-                    crate::clock::settle_headless_animations(window, &mut cx);
+                    vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
                     cx.capture_screenshot(window.into())
                         .unwrap()
                         .save(output.join(format!(
@@ -4622,17 +4621,17 @@ mod composer_motion_tests {
                     .unwrap();
             }
         }
-        crate::theme::configure(&Default::default(), false, true);
+        vorkspace_ui::theme::configure(&Default::default(), false, true);
     }
     #[gpui::test]
     fn composer_uses_react_surface_and_equal_text_padding_with_attachments(
         cx: &mut TestAppContext,
     ) {
         let preferences = crate::settings::Preferences::default();
-        crate::theme::configure(&preferences, false, true);
+        vorkspace_ui::theme::configure(&preferences, false, true);
         cx.update(|cx| {
             cx.set_global(preferences);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         for width in [480., 1000.] {
             let window = window(cx, width);
@@ -5357,7 +5356,7 @@ mod menu_tests {
         cx.update(|cx| {
             input::bind(cx);
             crate::popover::bind(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         let cwd = "/nonexistent/vorkspace-composer-existing-submenu";
         let feature = format!("{cwd}-feature-b");

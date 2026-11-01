@@ -327,7 +327,7 @@ fn native_compact_footer_capture() {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
                 .size_full()
-                .font_family(crate::fonts::UI)
+                .font_family(vorkspace_ui::fonts::UI)
                 .bg(rgb(CHAT))
                 .child(
                     div()
@@ -364,7 +364,7 @@ fn native_compact_footer_capture() {
         },
     );
     cx.update(|cx| {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         crate::accounts::install(store, cx);
     });
     for multiple in [false, true] {
@@ -421,7 +421,7 @@ fn native_sidebar_usage_capture() {
             div()
                 .size_full()
                 .bg(rgb(CHAT))
-                .font_family(crate::fonts::UI)
+                .font_family(vorkspace_ui::fonts::UI)
                 .child(
                     div()
                         .w(px(if self.compact { COMPACT_WIDTH } else { 240. }))
@@ -452,7 +452,7 @@ fn native_sidebar_usage_capture() {
         },
     );
     cx.update(|cx| {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         crate::accounts::install(store, cx);
         let center = crate::accounts::get(cx).unwrap();
         center.update(cx, |center, cx| {

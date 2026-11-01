@@ -11,6 +11,7 @@ use crate::notifications::{
     linked_activity::{Cleanup, LinkedActivity, LinkedActivityEvent},
     platform, reminders,
 };
+use crate::settings::ProjectNotifications;
 use std::{sync::mpsc::Receiver, time::Duration};
 
 pub(super) struct State {
@@ -1303,7 +1304,7 @@ mod error_tests {
 
     #[gpui::test]
     fn history_conflict_reaches_top_right_alert_and_preserves_composer(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("history.db");
         let mut store = vorkspace_core::store::Store::open_vorkspace(&path).unwrap();

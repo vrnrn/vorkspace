@@ -5,7 +5,6 @@ use crate::{
         ModelList, ModelPicked, ProjectPicked, ProjectPicker, model_display_name, model_name,
     },
     popover::{Anchor, AnchorSlot, Side, popover},
-    theme::*,
 };
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Role, Subscription, Task,
@@ -14,6 +13,7 @@ use gpui::{
 use vorkspace_core::{agent::AccessMode, provider::Kind};
 #[cfg(not(test))]
 use vorkspace_macos::global_hotkey as hotkey;
+use vorkspace_ui::theme::*;
 #[derive(Clone)]
 pub(crate) struct Launch {
     pub cwd: String,
@@ -287,7 +287,7 @@ impl Render for QuickComposer {
             .rounded_xl()
             .bg(shell_fill())
             .text_color(content(1.))
-            .font_family(crate::fonts::UI)
+            .font_family(vorkspace_ui::fonts::UI)
             .border_1()
             .border_color(content(0.15))
             .flex()

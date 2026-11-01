@@ -1,10 +1,10 @@
 //! A bounded projection of Shell's semantic session registry. The card owns its
 //! presentation clock: ticking never hydrates history or rebuilds the session snapshot.
 use super::*;
-use crate::clock::Instant;
 use gpui::{ListAlignment, ListOffset, ListState, list};
 use std::time::Duration;
 use vorkspace_core::project_appearance::ProjectAppearance;
+use vorkspace_ui::clock::Instant;
 
 const DEFAULT_ROWS: usize = 4;
 const ROW_HEIGHT: f32 = 49.;
@@ -429,8 +429,12 @@ impl LiveAgents {
                 });
             });
         let ink = match agent.status {
-            Status::Approval => crate::theme::status(crate::theme::StatusColor::Warning, 1.),
-            Status::Done => crate::theme::status(crate::theme::StatusColor::Success, 1.),
+            Status::Approval => {
+                vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Warning, 1.)
+            }
+            Status::Done => {
+                vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Success, 1.)
+            }
             Status::Working => content(0.5),
         };
         let status = div()
@@ -441,8 +445,12 @@ impl LiveAgents {
             .items_center()
             .justify_center()
             .child(if agent.status == Status::Working {
-                crate::session_mark::spinner_dots(if self.compact { 400 } else { self.frame_ms() })
-                    .into_any_element()
+                vorkspace_ui::session_mark::spinner_dots(if self.compact {
+                    400
+                } else {
+                    self.frame_ms()
+                })
+                .into_any_element()
             } else {
                 icon(agent.status.glyph(), 12.)
                     .text_color(ink)
@@ -608,7 +616,7 @@ impl Render for LiveAgents {
                     .items_center()
                     .justify_center()
                     .hover(|s| s.bg(content(0.08)))
-                    .child(crate::session_mark::spinner_dots(self.frame_ms()))
+                    .child(vorkspace_ui::session_mark::spinner_dots(self.frame_ms()))
                     .on_click(move |_, _, cx| {
                         let _ = owner.update(cx, |shell, cx| {
                             if !shell.workspace.project_rail_open {
@@ -904,7 +912,7 @@ mod minion_history_tests {
 
     #[gpui::test]
     fn restored_team_views_never_join_project_activity_trees(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let store = Store::open(std::path::Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/missing/team-project").unwrap();
         let id = session.id;

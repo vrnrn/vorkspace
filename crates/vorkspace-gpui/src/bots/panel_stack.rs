@@ -1,6 +1,6 @@
 //! PanelStack.tsx's 280ms slide over a covered, fading overview.
 use super::panels::Route;
-use crate::clock::Instant;
+use vorkspace_ui::clock::Instant;
 
 const DURATION: f32 = 0.28;
 
@@ -40,7 +40,7 @@ impl Motion {
         if t >= 1. {
             return (self.to, true);
         }
-        let p = crate::reveal::bezier(t, 0.2, 0.9, 0.3, 1.);
+        let p = vorkspace_ui::reveal::bezier(t, 0.2, 0.9, 0.3, 1.);
         (
             Pose {
                 x: self.from.x + (self.to.x - self.from.x) * p,

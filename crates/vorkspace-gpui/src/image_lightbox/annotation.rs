@@ -149,7 +149,7 @@ pub(super) fn png(
 
 // The editor and export deliberately use a single unwrapped system-font line.
 // Its origin is the top-left of the line box, in image-relative coordinates.
-pub(super) const FONT_FAMILY: &str = crate::fonts::UI;
+pub(super) const FONT_FAMILY: &str = vorkspace_ui::fonts::UI;
 const CLIPPED: &str = "Text extends beyond the image; shorten it or place it farther from the edge";
 
 fn draw_text(

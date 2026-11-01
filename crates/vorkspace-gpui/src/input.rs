@@ -224,8 +224,8 @@ impl Focusable for Input {
 impl Input {
     fn text_color(&self, placeholder: bool, ink: Hsla) -> Hsla {
         match (placeholder, self.placeholder_alpha) {
-            (true, Some(alpha)) => crate::theme::content(alpha),
-            (true, None) if !self.single_line => crate::theme::content(0.4),
+            (true, Some(alpha)) => vorkspace_ui::theme::content(alpha),
+            (true, None) if !self.single_line => vorkspace_ui::theme::content(0.4),
             _ => ink,
         }
     }
@@ -1022,7 +1022,7 @@ impl Input {
         self.replace_text_in_range(None, "", w, cx);
     }
     fn mouse_down(&mut self, e: &MouseDownEvent, w: &mut Window, cx: &mut Context<Self>) {
-        crate::traffic_lights::focus_content(w);
+        vorkspace_ui::traffic_lights::focus_content(w);
         if self.code_fold_down(e, cx) || self.code_scrollbar_down(e, w, cx) {
             return;
         }
@@ -1439,11 +1439,11 @@ impl Element for InputElement {
             .map(|pair| {
                 let at = pair[0];
                 let color = if command.is_some_and(|c| c.icon_range().contains(&at)) {
-                    crate::theme::content(0.)
+                    vorkspace_ui::theme::content(0.)
                 } else if let Some(command) = command.filter(|c| c.name_range().contains(&at)) {
                     command.mode.color()
                 } else if highlights.iter().any(|range| range.contains(&at)) {
-                    crate::theme::accent_color()
+                    vorkspace_ui::theme::accent_color()
                 } else {
                     run.color
                 };
@@ -1594,7 +1594,7 @@ impl Element for InputElement {
                                     point(x + left, y + sy),
                                     size((right - left).max(px(1.)), line_height),
                                 ),
-                                crate::theme::text_selection(),
+                                vorkspace_ui::theme::text_selection(),
                             ));
                             sy += line_height;
                         }
@@ -1610,7 +1610,7 @@ impl Element for InputElement {
                             .unwrap_or_default();
                         w.paint_quad(fill(
                             Bounds::new(point(x + p.x, y + p.y), size(px(1.5), line_height)),
-                            crate::theme::content(1.),
+                            vorkspace_ui::theme::content(1.),
                         ));
                     }
                 }
@@ -1762,43 +1762,51 @@ mod native_input_tests {
     ) {
         cx.update(|cx| {
             let mut preferences = crate::settings::Preferences::default();
-            crate::theme::configure(&preferences, false, true);
-            let field = cx
-                .new(|cx| Input::field("Search", "Search models", crate::theme::content(0.35), cx));
+            vorkspace_ui::theme::configure(&preferences, false, true);
+            let field = cx.new(|cx| {
+                Input::field(
+                    "Search",
+                    "Search models",
+                    vorkspace_ui::theme::content(0.35),
+                    cx,
+                )
+            });
             let composer = cx.new(Input::new);
-            let original_ink = field.read(cx).text_color(true, crate::theme::content(1.));
+            let original_ink = field
+                .read(cx)
+                .text_color(true, vorkspace_ui::theme::content(1.));
             field.update(cx, |input, cx| {
                 input.set_text("unfinished 🙂 draft".into(), cx);
                 input.selection = 0..10;
             });
             for theme in ["light", "dark"] {
                 preferences.theme = theme.into();
-                crate::theme::configure(&preferences, false, true);
+                vorkspace_ui::theme::configure(&preferences, false, true);
                 let input = field.read(cx);
                 assert_eq!(
-                    input.text_color(true, crate::theme::content(1.)),
-                    crate::theme::content(0.35)
+                    input.text_color(true, vorkspace_ui::theme::content(1.)),
+                    vorkspace_ui::theme::content(0.35)
                 );
                 assert_eq!(
-                    input.text_color(false, crate::theme::content(1.)),
-                    crate::theme::content(1.)
+                    input.text_color(false, vorkspace_ui::theme::content(1.)),
+                    vorkspace_ui::theme::content(1.)
                 );
                 assert_eq!(
                     composer
                         .read(cx)
-                        .text_color(true, crate::theme::content(1.)),
-                    crate::theme::content(0.4)
+                        .text_color(true, vorkspace_ui::theme::content(1.)),
+                    vorkspace_ui::theme::content(0.4)
                 );
                 assert_eq!(input.content, "unfinished 🙂 draft");
                 assert_eq!(input.selection, 0..10);
                 if theme == "light" {
                     assert_ne!(
-                        input.text_color(true, crate::theme::content(1.)),
+                        input.text_color(true, vorkspace_ui::theme::content(1.)),
                         original_ink
                     );
                 }
             }
-            crate::theme::configure(&Default::default(), false, true);
+            vorkspace_ui::theme::configure(&Default::default(), false, true);
         });
     }
 

@@ -134,7 +134,7 @@ fn ui_parity_capture() {
             )))
         },
     );
-    crate::clock::use_test_clock(&cx);
+    vorkspace_ui::clock::use_test_clock(&cx);
     for theme in ["dark", "light"] {
         for (name, open) in SURFACES {
             let mut state = Workspace::default();
@@ -157,7 +157,7 @@ fn ui_parity_capture() {
             window.update(&mut cx, open).unwrap();
             cx.run_until_parked();
             std::thread::sleep(std::time::Duration::from_millis(400));
-            crate::clock::settle_headless_animations(window, &mut cx);
+            vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
             cx.capture_screenshot(window.into())
                 .unwrap()
                 .save(output.join(format!("{theme}-{name}.png")))

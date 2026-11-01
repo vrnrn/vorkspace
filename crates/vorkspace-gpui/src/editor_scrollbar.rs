@@ -7,7 +7,7 @@ pub(crate) fn diff_colors(cx: &gpui::App) -> (u32, u32) {
         .try_global::<crate::settings::Preferences>()
         .map(|p| p.diff_palette.as_str())
         .unwrap_or("default");
-    let light = crate::theme::content(1.).l < 0.5;
+    let light = vorkspace_ui::theme::content(1.).l < 0.5;
     match (palette, light) {
         ("colorblind", false) => (0x388bfd, 0xdb6d28),
         ("colorblind", true) => (0x0969da, 0xbc4c00),

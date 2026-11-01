@@ -572,7 +572,7 @@ impl Accounts {
                     kind.label()
                 ),
                 "Work or Personal",
-                crate::theme::content(0.25),
+                vorkspace_ui::theme::content(0.25),
                 cx,
             );
             input.set_font_size(12.);

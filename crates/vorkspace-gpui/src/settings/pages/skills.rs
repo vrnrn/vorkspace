@@ -1,14 +1,12 @@
-use crate::{
-    settings::{
-        SettingsView,
-        management::Target,
-        widgets::{icon_action, note, page_header, secondary_button},
-    },
-    theme::*,
+use crate::settings::{
+    SettingsView,
+    management::Target,
+    widgets::{icon_action, note, page_header, secondary_button},
 };
 use gpui::{
     AnyElement, ClipboardItem, Context, Focusable, Role, SharedString, div, prelude::*, px,
 };
+use vorkspace_ui::theme::*;
 impl SettingsView {
     fn skill_create_form(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let e = self.management.as_ref().expect("open skill form");

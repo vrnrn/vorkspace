@@ -4,12 +4,10 @@
 //! per-hunk staging, and line comments for the chat. Highlighting runs off
 //! the UI thread, one file at a time, only for files that are on screen.
 use crate::{
-    file_icons::file_type_icon,
     input::{self, Input},
     popover::{AnchorSlot, Side, popover},
     right_panel::{format_integer, stroke, tabular},
     syntax::{HighlightRequest, HighlightSpan},
-    theme::*,
 };
 use gpui::{
     AnyElement, App, Bounds, Context, EventEmitter, FocusHandle, Focusable, FontWeight,
@@ -25,6 +23,7 @@ use std::{
     sync::Arc,
 };
 use vorkspace_core::diff::{self, Block, Line, LineKind};
+use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 pub(crate) const FILE_HEADER: f32 = 40.;
 const LINE: f32 = 20.;

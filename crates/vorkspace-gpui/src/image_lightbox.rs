@@ -1,6 +1,5 @@
 //! Native port of `src/shared/ui/ImageLightbox.tsx`.
 mod annotation;
-use crate::theme::{black, icon, white};
 use gpui::{
     App, Bounds, BoxShadow, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable,
     Image, ImageFormat, ImgResourceLoader, KeyBinding, MouseButton, Pixels, Point, RenderImage,
@@ -8,6 +7,7 @@ use gpui::{
 };
 use std::time::Instant;
 use std::{path::PathBuf, sync::Arc};
+use vorkspace_ui::theme::{black, icon, white};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Source {
@@ -461,12 +461,12 @@ impl ImageLightbox {
                         .w(px(220.))
                         .p(px(10.))
                         .rounded_lg()
-                        .bg(gpui::rgb(if crate::theme::is_light() {
+                        .bg(gpui::rgb(if vorkspace_ui::theme::is_light() {
                             0xf4f4f4
                         } else {
                             0x262628
                         }))
-                        .text_color(crate::theme::content(1.))
+                        .text_color(vorkspace_ui::theme::content(1.))
                         .border_1()
                         .border_color(white(0.15))
                         .shadow_lg()
@@ -517,7 +517,7 @@ impl ImageLightbox {
         let Some((from, born)) = self.transition else {
             return self.view;
         };
-        let t = crate::reveal::ease_out((born.elapsed().as_secs_f32() / 0.06).min(1.));
+        let t = vorkspace_ui::reveal::ease_out((born.elapsed().as_secs_f32() / 0.06).min(1.));
         View {
             scale: from.scale + (self.view.scale - from.scale) * t,
             x: from.x + (self.view.x - from.x) * t,

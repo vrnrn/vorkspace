@@ -1,10 +1,10 @@
 //! Fixed chat identity, outside the transcript's scroll and input ownership.
 use super::avatar;
-use crate::theme::*;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, FontWeight, Render, canvas, div, prelude::*, px,
 };
 use vorkspace_core::bot::Bot;
+use vorkspace_ui::theme::*;
 
 const FACE: f32 = 64.;
 const BACKDROP: f32 = 256.;

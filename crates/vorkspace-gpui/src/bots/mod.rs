@@ -32,7 +32,6 @@ use crate::{
     input::{self, Input},
     popover::{Anchor, AnchorSlot, Menu, MenuEvent, menu_popover, popover},
     shell::Shell,
-    theme::*,
 };
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, Focusable, MouseButton, Role, SharedString,
@@ -55,6 +54,7 @@ use vorkspace_core::{
     store::Session,
 };
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::theme::*;
 pub(crate) struct Changed;
 pub(crate) struct TabOpened(pub String);
 pub(crate) struct ShowDetails(pub String);
@@ -1894,7 +1894,7 @@ impl gpui::Render for Bots {
                 }
             }))
             .capture_any_mouse_down(|_, window, _| {
-                crate::traffic_lights::focus_content(window);
+                vorkspace_ui::traffic_lights::focus_content(window);
             })
             .child(
                 div()

@@ -14,12 +14,12 @@
 //! is clipped to its row's scroller. Hover follows the pointer, which already
 //! repaints the rail (`bots::avatar::sidebar_cursor_tracker`); the surface asks
 //! for frames only while a pill is moving.
-use crate::clock::Instant;
 use gpui::{
     Bounds, ContentMask, Hsla, IntoElement, PathBuilder, Pixels, Point, SharedString, Styled,
     canvas, fill, point, px, size,
 };
 use std::{cell::RefCell, rc::Rc, time::Duration};
+use vorkspace_ui::clock::Instant;
 
 /// `rounded_md`, for the pill's end and its joins into the pane.
 const RADIUS: f32 = 6.;
@@ -98,7 +98,7 @@ impl Anim {
     }
     fn value(&self, now: Instant) -> f32 {
         let (duration, ease): (_, fn(f32) -> f32) = if self.to > self.from {
-            (POUR, crate::reveal::ease_out)
+            (POUR, vorkspace_ui::reveal::ease_out)
         } else {
             (DRAIN, |t| t * t)
         };
@@ -185,7 +185,7 @@ impl Liquid {
                 // short of the pane's rounded bottom corner.
                 let divider = state
                     .below
-                    .unwrap_or_else(|| crate::theme::content(DIVIDER));
+                    .unwrap_or_else(|| vorkspace_ui::theme::content(DIVIDER));
                 let (top, bottom) = (bounds.top().as_f32(), bounds.bottom().as_f32());
                 // Beneath tabs, the line simply spans the surface.
                 let mut y = top
@@ -194,7 +194,7 @@ impl Liquid {
                     } else if let Some(cap) = cap_top {
                         cap + PANE_RADIUS
                     } else {
-                        crate::theme::TITLE_BAR_HEIGHT
+                        vorkspace_ui::theme::TITLE_BAR_HEIGHT
                     };
                 let end = bottom - if cap_bottom { PANE_RADIUS } else { 0. };
                 // Around the pane's corners, on the divider's column.
@@ -387,7 +387,7 @@ impl Notch {
         let lit = self.lit.value(now);
         let strength = HOVER + (1. - HOVER) * lit;
         if let Some(path) = outline(shape, edge, below, PathBuilder::fill()) {
-            window.paint_path(path, crate::theme::content(SELECTED * strength));
+            window.paint_path(path, vorkspace_ui::theme::content(SELECTED * strength));
         }
         // The divider runs around the pill, centred on the divider's column.
         if let Some(path) = outline(shape, edge - 0.5, below, PathBuilder::stroke(px(1.))) {

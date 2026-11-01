@@ -2,7 +2,7 @@ use crate::theme::*;
 use gpui::{Bounds, PathBuilder, canvas, div, fill, point, prelude::*, px, size};
 
 /// ContextMeter.tsx: 14px, 2px stroke, 25% track, clockwise from twelve.
-pub(crate) fn ring(ratio: f32) -> impl IntoElement {
+pub fn ring(ratio: f32) -> impl IntoElement {
     let color = if ratio >= 0.9 {
         gpui::rgb(0xf87171).into()
     } else if ratio >= 0.75 {

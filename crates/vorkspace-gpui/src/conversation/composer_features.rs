@@ -484,7 +484,9 @@ impl Conversation {
                         .rounded_md()
                         .bg(content(0.06))
                         .text_size(px(11.))
-                        .child(crate::file_icons::file_type_icon(&label, false, false, 14.))
+                        .child(vorkspace_ui::file_icons::file_type_icon(
+                            &label, false, false, 14.,
+                        ))
                         .child(div().max_w(px(190.)).truncate().child(label))
                         .child(remove)
                         .into_any_element()

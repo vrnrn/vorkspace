@@ -1,9 +1,5 @@
 //! Flowing Inbox prose. The detail page owns scrolling; this is never a chat.
-use crate::clock::Instant;
-use crate::{
-    markdown::{self, MarkdownRow, Part, Tone},
-    theme::*,
-};
+use crate::markdown::{self, MarkdownRow, Part, Tone};
 use gpui::{
     AnyElement, App, Asset, AvailableSpace, Bounds, Context, Element, ElementId, Entity,
     GlobalElementId, Image, ImageFormat, InspectorElementId, LayoutId, Pixels, Role, SharedString,
@@ -12,6 +8,8 @@ use gpui::{
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::{path::PathBuf, sync::Arc};
 use vorkspace_model::markdown_model;
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::theme::*;
 
 enum Row {
     Markdown(MarkdownRow, Pixels),

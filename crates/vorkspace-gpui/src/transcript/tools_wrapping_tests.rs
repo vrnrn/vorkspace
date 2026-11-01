@@ -15,7 +15,7 @@ fn command_call(command: &str, state: ToolState) -> ToolCall {
 }
 
 fn fixture(cx: &mut TestAppContext, bot: bool) -> WindowHandle<TranscriptView> {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
             cx.new(|_| {

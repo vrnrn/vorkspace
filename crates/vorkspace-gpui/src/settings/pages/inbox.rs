@@ -1,10 +1,8 @@
 use crate::input::{self, Input};
-use crate::{
-    settings::{SettingsEvent, SettingsView, widgets::secondary_button},
-    theme::*,
-};
+use crate::settings::{SettingsEvent, SettingsView, widgets::secondary_button};
 use gpui::{AnyElement, Context, Entity, SharedString, div, prelude::*, px};
 use vorkspace_core::inbox::JiraFilter;
+use vorkspace_ui::theme::*;
 
 #[derive(Default)]
 pub(in crate::settings) struct InboxState {

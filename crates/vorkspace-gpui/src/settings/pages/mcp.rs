@@ -1,12 +1,10 @@
-use crate::{
-    settings::{
-        SettingsView,
-        management::Target,
-        widgets::{note, secondary_button},
-    },
-    theme::*,
+use crate::settings::{
+    SettingsView,
+    management::Target,
+    widgets::{note, secondary_button},
 };
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
+use vorkspace_ui::theme::*;
 impl SettingsView {
     pub(super) fn mcp_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let project = self.project_picker(cx);

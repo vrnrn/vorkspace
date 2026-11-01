@@ -28,7 +28,7 @@ fn info() -> TurnInfo {
 }
 
 fn fixture(cx: &mut TestAppContext, bot: bool) -> WindowHandle<TranscriptView> {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
             cx.new(|cx| {
@@ -78,7 +78,7 @@ fn hover_metrics(
     visual: &mut VisualTestContext,
     turn: usize,
 ) -> Bounds<Pixels> {
-    crate::clock::settle_animations(window, visual);
+    vorkspace_ui::clock::settle_animations(window, visual);
     let anchor = window
         .update(visual, |view, _, _| {
             view.action_anchors[&(turn, "metrics")].get().unwrap()
@@ -99,7 +99,7 @@ fn hover_metrics(
         .unwrap();
     visual.run_until_parked();
     visual.refresh().unwrap();
-    crate::clock::settle_animations(window, visual);
+    vorkspace_ui::clock::settle_animations(window, visual);
     anchor
 }
 
@@ -135,7 +135,8 @@ fn bot_and_session_metrics_hover_show_the_same_text_and_fit_at_both_widths(
                     .painted_quads()
                     .into_iter()
                     .find(|quad| {
-                        quad.background == gpui::Background::from(crate::theme::content(0.02))
+                        quad.background
+                            == gpui::Background::from(vorkspace_ui::theme::content(0.02))
                     })
                     .expect("painted tooltip glass surface");
                 // Inspect the glass fill: GPUI splits transparent border
@@ -296,7 +297,7 @@ fn metrics_with_zero_or_legacy_duration_keep_tokens_without_a_made_up_rate(
 fn streamed_bot_metrics_survive_save_reopen_and_history_install(cx: &mut TestAppContext) {
     let window = fixture(cx, true);
     // The shown output rate divides by elapsed time, so this test reads real time.
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     window
         .update(cx, |view, _, cx| {
             view.streaming(true, cx);
@@ -451,7 +452,7 @@ fn native_metrics_hover_capture() {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
                 .size_full()
-                .font_family(crate::fonts::UI)
+                .font_family(vorkspace_ui::fonts::UI)
                 .bg(rgb(CHAT))
                 .child(self.0.clone())
         }
@@ -467,7 +468,7 @@ fn native_metrics_hover_capture() {
             )))
         },
     );
-    crate::clock::use_test_clock(&cx);
+    vorkspace_ui::clock::use_test_clock(&cx);
     for bot in [false, true] {
         for width in [900., 320.] {
             let window = cx
@@ -506,7 +507,7 @@ fn native_metrics_hover_capture() {
             })
             .unwrap();
             cx.run_until_parked();
-            crate::clock::settle_headless_animations(window, &mut cx);
+            vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
             cx.capture_screenshot(window.into())
                 .unwrap()
                 .save(output.join(format!(

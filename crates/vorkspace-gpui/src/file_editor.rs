@@ -4,7 +4,6 @@ use crate::{
     git_status::{GitChanged, ProjectGit},
     input::{self, Input},
     right_panel::{icon_action, stroke},
-    theme::*,
     transcript::TranscriptView,
 };
 use gpui::{
@@ -14,6 +13,7 @@ use gpui::{
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use vorkspace_core::files::document::{self, Document, TextDocument};
+use vorkspace_ui::theme::*;
 
 mod chrome;
 mod diff;

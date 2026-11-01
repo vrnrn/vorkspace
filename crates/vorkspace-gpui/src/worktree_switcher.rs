@@ -1,6 +1,6 @@
 //! SidebarWorktreeSwitcher.tsx's Working copies flyout. The composer keeps its
 //! own branch picker; this panel selects the project's workspace scope.
-use crate::{input, popover, theme::*};
+use crate::{input, popover};
 use gpui::{
     Context, Entity, EventEmitter, FocusHandle, Focusable, Role, ScrollHandle, Subscription,
     Window, div, prelude::*, px,
@@ -14,6 +14,7 @@ use vorkspace_core::{
     git::{self, Snapshot},
 };
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::theme::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct WorktreeFocus {

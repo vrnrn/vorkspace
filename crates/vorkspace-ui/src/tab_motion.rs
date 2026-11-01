@@ -7,9 +7,9 @@ use std::hash::Hash;
 use std::time::Duration;
 
 /// `--motion-tab-close-duration`.
-pub(crate) const DURATION: Duration = Duration::from_millis(200);
+pub const DURATION: Duration = Duration::from_millis(200);
 /// The strips' 2px gap, which a collapsed slot gives back (`-0.125rem`).
-pub(crate) const GAP: f32 = 2.;
+pub const GAP: f32 = 2.;
 
 /// `--motion-tab-ease-out`, cubic-bezier(1/3, 2/3, 2/3, 1): quadratic ease-out.
 fn ease(t: f32) -> f32 {
@@ -18,19 +18,19 @@ fn ease(t: f32) -> f32 {
 }
 
 /// How far a motion that began at `start` has eased, 0 to 1.
-pub(crate) fn progress(start: Instant, now: Instant) -> f32 {
+pub fn progress(start: Instant, now: Instant) -> f32 {
     ease(now.duration_since(start).as_secs_f32() / DURATION.as_secs_f32())
 }
 
 /// A slot in the strip, in display order.
-pub(crate) enum Slot<K, G> {
+pub enum Slot<K, G> {
     /// A live tab; `open` is its slot's share of its width, 1 once settled.
     Live { key: K, open: f32 },
     /// A closed tab collapsing, drawn from what it last showed.
     Closing { key: K, ghost: G, open: f32 },
 }
 
-pub(crate) struct TabMotion<K, G> {
+pub struct TabMotion<K, G> {
     /// The last strip, live and closing, in display order.
     order: Vec<K>,
     live: Vec<K>,
@@ -53,7 +53,7 @@ impl<K, G> Default for TabMotion<K, G> {
 impl<K: Clone + Eq + Hash, G: Clone> TabMotion<K, G> {
     /// Replace the content identity of a live slot without opening or closing
     /// it. An existing entrance keeps its original start time.
-    pub(crate) fn replace_key(&mut self, from: &K, to: K) {
+    pub fn replace_key(&mut self, from: &K, to: K) {
         if from == &to || !self.live.contains(from) {
             return;
         }
@@ -81,7 +81,7 @@ impl<K: Clone + Eq + Hash, G: Clone> TabMotion<K, G> {
 
     /// The strip to draw for `tabs`, each with what a closing copy would show.
     /// Returns whether a slot is still moving, so the caller asks for a frame.
-    pub(crate) fn sync(
+    pub fn sync(
         &mut self,
         tabs: Vec<(K, G)>,
         animate: bool,

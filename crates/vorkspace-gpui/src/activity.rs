@@ -96,7 +96,7 @@ impl Element for Shimmer {
                                     run.font_id,
                                     glyph.id,
                                     line.font_size,
-                                    crate::theme::content(0.4 + 0.6 * sweep),
+                                    vorkspace_ui::theme::content(0.4 + 0.6 * sweep),
                                 );
                             }
                         }
@@ -109,7 +109,7 @@ impl Element for Shimmer {
 
 pub(crate) fn file_icon(path: &str, side: f32) -> AnyElement {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    crate::file_icons::file_type_icon(name, false, false, side)
+    vorkspace_ui::file_icons::file_type_icon(name, false, false, side)
 }
 pub(crate) fn summary(tools: &[ToolCall], live: bool) -> (String, &'static str) {
     let mut order = Vec::new();

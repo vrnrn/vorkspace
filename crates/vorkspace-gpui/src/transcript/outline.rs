@@ -1,11 +1,11 @@
 // The prompt outline rail, ported from src/features/sessions/ui/PromptOutline.tsx
 // and its model in src/features/sessions/model/promptOutline.ts.
 use super::TranscriptView;
-use crate::clock::Instant;
 use crate::popover::{Align, Anchor, AnchorSlot, Side, popover};
-use crate::theme::*;
 use gpui::{Context, ListOffset, Role, Task, Window, div, prelude::*, px};
 use std::{collections::HashMap, time::Duration};
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::theme::*;
 
 const OPEN_DELAY: Duration = Duration::from_millis(25);
 const POPOVER_WIDTH: f32 = 288.;
@@ -38,7 +38,7 @@ struct Tween {
 impl Tween {
     fn at(&self, now: Instant) -> (f32, f32) {
         let t = now.saturating_duration_since(self.start).as_secs_f32() / BAR_TRANSITION;
-        let k = crate::reveal::ease_out(t.clamp(0., 1.));
+        let k = vorkspace_ui::reveal::ease_out(t.clamp(0., 1.));
         (
             self.from.0 + (self.to.0 - self.from.0) * k,
             self.from.1 + (self.to.1 - self.from.1) * k,

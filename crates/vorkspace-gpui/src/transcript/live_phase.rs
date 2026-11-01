@@ -1,5 +1,4 @@
 //! ActivityPhaseGroup's bounded live window and useLivePhaseScroll.
-use crate::clock::Instant;
 use gpui::{
     AnyElement, Bounds, Context, Pixels, ScrollHandle, Window, canvas, div, prelude::*, px,
 };
@@ -7,6 +6,7 @@ use std::{
     cell::{Cell, RefCell},
     rc::Rc,
 };
+use vorkspace_ui::clock::Instant;
 
 #[derive(Default)]
 pub(super) struct LiveScroll {
@@ -43,7 +43,7 @@ struct Edges {
 impl Edges {
     fn value(&self, now: Instant) -> (f32, f32) {
         let progress = self.changed.map_or(1., |at| {
-            crate::reveal::ease_out((now.duration_since(at).as_secs_f32() / 0.16).min(1.))
+            vorkspace_ui::reveal::ease_out((now.duration_since(at).as_secs_f32() / 0.16).min(1.))
         });
         (
             self.from.0 + (self.to.0 - self.from.0) * progress,
@@ -248,12 +248,12 @@ mod tests {
         visual
             .executor()
             .advance_clock(through.saturating_duration_since(now));
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
     }
 
     #[gpui::test]
     fn live_group_caps_height_follows_appends_and_respects_nested_wheels(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(
                 WindowOptions {
@@ -409,7 +409,7 @@ mod tests {
     fn short_groups_have_no_fades_and_live_groups_collapse_from_the_capped_height(
         cx: &mut TestAppContext,
     ) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| TranscriptView::new())
@@ -437,14 +437,18 @@ mod tests {
         settle_phase(window, visual);
         window
             .update(visual, |view, _, cx| {
-                crate::clock::use_test_clock(cx);
+                vorkspace_ui::clock::use_test_clock(cx);
                 view.streaming(false, cx);
                 assert!(view.rows.iter().any(|r| r.phase_group() == Some(1)));
                 let now = Instant::now();
                 for motion in view.motions.values_mut() {
                     assert_eq!(motion.group, Some(1));
                     assert!(!motion.opening);
-                    *motion = crate::reveal::Motion::phase(1, false, now - Duration::from_secs(25));
+                    *motion = vorkspace_ui::reveal::Motion::phase(
+                        1,
+                        false,
+                        now - Duration::from_secs(25),
+                    );
                     motion.duration = Duration::from_secs(100);
                 }
                 view.visible = false;

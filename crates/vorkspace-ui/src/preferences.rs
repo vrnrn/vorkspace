@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct Preferences {
+pub struct Preferences {
     pub vox_enabled: bool,
     pub vox_silent: bool,
     pub vox_microphone: serde_json::Value,
@@ -96,7 +96,7 @@ pub(crate) struct Preferences {
     pub keybindings: HashMap<String, Option<String>>,
 }
 
-pub(crate) const UI_SCALE_PERCENTS: [u32; 11] = [
+pub const UI_SCALE_PERCENTS: [u32; 11] = [
     Preferences::MIN_UI_SCALE_PERCENT,
     70,
     80,
@@ -197,7 +197,7 @@ impl Default for Preferences {
 
 impl Preferences {
     /// The saved cost monitoring link, only when it is a plain web link.
-    pub(crate) fn cost_link(&self) -> Option<&str> {
+    pub fn cost_link(&self) -> Option<&str> {
         let url = self.bedrock_cost_url.trim();
         let host = url
             .strip_prefix("https://")
@@ -208,16 +208,16 @@ impl Preferences {
             && !url.chars().any(|c| c.is_whitespace() || c.is_control()))
         .then_some(url)
     }
-    pub(crate) const MIN_UI_SCALE_PERCENT: u32 = 60;
-    pub(crate) const MAX_UI_SCALE_PERCENT: u32 = 160;
+    pub const MIN_UI_SCALE_PERCENT: u32 = 60;
+    pub const MAX_UI_SCALE_PERCENT: u32 = 160;
 
-    pub(crate) fn interface_scale(&self) -> f32 {
+    pub fn interface_scale(&self) -> f32 {
         self.ui_scale
             .clamp(Self::MIN_UI_SCALE_PERCENT, Self::MAX_UI_SCALE_PERCENT) as f32
             / 100.
     }
 
-    pub(crate) fn chat_background_settings(
+    pub fn chat_background_settings(
         &self,
     ) -> Option<vorkspace_core::project_appearance::Background> {
         use vorkspace_core::project_appearance::{Background, Effect, Scope};
@@ -244,8 +244,8 @@ impl Preferences {
 }
 
 impl Preferences {
-    pub(crate) fn apply_workspace_theme(&mut self, id: String) {
-        let color: gpui::Hsla = gpui::rgb(super::palette(&id, false).surface).into();
+    pub fn apply_workspace_theme(&mut self, id: String) {
+        let color: gpui::Hsla = gpui::rgb(crate::palettes::palette(&id, false).surface).into();
         self.theme_hue = (color.h * 360.).round() as u32;
         self.theme_saturation = (color.s * 100.).round() as u32;
         self.theme_dark_lightness = ((color.l * 100.).round() as u32).min(30);
@@ -253,7 +253,7 @@ impl Preferences {
     }
 
     /// SettingsView's Restore defaults: the Appearance page only.
-    pub(crate) fn restore_appearance(&mut self) {
+    pub fn restore_appearance(&mut self) {
         let d = Self::default();
         self.theme = d.theme;
         self.accent_color = d.accent_color;
@@ -278,19 +278,19 @@ impl Preferences {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ModelChoice {
+pub struct ModelChoice {
     pub provider: String,
     pub model: Option<String>,
 }
 
 /// Picker-visibility key; model ids alone can repeat across providers.
-pub(crate) fn model_key(provider: &str, model: &str) -> String {
+pub fn model_key(provider: &str, model: &str) -> String {
     format!("{provider}:{model}")
 }
 
 impl gpui::Global for Preferences {}
 impl Preferences {
-    pub(crate) fn model_hidden(&self, provider: &str, model: &str) -> bool {
+    pub fn model_hidden(&self, provider: &str, model: &str) -> bool {
         self.hidden_models.contains(&model_key(provider, model))
     }
 }

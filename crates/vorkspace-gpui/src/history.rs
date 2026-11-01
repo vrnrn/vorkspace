@@ -4,7 +4,6 @@ use crate::{
     git_status::{GitChanged, ProjectGit},
     input::{self, Input},
     right_panel::*,
-    theme::*,
 };
 use gpui::{
     App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla, KeyBinding, Role,
@@ -14,6 +13,7 @@ use gpui::{
 use std::{collections::HashMap, path::PathBuf};
 use vorkspace_core::scm::{self, HistoryCommit};
 use vorkspace_model::git_graph::{self, GraphCommit, NodeKind, Row, RowGraph, SWIMLANE_WIDTH};
+use vorkspace_ui::theme::*;
 
 const ROW: f32 = 44.;
 actions!(history, [CloseSearch]);

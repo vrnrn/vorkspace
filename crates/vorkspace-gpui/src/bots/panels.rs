@@ -1530,7 +1530,7 @@ impl Bots {
                     let model:SharedString=state.map(|s|s.model.clone()).filter(|model| !model.is_empty()).unwrap_or_else(||launch.model.clone().unwrap_or_default().into());
                     let status=match state{
                         Some(s) if s.needs_input=>div().flex().items_center().gap_1().text_color(rgb(0xfbbf24)).child(icon("circle-alert",12.).text_color(rgb(0xfbbf24))).child("Need approval").into_any_element(),
-                        Some(s) if s.busy=>div().text_color(crate::theme::accent_color()).child("Working...").into_any_element(),
+                        Some(s) if s.busy=>div().text_color(vorkspace_ui::theme::accent_color()).child("Working...").into_any_element(),
                         Some(s)=>div().text_color(content(0.45)).child(vorkspace_core::time::relative(s.updated_at,vorkspace_core::time::now_ms())).into_any_element(),
                         None=>div().text_color(content(0.45)).child("Unavailable").into_any_element(),
                     };
@@ -2907,7 +2907,7 @@ mod minion_ui_tests {
     fn minions_nest_under_parent_and_retired_history_stays_read_only_when_disabled(
         cx: &mut TestAppContext,
     ) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(
             Store::open(&directory.path().join("ui.sqlite")).unwrap(),

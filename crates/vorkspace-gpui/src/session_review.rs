@@ -1,14 +1,11 @@
 //! SessionReview.tsx: the latest turn's recorded workspace changes, under its
 //! reply, with Undo, Keep and Review. The checkpoint runs off the UI thread.
-use crate::{
-    file_icons::file_type_icon,
-    right_panel::{DIFF_ADD, DIFF_DEL, format_integer, tabular},
-    theme::*,
-};
+use crate::right_panel::{DIFF_ADD, DIFF_DEL, format_integer, tabular};
 use gpui::{
     Context, EventEmitter, FontWeight, Role, SharedString, Task, Window, div, prelude::*, px, rgb,
 };
 use vorkspace_core::checkpoint::{CheckpointFile, CheckpointStatus};
+use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 /// The card shows this many files until expanded.
 const COLLAPSED: usize = 3;

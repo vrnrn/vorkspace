@@ -1,13 +1,13 @@
 //! Preset colors from workspaceThemes.ts, including surface tints and accents.
 #[derive(Clone, Copy)]
-pub(crate) struct Palette {
+pub struct Palette {
     pub surface: u32,
     pub panel: u32,
     pub solid: u32,
     pub content: u32,
     pub accent: u32,
 }
-pub(crate) const PALETTES: &[(&str, &str, Palette, Palette)] = &[
+pub const PALETTES: &[(&str, &str, Palette, Palette)] = &[
     (
         "default",
         "Default",
@@ -207,7 +207,7 @@ pub(crate) const PALETTES: &[(&str, &str, Palette, Palette)] = &[
         },
     ),
 ];
-pub(crate) fn palette(id: &str, light: bool) -> Palette {
+pub fn palette(id: &str, light: bool) -> Palette {
     let row = PALETTES.iter().find(|r| r.0 == id).unwrap_or(&PALETTES[0]);
     if light { row.3 } else { row.2 }
 }

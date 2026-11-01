@@ -1,39 +1,39 @@
 use gpui::{CursorStyle, Div, Hsla, Role, Stateful, Svg, div, img, prelude::*, px, rgb, rgba, svg};
 // Shared appearance tokens. Interaction fills use translucent content ink
 // rather than opaque replacement greys.
-pub(crate) const CHAT: u32 = 0x141414;
-pub(crate) const TEXT: u32 = 0xebebeb;
-pub(crate) const MUTED: u32 = 0x969696;
-pub(crate) const ACCENT: u32 = 0x4da3f5;
-pub(crate) const COLUMN: f32 = 832.;
-pub(crate) const TITLE_BAR_HEIGHT: f32 = 40.;
+pub const CHAT: u32 = 0x141414;
+pub const TEXT: u32 = 0xebebeb;
+pub const MUTED: u32 = 0x969696;
+pub const ACCENT: u32 = 0x4da3f5;
+pub const COLUMN: f32 = 832.;
+pub const TITLE_BAR_HEIGHT: f32 = 40.;
 // AppKit points, independent of GPUI UI zoom and display DPI. Keep the
 // renderer's safe inset and the native constraints on the same geometry.
-pub(crate) const TRAFFIC_LIGHT_SIZE: f32 = 14.;
-pub(crate) const TRAFFIC_LIGHT_MARGIN: f32 = 12.;
-pub(crate) const TRAFFIC_LIGHT_SPACING: f32 = 6.;
-pub(crate) const TRAFFIC_LIGHT_SAFE_INSET: f32 =
+pub const TRAFFIC_LIGHT_SIZE: f32 = 14.;
+pub const TRAFFIC_LIGHT_MARGIN: f32 = 12.;
+pub const TRAFFIC_LIGHT_SPACING: f32 = 6.;
+pub const TRAFFIC_LIGHT_SAFE_INSET: f32 =
     2. * TRAFFIC_LIGHT_MARGIN + 3. * TRAFFIC_LIGHT_SIZE + 2. * TRAFFIC_LIGHT_SPACING;
-pub(crate) const NO_TRAFFIC_LIGHTS: f32 = 10.;
+pub const NO_TRAFFIC_LIGHTS: f32 = 10.;
 
-pub(crate) fn traffic_light_inset(ui_scale: f32, fullscreen: bool) -> f32 {
+pub fn traffic_light_inset(ui_scale: f32, fullscreen: bool) -> f32 {
     if !fullscreen {
         TRAFFIC_LIGHT_SAFE_INSET / ui_scale
     } else {
         NO_TRAFFIC_LIGHTS
     }
 }
-pub(crate) const TITLE_TAB_TEXT_SIZE: f32 = 13.;
-pub(crate) const TITLE_TAB_MAX_WIDTH: f32 = 224.;
-pub(crate) const PANE_HEADER_HEIGHT: f32 = 36.;
+pub const TITLE_TAB_TEXT_SIZE: f32 = 13.;
+pub const TITLE_TAB_MAX_WIDTH: f32 = 224.;
+pub const PANE_HEADER_HEIGHT: f32 = 36.;
 /// Every tab's plate: title, file and terminal tabs, and the new-tab button.
-pub(crate) const TAB_PLATE_HEIGHT: f32 = 27.;
+pub const TAB_PLATE_HEIGHT: f32 = 27.;
 /// How far a tab's label and close button sit below the bar's centre, so
 /// they centre in the pill that runs from the plate down to the bar's line.
-pub(crate) const TAB_LABEL_DROP: f32 = 3.;
+pub const TAB_LABEL_DROP: f32 = 3.;
 
 /// Attachment previews keep a fixed crop, independent of image dimensions.
-pub(crate) fn attachment_thumbnail(source: impl Into<gpui::ImageSource>) -> gpui::AnyElement {
+pub fn attachment_thumbnail(source: impl Into<gpui::ImageSource>) -> gpui::AnyElement {
     div()
         .size(px(36.))
         .min_w(px(36.))
@@ -67,13 +67,9 @@ struct Tokens {
     diff_strong: bool,
 }
 thread_local! { static TOKENS: std::cell::RefCell<Option<Tokens>> = const { std::cell::RefCell::new(None) }; }
-pub(crate) fn configure(
-    p: &crate::settings::Preferences,
-    system_light: bool,
-    classic: bool,
-) -> bool {
+pub fn configure(p: &crate::preferences::Preferences, system_light: bool, classic: bool) -> bool {
     let light = p.theme == "light" || (p.theme == "system" && system_light);
-    let palette = crate::settings::palette(&p.workspace_theme, light);
+    let palette = crate::palettes::palette(&p.workspace_theme, light);
     let glass = window_glass(p, system_light, classic);
     // Both layouts derive their surface roles from the same saved settings.
     let shell = gpui::hsla(
@@ -115,14 +111,14 @@ pub(crate) fn configure(
     })
 }
 
-pub(crate) fn window_glass(
-    p: &crate::settings::Preferences,
+pub fn window_glass(
+    p: &crate::preferences::Preferences,
     system_light: bool,
     classic: bool,
 ) -> bool {
     (classic || p.inset_glass) && p.theme != "light" && !(p.theme == "system" && system_light)
 }
-pub(crate) fn accent_color() -> Hsla {
+pub fn accent_color() -> Hsla {
     TOKENS.with(|t| {
         t.borrow()
             .as_ref()
@@ -130,7 +126,7 @@ pub(crate) fn accent_color() -> Hsla {
             .unwrap_or_else(|| rgb(ACCENT).into())
     })
 }
-pub(crate) fn content(alpha: f32) -> Hsla {
+pub fn content(alpha: f32) -> Hsla {
     let mut color: Hsla = TOKENS.with(|t| {
         t.borrow()
             .as_ref()
@@ -141,7 +137,7 @@ pub(crate) fn content(alpha: f32) -> Hsla {
     color
 }
 
-pub(crate) fn is_light() -> bool {
+pub fn is_light() -> bool {
     TOKENS.with(|tokens| tokens.borrow().as_ref().is_some_and(|tokens| tokens.light))
 }
 
@@ -149,13 +145,13 @@ pub(crate) fn is_light() -> bool {
 /// palette. Light ink starts from the artifact palette, with deeper danger and
 /// success shades to keep contrast over tinted surfaces and status washes.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum StatusColor {
+pub enum StatusColor {
     Danger,
     Warning,
     Success,
 }
 
-pub(crate) fn status(role: StatusColor, alpha: f32) -> Hsla {
+pub fn status(role: StatusColor, alpha: f32) -> Hsla {
     let (dark, light) = match role {
         StatusColor::Danger => (0xf87171, 0xa52632),
         StatusColor::Warning => (0xfbbf24, 0x845c0e),
@@ -165,7 +161,7 @@ pub(crate) fn status(role: StatusColor, alpha: f32) -> Hsla {
     color.opacity(alpha)
 }
 
-pub(crate) fn floating_fill() -> Hsla {
+pub fn floating_fill() -> Hsla {
     let mut fill = pane_fill();
     if is_light() {
         fill.l = 1.;
@@ -175,7 +171,7 @@ pub(crate) fn floating_fill() -> Hsla {
 }
 
 /// Text selection follows the current accent without obscuring light-theme ink.
-pub(crate) fn text_selection() -> Hsla {
+pub fn text_selection() -> Hsla {
     accent_color().opacity(if is_light() { 0.2 } else { 0.35 })
 }
 
@@ -188,12 +184,12 @@ fn user_accent() -> Option<Hsla> {
     })
 }
 
-pub(crate) fn user_bubble_fill() -> Hsla {
+pub fn user_bubble_fill() -> Hsla {
     user_accent().map_or(content(0.1), |accent| accent.opacity(0.24))
 }
 
 /// Preserve neutral controls until the user explicitly chooses an accent.
-pub(crate) fn primary_action(enabled: bool) -> Option<(Hsla, Hsla)> {
+pub fn primary_action(enabled: bool) -> Option<(Hsla, Hsla)> {
     let accent = user_accent()?;
     if !enabled {
         return Some((accent.opacity(0.28), content(0.35)));
@@ -219,7 +215,7 @@ pub(crate) fn primary_action(enabled: bool) -> Option<(Hsla, Hsla)> {
 
 /// `[data-composer-box]::before` uses content ink at 3% over its backdrop.
 /// Light mode instead gives the box the solid `background-base` surface.
-pub(crate) fn composer_fill() -> Hsla {
+pub fn composer_fill() -> Hsla {
     let light = TOKENS.with(|tokens| tokens.borrow().as_ref().is_some_and(|t| t.light));
     if light {
         let mut background = shell_fill();
@@ -231,16 +227,16 @@ pub(crate) fn composer_fill() -> Hsla {
 }
 
 /// The inset composer's frost; the solid light surface has no backdrop blur.
-pub(crate) fn composer_blur() -> f32 {
+pub fn composer_blur() -> f32 {
     let light = TOKENS.with(|tokens| tokens.borrow().as_ref().is_some_and(|t| t.light));
     if light { 0. } else { 24. }
 }
 
-pub(crate) fn composer_border(focused: bool) -> Hsla {
+pub fn composer_border(focused: bool) -> Hsla {
     content(if focused { 0.2 } else { 0.1 })
 }
 
-pub(crate) fn title_tab_fill(selected: bool, hovered: bool) -> Hsla {
+pub fn title_tab_fill(selected: bool, hovered: bool) -> Hsla {
     content(if selected {
         0.1
     } else if hovered {
@@ -253,7 +249,7 @@ pub(crate) fn title_tab_fill(selected: bool, hovered: bool) -> Hsla {
 /// The plate for session tabs in the title bar. Its fill is a pill rising
 /// from the line beneath the tabs (`crate::liquid`), so the plate has none.
 /// Headline ink owns inactive dimming; the plate never fades its children.
-pub(crate) fn title_tab_plate(_selected: bool, _hovered: bool) -> Div {
+pub fn title_tab_plate(_selected: bool, _hovered: bool) -> Div {
     div()
         .h(px(TAB_PLATE_HEIGHT))
         .rounded_md()
@@ -263,20 +259,20 @@ pub(crate) fn title_tab_plate(_selected: bool, _hovered: bool) -> Div {
         .flex()
         .items_center()
 }
-pub(crate) fn shell_fill() -> Hsla {
+pub fn shell_fill() -> Hsla {
     if let Some(fill) = TOKENS.with(|t| t.borrow().as_ref().map(|t| t.shell)) {
         return fill;
     }
     // #0d0d0d at 80%, with the stylesheet's #ebebeb 5% wash above it.
     rgba(0x1b1b1bcf).into()
 }
-pub(crate) fn pane_fill() -> Hsla {
+pub fn pane_fill() -> Hsla {
     if let Some(fill) = TOKENS.with(|t| t.borrow().as_ref().map(|t| t.pane)) {
         return fill;
     }
     rgba(0x06060666).into()
 }
-pub(crate) fn section_label(label: &'static str) -> Div {
+pub fn section_label(label: &'static str) -> Div {
     div()
         .h(px(28.))
         .px_2()
@@ -289,14 +285,14 @@ pub(crate) fn section_label(label: &'static str) -> Div {
         .text_color(content(0.5))
         .child(div().flex_1().child(label))
 }
-pub(crate) fn icon(path: &'static str, side: f32) -> Svg {
+pub fn icon(path: &'static str, side: f32) -> Svg {
     svg()
         .path(path)
         .size(px(side))
         .text_color(content(0.5))
         .flex_shrink_0()
 }
-pub(crate) fn provider_icon(provider: &str, side: f32) -> Div {
+pub fn provider_icon(provider: &str, side: f32) -> Div {
     let (path, monochrome, scale) = match provider {
         "claude" => ("claude.svg", false, 1.),
         "antigravity" => ("antigravity.svg", false, 1.),
@@ -324,14 +320,10 @@ pub(crate) fn provider_icon(provider: &str, side: f32) -> Div {
         .justify_center()
         .child(mark)
 }
-pub(crate) fn icon_button(
-    id: &'static str,
-    label: &'static str,
-    path: &'static str,
-) -> Stateful<Div> {
+pub fn icon_button(id: &'static str, label: &'static str, path: &'static str) -> Stateful<Div> {
     icon_button_hover(id, label, path, 0.1)
 }
-pub(crate) fn icon_button_hover(
+pub fn icon_button_hover(
     id: &'static str,
     label: &'static str,
     path: &'static str,
@@ -339,7 +331,7 @@ pub(crate) fn icon_button_hover(
 ) -> Stateful<Div> {
     chrome_button(id, label, path, true, hover_alpha)
 }
-pub(crate) fn icon_button_enabled(
+pub fn icon_button_enabled(
     id: &'static str,
     label: &'static str,
     path: &'static str,
@@ -379,10 +371,10 @@ fn chrome_button(
         )
 }
 // `.primary-action` paints with literal white and black, not theme ink.
-pub(crate) fn white(alpha: f32) -> Hsla {
+pub fn white(alpha: f32) -> Hsla {
     gpui::hsla(0., 0., 1., alpha)
 }
-pub(crate) fn black(alpha: f32) -> Hsla {
+pub fn black(alpha: f32) -> Hsla {
     gpui::hsla(0., 0., 0., alpha)
 }
 
@@ -409,7 +401,7 @@ fn syntax_palette(theme: &str, light: bool) -> [u32; 11] {
         .unwrap_or(0xebebeb)
     })
 }
-pub(crate) fn syntax_color(kind: &str) -> Hsla {
+pub fn syntax_color(kind: &str) -> Hsla {
     let name = kind
         .strip_prefix("var(--syntax-")
         .and_then(|s| s.strip_suffix(')'));
@@ -430,7 +422,7 @@ pub(crate) fn syntax_color(kind: &str) -> Hsla {
 }
 
 /// Resolve cached Dark+ grammar colors through the live appearance palette.
-pub(crate) fn diff_syntax_color(color: u32) -> Hsla {
+pub fn diff_syntax_color(color: u32) -> Hsla {
     let kind = match color {
         0x569cd6 | 0xc586c0 => "var(--syntax-keyword)",
         0xdcdcaa => "var(--syntax-callable)",
@@ -456,14 +448,14 @@ fn diff_palette(name: &str, light: bool) -> [u32; 4] {
         _ => [0x10b981, 0xf43f5e, 0x6ee7b7, 0xfda4af],
     }
 }
-pub(crate) fn diff_foreground(add: bool) -> Hsla {
+pub fn diff_foreground(add: bool) -> Hsla {
     let index = if add { 2 } else { 3 };
     let color = TOKENS
         .with(|t| t.borrow().as_ref().map(|t| t.diff[index]))
         .unwrap_or_else(|| diff_palette("default", false)[index]);
     rgb(color).into()
 }
-pub(crate) fn diff_background(add: bool, gutter: bool) -> Hsla {
+pub fn diff_background(add: bool, gutter: bool) -> Hsla {
     let index = if add { 0 } else { 1 };
     let (color, strong) = TOKENS
         .with(|t| t.borrow().as_ref().map(|t| (t.diff[index], t.diff_strong)))
@@ -478,9 +470,9 @@ pub(crate) fn diff_background(add: bool, gutter: bool) -> Hsla {
     color
 }
 
-#[cfg(test)]
-pub(crate) fn test_appearance(
-    preferences: &crate::settings::Preferences,
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_appearance(
+    preferences: &crate::preferences::Preferences,
     system_light: bool,
     classic: bool,
 ) -> impl Drop {
@@ -495,8 +487,8 @@ pub(crate) fn test_appearance(
     restore
 }
 
-#[cfg(test)]
-pub(crate) fn test_contrast(ink: Hsla, background: Hsla) -> f32 {
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_contrast(ink: Hsla, background: Hsla) -> f32 {
     let background = background.to_rgb();
     let foreground = background.blend(ink.to_rgb());
     let luminance = |color: gpui::Rgba| {
@@ -528,7 +520,7 @@ mod composer_tests {
             ] {
                 for glass in [false, true] {
                     for accent in [None, Some("#ffff00".into())] {
-                        let mut preferences = crate::settings::Preferences {
+                        let mut preferences = crate::preferences::Preferences {
                             theme: appearance.into(),
                             inset_glass: glass,
                             body_glass: glass,
@@ -576,7 +568,7 @@ mod composer_tests {
 
     #[test]
     fn status_dark_palette_is_preserved_and_light_palette_is_distinct() {
-        let preferences = crate::settings::Preferences {
+        let preferences = crate::preferences::Preferences {
             theme: "dark".into(),
             ..Default::default()
         };
@@ -588,7 +580,7 @@ mod composer_tests {
         ] {
             let dark = status(role, 1.);
             assert_eq!(dark, rgb(expected).into());
-            let light_preferences = crate::settings::Preferences {
+            let light_preferences = crate::preferences::Preferences {
                 theme: "light".into(),
                 ..Default::default()
             };
@@ -603,7 +595,7 @@ mod composer_tests {
     #[test]
     fn cached_diff_tokens_follow_live_light_dark_and_custom_palettes() {
         let saved = TOKENS.with(|tokens| *tokens.borrow());
-        let mut preferences = crate::settings::Preferences::default();
+        let mut preferences = crate::preferences::Preferences::default();
         configure(&preferences, false, true);
         let dark = diff_syntax_color(0xd4d4d4);
         preferences.theme = "light".into();
@@ -634,7 +626,7 @@ mod composer_tests {
             }
         }
         let _restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
-        let mut preferences = crate::settings::Preferences::default();
+        let mut preferences = crate::preferences::Preferences::default();
         for theme in ["dark", "light", "dark"] {
             preferences.theme = theme.into();
             configure(&preferences, false, true);
@@ -666,7 +658,7 @@ mod composer_tests {
     #[test]
     fn both_layouts_share_opacity_and_keep_dark_glass_preferences_when_disabled() {
         let before = TOKENS.with(|tokens| *tokens.borrow());
-        let mut preferences = crate::settings::Preferences {
+        let mut preferences = crate::preferences::Preferences {
             theme: "dark".into(),
             sidebar_opacity: 43,
             sidebar_blur: 57,
@@ -700,7 +692,7 @@ mod composer_tests {
             }
         }
         let _restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
-        let mut preferences = crate::settings::Preferences::default();
+        let mut preferences = crate::preferences::Preferences::default();
         configure(&preferences, false, true);
         assert_eq!(composer_fill(), content(0.03));
         assert_eq!(composer_blur(), 24.);

@@ -28,9 +28,9 @@ struct Track {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct ReflowMotion(Rc<RefCell<BTreeMap<Key, Track>>>);
+pub struct ReflowMotion(Rc<RefCell<BTreeMap<Key, Track>>>);
 impl ReflowMotion {
-    pub(crate) fn wrap(&self, key: Key, child: AnyElement, follow: f32) -> AnyElement {
+    pub fn wrap(&self, key: Key, child: AnyElement, follow: f32) -> AnyElement {
         Glide {
             motion: self.clone(),
             key,

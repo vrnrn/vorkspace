@@ -894,7 +894,7 @@ fn queued_messages_contribute_their_height_once(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn changing_inline_tool_status_does_not_move_settled_messages(cx: &mut TestAppContext) {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     let window = chat(cx);
     window
         .update(cx, |view, _, cx| {
@@ -905,7 +905,7 @@ fn changing_inline_tool_status_does_not_move_settled_messages(cx: &mut TestAppCo
         })
         .unwrap();
     render(window, cx);
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     window
         .update(cx, |view, _, _| {
             view.follow.reset();

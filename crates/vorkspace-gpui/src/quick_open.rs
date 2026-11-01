@@ -1,5 +1,5 @@
 //! Cmd+P's project-file search and `>` command palette.
-use crate::{input, theme::*};
+use crate::input;
 use gpui::{
     Context, Entity, EventEmitter, FocusHandle, Focusable, Role, Subscription, Window, div,
     prelude::*, px,
@@ -9,6 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use vorkspace_core::{composer, files::ProjectFile};
+use vorkspace_ui::theme::*;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Command {
@@ -201,7 +202,7 @@ impl Render for QuickOpen {
                     })
                     .hover(|s| s.bg(content(0.07)))
                     .child(if row.path.is_some() {
-                        crate::file_icons::file_type_icon(&row.label, false, false, 18.)
+                        vorkspace_ui::file_icons::file_type_icon(&row.label, false, false, 18.)
                     } else {
                         icon("sparkles", 16.).into_any_element()
                     })

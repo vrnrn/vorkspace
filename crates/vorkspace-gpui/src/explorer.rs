@@ -3,13 +3,11 @@
 //! dropped files and VS Code-style keyboard navigation. Directory reads and
 //! every file operation run off the UI thread.
 use crate::{
-    file_icons::file_type_icon,
     git_status::{GitChanged, ProjectGit},
     input::{self, Input},
     popover::{Anchor, Menu, MenuAction, MenuEvent, MenuItem, menu_popover},
     project_search::{ProjectSearch, SearchEvent},
     right_panel::*,
-    theme::*,
 };
 use gpui::{
     AnyElement, App, ClipboardEntry, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
@@ -23,6 +21,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use vorkspace_core::files::{self, DirEntry, NameIssueKind, Severity};
+use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 const MOD: &str = "⌘";
 const SHIFT: &str = "⇧";

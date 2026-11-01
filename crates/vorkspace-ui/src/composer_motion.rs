@@ -16,16 +16,16 @@ struct Launch {
     animation: Option<(Instant, Point<Pixels>)>,
 }
 #[derive(Clone, Default)]
-pub(crate) struct ComposerMotion(Rc<RefCell<Option<Launch>>>);
+pub struct ComposerMotion(Rc<RefCell<Option<Launch>>>);
 impl ComposerMotion {
-    pub(crate) fn capture(&self, from: Option<Bounds<Pixels>>) {
+    pub fn capture(&self, from: Option<Bounds<Pixels>>) {
         *self.0.borrow_mut() = from.map(|from| Launch {
             from,
             captured: Instant::now(),
             animation: None,
         });
     }
-    pub(crate) fn wrap(&self, child: impl IntoElement) -> impl IntoElement {
+    pub fn wrap(&self, child: impl IntoElement) -> impl IntoElement {
         Slide {
             motion: self.clone(),
             child: child.into_any_element(),
@@ -58,8 +58,8 @@ impl ComposerMotion {
         let remaining = 1. - crate::reveal::ease_move(t);
         (delta * remaining, true)
     }
-    #[cfg(test)]
-    pub(crate) fn elapsed(&self, elapsed: Duration) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn elapsed(&self, elapsed: Duration) {
         if let Some(launch) = self.0.borrow_mut().as_mut()
             && let Some((started, _)) = launch.animation.as_mut()
         {

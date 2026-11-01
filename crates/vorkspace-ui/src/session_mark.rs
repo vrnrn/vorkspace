@@ -15,7 +15,7 @@ const ROWS: [u32; 3] = [0x6f84a3, 0xe8b583, 0xe47fa6];
 /// TerminalSpinner's 12px 3×3 grid at `elapsed_ms` into its animation: a soft
 /// wave washes from the top-left corner to the bottom-right, and dots off the
 /// center diagonal peak dimmer.
-pub(crate) fn spinner_dots(elapsed_ms: u64) -> gpui::Div {
+pub fn spinner_dots(elapsed_ms: u64) -> gpui::Div {
     dots(None, Some(elapsed_ms))
 }
 
@@ -51,19 +51,19 @@ fn dots(color: Option<u32>, elapsed_ms: Option<u64>) -> gpui::Div {
 }
 
 /// The grid, still and solid in `color`: a mark for a channel.
-pub(crate) fn color_dots(color: u32) -> gpui::Div {
+pub fn color_dots(color: u32) -> gpui::Div {
     dots(Some(color), None)
 }
 
 /// A project's mark: the working grid in its colour, still while idle and
 /// waving while any of its sessions works. Only a working mark ticks.
-pub(crate) struct ProjectMark {
+pub struct ProjectMark {
     color: u32,
     frame: usize,
     animation: Option<Task<()>>,
 }
 impl ProjectMark {
-    pub(crate) fn new(color: u32) -> Self {
+    pub fn new(color: u32) -> Self {
         Self {
             color,
             frame: 0,
@@ -72,14 +72,14 @@ impl ProjectMark {
     }
     /// A removed row may still be retained by a cached element or a caller.
     /// Cancel its presentation task explicitly before releasing the rail owner.
-    pub(crate) fn hide(&mut self) {
+    pub fn hide(&mut self) {
         self.animation = None;
     }
-    #[cfg(test)]
-    pub(crate) fn animation_state(&self) -> (usize, bool) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn animation_state(&self) -> (usize, bool) {
         (self.frame, self.animation.is_some())
     }
-    pub(crate) fn set(&mut self, color: u32, working: bool, cx: &mut Context<Self>) {
+    pub fn set(&mut self, color: u32, working: bool, cx: &mut Context<Self>) {
         if self.color != color {
             self.color = color;
             cx.notify();
@@ -119,7 +119,7 @@ impl Render for ProjectMark {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum State {
+pub enum State {
     Idle,
     Working,
     Done,
@@ -128,7 +128,7 @@ pub(crate) enum State {
 }
 
 /// A small cached view so animation leaves the conversation untouched.
-pub(crate) struct SessionMark {
+pub struct SessionMark {
     side: f32,
     provider: String,
     /// The session's project colour, for its working grid.
@@ -138,7 +138,7 @@ pub(crate) struct SessionMark {
     animation: Option<Task<()>>,
 }
 impl SessionMark {
-    pub(crate) fn new(provider: String) -> Self {
+    pub fn new(provider: String) -> Self {
         Self {
             side: 16.,
             provider,
@@ -151,29 +151,29 @@ impl SessionMark {
     /// A title tab's mark. Tabs paint inside their own cached frame, so they
     /// can't share the sidebar's entity: a notify only repaints the cached
     /// views along the one path the entity was last drawn in.
-    pub(crate) fn tab(provider: String) -> Self {
+    pub fn tab(provider: String) -> Self {
         Self {
             side: 14.,
             ..Self::new(provider)
         }
     }
-    #[cfg(test)]
-    pub(crate) fn state(&self) -> State {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn state(&self) -> State {
         self.state
     }
-    pub(crate) fn set_size(&mut self, side: f32, cx: &mut Context<Self>) {
+    pub fn set_size(&mut self, side: f32, cx: &mut Context<Self>) {
         if self.side != side {
             self.side = side;
             cx.notify();
         }
     }
-    pub(crate) fn set_color(&mut self, color: u32, cx: &mut Context<Self>) {
+    pub fn set_color(&mut self, color: u32, cx: &mut Context<Self>) {
         if self.color != Some(color) {
             self.color = Some(color);
             cx.notify();
         }
     }
-    pub(crate) fn set(&mut self, provider: &str, state: State, cx: &mut Context<Self>) {
+    pub fn set(&mut self, provider: &str, state: State, cx: &mut Context<Self>) {
         if self.state == state && self.provider == provider {
             return;
         }

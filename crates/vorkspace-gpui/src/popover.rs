@@ -1,8 +1,6 @@
 // Anchored popovers and menus, ported from src/shared/ui/Popover.tsx, its
 // placement math in src/shared/lib/popover.ts, and the row/keyboard model of
 // src/features/files/ui/ExplorerMenu.tsx.
-use crate::clock::Instant;
-use crate::theme::*;
 use gpui::{
     AnyElement, AnyView, App, Bounds, BoxShadow, Context, CursorStyle, DispatchPhase, Display,
     Element, ElementId, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla,
@@ -11,6 +9,8 @@ use gpui::{
     div, point, prelude::*, px, rgb, rgba, size,
 };
 use std::{cell::Cell, rc::Rc};
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::theme::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Side {
@@ -278,7 +278,7 @@ const RADIUS: f32 = 12.;
 const BLUR: f32 = 24.;
 
 fn entrance(elapsed: f32) -> f32 {
-    crate::reveal::ease_entrance((elapsed / MENU_IN).clamp(0., 1.))
+    vorkspace_ui::reveal::ease_entrance((elapsed / MENU_IN).clamp(0., 1.))
 }
 fn entrance_offset(side: Side, progress: f32) -> Point<Pixels> {
     let remaining = px(MENU_TRAVEL * (1. - progress));
@@ -450,7 +450,7 @@ impl Popover {
             0.1
         };
         let tint = if self.modal_classic.is_some() {
-            let mut fill = crate::theme::pane_fill();
+            let mut fill = vorkspace_ui::theme::pane_fill();
             fill.a = 0.55;
             fill
         } else {
@@ -533,8 +533,8 @@ fn glass(tint: Hsla, radius: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            let opaque = crate::theme::floating_fill();
-            let quad = if crate::theme::is_light() {
+            let opaque = vorkspace_ui::theme::floating_fill();
+            let quad = if vorkspace_ui::theme::is_light() {
                 gpui::fill(bounds, opaque)
             } else {
                 gpui::fill(bounds, tint).border_color(
@@ -2117,7 +2117,7 @@ mod tests {
     fn selected_danger_row_repaints_on_theme_change_without_losing_focus(
         cx: &mut gpui::TestAppContext,
     ) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |window, cx| {
                 cx.new(|cx| MenuHost {
@@ -2147,7 +2147,7 @@ mod tests {
             let _restore = test_appearance(&preferences, false, false);
             window.update(cx, |_, _, cx| cx.notify()).unwrap();
             cx.refresh().unwrap();
-            crate::clock::settle_animations(window, cx);
+            vorkspace_ui::clock::settle_animations(window, cx);
             window
                 .update(cx, |host, window, cx| {
                     let menu = host.menu.read(cx);
@@ -2175,7 +2175,7 @@ mod tests {
     fn menus_and_picker_flyouts_keep_the_same_card_edge_gap(cx: &mut gpui::TestAppContext) {
         // Compare the resting gap; entrance motion deliberately starts child
         // cards a little closer to the parent before settling into this gap.
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |window, cx| {
                 cx.new(|cx| {
@@ -2247,7 +2247,7 @@ mod tests {
                     })
                     .unwrap();
                 cx.refresh().unwrap();
-                crate::clock::settle_animations(window, cx);
+                vorkspace_ui::clock::settle_animations(window, cx);
                 for ix in [0, 1] {
                     window
                         .update(cx, |host, window, cx| {
@@ -2257,7 +2257,7 @@ mod tests {
                         })
                         .unwrap();
                     cx.refresh().unwrap();
-                    crate::clock::settle_animations(window, cx);
+                    vorkspace_ui::clock::settle_animations(window, cx);
                     window
                         .update(cx, |host, _, cx| {
                             let menu = host.menu.read(cx);

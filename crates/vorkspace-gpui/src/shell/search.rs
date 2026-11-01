@@ -280,7 +280,7 @@ mod tests {
         cx.update(|cx| {
             input::bind(cx);
             super::super::bind_keys(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         let (window, a, b) = crate::shell::tests::window(cx);
         window

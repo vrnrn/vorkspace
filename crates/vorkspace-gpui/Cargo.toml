@@ -11,6 +11,7 @@ serde.workspace = true
 serde_json.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 vorkspace-core = { path = "../vorkspace-core" }
+vorkspace-ui = { path = "../vorkspace-ui" }
 vorkspace-runtime = { path = "../vorkspace-runtime" }
 vorkspace-editor = { path = "../vorkspace-editor" }
 vorkspace-macos = { path = "../vorkspace-macos" }
@@ -45,6 +46,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-user-notifications = "0.3"
 
 [dev-dependencies]
+vorkspace-ui = { path = "../vorkspace-ui", features = ["test-support"] }
 vorkspace-runtime = { path = "../vorkspace-runtime", features = ["test-support"] }
 gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false, features = ["test-support"] }
 rusqlite.workspace = true

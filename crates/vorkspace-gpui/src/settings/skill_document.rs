@@ -1,15 +1,13 @@
 //! SkillsPage's independently scrolling document, without chat alignment or fades.
-use crate::clock::Instant;
-use crate::{
-    markdown::{self, MarkdownRow, Part, Tone},
-    theme::*,
-};
+use crate::markdown::{self, MarkdownRow, Part, Tone};
 use gpui::{
     AnyElement, Context, ListAlignment, ListState, Render, Role, SharedString, Window, div, list,
     prelude::*, px,
 };
 use std::sync::Arc;
 use vorkspace_model::markdown_model;
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::theme::*;
 
 pub(super) struct DocumentData {
     metadata: Option<String>,

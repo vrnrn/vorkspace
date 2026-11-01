@@ -300,7 +300,7 @@ mod tests {
 
     #[gpui::test]
     fn queued_failed_and_one_way_messages_keep_their_origin(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let peer_prompt = prompt("Hi Beta!", false);
         let (origin, body) = presentation(&peer_prompt).unwrap();
         assert!(!origin.auto_reply);

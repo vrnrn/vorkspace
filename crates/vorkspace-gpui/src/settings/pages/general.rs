@@ -1,7 +1,7 @@
 //! GeneralPage and UpdateRow.
 use crate::settings::{SettingsView, widgets::secondary_button};
-use crate::theme::*;
 use gpui::{AnyElement, Context, FontWeight, div, prelude::*, px};
+use vorkspace_ui::theme::*;
 
 impl SettingsView {
     pub(super) fn general_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {

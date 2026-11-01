@@ -683,7 +683,7 @@ impl Bots {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(crate::session_mark::color_dots(bg)),
+                            .child(vorkspace_ui::session_mark::color_dots(bg)),
                     )
                     .hover(|s| s.opacity(1.))
                     .focus(|s| s.opacity(1.))

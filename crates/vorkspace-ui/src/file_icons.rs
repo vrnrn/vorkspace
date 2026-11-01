@@ -20,7 +20,7 @@ fn table() -> &'static Table {
 }
 /// The package matches the whole lowercased name, then each compound suffix
 /// (`d.ts`, then `ts`).
-pub(crate) fn file_icon_name(name: &str) -> &'static str {
+pub fn file_icon_name(name: &str) -> &'static str {
     let table = table();
     let key = name.to_lowercase();
     if let Some(icon) = table.files.get(&key) {
@@ -36,7 +36,7 @@ pub(crate) fn file_icon_name(name: &str) -> &'static str {
     "file"
 }
 /// `getFolderIcon` with the specific theme, never as a root.
-pub(crate) fn folder_icon_name(name: &str, open: bool) -> String {
+pub fn folder_icon_name(name: &str, open: bool) -> String {
     let base = table().folders.get(name).map_or("folder", String::as_str);
     if open {
         format!("{base}-open")
@@ -45,12 +45,12 @@ pub(crate) fn folder_icon_name(name: &str, open: bool) -> String {
     }
 }
 /// `mi/<icon>.svg` asset bytes.
-pub(crate) fn svg(asset: &str) -> Option<&'static [u8]> {
+pub fn svg(asset: &str) -> Option<&'static [u8]> {
     let name = asset.strip_prefix("mi/")?.strip_suffix(".svg")?;
     table().svgs.get(name).map(|svg| svg.as_bytes())
 }
 /// Colored, so drawn as an image rather than a monochrome SVG mask.
-pub(crate) fn file_type_icon(name: &str, is_dir: bool, open: bool, side: f32) -> AnyElement {
+pub fn file_type_icon(name: &str, is_dir: bool, open: bool, side: f32) -> AnyElement {
     let icon = if is_dir {
         folder_icon_name(name, open)
     } else {

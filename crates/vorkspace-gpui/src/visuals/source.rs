@@ -2,13 +2,13 @@
 use crate::{
     markdown::FIXED_FONT,
     syntax::{HighlightRequest, HighlightedDocument},
-    theme::content,
 };
 use gpui::{
     Context, HighlightStyle, IntoElement, ListHorizontalSizingBehavior, Render, SharedString,
     StyledText, Task, UniformListScrollHandle, Window, div, prelude::*, px, rgb, uniform_list,
 };
 use std::{ops::Range, sync::Arc};
+use vorkspace_ui::theme::content;
 
 const LINE_HEIGHT: f32 = 20.;
 const MAX_HEIGHT: f32 = 420.;

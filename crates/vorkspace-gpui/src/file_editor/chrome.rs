@@ -1,11 +1,8 @@
 use super::FileEditor;
-use crate::{
-    file_icons::file_type_icon,
-    right_panel::{stroke, tabular},
-    theme::*,
-};
+use crate::right_panel::{stroke, tabular};
 use gpui::{AnyElement, App, Context, Role, div, prelude::*, px};
 use std::path::{Component, Path};
+use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 const HEADER_HEIGHT: f32 = 30.;
 const CONTROL_HEIGHT: f32 = 20.;

@@ -1,7 +1,6 @@
 //! GPUI port of AgentMarkdown.tsx and its .agent-markdown CSS.
 mod search;
 use crate::syntax::HighlightedDocument;
-use crate::theme::*;
 use crate::transcript::selection::TextSelection;
 use gpui::Window;
 use gpui::{
@@ -11,6 +10,7 @@ use gpui::{
 };
 pub(crate) use search::{mark_row, mark_styles, row_text};
 use vorkspace_model::markdown_model::{Block, InlineRun, TableAlign};
+use vorkspace_ui::theme::*;
 
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
 #[action(namespace = markdown, no_json)]
@@ -34,12 +34,12 @@ fn activate_link(event: &ClickEvent, selection: Option<&TextSelection>) -> bool 
         && !event.modifiers().shift
         && !selection.is_some_and(TextSelection::has_selection)
 }
-use crate::clock::Instant;
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     ops::Range,
     sync::Arc,
 };
+use vorkspace_ui::clock::Instant;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Tone {
@@ -436,7 +436,8 @@ fn inline_selected(
             for piece in run.text.split_inclusive(char::is_whitespace) {
                 let mut highlight = highlight;
                 if !piece.trim().is_empty() {
-                    let alpha = crate::reveal::word_opacity(fade.and_then(|f| f.get(word)), now);
+                    let alpha =
+                        vorkspace_ui::reveal::word_opacity(fade.and_then(|f| f.get(word)), now);
                     highlight.fade_out = Some(1. - (1. - highlight.fade_out.unwrap_or(0.)) * alpha);
                     word += 1;
                 }
@@ -585,7 +586,8 @@ fn rich_inline(
                 let alpha = if style.link.is_some() || style.math {
                     1.
                 } else {
-                    let value = crate::reveal::word_opacity(fade.and_then(|f| f.get(word)), now);
+                    let value =
+                        vorkspace_ui::reveal::word_opacity(fade.and_then(|f| f.get(word)), now);
                     word += 1;
                     value
                 };
@@ -1109,7 +1111,7 @@ mod file_link_tests {
                     "row-1".into(),
                     Tone::Normal,
                     None,
-                    crate::clock::Instant::now(),
+                    vorkspace_ui::clock::Instant::now(),
                 ))
             }
         }

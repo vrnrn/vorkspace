@@ -1,7 +1,6 @@
 //! Inline SVG and Mermaid diagrams, drawn natively. Mermaid is rendered to SVG
 //! by Pele in QuickJS; Pele's CSS variables are resolved to the app's palette,
 //! then the SVG is rasterized off the main thread through GPUI's image assets.
-use crate::theme::*;
 use gpui::{
     AnyElement, App, Asset, EntityId, Global, Hsla, ImageCacheError, ImageSource, IntoElement,
     ParentElement, RenderImage, SharedString, Styled, Window, div, img, prelude::*,
@@ -15,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 use vorkspace_core::visual::{MAX_MERMAID_BYTES, validate_svg};
+use vorkspace_ui::theme::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum DiagramKind {

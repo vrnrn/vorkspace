@@ -1,8 +1,5 @@
 //! Native SearchView.tsx, including its compact rows and dotted empty state.
-use crate::{
-    input::{self, Input},
-    theme::*,
-};
+use crate::input::{self, Input};
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle,
     MouseButton, MouseMoveEvent, Pixels, Point, Render, Role, ScrollHandle, StyledText,
@@ -22,6 +19,7 @@ use vorkspace_core::{
     transcript::Row,
 };
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::theme::*;
 
 pub(crate) enum Event {
     Open(Target, String),
@@ -484,7 +482,7 @@ impl Render for SearchView {
                     Target::Message { .. } => icon("message-square", 14.)
                         .text_color(content(0.55))
                         .into_any_element(),
-                    Target::File { path, .. } => crate::file_icons::file_type_icon(
+                    Target::File { path, .. } => vorkspace_ui::file_icons::file_type_icon(
                         &search::project_name(path),
                         false,
                         false,

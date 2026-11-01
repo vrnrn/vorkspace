@@ -1,11 +1,12 @@
 //! The composer's searchable BranchPicker and existing-worktree list.
-use crate::{input, popover, theme::*};
+use crate::{input, popover};
 use gpui::{
     AnyElement, Context, Entity, EventEmitter, FocusHandle, Focusable, Role, Subscription, Window,
     div, prelude::*, px,
 };
 use std::path::PathBuf;
 use vorkspace_core::git::{self, Snapshot};
+use vorkspace_ui::theme::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {

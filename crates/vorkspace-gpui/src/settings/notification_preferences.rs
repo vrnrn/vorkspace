@@ -7,7 +7,6 @@ use crate::{
         platform,
     },
     popover::{Align, Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, menu_popover, popover},
-    theme::*,
 };
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, TimeZone};
 use gpui::{AnyElement, Context, Entity, Role, Subscription, Task, Window, div, prelude::*, px};
@@ -17,6 +16,7 @@ use std::{
     sync::mpsc::{Receiver, TryRecvError},
     time::Duration,
 };
+use vorkspace_ui::theme::*;
 
 pub(crate) const CATEGORIES: [(&str, &str); 5] = [
     ("pullRequests", "Pull requests / Merge requests"),
@@ -62,8 +62,31 @@ pub(super) struct Project {
     detail: String,
     kind: String,
 }
-impl Preferences {
-    pub(crate) fn known_notification_project_id(&self, cwd: &str) -> Option<String> {
+/// Notification policy over the saved preference values, which stay plain data.
+pub(crate) trait ProjectNotifications {
+    fn known_notification_project_id(&self, cwd: &str) -> Option<String>;
+    fn mute_notification_project(&mut self, cwd: &str, until: Option<u64>);
+    fn resume_notification_project(&mut self, cwd: &str);
+    fn allows_project_notification(
+        &self,
+        cwd: &str,
+        category: &str,
+        occurred_at: Option<u64>,
+        now: u64,
+    ) -> bool;
+    fn allows_notification_project(
+        &self,
+        id: &str,
+        category: &str,
+        occurred_at: Option<u64>,
+        now: u64,
+    ) -> bool;
+    fn project_muted(&self, id: &str, now: u64) -> bool;
+    fn mute_projects(&mut self, ids: &[String], until: Option<Value>, now: u64);
+    fn set_category(&mut self, id: &str, category: &str, enabled: bool, now: u64);
+}
+impl ProjectNotifications for Preferences {
+    fn known_notification_project_id(&self, cwd: &str) -> Option<String> {
         if !looks_like_project(cwd) {
             return None;
         }
@@ -85,7 +108,7 @@ impl Preferences {
             .or_else(|| Some(format!("local:{key}")))
     }
     /// None means muted until manually resumed. Time is milliseconds since epoch.
-    pub(crate) fn mute_notification_project(&mut self, cwd: &str, until: Option<u64>) {
+    fn mute_notification_project(&mut self, cwd: &str, until: Option<u64>) {
         if let Some(id) = self.known_notification_project_id(cwd) {
             self.mute_projects(
                 &[id],
@@ -94,12 +117,12 @@ impl Preferences {
             );
         }
     }
-    pub(crate) fn resume_notification_project(&mut self, cwd: &str) {
+    fn resume_notification_project(&mut self, cwd: &str) {
         if let Some(id) = self.known_notification_project_id(cwd) {
             self.mute_projects(&[id], None, vorkspace_core::time::now_ms());
         }
     }
-    pub(crate) fn allows_project_notification(
+    fn allows_project_notification(
         &self,
         cwd: &str,
         category: &str,
@@ -109,7 +132,7 @@ impl Preferences {
         self.known_notification_project_id(cwd)
             .is_some_and(|id| self.allows_notification_project(&id, category, occurred_at, now))
     }
-    pub(crate) fn allows_notification_project(
+    fn allows_notification_project(
         &self,
         id: &str,
         category: &str,

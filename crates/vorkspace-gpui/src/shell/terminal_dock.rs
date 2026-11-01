@@ -1,10 +1,8 @@
 // Project terminal dock, tab actions and resize interactions.
 use super::{MenuTarget, Shell, TabShift};
-use crate::clock::Instant;
 use crate::{
     popover::{Anchor, MenuAction, MenuItem, MenuStyle},
     terminal::Terminal,
-    theme::*,
     workspace::{DockSide, TerminalDock},
 };
 use gpui::{
@@ -12,6 +10,8 @@ use gpui::{
     MouseMoveEvent, Pixels, Role, SharedString, Window, div, point, prelude::*, px,
 };
 use std::collections::HashMap;
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::theme::*;
 
 /// useAnimatedReorder's drag of one dock tab along the strip.
 pub(super) struct DockTabDrag {
@@ -351,7 +351,7 @@ impl Shell {
             .collect();
         let (slots, opening) =
             self.dock_tab_motion
-                .sync(keyed, animate, crate::clock::Instant::now());
+                .sync(keyed, animate, vorkspace_ui::clock::Instant::now());
         if moving || opening {
             window.request_animation_frame();
         }
@@ -543,14 +543,14 @@ impl Shell {
                                 .w(px(224. * open))
                                 .min_w_0()
                                 .flex_shrink(1.)
-                                .mr(px(-crate::tab_motion::GAP * (1. - open)))
+                                .mr(px(-vorkspace_ui::tab_motion::GAP * (1. - open)))
                                 .overflow_hidden()
                                 .flex()
                         };
                         slots
                             .into_iter()
                             .filter_map(move |s| match s {
-                                crate::tab_motion::Slot::Live { key, open } => {
+                                vorkspace_ui::tab_motion::Slot::Live { key, open } => {
                                     let ix = ids.iter().position(|id| *id == key)?;
                                     let tab = tabs.get_mut(ix)?.take()?;
                                     Some(if open >= 1. {
@@ -559,37 +559,42 @@ impl Shell {
                                         slot(open).child(tab).into_any_element()
                                     })
                                 }
-                                crate::tab_motion::Slot::Closing { ghost, open, .. } => Some(
-                                    slot(open)
-                                        .child(
-                                            div()
-                                                .w(px(224.))
-                                                .h_full()
-                                                .flex_shrink_0()
-                                                .flex()
-                                                .items_center()
-                                                .child(
-                                                    div()
-                                                        .h(px(TAB_PLATE_HEIGHT))
-                                                        .w_full()
-                                                        .flex()
-                                                        .items_center()
-                                                        .gap(px(6.))
-                                                        .px_2()
-                                                        .rounded_md()
-                                                        .text_size(px(13.))
-                                                        .text_color(content(0.5))
-                                                        .child(
-                                                            icon("terminal", 14.)
-                                                                .text_color(content(0.5)),
-                                                        )
-                                                        .child(
-                                                            div().min_w_0().truncate().child(ghost),
-                                                        ),
-                                                ),
-                                        )
-                                        .into_any_element(),
-                                ),
+                                vorkspace_ui::tab_motion::Slot::Closing { ghost, open, .. } => {
+                                    Some(
+                                        slot(open)
+                                            .child(
+                                                div()
+                                                    .w(px(224.))
+                                                    .h_full()
+                                                    .flex_shrink_0()
+                                                    .flex()
+                                                    .items_center()
+                                                    .child(
+                                                        div()
+                                                            .h(px(TAB_PLATE_HEIGHT))
+                                                            .w_full()
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap(px(6.))
+                                                            .px_2()
+                                                            .rounded_md()
+                                                            .text_size(px(13.))
+                                                            .text_color(content(0.5))
+                                                            .child(
+                                                                icon("terminal", 14.)
+                                                                    .text_color(content(0.5)),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .min_w_0()
+                                                                    .truncate()
+                                                                    .child(ghost),
+                                                            ),
+                                                    ),
+                                            )
+                                            .into_any_element(),
+                                    )
+                                }
                             })
                             .collect::<Vec<_>>()
                     }),

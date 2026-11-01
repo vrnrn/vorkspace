@@ -485,7 +485,7 @@ impl TranscriptView {
                         .py_1()
                         .rounded_md()
                         .bg(content(0.06))
-                        .child(crate::file_icons::file_type_icon(
+                        .child(vorkspace_ui::file_icons::file_type_icon(
                             &file.name, false, false, 16.,
                         ))
                         .child(

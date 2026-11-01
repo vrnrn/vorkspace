@@ -48,7 +48,6 @@ use crate::{
     conversation::{Conversation, SessionChanged},
     input,
     notes::Notes,
-    pane_motion::{PaneSlide, ResizeSettle},
     pickers::{ProjectPicked, ProjectPicker},
     popover::{
         Align, Anchor, AnchorSlot, Flyout, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle, Side,
@@ -57,9 +56,7 @@ use crate::{
     resource_pressure::{ResourceMonitor, StopSession},
     response_actions::Transfer,
     right_panel::{PanelEvent, RightPanel},
-    session_mark::{SessionMark, State as MarkState},
     terminal::{Terminal, TerminalEvent},
-    theme::*,
     usage_footer::UsageFooter,
     workspace::{
         Connector, DockSide, SidebarNavigation, TitleTab, VisitHistory, Workspace, project_name,
@@ -83,6 +80,11 @@ use std::{
 use vorkspace_core::{provider::Kind, store::Session};
 use vorkspace_model::pane_layout::{Edge, LayoutLeaf, PaneNode, Rect, SplitDir};
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::{
+    pane_motion::{PaneSlide, ResizeSettle},
+    session_mark::{SessionMark, State as MarkState},
+    theme::*,
+};
 
 actions!(
     workspace,
@@ -438,7 +440,7 @@ struct PaneTick {
     from: Option<(i64, bool)>,
     /// 1 when the new line rises, -1 when it drops.
     dir: f32,
-    start: crate::clock::Instant,
+    start: vorkspace_ui::clock::Instant,
 }
 const PANE_TICK_DURATION: f32 = 0.24;
 /// useAnimatedReorder: `--motion-reorder-duration` with `--motion-ease-out`.
@@ -448,15 +450,15 @@ const REORDER_DURATION: f32 = 0.16;
 struct TabShift {
     from: f32,
     to: f32,
-    start: crate::clock::Instant,
+    start: vorkspace_ui::clock::Instant,
 }
 impl TabShift {
-    fn at(&self, now: crate::clock::Instant) -> (f32, bool) {
+    fn at(&self, now: vorkspace_ui::clock::Instant) -> (f32, bool) {
         let t = now.saturating_duration_since(self.start).as_secs_f32() / REORDER_DURATION;
         if t >= 1. {
             return (self.to, true);
         }
-        let eased = crate::reveal::ease_move(t);
+        let eased = vorkspace_ui::reveal::ease_move(t);
         (self.from + (self.to - self.from) * eased, false)
     }
 }
@@ -582,15 +584,19 @@ pub(crate) struct Shell {
     sidebar_hover: Option<&'static str>,
     tab_hover: Option<i64>,
     /// Tab animations: opening and closing title tabs, with each tab's last label.
-    title_tab_motion: crate::tab_motion::TabMotion<TitleTab, ()>,
+    title_tab_motion: vorkspace_ui::tab_motion::TabMotion<TitleTab, ()>,
     /// Tab animations: the selected tab before the last switch, the one now
     /// selected and when it changed, so one eases down as the other widens.
-    title_tab_selection: (Option<TitleTab>, Option<TitleTab>, crate::clock::Instant),
+    title_tab_selection: (
+        Option<TitleTab>,
+        Option<TitleTab>,
+        vorkspace_ui::clock::Instant,
+    ),
     session_hover: Option<i64>,
     session_preview: Option<SessionPreview>,
     preview_close: Option<gpui::Task<()>>,
     preview_open: Option<gpui::Task<()>>,
-    sidebar_last_scroll: Option<crate::clock::Instant>,
+    sidebar_last_scroll: Option<vorkspace_ui::clock::Instant>,
     window_observed: bool,
     shortcuts: Option<shortcuts::Shortcuts>,
     window_active: bool,
@@ -607,7 +613,7 @@ pub(crate) struct Shell {
     /// Sessions, Explorer and Changes rise from the line under them.
     sidebar_tab_liquid: crate::liquid::Liquid,
     /// Each project's working grid in the rail, by project path.
-    project_marks: HashMap<String, Entity<crate::session_mark::ProjectMark>>,
+    project_marks: HashMap<String, Entity<vorkspace_ui::session_mark::ProjectMark>>,
 
     project_anchor: AnchorSlot,
     sidebar_options_anchor: AnchorSlot,
@@ -665,7 +671,7 @@ pub(crate) struct Shell {
     resize_pinned: bool,
     dock_hover: Option<usize>,
     /// Tab animations for the dock's terminals, with each tab's last title.
-    dock_tab_motion: crate::tab_motion::TabMotion<gpui::EntityId, SharedString>,
+    dock_tab_motion: vorkspace_ui::tab_motion::TabMotion<gpui::EntityId, SharedString>,
     dock_drag: Option<terminal_dock::DockTabDrag>,
     /// The right panel's drawn width this frame, 0 while it is hidden.
     right_drawn: f32,
@@ -693,7 +699,7 @@ impl Shell {
         saved: Option<String>,
         cx: &mut Context<Self>,
     ) -> Self {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let paths = summaries
             .iter()
             .map(|s| (s.id, s.cwd.clone()))
@@ -928,7 +934,7 @@ impl Shell {
             sidebar_hover: None,
             tab_hover: None,
             title_tab_motion: Default::default(),
-            title_tab_selection: (None, None, crate::clock::Instant::now()),
+            title_tab_selection: (None, None, vorkspace_ui::clock::Instant::now()),
             session_hover: None,
             session_preview: None,
             preview_close: None,
@@ -1623,7 +1629,7 @@ impl Shell {
         self.workspace.right_panel_open = open;
         let previous = self.right_slide.take();
         self.right_slide = Some(match previous {
-            Some(slide) => slide.retarget(to, crate::clock::Instant::now()),
+            Some(slide) => slide.retarget(to, vorkspace_ui::clock::Instant::now()),
             None => PaneSlide::new(if open { 0. } else { full }, to, full),
         });
         self.sync_right_panel(cx);
@@ -1986,7 +1992,7 @@ impl Shell {
                 let distance = self.split_width() * ratio;
                 let slide = match self.review_slide.take() {
                     Some((sid, slide, _)) if sid == id => {
-                        slide.retarget(ratio, crate::clock::Instant::now())
+                        slide.retarget(ratio, vorkspace_ui::clock::Instant::now())
                     }
                     _ => PaneSlide::new(0., ratio, distance),
                 };
@@ -2053,7 +2059,7 @@ impl Shell {
             let distance = self.split_width() * ratio;
             let slide = match self.review_slide.take() {
                 Some((sid, slide, _)) if sid == id => {
-                    slide.retarget(0., crate::clock::Instant::now())
+                    slide.retarget(0., vorkspace_ui::clock::Instant::now())
                 }
                 _ => PaneSlide::new(ratio, 0., distance),
             };
@@ -2438,7 +2444,7 @@ impl Shell {
         });
         let motion = match self.pane_motion.as_ref().filter(|m| m.tab == tab) {
             Some(motion) => {
-                let (t, done) = motion.slide.at(crate::clock::Instant::now());
+                let (t, done) = motion.slide.at(vorkspace_ui::clock::Instant::now());
                 if done {
                     self.pane_motion = None;
                     None
@@ -2699,7 +2705,7 @@ impl Shell {
     ) -> AnyElement {
         let in_split = split.is_some();
         let chat = self.sessions.get(&id).cloned();
-        let now = crate::clock::Instant::now();
+        let now = vorkspace_ui::clock::Instant::now();
         let sliding = self
             .review_slide
             .as_ref()
@@ -3040,7 +3046,7 @@ impl Shell {
             project.clone(),
             match self.dock_slide.take() {
                 Some((p, slide)) if p == project => {
-                    slide.retarget(to, crate::clock::Instant::now())
+                    slide.retarget(to, vorkspace_ui::clock::Instant::now())
                 }
                 _ => PaneSlide::new(1. - to, to, size),
             },
@@ -3258,7 +3264,7 @@ impl Shell {
         };
         let progress = match self.dock_slide.as_ref().filter(|(p, _)| *p == project) {
             Some((_, slide)) => {
-                let (t, done) = slide.at(crate::clock::Instant::now());
+                let (t, done) = slide.at(vorkspace_ui::clock::Instant::now());
                 if done {
                     self.dock_slide = None;
                     None
@@ -4112,7 +4118,7 @@ impl Shell {
         let Some((target, settle)) = &self.resize_settle else {
             return;
         };
-        let (value, done) = settle.at(crate::clock::Instant::now());
+        let (value, done) = settle.at(vorkspace_ui::clock::Instant::now());
         let target = target.clone();
         self.set_resize(&target, value);
         if done {
@@ -4397,7 +4403,7 @@ impl Shell {
         }
         let to = if visible { 1. } else { 0. };
         self.sidebar_slide = Some(match self.sidebar_slide.take() {
-            Some(slide) => slide.retarget(to, crate::clock::Instant::now()),
+            Some(slide) => slide.retarget(to, vorkspace_ui::clock::Instant::now()),
             None => PaneSlide::new(1. - to, to, self.workspace.right_panel_width),
         });
         self.resize = None;
@@ -5849,7 +5855,7 @@ impl Shell {
         }
     }
     fn sidebar_scrolled(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_last_scroll = Some(crate::clock::Instant::now());
+        self.sidebar_last_scroll = Some(vorkspace_ui::clock::Instant::now());
         self.close_preview(cx);
         if let Some(id) = self.session_hover
             && let Some(anchor) = self.session_row_bounds.get(&id).cloned()
@@ -6752,7 +6758,7 @@ impl Shell {
                     .into_any_element(),
             },
             PaneMark::File(Some(name)) => {
-                crate::file_icons::file_type_icon(name, false, false, 14.)
+                vorkspace_ui::file_icons::file_type_icon(name, false, false, 14.)
             }
             PaneMark::File(None) => icon("git-compare", 14.).text_color(ink).into_any_element(),
         };
@@ -6792,7 +6798,7 @@ impl Shell {
                         .flex_1()
                         .min_w_0()
                         .h_full()
-                        .child(crate::tab_label::tab_label(pane.title.clone())),
+                        .child(vorkspace_ui::tab_label::tab_label(pane.title.clone())),
                 )
         };
         div()
@@ -6819,7 +6825,7 @@ impl Shell {
             self.pane_ticks.remove(&tab);
             return (None, 0., 1.);
         };
-        let now = crate::clock::Instant::now();
+        let now = vorkspace_ui::clock::Instant::now();
         let position = |key: (i64, bool)| copy.panes.iter().position(|p| p.key == key);
         let tick = self.pane_ticks.entry(tab).or_insert(PaneTick {
             shown,
@@ -6847,7 +6853,7 @@ impl Shell {
             tick.from = None;
             return (None, 0., 1.);
         }
-        (from, tick.dir, crate::reveal::ease_move(t))
+        (from, tick.dir, vorkspace_ui::reveal::ease_move(t))
     }
     /// The dragged session's title, following the pointer.
     fn drag_ghost(&self, cx: &App) -> Option<AnyElement> {
@@ -6888,7 +6894,7 @@ impl Shell {
                 .text_color(content(1.))
                 .child(if let Some(tab) = review {
                     if matches!(tab, crate::review::ReviewTab::File { .. }) {
-                        crate::file_icons::file_type_icon(&tab.label(), false, false, 14.)
+                        vorkspace_ui::file_icons::file_type_icon(&tab.label(), false, false, 14.)
                     } else {
                         icon("git-compare", 14.).into_any_element()
                     }
@@ -7035,7 +7041,7 @@ impl Shell {
             } else if drag.active {
                 self.cancel_pane_drag(cx);
                 // Each tab glides from where it is drawn into its new slot.
-                let now = crate::clock::Instant::now();
+                let now = vorkspace_ui::clock::Instant::now();
                 let visible = self.visible_tabs(cx);
                 let drawn: Vec<(TitleTab, f32)> = visible
                     .iter()
@@ -7076,7 +7082,7 @@ impl Shell {
     }
     /// Where tab `id` is drawn now, easing toward `target`.
     fn eased_shift(&mut self, id: TitleTab, target: f32, follow: bool) -> (f32, bool) {
-        let now = crate::clock::Instant::now();
+        let now = vorkspace_ui::clock::Instant::now();
         // The dragged tab rides the pointer; it eases only into a slot.
         if follow {
             self.tab_shifts.remove(&id);
@@ -7158,7 +7164,7 @@ impl Shell {
         let (slots, opening) = self.title_tab_motion.sync(
             tabs.iter().map(|tab| (tab.clone(), ())).collect(),
             animate,
-            crate::clock::Instant::now(),
+            vorkspace_ui::clock::Instant::now(),
         );
         // Every tab fits: they share the strip, however many there are. A tab
         // easing in or out holds its share of a slot, so the others give way
@@ -7166,8 +7172,8 @@ impl Shell {
         let share: f32 = slots
             .iter()
             .map(|s| match s {
-                crate::tab_motion::Slot::Live { open, .. }
-                | crate::tab_motion::Slot::Closing { open, .. } => *open,
+                vorkspace_ui::tab_motion::Slot::Live { open, .. }
+                | vorkspace_ui::tab_motion::Slot::Closing { open, .. } => *open,
             })
             .sum();
         let avail = viewport - STRIP_PAD - STRIP_NEW_TAB - share * 2.;
@@ -7178,13 +7184,13 @@ impl Shell {
         };
         // The selected tab keeps a wider share; the others split the rest.
         let selected = self.active_title_tab(cx);
-        let now = crate::clock::Instant::now();
+        let now = vorkspace_ui::clock::Instant::now();
         let selection_changed = self.title_tab_selection.1 != selected;
         if selection_changed {
             let previous = self.title_tab_selection.1.take();
             self.title_tab_selection = (previous.filter(|_| animate), selected.clone(), now);
         }
-        let switch = crate::tab_motion::progress(self.title_tab_selection.2, now);
+        let switch = vorkspace_ui::tab_motion::progress(self.title_tab_selection.2, now);
         if switch >= 1. {
             self.title_tab_selection.0 = None;
         }
@@ -7204,8 +7210,8 @@ impl Shell {
         let held: f32 = slots
             .iter()
             .map(|s| match s {
-                crate::tab_motion::Slot::Live { key, open } => weight(key) * open,
-                crate::tab_motion::Slot::Closing { .. } => 0.,
+                vorkspace_ui::tab_motion::Slot::Live { key, open } => weight(key) * open,
+                vorkspace_ui::tab_motion::Slot::Closing { .. } => 0.,
             })
             .sum();
         // The selected tab shrinks with the rest down to a floor, then holds
@@ -7227,14 +7233,14 @@ impl Shell {
         let slot_size = |tab: &TitleTab, open: f32| {
             (
                 snap(base_width(tab) * open),
-                snap(crate::tab_motion::GAP * (1. - open)),
+                snap(vorkspace_ui::tab_motion::GAP * (1. - open)),
             )
         };
         let used: f32 = slots
             .iter()
             .map(|s| match s {
-                crate::tab_motion::Slot::Live { key, open }
-                | crate::tab_motion::Slot::Closing { key, open, .. } => {
+                vorkspace_ui::tab_motion::Slot::Live { key, open }
+                | vorkspace_ui::tab_motion::Slot::Closing { key, open, .. } => {
                     if *open >= 1. {
                         base_width(key) + 2.
                     } else {
@@ -7253,7 +7259,7 @@ impl Shell {
             let settled: Vec<&TitleTab> = slots
                 .iter()
                 .filter_map(|s| match s {
-                    crate::tab_motion::Slot::Live { key, open } if *open >= 1. => Some(key),
+                    vorkspace_ui::tab_motion::Slot::Live { key, open } if *open >= 1. => Some(key),
                     _ => None,
                 })
                 .collect();
@@ -7523,7 +7529,7 @@ impl Shell {
         let elements: Vec<AnyElement> = slots
             .into_iter()
             .filter_map(|s| match s {
-                crate::tab_motion::Slot::Live { key, open } => {
+                vorkspace_ui::tab_motion::Slot::Live { key, open } => {
                     let element = live.remove(&key)?;
                     Some(if open >= 1. {
                         element
@@ -7537,7 +7543,7 @@ impl Shell {
                             .into_any_element()
                     })
                 }
-                crate::tab_motion::Slot::Closing { key, open, .. } => {
+                vorkspace_ui::tab_motion::Slot::Closing { key, open, .. } => {
                     let w = tab_width(&key);
                     // A closed conversation stays loaded, so its copy still reads.
                     let headline = key
@@ -7720,7 +7726,7 @@ impl Render for Shell {
         // Use the scale of this frame, which can differ from a zoom preference
         // deferred by GPUI until the next frame. This covers restored, menu,
         // keyboard, Settings and shared-preference zoom changes alike.
-        crate::traffic_lights::pin(window);
+        vorkspace_ui::traffic_lights::pin(window);
         self.keep_visible_idle_agents(cx);
         self.tick_resize_settle(window);
         if let Some(id) = self.pending_composer_focus.take()
@@ -7771,7 +7777,7 @@ impl Render for Shell {
         self.sync_settings(cx);
         self.sidebar_fraction = match &self.sidebar_slide {
             Some(slide) => {
-                let (fraction, done) = slide.at(crate::clock::Instant::now());
+                let (fraction, done) = slide.at(vorkspace_ui::clock::Instant::now());
                 if done {
                     self.sidebar_slide = None;
                 } else {
@@ -7833,7 +7839,7 @@ impl Render for Shell {
                             && shell.status_menu.is_some()
                             && !shell.unsaved_files(cx)
                         {
-                            crate::traffic_lights::hide(window);
+                            vorkspace_ui::traffic_lights::hide(window);
                             return false;
                         }
                         if shell.unsaved_files(cx) {
@@ -7899,7 +7905,7 @@ impl Render for Shell {
         let full = self.workspace.right_panel_width;
         let right_width = match &self.right_slide {
             Some(slide) => {
-                let (width, done) = slide.at(crate::clock::Instant::now());
+                let (width, done) = slide.at(vorkspace_ui::clock::Instant::now());
                 if done {
                     self.right_slide = None;
                     self.sync_right_panel(cx);
@@ -7978,7 +7984,7 @@ impl Render for Shell {
             .size_full()
             .bg(shell_fill())
             .text_color(content(1.))
-            .font_family(crate::fonts::UI)
+            .font_family(vorkspace_ui::fonts::UI)
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, cx| {
                 if this.session_preview.as_ref().is_some_and(|preview| {
                     !preview
@@ -9146,7 +9152,7 @@ mod tests {
         cx.update(|cx| {
             input::bind(cx);
             crate::popover::bind(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         window
             .update(cx, |shell, w, cx| {
@@ -9199,7 +9205,7 @@ mod tests {
             .expect("appearance controls in the flyout");
         visual.simulate_click(color.center(), Default::default());
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let grid_slider = visual.debug_bounds("project-grid-slider").unwrap();
         let click_x = grid_slider.left() + grid_slider.size.width * (4. / 6.);
         visual.simulate_click(
@@ -9207,10 +9213,10 @@ mod tests {
             Default::default(),
         );
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         visual.simulate_keystrokes("escape");
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, w, cx| {
                 assert!(shell.menu.is_none());
@@ -9244,7 +9250,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let card = window
             .update(visual, |shell, _, cx| {
                 let menu = shell.menu.as_ref().unwrap().menu.read(cx);
@@ -9259,7 +9265,7 @@ mod tests {
         assert_eq!(card.bottom() - last_row.bottom(), px(9.));
         visual.simulate_click(background_row.center(), Default::default());
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("project-background-dialog").is_some());
         let dialog = visual.debug_bounds("project-background-dialog").unwrap();
         let header = visual.debug_bounds("background-dialog-header").unwrap();
@@ -9311,26 +9317,26 @@ mod tests {
         assert_eq!(effect_trigger.right(), preview.right());
         visual.simulate_click(effect_trigger.center(), Default::default());
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         visual.simulate_keystrokes("escape");
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("project-background-dialog").is_some());
         assert!(visual.debug_bounds("project-settings-Haze").is_none());
         visual.simulate_click(effect_trigger.center(), Default::default());
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         for selector in ["project-settings-Haze", "project-settings-Empty only"] {
             let bounds = visual.debug_bounds(selector).unwrap();
             visual.simulate_click(bounds.center(), Default::default());
             visual.run_until_parked();
-            crate::clock::settle_animations(window, visual);
+            vorkspace_ui::clock::settle_animations(window, visual);
         }
         let opacity = visual.debug_bounds("empty-background-opacity").unwrap();
         visual.simulate_click(opacity.center(), Default::default());
         visual.simulate_keystrokes("right");
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, _, _| {
                 let background = shell.workspace.project_appearance["/work/vorkspace"]
@@ -9353,7 +9359,7 @@ mod tests {
             .unwrap();
         visual.simulate_keystrokes("escape");
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, _, _| {
                 assert!(shell.background_dialog.is_none())
@@ -9371,7 +9377,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("project-chat-background").is_none());
         visual.simulate_resize(gpui::size(px(820.), px(520.)));
         window
@@ -9380,7 +9386,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let compact = visual.debug_bounds("project-background-dialog").unwrap();
         let body = visual.debug_bounds("background-dialog-body").unwrap();
         assert!(compact.top() >= px(16.));
@@ -9535,7 +9541,7 @@ mod tests {
         use crate::workspace::SidebarTab;
         let (window, _, _) = window(cx);
         cx.update(|cx| {
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
             bind_keys(cx);
         });
         window
@@ -9565,7 +9571,7 @@ mod tests {
     ) {
         let (window, _, _) = window(cx);
         cx.update(|cx| {
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
             bind_keys(cx);
             crate::input::bind(cx);
         });
@@ -9693,7 +9699,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (window, _, _) = window(cx);
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         window
             .update(cx, |shell, w, cx| shell.focus_active(w, cx))
             .unwrap();
@@ -9755,7 +9761,7 @@ mod tests {
         use crate::workspace::SidebarTab;
         let (window, _, active) = window(cx);
         cx.update(|cx| {
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
             bind_keys(cx);
         });
         window
@@ -9773,7 +9779,7 @@ mod tests {
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1500.), px(900.)));
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         for (selector, header, expected) in [
             ("classic-tab-explorer", "explorer-header", SidebarTab::Files),
             ("classic-tab-changes", "changes-header", SidebarTab::Changes),
@@ -9786,7 +9792,7 @@ mod tests {
             let tab = visual.debug_bounds(selector).unwrap();
             visual.simulate_click(tab.center(), Default::default());
             visual.run_until_parked();
-            crate::clock::settle_animations(window, visual);
+            vorkspace_ui::clock::settle_animations(window, visual);
             let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
             let tool = visual.debug_bounds(header).unwrap();
             let review = visual.debug_bounds("review-tab-strip").unwrap();
@@ -9813,7 +9819,7 @@ mod tests {
         for visible in [false, true, false, true] {
             visual.simulate_keystrokes(&format!("{modifier}-shift-b"));
             visual.run_until_parked();
-            crate::clock::settle_animations(window, visual);
+            vorkspace_ui::clock::settle_animations(window, visual);
             window
                 .update(visual, |shell, _, _| {
                     assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Graph);
@@ -9837,8 +9843,9 @@ mod tests {
             .unwrap();
         // Tab motion shares the executor clock with the window's frames.
         let settle = |cx: &mut gpui::VisualTestContext| {
-            cx.executor()
-                .advance_clock(crate::tab_motion::DURATION + std::time::Duration::from_millis(20));
+            cx.executor().advance_clock(
+                vorkspace_ui::tab_motion::DURATION + std::time::Duration::from_millis(20),
+            );
             window
                 .update(cx, |shell, _, cx| {
                     shell.tabs_frame.update(cx, |_, cx| cx.notify())
@@ -9956,7 +9963,7 @@ mod tests {
     #[gpui::test]
     fn project_rail_toggle_holds_still_and_history_follows_the_rail(cx: &mut TestAppContext) {
         let (window, _, _) = window(cx);
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
         let toggle = visual.debug_bounds("toggle-sidebar").unwrap();
@@ -10014,7 +10021,7 @@ mod tests {
     ) {
         use crate::workspace::SidebarTab;
         let (window, _, active) = window(cx);
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         window
             .update(cx, |shell, window, cx| {
                 shell.toggle_project_rail(cx);
@@ -10055,13 +10062,13 @@ mod tests {
     fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(
         cx: &mut TestAppContext,
     ) {
-        crate::theme::configure(&crate::settings::Preferences::default(), false, true);
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::theme::configure(&crate::settings::Preferences::default(), false, true);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, a, b) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         visual
             .update_window(window.into(), |_, window, cx| {
                 window.simulate_next_frame(cx);
@@ -10125,12 +10132,12 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         for rail_open in [false, true] {
             let toggle = visual.debug_bounds("toggle-sidebar").unwrap();
             visual.simulate_click(toggle.center(), Default::default());
             visual.run_until_parked();
-            crate::clock::settle_animations(window, visual);
+            vorkspace_ui::clock::settle_animations(window, visual);
             let rail = visual.debug_bounds("classic-project-rail").unwrap();
             assert_eq!(rail.size.width, px(if rail_open { 200. } else { 48. }));
             window
@@ -10152,7 +10159,7 @@ mod tests {
                 .update(visual, |shell, window, cx| shell.toggle_sidebar(window, cx))
                 .unwrap();
             visual.run_until_parked();
-            crate::clock::settle_animations(window, visual);
+            vorkspace_ui::clock::settle_animations(window, visual);
             let rail = visual.debug_bounds("classic-project-rail").unwrap();
             let main = visual.debug_bounds("main-pane-frame").unwrap();
             assert_eq!(rail.size.width, px(200.));
@@ -10196,7 +10203,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         use crate::workspace::SidebarTab;
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, active) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1500.), px(900.)));
@@ -10486,7 +10493,7 @@ mod tests {
                     .sidebar_slide
                     .as_ref()
                     .unwrap()
-                    .at(crate::clock::Instant::now())
+                    .at(vorkspace_ui::clock::Instant::now())
                     .0;
                 shell.toggle_sidebar(w, cx);
                 assert!(shell.workspace.sidebar_visible);
@@ -10494,7 +10501,7 @@ mod tests {
                     .sidebar_slide
                     .as_ref()
                     .unwrap()
-                    .at(crate::clock::Instant::now())
+                    .at(vorkspace_ui::clock::Instant::now())
                     .0;
                 assert!((after - before).abs() < 0.01);
             })
@@ -10519,7 +10526,7 @@ mod tests {
     ) {
         let (window, first, current) = same_project_window(cx);
         cx.update(|cx| {
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
             input::bind(cx);
             bind_keys(cx);
         });
@@ -10560,7 +10567,7 @@ mod tests {
                     let (slots, moving) = shell.title_tab_motion.sync(
                         tabs.into_iter().map(|tab| (tab, ())).collect(),
                         true,
-                        crate::clock::Instant::now(),
+                        vorkspace_ui::clock::Instant::now(),
                     );
                     assert!(
                         !moving,
@@ -10568,7 +10575,7 @@ mod tests {
                     );
                     assert!(slots.iter().all(|slot| matches!(
                         slot,
-                        crate::tab_motion::Slot::Live { open, .. } if *open == 1.
+                        vorkspace_ui::tab_motion::Slot::Live { open, .. } if *open == 1.
                     )));
                     assert_eq!(
                         shell.title_tab_selection.1,
@@ -11025,7 +11032,7 @@ mod tests {
     #[gpui::test]
     fn pane_limit_rejected_chat_drop_keeps_attached_dirty_file(cx: &mut TestAppContext) {
         use gpui::EntityInputHandler;
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("draft.txt");
         std::fs::write(&path, "original").unwrap();
@@ -11061,7 +11068,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, w, cx| {
                 let review = shell.reviews[&source].clone();
@@ -11073,7 +11080,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, w, cx| {
                 let review = shell.reviews[&source].clone();
@@ -11246,7 +11253,7 @@ mod tests {
                 )))
             },
         );
-        crate::clock::use_test_clock(&cx);
+        vorkspace_ui::clock::use_test_clock(&cx);
         for (name, dir, count, viewport) in [
             ("two-wide", SplitDir::Right, 2, (1500., 900.)),
             (
@@ -11286,7 +11293,7 @@ mod tests {
                 })
                 .unwrap();
             cx.run_until_parked();
-            crate::clock::settle_headless_animations(window, &mut cx);
+            vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
             cx.capture_screenshot(window.into())
                 .unwrap()
                 .save(output.join(format!("{name}.png")))
@@ -11534,8 +11541,8 @@ mod tests {
     #[gpui::test]
     #[ignore = "Manual CoreText CPU frame-cost measurement; opens no native window"]
     fn pane_motion_frame_cost_with_long_history(cx: &mut TestAppContext) {
-        use crate::clock::Instant;
         use std::time::Duration;
+        use vorkspace_ui::clock::Instant;
         let cx = &mut TestAppContext::build_with_text_system(
             cx.dispatcher.clone(),
             Some("pane_motion_frame_cost"),
@@ -11624,7 +11631,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         cx.update(|cx| {
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
             crate::app_menu::init(cx);
         });
         use gpui::EntityInputHandler;
@@ -11647,7 +11654,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, w, cx| {
                 let pane = shell.reviews[&id].clone();
@@ -11718,7 +11725,7 @@ mod tests {
         let (window, a, b) = window(cx);
         cx.update(|cx| {
             bind_keys(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         window
             .update(cx, |shell, w, cx| {
@@ -11729,7 +11736,7 @@ mod tests {
             .unwrap();
         let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         let count_selector: &'static str =
             Box::leak(format!("title-tab-pane-count-{b}").into_boxed_str());
         let close_selector: &'static str =
@@ -11744,7 +11751,7 @@ mod tests {
         );
         cx.simulate_keystrokes("cmd-d");
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         let new = window
             .update(cx, |shell, _, _| {
                 let new = shell.workspace.active.unwrap();
@@ -11764,7 +11771,7 @@ mod tests {
             .unwrap();
         cx.refresh().unwrap();
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         assert!(
             cx.debug_bounds(count_selector).is_some(),
             "split tabs show their pane count"
@@ -11792,7 +11799,7 @@ mod tests {
             Modifiers::default(),
         );
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, _, _| {
                 let leaves = shell.workspace.layout(b).leaves();
@@ -11812,7 +11819,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         let row = cx
             .debug_bounds(Box::leak(format!("sidebar-session-{a}").into_boxed_str()))
             .unwrap()
@@ -11833,7 +11840,7 @@ mod tests {
             .unwrap();
         cx.simulate_mouse_up(below, MouseButton::Left, Modifiers::default());
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.workspace.tabs, [b]);
@@ -11844,7 +11851,7 @@ mod tests {
             .unwrap();
         cx.refresh().unwrap();
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
 
         // Its header drags it up onto the title strip: a tab of its own.
         let grip = cx
@@ -11864,7 +11871,7 @@ mod tests {
         cx.simulate_mouse_move(before_b, MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(before_b, MouseButton::Left, Modifiers::default());
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.workspace.tabs, [a, b]);
@@ -11908,7 +11915,7 @@ mod tests {
             .unwrap();
         cx.refresh().unwrap();
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         let tab = cx
             .debug_bounds(Box::leak(format!("title-tab-{a}").into_boxed_str()))
             .unwrap()
@@ -11943,7 +11950,7 @@ mod tests {
         cx.simulate_mouse_move(left_half, MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(left_half, MouseButton::Left, Modifiers::default());
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.workspace.tabs, [b]);
@@ -11955,7 +11962,7 @@ mod tests {
         // ⌘W closes the focused pane only; its neighbour takes focus.
         cx.simulate_keystrokes("cmd-w");
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.workspace.tabs, [b]);
@@ -12038,7 +12045,7 @@ mod tests {
         let (window, _, b) = window(cx);
         cx.update(|cx| {
             bind_keys(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         window
             .update(cx, |shell, w, cx| {
@@ -12050,7 +12057,7 @@ mod tests {
         cx.run_until_parked();
         cx.simulate_keystrokes("cmd-d");
         cx.run_until_parked();
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let new = window
             .update(cx, |shell, w, cx| {
                 let new = shell.workspace.active.unwrap();
@@ -12113,7 +12120,7 @@ mod tests {
 
     fn assert_closed_header_stays_hidden(cx: &mut TestAppContext, file: bool) {
         use std::time::Duration;
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, session, other) = same_project_window(cx);
         window
             .update(cx, |shell, w, cx| {
@@ -12134,11 +12141,11 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         let header = Box::leak(format!("split-header-{session}").into_boxed_str());
         assert!(visual.debug_bounds(header).is_some());
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         window
             .update(visual, |shell, w, cx| {
                 if file {
@@ -12204,7 +12211,7 @@ mod tests {
         let (window, _, b) = window(cx);
         cx.update(|cx| {
             bind_keys(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         cx.simulate_window_resize(window.into(), gpui::size(px(1200.), px(800.)));
         window
@@ -12311,7 +12318,7 @@ mod tests {
         cx.update(|cx| {
             bind_keys(cx);
             crate::terminal::bind(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         window
             .update(cx, |shell, w, cx| {
@@ -12321,11 +12328,11 @@ mod tests {
             .unwrap();
         let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         assert!(cx.debug_bounds("terminal-dock").is_none());
         cx.simulate_keystrokes("cmd-j");
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         let project = window
             .update(cx, |shell, w, cx| {
                 let project = shell.workspace.project.clone();
@@ -12344,7 +12351,7 @@ mod tests {
         let tabs = window.update(cx, |s, _, _| s.workspace.tabs.len()).unwrap();
         cx.simulate_keystrokes("cmd-t");
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, w, cx| {
                 assert_eq!(shell.workspace.tabs.len(), tabs);
@@ -12357,7 +12364,7 @@ mod tests {
         // ⌘W closes the focused terminal; the session tab stays.
         cx.simulate_keystrokes("cmd-w");
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.workspace.tabs.len(), tabs);
@@ -12368,7 +12375,7 @@ mod tests {
         // Docked right, it takes width: a narrow window gives up its sidebar.
         cx.simulate_resize(gpui::size(px(1000.), px(800.)));
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, _, cx| {
                 shell.workspace.docks.get_mut(&project).unwrap().size = 360.;
@@ -12377,7 +12384,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         let dock = cx.debug_bounds("terminal-dock").unwrap();
         assert!((dock.size.width - px(360.)).abs() < px(2.), "{dock:?}");
         // ⌘J hides it and the composer takes the keys back.
@@ -12386,7 +12393,7 @@ mod tests {
             .unwrap();
         cx.simulate_keystrokes("cmd-j");
         cx.run_until_parked();
-        crate::clock::settle_animations(window, cx);
+        vorkspace_ui::clock::settle_animations(window, cx);
         window
             .update(cx, |shell, w, cx| {
                 assert!(!shell.workspace.docks[&project].open);
@@ -12555,7 +12562,7 @@ mod tests {
     #[gpui::test]
     fn settled_title_does_not_schedule_decorative_redraws(cx: &mut TestAppContext) {
         let (window, _, id) = window(cx);
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         // Blank tabs deliberately have no sidebar card. Mount a conversation
         // before changing its title, so this exercises an existing label.
         window

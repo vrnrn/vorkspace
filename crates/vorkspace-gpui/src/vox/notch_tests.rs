@@ -15,13 +15,13 @@ fn voice(_cx: &mut gpui::Context<Vox>) -> Vox {
     voice.state = "live".into();
     voice.face = "o-o".into();
     voice.active.store(true, Ordering::Relaxed);
-    voice.notch.touched = crate::clock::Instant::now();
+    voice.notch.touched = vorkspace_ui::clock::Instant::now();
     // This is a display-only fixture: no provider or microphone is started.
     voice
 }
 
 fn window(cx: &mut TestAppContext) -> WindowHandle<Vox> {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     let window = cx.update(|cx| {
         crate::input::bind(cx);
         cx.open_window(Default::default(), |_, cx| cx.new(voice))
@@ -144,7 +144,7 @@ fn silent_reply_stays_below_the_notch_and_survives_status_updates(cx: &mut TestA
             cx.notify();
         })
         .unwrap();
-    crate::clock::settle_animations(window, cx);
+    vorkspace_ui::clock::settle_animations(window, cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     let gap = visual.debug_bounds("vox-notch-gap").unwrap();
     let face = visual.debug_bounds("vox-toggle").unwrap();
@@ -175,7 +175,7 @@ fn silent_reply_stays_below_the_notch_and_survives_status_updates(cx: &mut TestA
 #[gpui::test]
 fn hovering_the_status_dot_turns_it_into_the_call_control(cx: &mut TestAppContext) {
     let window = window(cx);
-    crate::clock::settle_animations(window, cx);
+    vorkspace_ui::clock::settle_animations(window, cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     let dot = visual.debug_bounds("vox-dot").unwrap();
     assert!(visual.debug_bounds("vox-square").is_none());
@@ -218,7 +218,7 @@ fn hovering_the_status_dot_turns_it_into_the_call_control(cx: &mut TestAppContex
 #[gpui::test]
 fn moving_away_from_the_status_control_restores_the_dot(cx: &mut TestAppContext) {
     let window = window(cx);
-    crate::clock::settle_animations(window, cx);
+    vorkspace_ui::clock::settle_animations(window, cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     let dot = visual.debug_bounds("vox-dot").unwrap();
     visual.simulate_mouse_move(dot.center(), None, Default::default());
@@ -233,7 +233,7 @@ fn moving_away_from_the_status_control_restores_the_dot(cx: &mut TestAppContext)
 #[gpui::test]
 fn leaving_the_window_from_the_status_control_stays_left(cx: &mut TestAppContext) {
     let window = window(cx);
-    crate::clock::settle_animations(window, cx);
+    vorkspace_ui::clock::settle_animations(window, cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     let dot = visual.debug_bounds("vox-dot").unwrap();
     visual.simulate_mouse_move(dot.center(), None, Default::default());
@@ -352,7 +352,7 @@ fn native_notch_state_captures() {
             )))
         },
     );
-    crate::clock::use_test_clock(&cx);
+    vorkspace_ui::clock::use_test_clock(&cx);
     let window = cx
         .open_window(gpui::size(px(480.), px(240.)), |_, cx| cx.new(voice))
         .unwrap();
@@ -377,7 +377,7 @@ fn native_notch_state_captures() {
             })
             .unwrap();
         cx.run_until_parked();
-        crate::clock::settle_headless_animations(window, &mut cx);
+        vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
         cx.capture_screenshot(window.into())
             .unwrap()
             .save(output.join(format!("vox-{name}.png")))

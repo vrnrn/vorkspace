@@ -6,7 +6,6 @@ use crate::{
         Section, SettingsView,
         widgets::{red, secondary_button},
     },
-    theme::*,
 };
 use gpui::{
     AnyElement, Context, Div, Focusable, FontWeight, Role, SharedString, Task, Window, div,
@@ -19,6 +18,7 @@ use std::{
     time::Duration,
 };
 use vorkspace_core::remote::{Connections, JobView, Machine};
+use vorkspace_ui::theme::*;
 
 const TARGET: &str = "SSH target";
 const NAME: &str = "Machine name";

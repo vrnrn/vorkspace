@@ -41,7 +41,7 @@ fn visible(view: &TranscriptView) -> Vec<((usize, usize), Value)> {
         .collect()
 }
 fn fixture(cx: &mut TestAppContext, bot: bool) -> gpui::Entity<TranscriptView> {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     cx.new(|_| {
         let mut view = TranscriptView::new();
         if bot {
@@ -407,7 +407,7 @@ fn cards_shared_history_projection_and_save_preserve_duplicate_source_blocks(
 
 #[gpui::test]
 fn cards_screenshot_materialization_renders_two_pills_and_routes_clicks(cx: &mut TestAppContext) {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     let window = cx
         .update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
@@ -467,7 +467,7 @@ fn cards_screenshot_materialization_renders_two_pills_and_routes_clicks(cx: &mut
         .unwrap();
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.simulate_resize(size(px(900.), px(900.)));
-    crate::clock::settle_animations(window, visual);
+    vorkspace_ui::clock::settle_animations(window, visual);
     visual.run_until_parked();
     let rebuilds = window
         .update(visual, |view, _, _| view.rebuild_passes)

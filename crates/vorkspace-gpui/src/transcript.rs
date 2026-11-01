@@ -26,15 +26,10 @@ pub(crate) mod tasks;
 mod tools;
 mod visuals;
 
-use crate::clock::Instant;
+use crate::markdown::{self, Fence, MarkdownRow, Part};
 use crate::popover::{Anchor, AnchorSlot, Side, popover};
 use crate::response_actions::{self, Request as ResponseRequest};
 use crate::syntax::{HighlightRequest, HighlightedDocument};
-use crate::{
-    markdown::{self, Fence, MarkdownRow, Part},
-    reveal::{Disclosure, Motion, PacedText},
-    theme::*,
-};
 use gpui::{
     Animation, AnimationExt, AvailableSpace, Bounds, ClipboardItem, Context, FollowMode,
     ListAlignment, ListOffset, ListState, Pixels, Role, SharedString, Transformation, Window,
@@ -47,6 +42,11 @@ use std::{
 use vorkspace_core::tool::{ToolCall, ToolState, tasks::Panel};
 use vorkspace_core::transcript::Row;
 use vorkspace_model::markdown_model::MarkdownParser;
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::{
+    reveal::{Disclosure, Motion, PacedText},
+    theme::*,
+};
 /// Where a launched session stands, for its card in the chat.
 #[derive(Clone, PartialEq)]
 pub(crate) struct LaunchView {
@@ -492,7 +492,7 @@ pub(crate) struct TranscriptView {
     reveals: HashMap<usize, PacedText>,
     live_start: usize,
     motions: HashMap<(usize, usize), Motion>,
-    reflow: crate::reflow_motion::ReflowMotion,
+    reflow: vorkspace_ui::reflow_motion::ReflowMotion,
     frame_scheduled: bool,
     visible: bool,
     viewport: Bounds<Pixels>,
@@ -512,7 +512,7 @@ pub(crate) struct TranscriptView {
     provider: String,
     model: String,
     active_provider_turn_id: Option<String>,
-    started: Option<crate::clock::Instant>,
+    started: Option<vorkspace_ui::clock::Instant>,
     elapsed: HashMap<usize, std::time::Duration>,
     outline: outline::Outline,
     pub(crate) list: ListState,
@@ -915,7 +915,7 @@ impl TranscriptView {
         let (scale, opacity) = born.map_or((1., 1.), |born| {
             let t = (born.elapsed().as_secs_f32() / 0.32).min(1.);
             (
-                0.9 + 0.1 * crate::reveal::bezier(t, 0.2, 1.4, 0.4, 1.),
+                0.9 + 0.1 * vorkspace_ui::reveal::bezier(t, 0.2, 1.4, 0.4, 1.),
                 (t / 0.4).min(1.),
             )
         });
@@ -1551,7 +1551,7 @@ impl TranscriptView {
             .is_some_and(|next| !dates::opens_stretch(next.sent_at, message.sent_at));
         let (mut opacity, mut rise) = (1., 0.);
         if let Some(born) = self.pending_entrances.get(&message.id) {
-            let t = crate::reveal::ease_move((born.elapsed().as_secs_f32() / 0.36).min(1.));
+            let t = vorkspace_ui::reveal::ease_move((born.elapsed().as_secs_f32() / 0.36).min(1.));
             opacity = t;
             rise = 16. * (1. - t);
         }
@@ -2306,7 +2306,7 @@ impl TranscriptView {
                 self.show_jump = false;
                 self.list.set_follow_mode(FollowMode::Tail);
             }
-            self.started = Some(crate::clock::Instant::now());
+            self.started = Some(vorkspace_ui::clock::Instant::now());
         } else {
             self.follow.until = Some(Instant::now() + std::time::Duration::from_millis(1200));
             if let Some(started) = self.started.take()
@@ -3601,7 +3601,7 @@ impl TranscriptView {
         let now = self.frame_now;
         if self.visible
             && (resized
-                || (self.streaming && !crate::clock::suppress_endless_animation_frames())
+                || (self.streaming && !vorkspace_ui::clock::suppress_endless_animation_frames())
                 || !self.motions.is_empty()
                 || self.agent_panels.animating()
                 || self.prompt_rise.is_some_and(|(_, born)| {
@@ -4335,13 +4335,13 @@ impl TranscriptView {
                                     .items_center()
                                     .justify_center()
                                     .child(
-                                        crate::session_mark::spinner_dots(0).with_animation(
+                                        vorkspace_ui::session_mark::spinner_dots(0).with_animation(
                                             ("phase-loader", group),
                                             Animation::new(std::time::Duration::from_millis(1_200))
                                                 .repeat()
                                                 .with_max_fps(30.),
                                             |_, phase| {
-                                                crate::session_mark::spinner_dots(
+                                                vorkspace_ui::session_mark::spinner_dots(
                                                     (phase * 1_200.) as u64,
                                                 )
                                             },
@@ -4807,14 +4807,14 @@ impl TranscriptView {
         {
             let elapsed = self.frame_now.saturating_duration_since(born).as_secs_f32();
             if message_start == prompt {
-                let rise = crate::reveal::ease_move((elapsed / 0.56).min(1.));
-                let fade = crate::reveal::ease_out((elapsed / 0.48).min(1.));
+                let rise = vorkspace_ui::reveal::ease_move((elapsed / 0.56).min(1.));
+                let fade = vorkspace_ui::reveal::ease_out((elapsed / 0.48).min(1.));
                 translate_y =
                     (f32::from(self.viewport.size.height) * 0.3 - TOP_INSET).max(0.) * (1. - rise);
                 opacity *= fade;
             } else {
                 let t = ((elapsed - 0.56) / 0.32).clamp(0., 1.);
-                let reveal = crate::reveal::ease_move(t);
+                let reveal = vorkspace_ui::reveal::ease_move(t);
                 translate_y = 10. * (1. - reveal);
                 opacity *= reveal;
             }
@@ -4827,7 +4827,7 @@ impl TranscriptView {
             // useBottomChatMotion's entrance: a sent message rises 16px over
             // 360ms, a reply 10px over 280ms.
             let (rise, duration) = if user { (16., 0.36) } else { (10., 0.28) };
-            let t = crate::reveal::ease_move(
+            let t = vorkspace_ui::reveal::ease_move(
                 (self
                     .frame_now
                     .saturating_duration_since(*born)
@@ -5777,7 +5777,7 @@ mod scroll_tests {
     fn bot_turns_merge_follow_ups_keep_inline_work_and_queue_above_the_work(
         cx: &mut TestAppContext,
     ) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let view = cx.new(|_| {
             let mut view = TranscriptView::new();
             view.bot_mode("cat", 0xe86b5f, "BotCat");
@@ -5922,7 +5922,7 @@ mod scroll_tests {
 
     #[gpui::test]
     fn bot_document_and_session_cards_are_one_line_like_react(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let start = serde_json::to_string(&ToolCall {
             id: "t".into(),
             name: "Bash".into(),

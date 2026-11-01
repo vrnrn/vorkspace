@@ -4548,6 +4548,7 @@ dependencies = [
  "vorkspace-macos",
  "vorkspace-model",
  "vorkspace-runtime",
+ "vorkspace-ui",
 ]
 
 [[package]]
@@ -4588,6 +4589,21 @@ dependencies = [
  "gpui-pre",
  "serde_json",
  "tempfile",
+ "vorkspace-core",
+]
+
+[[package]]
+name = "vorkspace-ui"
+version = "1.1.0"
+dependencies = [
+ "gpui-pre",
+ "gpui-pre-apple",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
  "vorkspace-core",
 ]
 

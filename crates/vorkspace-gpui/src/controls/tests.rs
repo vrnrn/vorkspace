@@ -1,8 +1,9 @@
 use super::*;
-use crate::{input::Input, theme};
+use crate::input::Input;
 use gpui::{
     Element, Entity, Focusable, InputEvent, TestAppContext, VisualTestContext, WindowHandle, size,
 };
+use vorkspace_ui::theme;
 
 /// GPUI's simulate_keystrokes emits only key-down; native buttons click on key-up.
 pub(crate) fn press_key(visual: &mut VisualTestContext, key: &str) {
@@ -98,7 +99,7 @@ impl Render for Surface {
                 icon_button("action", "Save draft", true)
                     .debug_selector(|| "action".into())
                     .hover(|s| s.bg(content(0.08)))
-                    .child(crate::theme::icon("check", 14.))
+                    .child(vorkspace_ui::theme::icon("check", 14.))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.actions += 1;
                         cx.notify();

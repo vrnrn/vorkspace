@@ -1,11 +1,11 @@
 //! Pending approval/question cards and request-level announcement bookkeeping.
-use crate::theme::*;
 use gpui::{Context, EventEmitter, Role, div, prelude::*, px};
 use std::{
     collections::{HashMap, HashSet},
     time::SystemTime,
 };
 use vorkspace_core::agent::Decision;
+use vorkspace_ui::theme::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum InputKind {

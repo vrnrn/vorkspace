@@ -1,6 +1,6 @@
 //! Real Metal regression for the translucent inset shell. No window is opened.
-use crate::theme::{content, pane_fill, shell_fill};
 use gpui::{Bounds, ContentMask, Corners, DevicePixels, Quad, ScaledPixels, Scene, point, size};
+use vorkspace_ui::theme::{content, pane_fill, shell_fill};
 // `backdrop_marker_blurs_only_inside_its_rounded_bounds` also needs Edges, Hsla.
 use gpui_apple::metal_renderer::{InstanceBufferPool, MetalRenderer};
 use std::sync::Arc;

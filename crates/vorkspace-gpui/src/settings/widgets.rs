@@ -1,14 +1,12 @@
 //! SettingsView.tsx's building blocks: PageHeader, Group, Row, Toggle,
 //! Segmented, Slider, Select and SecondaryButton, at their Tailwind metrics.
 use super::{SettingsView, SliderKind};
-use crate::{
-    popover::{Align, Anchor, AnchorSlot, Side, popover},
-    theme::*,
-};
+use crate::popover::{Align, Anchor, AnchorSlot, Side, popover};
 use gpui::{
     AnyElement, Context, Div, ElementId, FontWeight, Hsla, MouseButton, MouseDownEvent, Role,
     SharedString, Stateful, div, prelude::*, px, relative,
 };
+use vorkspace_ui::theme::*;
 
 /// `text-[12px] leading-relaxed` and `text-[13px]` line boxes.
 const RELAXED_12: f32 = 19.5;
@@ -754,7 +752,7 @@ impl SettingsView {
         models: &[(String, String)],
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use super::preferences::model_key;
+        use vorkspace_ui::preferences::model_key;
         let provider = kind.id();
         let open = self.models_open == Some(kind);
         let slot = self

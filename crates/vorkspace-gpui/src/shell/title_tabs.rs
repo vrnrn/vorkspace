@@ -398,7 +398,7 @@ mod tests {
                 )))
             },
         );
-        crate::clock::use_test_clock(&cx);
+        vorkspace_ui::clock::use_test_clock(&cx);
         let window = cx
             .open_window(gpui::size(px(1280.), px(800.)), |_, cx| {
                 cx.new(|cx| {
@@ -429,7 +429,7 @@ mod tests {
                 })
                 .unwrap();
             cx.run_until_parked();
-            crate::clock::settle_headless_animations(window, &mut cx);
+            vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
             cx.capture_screenshot(window.into())
                 .unwrap()
                 .save(output.join(format!("connectors-{name}.png")))
@@ -441,7 +441,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        crate::clock::settle_headless_animations(window, &mut cx);
+        vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
         cx.capture_screenshot(window.into())
             .unwrap()
             .save(output.join("connectors-settings.png"))
@@ -452,7 +452,7 @@ mod tests {
         cx.update(|cx| {
             bind_keys(cx);
             crate::input::bind(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         let (window, _, session) = window(cx);
         let chat = window
@@ -602,7 +602,7 @@ mod tests {
         cx.update(|cx| {
             bind_keys(cx);
             crate::input::bind(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         let (window, _, session) = window(cx);
         window

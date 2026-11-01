@@ -1,6 +1,5 @@
 //! Port of TerminalView.tsx: a login shell on a PTY, emulated by
 //! alacritty_terminal and painted as a grid of cell-snapped text runs.
-use crate::theme::*;
 use alacritty_terminal::{
     event::{Event as TermEvent, EventListener, WindowSize},
     event_loop::{EventLoop, EventLoopSender, Msg},
@@ -32,6 +31,7 @@ use std::{
     },
     time::Duration,
 };
+use vorkspace_ui::theme::*;
 
 actions!(
     terminal,

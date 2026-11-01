@@ -6,22 +6,19 @@ mod layout_tests;
 mod management;
 mod model;
 mod notification_preferences;
+pub(crate) use notification_preferences::ProjectNotifications;
 mod pages;
-mod palettes;
-mod preferences;
 mod skill_document;
-pub(crate) use palettes::palette;
 pub(crate) mod widgets;
 
 pub(crate) use keymap::apply as apply_keybindings;
 pub(crate) use model::Section;
-pub(crate) use preferences::{ModelChoice, Preferences, model_key};
+pub(crate) use vorkspace_ui::preferences::{ModelChoice, Preferences, model_key};
 
 use crate::{
     input::{self, Input},
     popover::{Align, Anchor, AnchorSlot, Side, popover},
     project_background::ProjectBackground,
-    theme::*,
 };
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, MouseButton,
@@ -29,6 +26,7 @@ use gpui::{
     px,
 };
 use std::{cell::RefCell, collections::HashMap, time::Duration};
+use vorkspace_ui::theme::*;
 
 /// Every window takes its initial scale from the same live preference owner.
 /// Keep the subscription on its root so closing the window releases it.

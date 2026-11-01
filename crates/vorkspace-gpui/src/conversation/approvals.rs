@@ -252,7 +252,7 @@ mod tests {
             visual.refresh().unwrap();
             assert_eq!(visual.debug_bounds("approval-shelf").unwrap(), settled);
         }
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         window
             .update(visual, |view, _, cx| {
                 view.approvals.clear();
@@ -261,7 +261,7 @@ mod tests {
             })
             .unwrap();
         visual.refresh().unwrap();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("approval-shelf").unwrap().size.height > px(60.));
         assert_eq!(visual.debug_bounds("composer-box").unwrap(), input);
     }
@@ -271,7 +271,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let window = conversation(cx);
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (send, receive) = std::sync::mpsc::channel();
         window
             .update(cx, |view, _, cx| {
@@ -294,7 +294,7 @@ mod tests {
             if id == "denied" {
                 assert!(visual.debug_bounds("approval-session").is_none());
             }
-            crate::clock::settle_animations(window, visual);
+            vorkspace_ui::clock::settle_animations(window, visual);
             let bounds = visual.debug_bounds(button).unwrap();
             visual.simulate_click(bounds.center(), Default::default());
             visual.refresh().unwrap();
@@ -308,7 +308,7 @@ mod tests {
             ));
             assert!(receive.try_recv().is_err());
         }
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("approval-shelf").is_none());
         window
             .read_with(visual, |view, _| assert!(view.approvals.is_empty()))

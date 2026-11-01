@@ -278,7 +278,7 @@ mod tests {
 
     #[gpui::test]
     fn identical_cwd_terminal_pills_keep_hover_and_selection_independent(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, _) = super::super::tests::window(cx);
         let (first, second) = window
             .update(cx, |shell, w, cx| {
@@ -291,7 +291,7 @@ mod tests {
             .unwrap();
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let first_bounds = visual.debug_bounds(title_selector(&first)).unwrap();
         visual.simulate_mouse_move(first_bounds.center(), None, Default::default());
         visual.run_until_parked();
@@ -332,7 +332,7 @@ mod tests {
         let (window, _, _) = super::super::tests::window(cx);
         cx.update(|cx| {
             bind_keys(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
@@ -371,7 +371,7 @@ mod tests {
         cx.update(|cx| {
             bind_keys(cx);
             crate::terminal::bind(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         let mut opened: Vec<(TitleTab, Entity<Terminal>)> = Vec::new();
@@ -501,7 +501,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (window, _, session) = super::super::tests::window(cx);
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (original_tab, terminal) = window
             .update(cx, |shell, w, cx| {
                 shell.open_terminal_tab(w, cx);
@@ -845,7 +845,7 @@ fn native_terminal_tab_capture() {
             )))
         },
     );
-    crate::clock::use_test_clock(&cx);
+    vorkspace_ui::clock::use_test_clock(&cx);
     let window = cx
         .open_window(gpui::size(px(1200.), px(800.)), |_, cx| {
             cx.new(|cx| Shell::new(store, Vec::new(), cwd.clone(), Some(saved), cx))
@@ -865,7 +865,7 @@ fn native_terminal_tab_capture() {
     })
     .unwrap();
     cx.run_until_parked();
-    crate::clock::settle_headless_animations(window, &mut cx);
+    vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
     cx.capture_screenshot(window.into())
         .unwrap()
         .save(output)

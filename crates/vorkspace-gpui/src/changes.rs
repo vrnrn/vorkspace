@@ -3,14 +3,12 @@
 //! and unstaged files as a list or a tree. Every Git call runs off-thread,
 //! one mutation at a time per checkout.
 use crate::{
-    file_icons::file_type_icon,
     git_status::{GitChanged, ProjectGit},
     input::{self, Input},
     popover::{
         Align, Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle, menu_popover,
     },
     right_panel::*,
-    theme::*,
 };
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FontWeight, Hsla, PromptLevel, Role,
@@ -31,6 +29,7 @@ use vorkspace_core::{
     provider::{self, Event, Kind, Request},
     scm::{self, ChangedFile, DiffIndex, Pr},
 };
+use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 const MOD: &str = "⌘";
 const ROW: f32 = 28.;

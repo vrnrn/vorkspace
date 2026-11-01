@@ -398,7 +398,7 @@ mod tests {
         let window = cx.update(|cx| {
             input::bind(cx);
             crate::popover::bind(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx))
             })

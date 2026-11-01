@@ -3,9 +3,9 @@
 //! its row. Each rail opens while its thread, or one of the thread's
 //! sessions, is in view, chosen or working, and RevealHeight grows it in.
 use super::*;
-use crate::clock::Instant;
-use crate::reveal::{Disclosure, bezier};
 use std::time::Duration;
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::reveal::{Disclosure, bezier};
 
 /// RevealHeight's `reveal-height-in` and `reveal-height-out`.
 const OPEN: Duration = Duration::from_millis(240);
@@ -340,7 +340,7 @@ impl Shell {
                                 d.child(icon("circle-alert", 12.).text_color(tone))
                             })
                             .when(working, |d| {
-                                d.child(crate::session_mark::spinner_dots(spin))
+                                d.child(vorkspace_ui::session_mark::spinner_dots(spin))
                             })
                             .when(done && !alert, |d| {
                                 d.child(icon("check", 12.).text_color(tone))

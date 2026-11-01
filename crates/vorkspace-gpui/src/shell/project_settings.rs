@@ -1,4 +1,5 @@
 use super::*;
+use crate::settings::ProjectNotifications;
 use crate::{
     project_background::ProjectBackground,
     project_settings::{AppearanceControls, BackgroundDialog, Event, project_icon},

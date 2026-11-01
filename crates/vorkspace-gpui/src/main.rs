@@ -6,10 +6,7 @@ mod automations;
 mod bots;
 mod changes;
 mod clipboard;
-mod clock;
 mod composer_completion;
-mod composer_motion;
-mod context_meter;
 mod controls;
 mod conversation;
 mod dev_reload;
@@ -18,9 +15,7 @@ mod diff_view;
 mod editor_scrollbar;
 mod explorer;
 mod file_editor;
-mod file_icons;
 mod fixtures;
-mod fonts;
 mod git_picker;
 mod git_status;
 mod history;
@@ -33,7 +28,6 @@ mod markdown;
 mod metal_tests;
 mod notes;
 mod notifications;
-mod pane_motion;
 mod pickers;
 mod popover;
 mod project_background;
@@ -43,25 +37,18 @@ mod project_tabs;
 mod questions;
 mod quick_composer;
 mod quick_open;
-mod reflow_motion;
 mod resource_pressure;
 mod response_actions;
-mod reveal;
 mod review;
 mod right_panel;
 mod search;
-mod session_mark;
 mod session_review;
 mod settings;
 mod shell;
 mod sound;
 mod syntax;
-mod tab_label;
-mod tab_motion;
 mod terminal;
-mod theme;
 mod todos;
-mod traffic_lights;
 mod transcript;
 mod usage_footer;
 mod visuals;
@@ -426,8 +413,8 @@ fn main() {
                         traffic_light_position: // Original macOS chrome: 12 pt left inset, with
                             // 14 pt native buttons centered in the 40 pt bar.
                             Some(point(
-                                px(theme::TRAFFIC_LIGHT_MARGIN),
-                                px((theme::TITLE_BAR_HEIGHT - theme::TRAFFIC_LIGHT_SIZE) / 2.),
+                                px(vorkspace_ui::theme::TRAFFIC_LIGHT_MARGIN),
+                                px((vorkspace_ui::theme::TITLE_BAR_HEIGHT - vorkspace_ui::theme::TRAFFIC_LIGHT_SIZE) / 2.),
                             )),
                     }),
                     ..Default::default()
@@ -448,11 +435,11 @@ fn main() {
                         shell.focus_active(window, cx);
                     });
                     {
-                        traffic_lights::pin(window);
+                        vorkspace_ui::traffic_lights::pin(window);
                         // AppKit rebuilds the buttons on some titlebar changes.
                         shell.update(cx, |_, cx| {
                             cx.observe_window_activation(window, |_, window, _| {
-                                traffic_lights::pin(window)
+                                vorkspace_ui::traffic_lights::pin(window)
                             })
                             .detach();
                         });

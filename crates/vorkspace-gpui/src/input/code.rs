@@ -440,8 +440,8 @@ impl Input {
                 .w(px(width))
                 .rounded(px(6.))
                 .border_1()
-                .border_color(crate::theme::content(0.12))
-                .bg(crate::theme::shell_fill().opacity(1.))
+                .border_color(vorkspace_ui::theme::content(0.12))
+                .bg(vorkspace_ui::theme::shell_fill().opacity(1.))
                 .shadow_md()
                 .overflow_hidden()
                 .py_1()
@@ -462,11 +462,11 @@ impl Input {
                                 .items_center()
                                 .gap_2()
                                 .text_size(px(12.))
-                                .text_color(crate::theme::content(1.))
+                                .text_color(vorkspace_ui::theme::content(1.))
                                 .when(n == code.completion_index, |d| {
-                                    d.bg(crate::theme::accent_color().opacity(0.25))
+                                    d.bg(vorkspace_ui::theme::accent_color().opacity(0.25))
                                 })
-                                .child(div().text_color(crate::theme::content(0.5)).child(
+                                .child(div().text_color(vorkspace_ui::theme::content(0.5)).child(
                                     match option.kind.as_str() {
                                         "function" => "ƒ",
                                         "keyword" => "k",
@@ -478,7 +478,7 @@ impl Input {
                                 .child(div().flex_1())
                                 .child(
                                     div()
-                                        .text_color(crate::theme::content(0.5))
+                                        .text_color(vorkspace_ui::theme::content(0.5))
                                         .child(option.detail.clone()),
                                 )
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1111,8 +1111,8 @@ impl Input {
                 .overflow_hidden()
                 .rounded(px(4.))
                 .border_1()
-                .border_color(crate::theme::content(0.14))
-                .bg(crate::theme::shell_fill().opacity(0.92))
+                .border_color(vorkspace_ui::theme::content(0.14))
+                .bg(vorkspace_ui::theme::shell_fill().opacity(0.92))
                 .shadow_md()
                 .when(code.can_stage, |d| {
                     d.child(
@@ -1157,11 +1157,11 @@ impl Input {
                 .px_2()
                 .py_1()
                 .rounded_md()
-                .bg(crate::theme::pane_fill())
+                .bg(vorkspace_ui::theme::pane_fill())
                 .border_1()
-                .border_color(crate::theme::content(0.14))
+                .border_color(vorkspace_ui::theme::content(0.14))
                 .text_size(px(12.))
-                .text_color(crate::theme::content(1.))
+                .text_color(vorkspace_ui::theme::content(1.))
                 .child(marker.message.clone())
                 .into_any_element(),
         )
@@ -1197,7 +1197,7 @@ fn paint_rail(
     w.with_content_mask(Some(ContentMask { bounds: rail }), |w| {
         w.paint_quad(fill(
             Bounds::new(rail.origin, size(px(1.), rail.size.height)),
-            crate::theme::content(0.07),
+            vorkspace_ui::theme::content(0.07),
         ));
         if metrics.scrollable {
             w.paint_quad(
@@ -1206,7 +1206,7 @@ fn paint_rail(
                         rail.origin + point(px(3.), px(metrics.thumb_top)),
                         size(px(WIDTH - 6.), px(metrics.thumb_height)),
                     ),
-                    crate::theme::content(if code.hovered || code.drag_offset.is_some() {
+                    vorkspace_ui::theme::content(if code.hovered || code.drag_offset.is_some() {
                         0.38 * 0.88
                     } else {
                         0.30 * 0.72
@@ -1240,7 +1240,7 @@ fn paint_rail(
                 _ => 0x969696,
             };
             let ink = if diagnostic.severity == "hint" {
-                crate::theme::content(0.48)
+                vorkspace_ui::theme::content(0.48)
             } else {
                 rgb(color).into()
             };
@@ -1253,7 +1253,7 @@ fn paint_rail(
             });
         }
         let cursor_y = code.row(i.cursor()) as f32 / code.offsets.len().max(1) as f32 * height;
-        let mut cursor_color = crate::theme::accent_color();
+        let mut cursor_color = vorkspace_ui::theme::accent_color();
         cursor_color.a *= if i.focus.is_focused(w) { 1. } else { 0.6 };
         w.paint_quad(fill(
             Bounds::new(
@@ -1365,7 +1365,7 @@ fn token_line(
     let base = TextRun {
         len: 0,
         font: gpui::font(crate::markdown::FIXED_FONT),
-        color: crate::theme::content(1.),
+        color: vorkspace_ui::theme::content(1.),
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -1381,7 +1381,7 @@ fn token_line(
         }
         runs.push(TextRun {
             len: token.to - token.from,
-            color: crate::theme::syntax_color(&token.kind),
+            color: vorkspace_ui::theme::syntax_color(&token.kind),
             ..base.clone()
         });
         at = token.to;
@@ -1414,7 +1414,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
     let base = TextRun {
         len: text.len(),
         font: gpui::font(crate::markdown::FIXED_FONT),
-        color: crate::theme::content(1.),
+        color: vorkspace_ui::theme::content(1.),
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -1426,7 +1426,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
     for token in tokens.iter().skip(first).take_while(|t| t.from < end) {
         let from = token.from.max(start);
         let to = token.to.min(end);
-        let color = crate::theme::syntax_color(&token.kind);
+        let color = vorkspace_ui::theme::syntax_color(&token.kind);
         if let Some(fold) = code.fold_at(row) {
             if from < fold.from {
                 spans.push((from - start, to.min(fold.from) - start, color));
@@ -1446,7 +1446,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
         spans.push((
             fold.from - start,
             fold.from - start + "…".len(),
-            crate::theme::content(0.4),
+            vorkspace_ui::theme::content(0.4),
         ));
     }
     spans.sort_by_key(|s| s.0);
@@ -1614,7 +1614,7 @@ impl Element for CodeElement {
                     &[TextRun {
                         len: 1,
                         font: gpui::font(crate::markdown::FIXED_FONT),
-                        color: crate::theme::content(1.),
+                        color: vorkspace_ui::theme::content(1.),
                         background_color: None,
                         underline: None,
                         strikethrough: None,
@@ -1823,21 +1823,21 @@ impl Element for CodeElement {
                             point(bounds.left(), y),
                             size(bounds.size.width - px(WIDTH), line.size(lh).height),
                         ),
-                        crate::theme::diff_background(false, false),
+                        vorkspace_ui::theme::diff_background(false, false),
                     ));
                     w.paint_quad(fill(
                         Bounds::new(
                             point(bounds.left(), y),
                             size(px(code.gutter() - 22.), line.size(lh).height),
                         ),
-                        crate::theme::diff_background(false, true),
+                        vorkspace_ui::theme::diff_background(false, true),
                     ));
                     let number = plain_line(
                         &number.to_string(),
                         None,
                         11.,
                         w,
-                        crate::theme::diff_foreground(false),
+                        vorkspace_ui::theme::diff_foreground(false),
                     );
                     let _ = number.paint(
                         point(state.text_bounds.left() - px(26.) - number.width(), y),
@@ -1847,7 +1847,13 @@ impl Element for CodeElement {
                         w,
                         cx,
                     );
-                    let minus = plain_line("−", None, 12., w, crate::theme::diff_foreground(false));
+                    let minus = plain_line(
+                        "−",
+                        None,
+                        12.,
+                        w,
+                        vorkspace_ui::theme::diff_foreground(false),
+                    );
                     let _ = minus.paint(
                         point(state.text_bounds.left() - px(12.), y),
                         lh,
@@ -1871,10 +1877,15 @@ impl Element for CodeElement {
                                 point(bounds.left(), y),
                                 size(bounds.size.width - px(WIDTH), line.size(lh).height),
                             ),
-                            crate::theme::diff_background(true, false),
+                            vorkspace_ui::theme::diff_background(true, false),
                         ));
-                        let plus =
-                            plain_line("+", None, 12., w, crate::theme::diff_foreground(true));
+                        let plus = plain_line(
+                            "+",
+                            None,
+                            12.,
+                            w,
+                            vorkspace_ui::theme::diff_foreground(true),
+                        );
                         let _ = plus.paint(
                             point(state.text_bounds.left() - px(12.), y),
                             lh,
@@ -1904,7 +1915,7 @@ impl Element for CodeElement {
                                 "⌄".len()
                             },
                             font: gpui::font(crate::markdown::FIXED_FONT),
-                            color: crate::theme::content(0.45),
+                            color: vorkspace_ui::theme::content(0.45),
                             background_color: None,
                             underline: None,
                             strikethrough: None,
@@ -1932,7 +1943,7 @@ impl Element for CodeElement {
                     &[TextRun {
                         len,
                         font: gpui::font(crate::markdown::FIXED_FONT),
-                        color: crate::theme::content(0.3),
+                        color: vorkspace_ui::theme::content(0.3),
                         background_color: None,
                         underline: None,
                         strikethrough: None,
@@ -1979,7 +1990,7 @@ impl Element for CodeElement {
                                 point(state.text_bounds.left(), y),
                                 size(state.text_bounds.size.width, line.size(lh).height),
                             ),
-                            crate::theme::content(0.1),
+                            vorkspace_ui::theme::content(0.1),
                         ));
                     }
                     for range in &code.search_matches {
@@ -2020,7 +2031,7 @@ impl Element for CodeElement {
                                     point(x + left, y + sy),
                                     size((right - left).max(px(2.)), lh),
                                 ),
-                                crate::theme::text_selection(),
+                                vorkspace_ui::theme::text_selection(),
                             ));
                             sy += lh;
                         }
@@ -2039,7 +2050,7 @@ impl Element for CodeElement {
                         );
                         w.paint_quad(fill(
                             Bounds::new(point(x + p.x, y + p.y), size(px(1.5), lh)),
-                            crate::theme::content(1.),
+                            vorkspace_ui::theme::content(1.),
                         ));
                     }
                 }

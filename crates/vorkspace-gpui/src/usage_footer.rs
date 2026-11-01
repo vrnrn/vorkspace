@@ -1,7 +1,4 @@
-use crate::{
-    popover::{Anchor, AnchorSlot, Side, popover},
-    theme::*,
-};
+use crate::popover::{Anchor, AnchorSlot, Side, popover};
 use gpui::{
     App, Context, FocusHandle, FontWeight, KeyBinding, Role, Window, actions, div, prelude::*, px,
     rgb,
@@ -10,6 +7,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use vorkspace_core::usage::{FetchError, Snapshot};
 use vorkspace_core::{provider::Kind, usage};
+use vorkspace_ui::theme::*;
 
 mod resets;
 

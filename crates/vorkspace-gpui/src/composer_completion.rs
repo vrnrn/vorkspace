@@ -3,7 +3,6 @@
 use crate::{
     input,
     popover::{Anchor, AnchorSlot, Side, popover},
-    theme::*,
 };
 use gpui::{
     App, Context, Entity, EventEmitter, Focusable, KeyBinding, MouseButton, Role, SharedString,
@@ -21,6 +20,7 @@ use vorkspace_core::{
     files::ProjectFile,
     skills::DiscoveredSkill,
 };
+use vorkspace_ui::theme::*;
 
 actions!(completion, [Accept, Dismiss]);
 pub(crate) fn bind(cx: &mut App) {
@@ -994,7 +994,7 @@ impl Render for Completion {
                                             true,
                                         )
                                     } else if choice.file {
-                                        crate::file_icons::file_type_icon(
+                                        vorkspace_ui::file_icons::file_type_icon(
                                             &choice.label,
                                             false,
                                             false,

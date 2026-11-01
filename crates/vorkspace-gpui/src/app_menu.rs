@@ -48,7 +48,7 @@ fn workspace_fallback<A: Action>(cx: &mut App) {
                 }
                 cx.activate(true);
                 window.activate_window();
-                crate::traffic_lights::show(window);
+                vorkspace_ui::traffic_lights::show(window);
                 window.focus(&focus, cx);
                 focus.dispatch_action(action.as_ref(), window, cx);
             });

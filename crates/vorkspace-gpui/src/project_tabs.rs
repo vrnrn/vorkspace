@@ -1,7 +1,8 @@
 //! Compact project tool tabs shared by the rounded and expanded layouts.
-use crate::clock::Instant;
-use crate::{right_panel::RightTab, theme::*};
+use crate::right_panel::RightTab;
 use gpui::{CursorStyle, MouseButton, Role, Stateful, Window, div, prelude::*, px};
+use vorkspace_ui::clock::Instant;
+use vorkspace_ui::theme::*;
 
 const TAB_TEXT_SIZE: f32 = 12.;
 
@@ -29,7 +30,10 @@ impl<T: Copy + PartialEq> TabReveal<T> {
         if t < 1. {
             window.request_animation_frame();
         }
-        Some((self.closing, crate::reveal::ease_out(t.clamp(0., 1.))))
+        Some((
+            self.closing,
+            vorkspace_ui::reveal::ease_out(t.clamp(0., 1.)),
+        ))
     }
 }
 

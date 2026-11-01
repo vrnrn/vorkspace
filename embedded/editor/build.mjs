@@ -101,7 +101,7 @@ const paletteBuild = await build({
 const palettes = vm.createContext({});
 vm.runInContext(paletteBuild.outputFiles[0].text, palettes);
 await writeFile(
-  path.join(root, "crates/vorkspace-gpui/assets/editor-palettes.json"),
+  path.join(root, "crates/vorkspace-ui/assets/editor-palettes.json"),
   JSON.stringify(palettes.palettes, null, 2) + "\n",
 );
 const notices = [

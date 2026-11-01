@@ -167,7 +167,7 @@ mod tests {
         configured: bool,
         retired: bool,
     ) -> WindowHandle<Conversation> {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let store = Store::open(Path::new(":memory:")).unwrap();
         let summary = store
             .create("codex", "/missing/team-history-fixture")

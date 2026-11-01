@@ -8,7 +8,7 @@ mod notch_tests;
 pub(crate) mod preview;
 pub(crate) use controller::{configure, error as shortcut_error, toggle};
 mod web;
-use crate::{shell::Shell, theme::*};
+use crate::shell::Shell;
 use gpui::{Context, WeakEntity, Window, div, prelude::*, px};
 use serde_json::{Value, json};
 use std::{
@@ -19,6 +19,7 @@ use std::{
     },
 };
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::theme::*;
 
 pub(crate) struct Vox {
     owner: WeakEntity<Shell>,

@@ -1,9 +1,10 @@
 //! Provider-neutral question card, retaining selection and native text fields.
-use crate::{input, theme::*};
+use crate::input;
 use gpui::{
     AnyElement, Context, Entity, EventEmitter, MouseButton, Role, Subscription, div, prelude::*, px,
 };
 use vorkspace_core::agent::Question;
+use vorkspace_ui::theme::*;
 
 pub(crate) struct Answered {
     pub id: String,

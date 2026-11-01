@@ -5,13 +5,13 @@ use crate::{
     popover::{Anchor, popover},
     resource_pressure::SessionInfo,
     right_panel::RightPanel,
-    theme::*,
 };
 use gpui::{
     AnyElement, Context, CursorStyle, Entity, MouseButton, MouseDownEvent, StyleRefinement, Window,
     div, prelude::*, px,
 };
 use std::collections::HashMap;
+use vorkspace_ui::theme::*;
 
 impl Shell {
     pub(super) fn layout_body(
@@ -400,10 +400,10 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clock::Instant;
     use crate::{bots::Bots, shell::tests::window};
     use gpui::{Focusable, TestAppContext, WindowHandle};
     use std::time::Duration;
+    use vorkspace_ui::clock::Instant;
 
     fn pane_has_left_border(
         window: WindowHandle<Shell>,
@@ -448,7 +448,7 @@ mod tests {
 
     #[gpui::test]
     fn the_sidebar_sits_beside_the_rail_by_default_or_switches_right(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, session) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1400.), px(900.)));
@@ -463,7 +463,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let rail = visual.debug_bounds("classic-project-rail").unwrap();
         let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
         let pane = visual.debug_bounds("main-pane-frame").unwrap();
@@ -501,14 +501,14 @@ mod tests {
                 cx.notify();
             })
             .unwrap();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("sidebar-frame").is_none());
         assert!(!pane_has_left_border(window, visual));
     }
 
     #[gpui::test]
     fn sidebar_project_switcher_clears_navigation_across_rail_modes(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, session) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1400.), px(900.)));
@@ -519,7 +519,7 @@ mod tests {
                 shell.set_sidebar_visible(true, cx);
             })
             .unwrap();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         for right in [false, true] {
             for mode in ["expanded", "compact", "hidden", "expanded"] {
                 window
@@ -568,7 +568,7 @@ mod tests {
 
     #[gpui::test]
     fn the_active_tab_is_the_selected_pill_of_the_tab_strip(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, session) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         window
@@ -590,7 +590,7 @@ mod tests {
     fn expanded_pages_have_no_title_bar_but_settings_keeps_its_header_over_them(
         cx: &mut TestAppContext,
     ) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, _) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         window
@@ -614,7 +614,7 @@ mod tests {
     fn search_header_clears_navigation_and_keeps_its_query_across_rail_modes(
         cx: &mut TestAppContext,
     ) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, _) = window(cx);
         let input = window
             .update(cx, |shell, w, cx| {
@@ -680,7 +680,7 @@ mod tests {
 
     #[gpui::test]
     fn channels_after_bot_details_keep_a_plain_header_and_full_tab_width(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, manager, _, _) = mixed_window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
@@ -718,7 +718,7 @@ mod tests {
     fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
         cx: &mut TestAppContext,
     ) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, manager, bot, session) = mixed_window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
@@ -806,7 +806,7 @@ mod tests {
     #[gpui::test]
     fn original_workspace_tabs_fit_sidebar_widths_and_keep_their_actions(cx: &mut TestAppContext) {
         use crate::workspace::SidebarTab;
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, _) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1600.), px(900.)));
@@ -860,17 +860,17 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         use crate::workspace::SidebarTab;
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, manager, bot, session) = mixed_window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("right-panel-frame").is_none());
         let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
         visual.simulate_click(toggle.center(), Default::default());
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("bot-overview-panel").is_some());
         let frame = visual.debug_bounds("right-panel-frame").unwrap();
         let bounds = visual.debug_bounds("right-panel-resize").unwrap();
@@ -884,7 +884,7 @@ mod tests {
                 .unwrap();
             visual.simulate_mouse_up(point, MouseButton::Left, Default::default());
             visual.run_until_parked();
-            crate::clock::settle_animations(window, visual);
+            vorkspace_ui::clock::settle_animations(window, visual);
         }
         let handle = visual.debug_bounds("right-panel-resize").unwrap().center();
         let end = handle - gpui::point(px(30.), px(0.));
@@ -892,7 +892,7 @@ mod tests {
         visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
         visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let expanded = window
             .update(visual, |shell, _, _| shell.workspace.right_panel_width)
             .unwrap();
@@ -911,11 +911,11 @@ mod tests {
             Default::default(),
         );
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let width = window
             .update(visual, |shell, w, cx| {
                 assert!(shell.right_resize.is_none());
-                crate::clock::use_test_clock(cx);
+                vorkspace_ui::clock::use_test_clock(cx);
                 let width = shell.workspace.right_panel_width;
                 shell.open(session, w, cx);
                 shell.select_classic_sidebar(SidebarTab::Files, w, cx);
@@ -923,7 +923,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("right-panel-frame").is_none());
         assert!(visual.debug_bounds("bot-overview-panel").is_none());
         let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
@@ -937,7 +937,7 @@ mod tests {
         visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
         visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let width = width + 40.;
         let session_sidebar = visual.debug_bounds("sidebar-frame").unwrap();
         assert_eq!(session_sidebar.size.width, px(width));
@@ -947,7 +947,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         for _ in 0..3 {
             assert_eq!(
                 visual.debug_bounds("right-panel-frame").unwrap(),
@@ -957,7 +957,7 @@ mod tests {
                 .update_window(window.into(), |_, w, cx| w.simulate_next_frame(cx))
                 .unwrap();
         }
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         // One sidebar fits at this size. Counting the hidden session sidebar
         // alongside Bot details must not change its visibility preference.
         visual.simulate_resize(gpui::size(px(1050.), px(1000.)));
@@ -968,7 +968,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let session_sidebar = visual.debug_bounds("sidebar-frame").unwrap();
         assert_eq!(session_sidebar.size.width, px(width));
         window
@@ -977,7 +977,7 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert_eq!(
             visual.debug_bounds("right-panel-frame").unwrap(),
             session_sidebar
@@ -985,7 +985,7 @@ mod tests {
         let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
         visual.simulate_click(toggle.center(), Default::default());
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("right-panel-frame").is_none());
         window
             .update(visual, |shell, _, _| {
@@ -1004,7 +1004,7 @@ mod tests {
     }
     #[gpui::test]
     fn session_sidebar_peeks_from_the_right_and_never_over_a_bot(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, manager, bot, session) = mixed_window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
@@ -1015,11 +1015,11 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, _, cx| shell.set_peek(true, cx))
             .unwrap();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let peek = visual.debug_bounds("sidebar-peek").unwrap();
         assert_eq!(peek.right(), px(1594.));
         assert_eq!(peek.size.width, px(crate::right_panel::WIDTH_DEFAULT));
@@ -1043,7 +1043,7 @@ mod tests {
                 })
             })
             .unwrap();
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         window
             .update(cx, |shell, w, cx| shell.toggle_right_panel(w, cx))
             .unwrap();
@@ -1132,7 +1132,7 @@ mod navigation_fit_tests {
 
     #[gpui::test]
     fn the_open_rail_holds_navigation_at_low_zoom(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, _) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1100.), px(800.)));
@@ -1149,7 +1149,7 @@ mod navigation_fit_tests {
                     cx.notify();
                 })
                 .unwrap();
-            crate::clock::settle_animations(window, visual);
+            vorkspace_ui::clock::settle_animations(window, visual);
             let rail = visual.debug_bounds("classic-project-rail").unwrap();
             let forward = visual.debug_bounds("visit-forward").unwrap();
             let pane = visual.debug_bounds("main-pane-frame").unwrap();
@@ -1171,7 +1171,7 @@ mod navigation_fit_tests {
 
     #[gpui::test]
     fn the_icon_rail_divider_curves_into_the_title_rule(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, session) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -1203,7 +1203,7 @@ mod navigation_fit_tests {
                     cx.notify();
                 })
                 .unwrap();
-            crate::clock::settle_animations(window, visual);
+            vorkspace_ui::clock::settle_animations(window, visual);
             let rail = visual.debug_bounds("classic-project-rail").unwrap();
             window
                 .update(visual, |shell, _, _| assert!(shell.rail_meets_title_rule()))
@@ -1224,7 +1224,7 @@ mod navigation_fit_tests {
                 cx.notify();
             })
             .unwrap();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let rail = visual.debug_bounds("classic-project-rail").unwrap();
         let row = visual.debug_bounds("sidebar-navigation-row").unwrap();
         let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
@@ -1243,7 +1243,7 @@ mod navigation_fit_tests {
 
     #[gpui::test]
     fn the_sidebar_tabs_rise_from_their_line(cx: &mut TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, session) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1200.), px(800.)));
@@ -1255,7 +1255,7 @@ mod navigation_fit_tests {
                 cx.notify();
             })
             .unwrap();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let selected = |visual: &mut gpui::VisualTestContext| {
             window
                 .update(visual, |shell, _, _| shell.sidebar_tab_liquid.selected())
@@ -1264,14 +1264,14 @@ mod navigation_fit_tests {
         assert_eq!(selected(visual).as_deref(), Some("sidebar-tab:Sessions"));
         let changes = visual.debug_bounds("classic-tab-changes").unwrap();
         visual.simulate_click(changes.center(), Default::default());
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert_eq!(selected(visual).as_deref(), Some("sidebar-tab:Changes"));
     }
 
     #[gpui::test]
     fn to_dos_open_from_the_sidebar_and_the_project_switcher(cx: &mut TestAppContext) {
         use vorkspace_core::todos::TodoBoard;
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, session) = window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1200.), px(800.)));
@@ -1284,11 +1284,11 @@ mod navigation_fit_tests {
                 cx.notify();
             })
             .unwrap();
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         // The project's switcher has a To-dos tab for the current project.
         let tab = visual.debug_bounds("classic-tab-to-dos").unwrap();
         visual.simulate_click(tab.center(), Default::default());
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("todo-board").is_some());
         window
             .update(visual, |shell, _, cx| {
@@ -1308,7 +1308,7 @@ mod navigation_fit_tests {
         // The left sidebar's To-dos page starts on the personal board.
         let entry = visual.debug_bounds("sidebar-navigation-To-dos").unwrap();
         visual.simulate_click(entry.center(), Default::default());
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         assert!(visual.debug_bounds("todos-page").is_some());
         window
             .update(visual, |shell, _, cx| {
@@ -1323,10 +1323,10 @@ mod navigation_fit_tests {
         // Its picker lists the project.
         let picker = visual.debug_bounds("todo-board-picker-button").unwrap();
         visual.simulate_click(picker.center(), Default::default());
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         let project = visual.debug_bounds("todo-board-choice-1").unwrap();
         visual.simulate_click(project.center(), Default::default());
-        crate::clock::settle_animations(window, visual);
+        vorkspace_ui::clock::settle_animations(window, visual);
         window
             .update(visual, |shell, _, cx| {
                 let page = shell.todos_page.as_ref().unwrap().read(cx);

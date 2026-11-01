@@ -3,13 +3,13 @@ use super::{FileEditor, FileEvent};
 use crate::{
     input::Input,
     popover::{Align, Anchor, AnchorSlot, Side, popover},
-    theme::*,
 };
 use gpui::{
     AnyElement, Bounds, Context, Focusable, MouseButton, Pixels, Role, Size, Window, div,
     prelude::*, px,
 };
 use std::{ops::Range, path::Path};
+use vorkspace_ui::theme::*;
 
 #[derive(Clone)]
 struct Target {

@@ -146,7 +146,7 @@ impl AssetSource for Assets {
    "antigravity.svg"=>include_bytes!("../assets/antigravity.svg"),
    "pi.svg"=>include_bytes!("../assets/pi.svg"),
    "omp.svg"=>include_bytes!("../assets/omp.svg"),
-   _ if path.starts_with("mi/")=>return Ok(crate::file_icons::svg(path).map(Cow::Borrowed)),
+   _ if path.starts_with("mi/")=>return Ok(vorkspace_ui::file_icons::svg(path).map(Cow::Borrowed)),
    _=>return Ok(icon_body(path).map(|body|Cow::Owned(format!("<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'>{body}</svg>").into_bytes())))
   };
         Ok(Some(Cow::Borrowed(bytes)))

@@ -428,7 +428,7 @@ mod tests {
     fn vox_launcher_sits_above_subscriptions_and_disabled_vox_opens_settings(
         cx: &mut gpui::TestAppContext,
     ) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, _) = crate::shell::tests::window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.simulate_resize(gpui::size(px(1400.), px(900.)));

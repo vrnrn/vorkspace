@@ -1,6 +1,6 @@
 //! The original project rail is independent of the project's session/file pane.
 use super::*;
-use crate::{session_mark::ProjectMark, theme::StatusColor};
+use vorkspace_ui::{session_mark::ProjectMark, theme::StatusColor};
 
 const COMPACT_WIDTH: f32 = 48.;
 
@@ -608,8 +608,12 @@ impl Shell {
                     && self.app_search.is_none()
                     && !self.bot_active(cx);
                 let ink = match status {
-                    live_agents::Status::Approval => crate::theme::status(StatusColor::Warning, 1.),
-                    live_agents::Status::Done => crate::theme::status(StatusColor::Success, 1.),
+                    live_agents::Status::Approval => {
+                        vorkspace_ui::theme::status(StatusColor::Warning, 1.)
+                    }
+                    live_agents::Status::Done => {
+                        vorkspace_ui::theme::status(StatusColor::Success, 1.)
+                    }
                     live_agents::Status::Working => content(0.5),
                 };
                 div()
@@ -1004,7 +1008,7 @@ mod tests {
     #[gpui::test]
     fn hidden_project_rows_stop_ticks_and_resample_work_on_reveal(cx: &mut TestAppContext) {
         use std::time::Duration;
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let (window, _, session) = crate::shell::tests::window(cx);
         let path = "/work/vorkspace";
         window

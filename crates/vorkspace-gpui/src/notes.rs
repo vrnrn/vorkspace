@@ -5,7 +5,6 @@ use crate::{
     explorer::DraggedFile,
     input::{self, Input},
     popover::{Anchor, AnchorSlot, popover},
-    theme::*,
 };
 use gpui::{
     AnyElement, App, ClipboardItem, Context, CursorStyle, Entity, EventEmitter, ExternalPaths,
@@ -15,6 +14,7 @@ use gpui::{
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 use vorkspace_core::notes::{self, Note};
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::theme::*;
 
 pub(crate) enum Event {
     Close,
@@ -1211,7 +1211,7 @@ mod tests {
     ) -> (gpui::WindowHandle<Notes>, VisualTestContext) {
         cx.update(|cx| {
             crate::input::bind(cx);
-            crate::clock::use_test_clock(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
         });
         let store = store.clone();
         let window = cx.add_window(move |_, cx| Notes::new(store, cx));

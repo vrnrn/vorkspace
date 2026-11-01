@@ -3,20 +3,20 @@
 use crate::clock::Instant;
 use std::cell::Cell;
 
-pub(crate) struct PaneSlide {
+pub struct PaneSlide {
     from: f32,
-    pub(crate) to: f32,
+    pub to: f32,
     velocity: f32,
     frequency: f32,
     pixels_per_unit: f32,
     limits: (f32, f32),
     start: Cell<Option<Instant>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fixed_elapsed: Cell<Option<std::time::Duration>>,
 }
 
 impl PaneSlide {
-    pub(crate) fn new(from: f32, to: f32, distance: f32) -> Self {
+    pub fn new(from: f32, to: f32, distance: f32) -> Self {
         let pace = (distance.abs() / 360.).sqrt().clamp(1., 1.35);
         let opening = to > from;
         Self {
@@ -31,16 +31,16 @@ impl PaneSlide {
             },
             limits: (from.min(to), from.max(to)),
             start: Cell::new(None),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             fixed_elapsed: Cell::new(None),
         }
     }
 
-    pub(crate) fn opening(&self) -> bool {
+    pub fn opening(&self) -> bool {
         self.to > self.from
     }
 
-    pub(crate) fn retarget(&self, to: f32, now: Instant) -> Self {
+    pub fn retarget(&self, to: f32, now: Instant) -> Self {
         let (from, velocity, _) = self.sample(now);
         let distance = (to - from) * self.pixels_per_unit;
         let mut next = Self::new(from, to, distance);
@@ -50,7 +50,7 @@ impl PaneSlide {
         next
     }
 
-    pub(crate) fn at(&self, now: Instant) -> (f32, bool) {
+    pub fn at(&self, now: Instant) -> (f32, bool) {
         let (value, _, done) = self.sample(now);
         (value, done)
     }
@@ -61,7 +61,7 @@ impl PaneSlide {
         let start = self.start.get().unwrap_or(now);
         self.start.set(Some(start));
         let t = now.saturating_duration_since(start).as_secs_f32();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let t = self
             .fixed_elapsed
             .get()
@@ -85,23 +85,23 @@ impl PaneSlide {
         (value, velocity, false)
     }
 
-    #[cfg(test)]
-    pub(crate) fn elapsed(&self, elapsed: std::time::Duration) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn elapsed(&self, elapsed: std::time::Duration) {
         self.fixed_elapsed.set(None);
         self.start.set(Some(Instant::now() - elapsed));
     }
-    #[cfg(test)]
-    pub(crate) fn freeze_elapsed(&self, elapsed: std::time::Duration) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn freeze_elapsed(&self, elapsed: std::time::Duration) {
         self.fixed_elapsed.set(Some(elapsed));
     }
 }
 
 #[derive(Default)]
-pub(crate) struct PaneReveal {
+pub struct PaneReveal {
     start: Cell<Option<Instant>>,
 }
 impl PaneReveal {
-    pub(crate) fn opacity(&self, now: Instant) -> (f32, bool) {
+    pub fn opacity(&self, now: Instant) -> (f32, bool) {
         let start = self.start.get().unwrap_or(now);
         self.start.set(Some(start));
         let t = (now.saturating_duration_since(start).as_secs_f32() / 0.14).clamp(0., 1.);
@@ -111,7 +111,7 @@ impl PaneReveal {
 
 /// A resize that hits its limit mid-drag knocks a few pixels past it and
 /// springs back, while the pointer is still held.
-pub(crate) struct ResizeSettle {
+pub struct ResizeSettle {
     from: f32,
     to: f32,
     velocity: f32,
@@ -128,7 +128,7 @@ impl ResizeSettle {
     }
 
     /// Kicks from `limit` so the edge peaks `overshoot` units past it.
-    pub(crate) fn hit(limit: f32, overshoot: f32, pixels_per_unit: f32) -> Self {
+    pub fn hit(limit: f32, overshoot: f32, pixels_per_unit: f32) -> Self {
         // A kick from rest peaks at `velocity / damped * peak`.
         let decay = Self::DAMPING * Self::FREQUENCY;
         let peak_at = (Self::damped() / decay).atan() / Self::damped();
@@ -142,11 +142,11 @@ impl ResizeSettle {
         }
     }
 
-    pub(crate) fn target(&self) -> f32 {
+    pub fn target(&self) -> f32 {
         self.to
     }
 
-    pub(crate) fn at(&self, now: Instant) -> (f32, bool) {
+    pub fn at(&self, now: Instant) -> (f32, bool) {
         let start = self.start.get().unwrap_or(now);
         self.start.set(Some(start));
         let t = now.saturating_duration_since(start).as_secs_f32();

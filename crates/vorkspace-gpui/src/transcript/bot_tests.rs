@@ -46,7 +46,7 @@ fn projection(view: &TranscriptView) -> Vec<(usize, String, bool, bool, Option<u
 
 #[gpui::test]
 fn bot_work_matches_sessions_while_streaming_settled_and_reloaded(cx: &mut TestAppContext) {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     let session = cx.new(|_| TranscriptView::new());
     let bot = cx.new(|_| {
         let mut view = TranscriptView::new();
@@ -206,7 +206,7 @@ fn bot_work_matches_sessions_while_streaming_settled_and_reloaded(cx: &mut TestA
 
 #[gpui::test]
 fn bot_inline_disclosures_preserve_reaction_final_reply_and_saved_work(cx: &mut TestAppContext) {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     let source = vec![
         row("user", "Write the report"),
         row("assistant", "<reaction>👍</reaction>"),
@@ -299,7 +299,7 @@ fn bot_inline_disclosures_preserve_reaction_final_reply_and_saved_work(cx: &mut 
 
 #[gpui::test]
 fn bot_continuation_search_and_pinned_reports_use_their_own_run(cx: &mut TestAppContext) {
-    crate::clock::use_test_clock(cx);
+    vorkspace_ui::clock::use_test_clock(cx);
     let mut failed = ToolCall::new("agent", "Agent");
     failed.state = ToolState::Failed;
     failed.panel = Some(Panel::Agent(Default::default()));

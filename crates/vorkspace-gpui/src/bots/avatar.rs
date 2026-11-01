@@ -1,6 +1,5 @@
 //! 3D curved Bot avatars (`80%` spherical curvature, direct backing, `4` rings/cell
 //! concentric texture at `60%` opacity) + sidebar cursor gaze tracking & textured pills.
-use crate::clock::Instant;
 use gpui::{
     AnyElement, Bounds, Corners, DispatchPhase, Pixels, Point, RenderImage, Window, canvas,
     prelude::*, px,
@@ -19,6 +18,7 @@ use vorkspace_core::{
         normalize_badge_shape, normalize_bot_face, render_badge_or_bot_with_eyes,
     },
 };
+use vorkspace_ui::clock::Instant;
 
 /// Origin of every avatar clock. Idle beats and status ticks are absolute
 /// offsets from it, so avatars in different views wake at the same instants and
@@ -28,7 +28,7 @@ static START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 #[cfg(test)]
 thread_local! {
-    static TEST_START: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+    static TEST_START: std::cell::Cell<Option<(u64, Instant)>> = const { std::cell::Cell::new(None) };
 }
 
 fn avatar_start() -> Instant {
@@ -38,20 +38,16 @@ fn avatar_start() -> Instant {
     }
     #[cfg(test)]
     {
+        let generation = vorkspace_ui::clock::test_clock_generation();
         TEST_START.with(|start| match start.get() {
-            Some(start) => start,
-            None => {
+            Some((seen, start)) if seen == generation => start,
+            _ => {
                 let now = Instant::now();
-                start.set(Some(now));
+                start.set(Some((generation, now)));
                 now
             }
         })
     }
-}
-
-#[cfg(test)]
-pub(crate) fn reset_test_clock() {
-    TEST_START.set(None);
 }
 
 /// Bound avatar motion to about 30 fps. Chat headers have their own rendering
@@ -785,7 +781,7 @@ fn blink_at(t: f32) -> f32 {
 
 fn schedule(window: &Window, cx: &gpui::App, next: Option<Duration>) {
     if let Some(at) = next
-        && !crate::clock::suppress_endless_animation_frames()
+        && !vorkspace_ui::clock::suppress_endless_animation_frames()
     {
         request_avatar_frame(window, cx, at);
     }
@@ -1079,11 +1075,11 @@ mod header_tests {
 
     #[gpui::test]
     fn avatar_clock_origin_follows_the_bound_executor(cx: &mut gpui::TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let first_origin = avatar_start();
         cx.background_executor
             .advance_clock(Duration::from_secs(100));
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         assert_eq!(
             avatar_start(),
             first_origin,
@@ -1091,7 +1087,7 @@ mod header_tests {
         );
         assert_eq!(avatar_start().elapsed(), Duration::from_secs(100));
         let other = gpui::TestAppContext::build(gpui::TestDispatcher::new(42), None);
-        crate::clock::use_test_clock(&other);
+        vorkspace_ui::clock::use_test_clock(&other);
         assert_eq!(
             avatar_start(),
             Instant::now(),
@@ -1153,7 +1149,7 @@ mod header_tests {
 
     #[gpui::test]
     fn avatar_frame_coalesces_supersedes_and_releases_after_timer(cx: &mut gpui::TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let renders = std::rc::Rc::new(std::cell::Cell::new(0));
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
@@ -1196,7 +1192,7 @@ mod header_tests {
 
     #[gpui::test]
     fn due_avatar_wake_is_not_replaced_by_a_later_deadline(cx: &mut gpui::TestAppContext) {
-        crate::clock::use_test_clock(cx);
+        vorkspace_ui::clock::use_test_clock(cx);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| AvatarFrameTestView(None))

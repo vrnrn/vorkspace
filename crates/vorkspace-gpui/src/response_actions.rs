@@ -1,10 +1,11 @@
-use crate::{popover::AnchorSlot, theme::*};
+use crate::popover::AnchorSlot;
 use gpui::{Role, SharedString, div, prelude::*, px};
 use vorkspace_core::{
     agent::Settings,
     response::{Target, TransferKind},
     transcript::Row,
 };
+use vorkspace_ui::theme::*;
 
 pub(crate) enum Request {
     RemotePlan {

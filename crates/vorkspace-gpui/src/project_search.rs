@@ -1,9 +1,7 @@
 //! ProjectSearch.tsx: content search inside the Explorer, scoped to its checkout.
 use crate::{
-    file_icons::file_type_icon,
     input::{self, Input},
     right_panel::{spinner, stroke, tabular},
-    theme::*,
 };
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle, Role,
@@ -19,6 +17,7 @@ use std::{
     time::Duration,
 };
 use vorkspace_core::search::project::{self, SearchMatch, SearchOptions};
+use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 fn accent(alpha: f32) -> gpui::Hsla {
     let mut color = accent_color();
@@ -594,7 +593,7 @@ impl Render for ProjectSearch {
                     .py(px(6.))
                     .text_size(px(11.))
                     .text_color(if self.error.is_some() {
-                        crate::theme::status(StatusColor::Danger, 1.)
+                        vorkspace_ui::theme::status(StatusColor::Danger, 1.)
                     } else {
                         content(0.45)
                     })

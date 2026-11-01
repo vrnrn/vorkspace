@@ -44,7 +44,7 @@ impl Shell {
             Action::Settings => {
                 cx.activate(true);
                 window.activate_window();
-                crate::traffic_lights::show(window);
+                vorkspace_ui::traffic_lights::show(window);
                 self.open_settings(crate::settings::Section::General, window, cx);
             }
             // Keep the application action's unsaved-file and shutdown guards.

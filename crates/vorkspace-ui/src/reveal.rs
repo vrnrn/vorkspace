@@ -9,13 +9,13 @@ use std::time::Duration;
 
 /// Measure the expanded child at the current width before interpolating height.
 /// Estimates or heights from an earlier width cause a snap when motion finishes.
-pub(crate) struct Disclosure {
+pub struct Disclosure {
     child: AnyElement,
     width: Pixels,
     progress: f32,
 }
 impl Disclosure {
-    pub(crate) fn new(child: impl IntoElement, width: Pixels, progress: f32) -> Self {
+    pub fn new(child: impl IntoElement, width: Pixels, progress: f32) -> Self {
         Self {
             child: child.into_any_element(),
             width,
@@ -83,8 +83,8 @@ impl Element for Disclosure {
     }
 }
 
-pub(crate) const WORD_FADE: Duration = Duration::from_millis(320);
-pub(crate) struct PacedText {
+pub const WORD_FADE: Duration = Duration::from_millis(320);
+pub struct PacedText {
     target: String,
     shown: usize,
     position: f64,
@@ -178,7 +178,7 @@ impl PacedText {
         self.births.fill(now - WORD_FADE);
     }
 }
-pub(crate) fn word_opacity(born: Option<&Instant>, now: Instant) -> f32 {
+pub fn word_opacity(born: Option<&Instant>, now: Instant) -> f32 {
     born.map_or(1., |born| {
         let t = (now.duration_since(*born).as_secs_f32() / WORD_FADE.as_secs_f32()).clamp(0., 1.);
         // CSS ease-out (0,0,.58,1), rather than a linear opacity ramp.
@@ -186,16 +186,16 @@ pub(crate) fn word_opacity(born: Option<&Instant>, now: Instant) -> f32 {
     })
 }
 /// Shared motion curves; the general solver remains for distinct transitions.
-pub(crate) fn ease_entrance(t: f32) -> f32 {
+pub fn ease_entrance(t: f32) -> f32 {
     bezier(t, 0.16, 1., 0.3, 1.)
 }
-pub(crate) fn ease_move(t: f32) -> f32 {
+pub fn ease_move(t: f32) -> f32 {
     bezier(t, 0.22, 1., 0.36, 1.)
 }
-pub(crate) fn ease_out(t: f32) -> f32 {
+pub fn ease_out(t: f32) -> f32 {
     bezier(t, 0., 0., 0.58, 1.)
 }
-pub(crate) fn bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+pub fn bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
     if t <= 0. {
         return 0.;
     }
@@ -218,7 +218,7 @@ pub(crate) fn bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
 }
 
 #[derive(Clone)]
-pub(crate) struct Motion {
+pub struct Motion {
     pub start: Instant,
     pub opening: bool,
     pub duration: Duration,

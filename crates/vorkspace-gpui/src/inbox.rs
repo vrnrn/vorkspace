@@ -9,7 +9,6 @@ use crate::{
     diff_view::{DiffEvent, DiffView},
     input::{self, Input},
     popover::AnchorSlot,
-    theme::*,
 };
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, ListAlignment,
@@ -22,6 +21,7 @@ use vorkspace_core::{
     store::Session,
 };
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::theme::*;
 
 pub(crate) enum Event {
     Close,
