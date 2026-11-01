@@ -1,6 +1,6 @@
 # Finding your way around the repository
 
-`crates/vorkspace-gpui` draws the desktop and handles clicks and typing. `crates/vorkspace-core` runs agents, saves work, and manages files. Five smaller folders beside them hold pieces with a single job: `vorkspace-ui` for colors, settings and animation timing, `vorkspace-runtime` for running a session, `vorkspace-editor` for understanding code in the file editor, `vorkspace-model` for plain data, and `vorkspace-macos` for talking to the Mac. They all run together in one desktop app, and keeping them separate means changing one rebuilds less.
+`crates/vorkspace-gpui` draws the desktop and handles clicks and typing. `crates/vorkspace-core` runs agents, saves work, and manages files. Six smaller folders beside them hold pieces with a single job: `vorkspace-ui` for colors, settings and animation timing, `vorkspace-runtime` for running a session, `vorkspace-editor` for understanding code in the file editor, `vorkspace-model` for plain data, `vorkspace-macos` for talking to the Mac, and `vorkspace-clipboard` for the small helper that keeps clipboard history after you quit. All but the helper run together in one desktop app, and keeping them separate means changing one rebuilds less.
 
 `host` is the program that runs on a remote computer. It has its own saved conversations and agent processes, which can continue when your desktop disconnects.
 

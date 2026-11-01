@@ -27,8 +27,6 @@ async function fixture(t) {
   await mkdir(join(root, "src"));
   await writeFile(join(root, "src/lib.rs"), "");
   await copyFile(buildScript, join(root, "build.rs"));
-  await mkdir(join(root, "native"));
-  await copyFile(new URL("../../crates/vorkspace-gpui/native/Clipboard.swift", import.meta.url), join(root, "native/Clipboard.swift"));
   // The copied build script also validates notes in a release CI environment.
   await mkdir(join(root, "build"));
   await writeFile(join(root, "build/release-notes.md"), "## [0.0.0]\n\nDependency guard fixture.\n");

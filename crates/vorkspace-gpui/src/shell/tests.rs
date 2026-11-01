@@ -3252,7 +3252,7 @@ fn explorer_files_share_the_review_pane_and_dirty_close_can_cancel_or_save(
     cx.run_until_parked();
     window
         .update(cx, |shell, window, cx| {
-            shell.status_menu_action(vorkspace_macos::status_menu::Action::Quit, window, cx);
+            shell.status_menu_action(status_menu::Action::Quit, window, cx);
         })
         .unwrap();
     cx.run_until_parked();

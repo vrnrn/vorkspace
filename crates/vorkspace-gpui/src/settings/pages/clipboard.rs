@@ -13,7 +13,7 @@ impl SettingsView {
             cx,
             |this, on, cx| this.update(cx, |p| p.clipboard_history = on),
         )];
-        let description = "Keep up to 50 text and image copies in memory. History is never saved to disk. Turning this off clears it. Very large copies are skipped.";
+        let description = "Keep up to 50 text and image copies in memory, even after you quit, until you log out or use Quit in the clipboard menu. History is never saved to disk. Turning this off clears it. Very large copies are skipped.";
         let description = if let Some(service) = crate::clipboard::get(cx)
             && let Some(error) = &service.read(cx).error
         {

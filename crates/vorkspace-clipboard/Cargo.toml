@@ -1,0 +1,33 @@
+[package]
+name = "vorkspace-clipboard"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "vorkspace-clipboard"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+async-channel = "2"
+libc = "0.2"
+gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
+gpui_macos = { package = "gpui-pre-macos", version = "=0.3.9", default-features = false }
+vorkspace-macos = { path = "../vorkspace-macos" }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSScreen", "NSResponder", "NSView", "NSWindow", "objc2-core-foundation"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFData", "CFDictionary", "CFNumber", "CFString"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSGeometry", "NSString"] }
+objc2-image-io = { version = "0.3.2", default-features = false, features = ["std", "CGImageSource", "objc2-core-graphics"] }
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false, features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+tempfile = "3"

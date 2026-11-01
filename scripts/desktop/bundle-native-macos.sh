@@ -18,11 +18,14 @@ case "$native_data_mode" in
 esac
 native_bundle="$native_target/vorkspace.app"
 native_binary="$native_target/vorkspace-gpui"
-if [ ! -f "$native_binary" ]; then
-  echo "Missing native executable: $native_binary" >&2
-  echo 'Build it with cargo first, or use npm run build.' >&2
-  exit 1
-fi
+native_clipboard_binary="$native_target/vorkspace-clipboard"
+for binary in "$native_binary" "$native_clipboard_binary"; do
+  if [ ! -f "$binary" ]; then
+    echo "Missing native executable: $binary" >&2
+    echo 'Build it with cargo first, or use npm run build.' >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$native_bundle/Contents/MacOS" "$native_bundle/Contents/Resources"
 # Replace the inode atomically so macOS does not reuse an older signature cache.
@@ -59,6 +62,26 @@ cat > "$native_bundle/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+# A nested app with its own identity: sharing the main bundle's would make macOS
+# treat vorkspace as running after Quit, so the Dock could no longer launch it.
+native_clipboard="$native_bundle/Contents/Helpers/vorkspace Clipboard.app"
+mkdir -p "$native_clipboard/Contents/MacOS"
+cp "$native_clipboard_binary" "$native_clipboard/Contents/MacOS/vorkspace-clipboard.next"
+mv -f "$native_clipboard/Contents/MacOS/vorkspace-clipboard.next" "$native_clipboard/Contents/MacOS/vorkspace-clipboard"
+cat > "$native_clipboard/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>vorkspace-clipboard</string>
+<key>CFBundleIdentifier</key><string>com.vorkspace.gpui.clipboard</string>
+<key>CFBundleName</key><string>vorkspace Clipboard</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>$native_version</string>
+<key>CFBundleVersion</key><string>$native_version</string>
+<key>LSMinimumSystemVersion</key><string>11.0</string>
+<key>LSUIElement</key><true/>
+</dict></plist>
+PLIST
 # Release configuration is explicit; never attach development data to a feed.
 python3 scripts/desktop/native-bundle-plist.py "$native_bundle/Contents/Info.plist"
 if [ -n "${VORKSPACE_SPARKLE_FRAMEWORK:-}" ]; then
@@ -73,6 +96,7 @@ else
 fi
 native_identity="${VORKSPACE_SIGNING_IDENTITY:--}"
 if [ "$native_identity" = - ]; then
+  codesign --force --sign - "$native_clipboard"
   codesign --force --sign - "$native_bundle"
 else
   # Sparkle contains nested executables; sign from the leaves toward the root.

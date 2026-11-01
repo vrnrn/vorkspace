@@ -427,7 +427,12 @@ impl Shell {
             vorkspace_ui::preferences::Preferences::MIN_UI_SCALE_PERCENT,
             vorkspace_ui::preferences::Preferences::MAX_UI_SCALE_PERCENT,
         );
-        crate::clipboard::configure(self.workspace.preferences.clipboard_history, cx);
+        crate::clipboard::configure(
+            self.workspace.preferences.clipboard_history,
+            // Retain the saved preference key so existing users keep their choice.
+            self.workspace.preferences.bot_menu_bar_icon,
+            cx,
+        );
         if let Some(vox) = &self.vox {
             let prefs = self.workspace.preferences.clone();
             vox.update(cx, |v, cx| v.preferences(&prefs, cx));
