@@ -14,7 +14,7 @@
     "check": "npm run test:tooling && npm run test:voice && npm run test:host && cargo fmt --all --check && cargo clippy --locked --workspace --all-targets --profile native-dev -- -D warnings && npm run test:rust",
     "check:fast": "npm run test:tooling && npm run test:voice && cargo fmt --all --check && cargo clippy --locked --workspace --all-targets --profile native-dev -- -D warnings && cargo nextest run --locked --cargo-profile native-dev -p vorkspace-core",
     "test": "npm run test:tooling && npm run test:voice && npm run test:host && npm run test:rust",
-    "test:rust": "cargo nextest run --locked --cargo-profile native-dev --workspace",
+    "test:rust": "cargo nextest run --locked --cargo-profile native-dev --workspace && cargo test --quiet --manifest-path vendor/block/Cargo.toml --target-dir target/block",
     "test:tooling": "node --test scripts/desktop/*.test.mjs scripts/checks/*.test.mjs scripts/release/*.test.mjs && python3 scripts/desktop/native-bundle-plist.test.py && python3 scripts/release/package-native-update.test.py",
     "test:voice": "vitest run --config embedded/vox/vitest.config.js",
     "host:build": "node host/build.mjs",

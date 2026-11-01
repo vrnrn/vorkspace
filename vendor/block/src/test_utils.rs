@@ -1,31 +1,19 @@
-extern crate objc_test_utils;
-
-use {Block, RcBlock};
+// Upstream's fixture needs a C helper crate that isn't published. These build the
+// same blocks through this crate, so copy, call and disposal still run for real.
+use {Block, ConcreteBlock, RcBlock};
 
 pub fn get_int_block_with(i: i32) -> RcBlock<(), i32> {
-    unsafe {
-        let ptr = objc_test_utils::get_int_block_with(i);
-        RcBlock::new(ptr as *mut _)
-    }
+    ConcreteBlock::new(move || i).copy()
 }
 
 pub fn get_add_block_with(i: i32) -> RcBlock<(i32,), i32> {
-    unsafe {
-        let ptr = objc_test_utils::get_add_block_with(i);
-        RcBlock::new(ptr as *mut _)
-    }
+    ConcreteBlock::new(move |a: i32| a + i).copy()
 }
 
 pub fn invoke_int_block(block: &Block<(), i32>) -> i32 {
-    let ptr = block as *const _;
-    unsafe {
-        objc_test_utils::invoke_int_block(ptr as *mut _)
-    }
+    unsafe { block.call(()) }
 }
 
 pub fn invoke_add_block(block: &Block<(i32,), i32>, a: i32) -> i32 {
-    let ptr = block as *const _;
-    unsafe {
-        objc_test_utils::invoke_add_block(ptr as *mut _, a)
-    }
+    unsafe { block.call((a,)) }
 }
