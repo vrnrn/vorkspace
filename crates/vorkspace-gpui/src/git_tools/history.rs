@@ -1,7 +1,7 @@
 //! GitHistoryGraph.tsx's standalone History tab: its toolbar, search and
 //! 44px rows with the swimlane graph painted per row.
 use crate::{
-    git_status::{GitChanged, ProjectGit},
+    git_tools::git_status::{GitChanged, ProjectGit},
     input::{self, Input},
     right_panel::*,
 };

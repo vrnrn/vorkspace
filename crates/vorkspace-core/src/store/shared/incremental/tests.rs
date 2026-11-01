@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn rich_source() -> Vec<Value> {

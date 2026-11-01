@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::{bots::Bots, shell::tests::window};
 use gpui::{Focusable, TestAppContext, WindowHandle};

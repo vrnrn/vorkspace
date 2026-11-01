@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::transcript::Row;
 use std::path::Path;

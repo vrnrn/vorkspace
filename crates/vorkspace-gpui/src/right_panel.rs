@@ -1,10 +1,10 @@
 //! Sidebar.tsx's inset `RightPanel`: the project tools beside the card, with
 //! reorderable Explorer / Changes / History tabs in the title bar.
 use crate::{
-    changes::Changes,
-    explorer::Explorer,
-    git_status::{GitChanged, ProjectGit},
-    history::History,
+    file_tools::explorer::Explorer,
+    git_tools::changes::Changes,
+    git_tools::git_status::{GitChanged, ProjectGit},
+    git_tools::history::History,
     project_tabs::{TabLabel, TabReveal, tab_button},
 };
 use gpui::{

@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::settings::{Preferences, Section, SettingsContext};
 use gpui::{

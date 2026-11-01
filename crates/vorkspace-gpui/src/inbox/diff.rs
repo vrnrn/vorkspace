@@ -1,5 +1,5 @@
 //! Provider patches use the same virtualized native review as local changes.
-use crate::diff_view::DiffFile;
+use crate::git_tools::diff_view::DiffFile;
 use gpui::SharedString;
 use std::{collections::HashMap, sync::Arc};
 use vorkspace_core::{

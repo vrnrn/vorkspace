@@ -1,4 +1,3 @@
-
 use super::*;
 
 #[test]
@@ -520,7 +519,7 @@ fn restore_keeps_project_selection_and_prunes_stale_project_focus() {
     state.project_focus.insert("/b".into(), 99);
     state.worktree_focus.insert(
         "/a".into(),
-        crate::worktree_switcher::WorktreeFocus {
+        crate::git_tools::worktree_switcher::WorktreeFocus {
             path: "/a-tree".into(),
             branch: Some("feature".into()),
         },

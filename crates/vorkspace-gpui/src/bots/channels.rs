@@ -493,7 +493,8 @@ pub(super) struct ChannelUi {
     pub(super) editing: bool,
     pub(super) settings_anchor: AnchorSlot,
     pub(super) rail_bounds: HashMap<String, AnchorSlot>,
-    pub(super) completions: HashMap<String, Entity<crate::composer_completion::Completion>>,
+    pub(super) completions:
+        HashMap<String, Entity<crate::composer::composer_completion::Completion>>,
     pub(super) form_members: HashMap<String, HashSet<String>>,
     pub(super) message_cache: HashMap<String, std::sync::Arc<Vec<crate::markdown::MarkdownRow>>>,
     pub(super) scroll: HashMap<String, gpui::ScrollHandle>,

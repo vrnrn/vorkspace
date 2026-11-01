@@ -1,6 +1,5 @@
-
 use super::*;
-use crate::{review::ReviewTab, shell::tests::window};
+use crate::{git_tools::review::ReviewTab, shell::tests::window};
 use gpui::{EntityInputHandler, TestAppContext, VisualTestContext, point};
 
 #[gpui::test]
@@ -40,7 +39,9 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
     window
         .update(visual, |_, w, cx| {
             w.dispatch_action(
-                Box::new(crate::file_editor::OpenPath(format!("{path}:2:3"))),
+                Box::new(crate::file_tools::file_editor::OpenPath(format!(
+                    "{path}:2:3"
+                ))),
                 cx,
             );
         })
@@ -100,7 +101,10 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
                 "Keep my Bot draft"
             );
             assert!(restored.read(cx).input.focus_handle(cx).is_focused(w));
-            w.dispatch_action(Box::new(crate::file_editor::OpenPath(path.clone())), cx);
+            w.dispatch_action(
+                Box::new(crate::file_tools::file_editor::OpenPath(path.clone())),
+                cx,
+            );
         })
         .unwrap();
     visual.run_until_parked();
@@ -154,7 +158,7 @@ fn file_word_wrap_is_shared_and_persisted_across_restart(cx: &mut TestAppContext
     vorkspace_ui::clock::settle_animations(window, visual);
     window
         .update(visual, |_, w, cx| {
-            w.dispatch_action(Box::new(crate::file_editor::ToggleWordWrap), cx)
+            w.dispatch_action(Box::new(crate::file_tools::file_editor::ToggleWordWrap), cx)
         })
         .unwrap();
     visual.run_until_parked();
@@ -271,7 +275,7 @@ fn numbered_shortcuts_return_from_file_only_tabs_to_sessions(cx: &mut TestAppCon
                 } else {
                     shell.reviews[&first].update(cx, |r, cx| {
                         r.state.chat_hidden = true;
-                        cx.emit(crate::review::ReviewEvent::Changed);
+                        cx.emit(crate::git_tools::review::ReviewEvent::Changed);
                     });
                     first
                 };

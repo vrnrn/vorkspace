@@ -1,5 +1,7 @@
 //! Native menus dispatch through the same workspace and editor action owners.
-use crate::{file_editor as editor, image_lightbox, input, settings::Preferences, shell};
+use crate::{
+    file_tools::file_editor as editor, image_lightbox, input, settings::Preferences, shell,
+};
 use gpui::{
     Action, AnyWindowHandle, App, Global, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType,
     actions,

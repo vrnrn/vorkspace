@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::TestAppContext;
 use std::{cell::RefCell, rc::Rc};

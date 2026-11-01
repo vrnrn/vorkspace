@@ -113,7 +113,7 @@ impl Shell {
                             review.update(cx, |r, cx| {
                                 r.state.chat_hidden = true;
                                 r.focus_active(window, cx);
-                                cx.emit(crate::review::ReviewEvent::Changed);
+                                cx.emit(crate::git_tools::review::ReviewEvent::Changed);
                             });
                         }
                     })),

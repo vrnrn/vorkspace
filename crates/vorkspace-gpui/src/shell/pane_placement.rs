@@ -193,7 +193,7 @@ impl Shell {
         let cwd = self.workspace.project.clone();
         let worktree = target.and_then(|id| {
             let path = self.session_working_copy(id, cx);
-            (path != cwd).then(|| crate::worktree_switcher::WorktreeFocus {
+            (path != cwd).then(|| crate::git_tools::worktree_switcher::WorktreeFocus {
                 path: path.into(),
                 branch: self.worktree_focus.get(&cwd).and_then(|f| f.branch.clone()),
             })
@@ -234,7 +234,7 @@ impl Shell {
     pub(super) fn finish_split_creation(
         &mut self,
         summary: Session,
-        worktree: Option<&crate::worktree_switcher::WorktreeFocus>,
+        worktree: Option<&crate::git_tools::worktree_switcher::WorktreeFocus>,
         request: (Option<i64>, u64, SplitDir),
         window: &mut Window,
         cx: &mut Context<Self>,

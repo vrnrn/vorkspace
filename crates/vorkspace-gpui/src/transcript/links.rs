@@ -38,7 +38,8 @@ impl Target {
         {
             return None;
         }
-        let (path, location) = crate::file_editor::file_location(url, base.unwrap_or(""));
+        let (path, location) =
+            crate::file_tools::file_editor::file_location(url, base.unwrap_or(""));
         if !Path::new(&path).is_absolute() {
             return None;
         }
@@ -131,7 +132,10 @@ impl TranscriptView {
                     || path.clone(),
                     |(line, column)| format!("{path}:{line}:{column}"),
                 );
-                window.dispatch_action(Box::new(crate::file_editor::OpenPath(target)), cx);
+                window.dispatch_action(
+                    Box::new(crate::file_tools::file_editor::OpenPath(target)),
+                    cx,
+                );
             }
             ("copy-path", Target::File { path, .. }) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(path.clone()))

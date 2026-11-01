@@ -1,4 +1,3 @@
-
 use super::*;
 
 /// Count visible connected regions in the actual raster, rather than

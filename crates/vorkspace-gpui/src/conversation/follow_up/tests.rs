@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{TestAppContext, VisualTestContext, WindowHandle};
 use std::sync::Mutex;

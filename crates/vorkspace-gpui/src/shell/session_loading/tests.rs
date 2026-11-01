@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::TestAppContext;
 use vorkspace_core::{agent::Settings, store::Store};
@@ -52,7 +51,7 @@ fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(cx: &m
             assert_eq!(shell.sidebar_session_ids(cx).len(), 7);
             shell.worktree_focus.insert(
                 "/work/project".into(),
-                crate::worktree_switcher::WorktreeFocus {
+                crate::git_tools::worktree_switcher::WorktreeFocus {
                     path: "/work/feature".into(),
                     branch: Some("feature".into()),
                 },
@@ -66,7 +65,7 @@ fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(cx: &m
             );
             shell.worktree_focus.insert(
                 "/work/project".into(),
-                crate::worktree_switcher::WorktreeFocus {
+                crate::git_tools::worktree_switcher::WorktreeFocus {
                     path: "/work/project".into(),
                     branch: None,
                 },

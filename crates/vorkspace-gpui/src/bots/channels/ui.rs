@@ -177,7 +177,7 @@ impl Bots {
         let bot_mentions = members
             .iter()
             .filter_map(|id| self.roster.get(id))
-            .map(|bot| crate::composer_completion::BotMention {
+            .map(|bot| crate::composer::composer_completion::BotMention {
                 id: bot.id.clone(),
                 name: bot.label(),
                 mascot: bot.mascot.clone(),
@@ -189,7 +189,7 @@ impl Bots {
             completion.clone()
         } else {
             let completion = cx.new(|cx| {
-                crate::composer_completion::Completion::bot_mentions(
+                crate::composer::composer_completion::Completion::bot_mentions(
                     input.clone(),
                     bot_mentions,
                     cx,

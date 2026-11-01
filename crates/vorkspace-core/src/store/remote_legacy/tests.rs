@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::{agent::Settings, desktop_preferences::DesktopPreferences};
 use std::{path::Path, sync::Arc};

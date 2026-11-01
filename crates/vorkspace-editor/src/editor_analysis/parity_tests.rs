@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn search_and_replace_share_codemirror_unicode_captures_and_word_boundaries() {

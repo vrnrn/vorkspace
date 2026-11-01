@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::transcript::Body;
 use gpui::{TestAppContext, point};

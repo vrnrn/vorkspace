@@ -1,4 +1,3 @@
-
 use super::*;
 fn c(sha: &str, parents: &[&str]) -> GraphCommit {
     GraphCommit {

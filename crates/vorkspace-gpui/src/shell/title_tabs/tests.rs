@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::{shell::tests::window, workspace::AppView};
 use gpui::TestAppContext;

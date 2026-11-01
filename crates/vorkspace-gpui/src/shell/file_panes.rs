@@ -71,7 +71,7 @@ impl Shell {
         review.update(cx, |r, cx| {
             r.state.chat_hidden = true;
             r.set_deferred(false, cx);
-            cx.emit(crate::review::ReviewEvent::Changed);
+            cx.emit(crate::git_tools::review::ReviewEvent::Changed);
             cx.notify();
         });
         self.workspace

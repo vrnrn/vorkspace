@@ -116,7 +116,8 @@ impl Shell {
                     key: (id, true),
                     title: t.label(),
                     mark: PaneMark::File(
-                        matches!(t, crate::review::ReviewTab::File { .. }).then(|| t.label()),
+                        matches!(t, crate::git_tools::review::ReviewTab::File { .. })
+                            .then(|| t.label()),
                     ),
                 });
             }
@@ -284,7 +285,7 @@ impl Shell {
                 .text_size(px(12.))
                 .text_color(content(1.))
                 .child(if let Some(tab) = review {
-                    if matches!(tab, crate::review::ReviewTab::File { .. }) {
+                    if matches!(tab, crate::git_tools::review::ReviewTab::File { .. }) {
                         vorkspace_ui::file_icons::file_type_icon(&tab.label(), false, false, 14.)
                     } else {
                         icon("git-compare", 14.).into_any_element()

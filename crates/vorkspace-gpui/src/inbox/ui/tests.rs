@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{
     AssetSource, Bounds, Render, TestAppContext, WindowBounds, WindowHandle, WindowOptions, point,

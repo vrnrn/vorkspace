@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn remote_selection_reuses_only_its_tracking_branch_and_preserves_work() {

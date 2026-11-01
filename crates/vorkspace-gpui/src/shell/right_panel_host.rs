@@ -123,7 +123,7 @@ impl Shell {
         let explorer = panel.read(cx).explorer.clone();
         self.observations.push(cx.subscribe(
             &explorer,
-            |this, _, event: &crate::explorer::FileActionError, cx| {
+            |this, _, event: &crate::file_tools::explorer::FileActionError, cx| {
                 this.notification_state
                     .file_error
                     .update(cx, |notice, cx| notice.set_message(event.0.clone(), cx));
@@ -133,9 +133,9 @@ impl Shell {
         self.observations.push(cx.subscribe_in(
             &explorer,
             window,
-            |this, _, event: &crate::explorer::OpenFile, window, cx| {
+            |this, _, event: &crate::file_tools::explorer::OpenFile, window, cx| {
                 this.open_review(
-                    crate::review::ReviewTab::File {
+                    crate::git_tools::review::ReviewTab::File {
                         cwd: this.git.read(cx).project().into(),
                         path: event.0.clone(),
                     },
@@ -147,9 +147,9 @@ impl Shell {
         self.observations.push(cx.subscribe_in(
             &explorer,
             window,
-            |this, _, event: &crate::explorer::OpenSearchMatch, window, cx| {
+            |this, _, event: &crate::file_tools::explorer::OpenSearchMatch, window, cx| {
                 this.open_review_with_preview(
-                    crate::review::ReviewTab::File {
+                    crate::git_tools::review::ReviewTab::File {
                         cwd: event.cwd.clone(),
                         path: event.matched.path.clone(),
                     },
@@ -192,14 +192,14 @@ impl Shell {
         self.observations.push(cx.subscribe_in(
             &changes,
             window,
-            |this, _, event: &crate::changes::ChangesEvent, window, cx| match event {
-                crate::changes::ChangesEvent::View(view) => {
+            |this, _, event: &crate::git_tools::changes::ChangesEvent, window, cx| match event {
+                crate::git_tools::changes::ChangesEvent::View(view) => {
                     this.workspace.changes_view = *view;
                     this.persist(cx);
                 }
-                crate::changes::ChangesEvent::OpenDiff { cwd, path, staged } => {
+                crate::git_tools::changes::ChangesEvent::OpenDiff { cwd, path, staged } => {
                     this.open_review(
-                        crate::review::ReviewTab::Changes {
+                        crate::git_tools::review::ReviewTab::Changes {
                             cwd: cwd.clone(),
                             path: path.clone(),
                             staged: Some(*staged),
@@ -214,15 +214,15 @@ impl Shell {
         self.observations.push(cx.subscribe_in(
             &history,
             window,
-            |this, _, event: &crate::history::HistoryEvent, window, cx| {
-                let crate::history::HistoryEvent::OpenCommit {
+            |this, _, event: &crate::git_tools::history::HistoryEvent, window, cx| {
+                let crate::git_tools::history::HistoryEvent::OpenCommit {
                     cwd,
                     sha,
                     short_sha,
                     subject,
                 } = event;
                 this.open_review(
-                    crate::review::ReviewTab::Commit {
+                    crate::git_tools::review::ReviewTab::Commit {
                         cwd: cwd.clone(),
                         sha: sha.clone(),
                         short_sha: short_sha.clone(),

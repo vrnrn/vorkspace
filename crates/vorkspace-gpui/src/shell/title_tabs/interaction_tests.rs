@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::shell::tests::window;
 use gpui::{Modifiers, TestAppContext, point};

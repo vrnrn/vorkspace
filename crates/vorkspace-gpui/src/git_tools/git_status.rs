@@ -63,7 +63,7 @@ pub(crate) struct ProjectGit {
     pub statuses: StatusMap,
     /// Bumped on every observed change, for views that reread on it.
     pub epoch: u64,
-    pub review_cache: crate::review::ReviewCache,
+    pub review_cache: crate::git_tools::review::ReviewCache,
     versions: Option<HashMap<String, scm::FileDiffVersion>>,
     remembered: HashMap<String, (u64, DiffIndex)>,
     clock: u64,

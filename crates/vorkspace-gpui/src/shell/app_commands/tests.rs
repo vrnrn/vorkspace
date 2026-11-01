@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::TestAppContext;
 fn command_window(cx: &mut TestAppContext) -> (gpui::WindowHandle<Shell>, i64, tempfile::TempDir) {

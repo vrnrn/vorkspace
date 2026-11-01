@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{Bounds, EntityInputHandler, TestAppContext, WindowBounds, WindowOptions, point, size};
 use std::{sync::Mutex, time::Duration};

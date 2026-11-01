@@ -620,7 +620,7 @@ mod tests {
                             "/tmp/image.png".into(),
                             Arc::new(Image::from_bytes(
                                 ImageFormat::Png,
-                                include_bytes!("../../assets/vorkspace.png").to_vec(),
+                                include_bytes!("../../../assets/vorkspace.png").to_vec(),
                             )),
                             800,
                             400,

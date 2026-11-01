@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{TestAppContext, WindowHandle};
 #[gpui::test]

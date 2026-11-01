@@ -535,7 +535,7 @@ pub(crate) struct Shell {
     tab_marks: HashMap<i64, Entity<SessionMark>>,
     busy_sessions: HashSet<i64>,
     notification_state: notifications::State,
-    quick: crate::quick_composer::Controller,
+    quick: crate::composer::quick_composer::Controller,
     unseen_finished: HashSet<i64>,
     live_agents: Entity<live_agents::LiveAgents>,
     archiving: HashSet<i64>,
@@ -632,7 +632,7 @@ pub(crate) struct Shell {
     pending_project_blanks: HashSet<String>,
     pending_project_creations: HashMap<String, usize>,
     new_tab_task: Option<gpui::Task<()>>,
-    worktree_focus: HashMap<String, crate::worktree_switcher::WorktreeFocus>,
+    worktree_focus: HashMap<String, crate::git_tools::worktree_switcher::WorktreeFocus>,
     session_worktrees: HashMap<i64, Option<String>>,
     session_details: HashMap<i64, vorkspace_core::store::SessionMetadata>,
     sidebar_hidden_sessions: HashSet<i64>,
@@ -647,15 +647,15 @@ pub(crate) struct Shell {
     tab_scroll: ScrollHandle,
     tab_scroll_task: Option<gpui::Task<()>>,
     resize: Option<(Pixels, f32)>,
-    pub(crate) git: Entity<crate::git_status::ProjectGit>,
+    pub(crate) git: Entity<crate::git_tools::git_status::ProjectGit>,
     pub(crate) right_panel: Option<Entity<RightPanel>>,
     right_resize: Option<(Pixels, f32)>,
     right_slide: Option<PaneSlide>,
-    reviews: HashMap<i64, Entity<crate::review::ReviewPane>>,
+    reviews: HashMap<i64, Entity<crate::git_tools::review::ReviewPane>>,
     /// A review sliding in or out: its session and pane.
-    review_slide: Option<(i64, PaneSlide, Entity<crate::review::ReviewPane>)>,
+    review_slide: Option<(i64, PaneSlide, Entity<crate::git_tools::review::ReviewPane>)>,
     /// A session review card's Review, opened beside its pane next frame.
-    pending_review: Option<(i64, crate::review::ReviewTab)>,
+    pending_review: Option<(i64, crate::git_tools::review::ReviewTab)>,
     pending_composer_focus: Option<i64>,
     review_focused: bool,
     review_drag: bool,
@@ -826,7 +826,7 @@ impl Shell {
             }
         });
         let git_project = workspace.project.clone();
-        let git = cx.new(|cx| crate::git_status::ProjectGit::new(git_project, cx));
+        let git = cx.new(|cx| crate::git_tools::git_status::ProjectGit::new(git_project, cx));
         let git_observation = cx.observe(&git, |this, _, cx| {
             // The title bar's dot and the panel's tab label follow its stats.
             let _ = this;
@@ -1664,7 +1664,7 @@ impl Shell {
             review.update(cx, |r, cx| {
                 if r.state.chat_hidden {
                     r.state.chat_hidden = false;
-                    cx.emit(crate::review::ReviewEvent::Changed);
+                    cx.emit(crate::git_tools::review::ReviewEvent::Changed);
                 }
             });
         }
@@ -2593,11 +2593,16 @@ impl Render for Shell {
                     this.close_preview(cx);
                 }
             }))
-            .on_action(
-                cx.listener(|this, event: &crate::file_editor::OpenPath, window, cx| {
+            .on_action(cx.listener(
+                |this, event: &crate::file_tools::file_editor::OpenPath, window, cx| {
                     let cwd = this.git.read(cx).project().to_owned();
-                    let (path, location) = crate::file_editor::file_location(&event.0, &cwd);
-                    this.open_review(crate::review::ReviewTab::File { cwd, path }, window, cx);
+                    let (path, location) =
+                        crate::file_tools::file_editor::file_location(&event.0, &cwd);
+                    this.open_review(
+                        crate::git_tools::review::ReviewTab::File { cwd, path },
+                        window,
+                        cx,
+                    );
                     // Bots render above the session pane tree. Give its file
                     // an independent visible tab using the normal navigation
                     // path, which retains the Bot tab and live conversation.
@@ -2612,8 +2617,8 @@ impl Render for Shell {
                     {
                         pane.update(cx, |pane, cx| pane.navigate_file(line, column, cx));
                     }
-                }),
-            )
+                },
+            ))
             .on_action(
                 cx.listener(|this, _: &crate::Quit, window, cx| this.request_quit(window, cx)),
             )
@@ -2692,14 +2697,14 @@ impl Render for Shell {
                     this.create(this.default_kind(), cx);
                 }
             }))
-            .on_action(
-                cx.listener(|this, _: &crate::file_editor::ToggleAutosave, _, cx| {
+            .on_action(cx.listener(
+                |this, _: &crate::file_tools::file_editor::ToggleAutosave, _, cx| {
                     this.workspace.preferences.autosave = !this.workspace.preferences.autosave;
                     this.apply_preferences(cx);
                     this.persist(cx);
                     cx.notify();
-                }),
-            )
+                },
+            ))
             .on_action(cx.listener(|this, _: &NewClaude, _, cx| this.create(Kind::Claude, cx)))
             .on_action(cx.listener(|this, _: &OpenProject, _, cx| this.open_project(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
@@ -2848,14 +2853,16 @@ impl Render for Shell {
                 this.invalidate_chrome(cx);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &crate::diff_view::Unified, _, cx| {
-                this.workspace.preferences.diff_view = "unified".into();
-                this.apply_preferences(cx);
-                this.persist(cx);
-                cx.notify();
-            }))
             .on_action(
-                cx.listener(|this, _: &crate::diff_view::SideBySide, _, cx| {
+                cx.listener(|this, _: &crate::git_tools::diff_view::Unified, _, cx| {
+                    this.workspace.preferences.diff_view = "unified".into();
+                    this.apply_preferences(cx);
+                    this.persist(cx);
+                    cx.notify();
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::git_tools::diff_view::SideBySide, _, cx| {
                     this.workspace.preferences.diff_view = "split".into();
                     this.apply_preferences(cx);
                     this.persist(cx);
@@ -2961,7 +2968,9 @@ impl Render for Shell {
                     if std::mem::take(&mut this.review_drag)
                         && let Some(review) = this.active_review(cx)
                     {
-                        review.update(cx, |_, cx| cx.emit(crate::review::ReviewEvent::Changed));
+                        review.update(cx, |_, cx| {
+                            cx.emit(crate::git_tools::review::ReviewEvent::Changed)
+                        });
                     }
                 }),
             )

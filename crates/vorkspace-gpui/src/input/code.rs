@@ -1,7 +1,7 @@
 //! The editor shares native selection/IME handling with Input and retains glyph
 //! runs for visible lines. Scroll position is independent of the caret.
 use super::*;
-use crate::editor_scrollbar::{Metrics, WIDTH};
+use crate::file_tools::editor_scrollbar::{Metrics, WIDTH};
 use gpui::{AnyElement, Task};
 use std::{cell::Cell, sync::Arc};
 use vorkspace_editor::editor_analysis::Analysis;
@@ -1262,7 +1262,7 @@ fn paint_rail(
             ),
             cursor_color,
         ));
-        let (add, del) = crate::editor_scrollbar::diff_colors(cx);
+        let (add, del) = crate::file_tools::editor_scrollbar::diff_colors(cx);
         // Git's layer is above the cursor/diagnostic layer in editorGit.ts.
         for change in &code.analysis.changes {
             let row = code.row(change.from);

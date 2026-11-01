@@ -31,7 +31,7 @@ mod ticket_context;
 mod title;
 mod turn_flow;
 use crate::{
-    git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
+    git_tools::git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
     input,
     pickers::{
         ModelList, ModelPicked, cached_model_name, model_display_name, model_name, remember_model,
@@ -133,7 +133,7 @@ pub(crate) struct SessionChanged;
 pub(crate) struct SessionActivityChanged;
 pub(crate) struct ChooseFolder(pub(crate) AnchorSlot);
 /// The review card asked to open the session's recorded changes.
-pub(crate) struct OpenSessionChanges(pub(crate) crate::review::ReviewTab);
+pub(crate) struct OpenSessionChanges(pub(crate) crate::git_tools::review::ReviewTab);
 pub(crate) struct Conversation {
     editing_last_turn: edit_last_turn::State,
     btw: Option<Entity<btw::Btw>>,
@@ -142,11 +142,11 @@ pub(crate) struct Conversation {
     remote_plans: remote_plans::State,
     store: Database,
     pub(crate) transcript: Entity<TranscriptView>,
-    pub(crate) review: Entity<crate::session_review::SessionReview>,
+    pub(crate) review: Entity<crate::git_tools::session_review::SessionReview>,
     _review_events: Subscription,
     _review_observation: Subscription,
     pub(crate) input: Entity<input::Input>,
-    completion: Entity<crate::composer_completion::Completion>,
+    completion: Entity<crate::composer::composer_completion::Completion>,
     _completion_event: Subscription,
     _command_removal: Subscription,
     _draft_observation: Subscription,
@@ -210,8 +210,10 @@ pub(crate) struct Conversation {
     _account_usage: Option<Subscription>,
     approvals: std::collections::VecDeque<Approval>,
     approval_ui: approvals::State,
-    questions:
-        std::collections::VecDeque<(Entity<crate::questions::QuestionCard>, Vec<Subscription>)>,
+    questions: std::collections::VecDeque<(
+        Entity<crate::composer::questions::QuestionCard>,
+        Vec<Subscription>,
+    )>,
     controls: Option<std::sync::mpsc::Sender<Control>>,
     branch: Option<String>,
     git: Option<vorkspace_core::git::Snapshot>,
@@ -346,15 +348,19 @@ impl Conversation {
             .then(|| vorkspace_model::git_cache::get(&summary.cwd))
             .flatten();
         let completion = cx.new(|cx| {
-            crate::composer_completion::Completion::new(input.clone(), summary.cwd.clone(), cx)
-                .with_store(store.clone())
+            crate::composer::composer_completion::Completion::new(
+                input.clone(),
+                summary.cwd.clone(),
+                cx,
+            )
+            .with_store(store.clone())
         });
         completion.update(cx, |completion, cx| {
             completion.set_provider(&summary.provider, cx)
         });
         let completion_event = cx.subscribe(
             &completion,
-            |this, _, event: &crate::composer_completion::ModePicked, cx| {
+            |this, _, event: &crate::composer::composer_completion::ModePicked, cx| {
                 if event.0 == "add-to-folder" {
                     this.request_folder(cx);
                 } else {
@@ -394,19 +400,22 @@ impl Conversation {
             this.persist_composer(cx);
         });
         let submission = cx.subscribe(&input, |this, _, _: &input::Submitted, cx| this.send(cx));
-        let review =
-            cx.new(|_| crate::session_review::SessionReview::new(summary.id, summary.cwd.clone()));
+        let review = cx.new(|_| {
+            crate::git_tools::session_review::SessionReview::new(summary.id, summary.cwd.clone())
+        });
         let review_events = cx.subscribe(&review, |this, review, event, cx| match event {
-            crate::session_review::SessionReviewEvent::Open { path } => {
+            crate::git_tools::session_review::SessionReviewEvent::Open { path } => {
                 let (session, cwd) = review.read(cx).session();
-                cx.emit(OpenSessionChanges(crate::review::ReviewTab::Session {
-                    cwd: cwd.to_owned(),
-                    session,
-                    path: path.clone(),
-                }));
+                cx.emit(OpenSessionChanges(
+                    crate::git_tools::review::ReviewTab::Session {
+                        cwd: cwd.to_owned(),
+                        session,
+                        path: path.clone(),
+                    },
+                ));
             }
             // Undo and Keep may rewrite files; the checkout's views reread.
-            crate::session_review::SessionReviewEvent::Changed => {
+            crate::git_tools::session_review::SessionReviewEvent::Changed => {
                 this.refresh_git(cx);
                 cx.emit(SessionChanged);
             }

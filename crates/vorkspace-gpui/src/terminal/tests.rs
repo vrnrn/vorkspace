@@ -1,4 +1,3 @@
-
 use super::*;
 use alacritty_terminal::index::Line;
 use gpui::{AppContext, Modifiers};

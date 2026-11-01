@@ -291,7 +291,7 @@ pub(crate) struct Workspace {
     /// Sidebar narrowing belongs to this run. Reopen on the full project,
     /// while saved conversations retain their own execution directories.
     #[serde(skip)]
-    pub worktree_focus: HashMap<String, crate::worktree_switcher::WorktreeFocus>,
+    pub worktree_focus: HashMap<String, crate::git_tools::worktree_switcher::WorktreeFocus>,
     /// Directly opened chats join the workspace on screen without changing
     /// their execution directory. Like workspace selection, these pins are local
     /// to the current run and disappear when their tabs close.
@@ -338,9 +338,9 @@ pub(crate) struct Workspace {
     /// Shared width for project tools and Bot details, independent of visibility.
     pub right_panel_width: f32,
     pub right_panel_tabs: Vec<crate::right_panel::RightTab>,
-    pub changes_view: crate::changes::ChangesView,
+    pub changes_view: crate::git_tools::changes::ChangesView,
     /// Each tab's file/review pane beside its chat.
-    pub reviews: std::collections::HashMap<i64, crate::review::ReviewState>,
+    pub reviews: std::collections::HashMap<i64, crate::git_tools::review::ReviewState>,
     /// Independent file panes use negative IDs in the layout tree. Their
     /// originating session supplies project/worktree scope and Add to Chat.
     pub review_owners: HashMap<i64, i64>,

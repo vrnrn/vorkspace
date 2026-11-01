@@ -160,7 +160,7 @@ pub(crate) struct Bots {
     documents: HashMap<String, Entity<crate::transcript::TranscriptView>>,
     html_documents: HashMap<String, Entity<html::Html>>,
     project_changes: changes::ProjectChanges,
-    review: Option<Entity<crate::review::ReviewPane>>,
+    review: Option<Entity<crate::git_tools::review::ReviewPane>>,
     rail_ids: Vec<String>,
     running: HashMap<i64, RunningHabit>,
     active_run: Option<i64>,

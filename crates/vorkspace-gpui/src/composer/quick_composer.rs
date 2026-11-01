@@ -69,7 +69,7 @@ impl Controller {
 }
 pub(crate) struct QuickComposer {
     input: Entity<Input>,
-    completion: Entity<crate::composer_completion::Completion>,
+    completion: Entity<crate::composer::composer_completion::Completion>,
     projects: Vec<String>,
     cwd: String,
     kind: Kind,
@@ -103,8 +103,12 @@ impl QuickComposer {
             input
         });
         let completion = cx.new(|cx| {
-            crate::composer_completion::Completion::new(input.clone(), choice.cwd.clone(), cx)
-                .with_store(store)
+            crate::composer::composer_completion::Completion::new(
+                input.clone(),
+                choice.cwd.clone(),
+                cx,
+            )
+            .with_store(store)
         });
         completion.update(cx, |completion, cx| {
             completion.set_provider(choice.kind.id(), cx)
@@ -116,7 +120,7 @@ impl QuickComposer {
             cx.observe(&input, |_, _, cx| cx.notify()),
             cx.subscribe(
                 &completion,
-                |this, _, picked: &crate::composer_completion::ModePicked, cx| {
+                |this, _, picked: &crate::composer::composer_completion::ModePicked, cx| {
                     let text = this.input.read(cx).content.trim_start().to_owned();
                     this.input.update(cx, |input, cx| {
                         input.set_text(format!("/{} {text}", picked.0), cx)

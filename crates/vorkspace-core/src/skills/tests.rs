@@ -1,4 +1,3 @@
-
 #[test]
 fn starter_skills_validate_and_never_replace_existing_content() {
     let dir = tempfile::tempdir().unwrap();

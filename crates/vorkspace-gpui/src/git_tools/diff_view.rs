@@ -687,8 +687,8 @@ impl DiffView {
         let top = self.list.logical_scroll_top();
         self.offsets.get(top.item_ix).copied().unwrap_or(0.) + top.offset_in_item.as_f32()
     }
-    fn overview_metrics(&self, height: f32) -> crate::editor_scrollbar::Metrics {
-        crate::editor_scrollbar::Metrics::new(self.top_px(), self.total, height, height)
+    fn overview_metrics(&self, height: f32) -> crate::file_tools::editor_scrollbar::Metrics {
+        crate::file_tools::editor_scrollbar::Metrics::new(self.top_px(), self.total, height, height)
     }
     fn overview_scroll(&mut self, y: Pixels, cx: &mut Context<Self>) {
         let Some(bounds) = self.overview_bounds.get() else {
@@ -703,7 +703,7 @@ impl DiffView {
         cx.notify();
     }
     fn overview(&self, cx: &mut Context<Self>) -> AnyElement {
-        use crate::editor_scrollbar::WIDTH;
+        use crate::file_tools::editor_scrollbar::WIDTH;
         let total = self.total.max(1.);
         let top = self.top_px();
         let active = self.overview_drag.is_some() || self.overview_hovered;
@@ -721,7 +721,7 @@ impl DiffView {
                 canvas(
                     move |bounds, _, _| bounds,
                     move |bounds, _, window, _| {
-                        let m = crate::editor_scrollbar::Metrics::new(
+                        let m = crate::file_tools::editor_scrollbar::Metrics::new(
                             top,
                             total,
                             bounds.size.height.as_f32(),
@@ -1983,7 +1983,7 @@ impl Render for DiffView {
                     .min_h_0()
                     // The pinned header slides up under the toolbar, never over it.
                     .overflow_hidden()
-                    .pr(px(crate::editor_scrollbar::WIDTH))
+                    .pr(px(crate::file_tools::editor_scrollbar::WIDTH))
                     .child(
                         canvas(
                             move |bounds, _, cx| {

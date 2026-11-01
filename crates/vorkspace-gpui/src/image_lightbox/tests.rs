@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{
     Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext,

@@ -1,4 +1,3 @@
-
 #[test]
 fn sidebar_usage_windows_resets_and_rail_priority() {
     use super::*;

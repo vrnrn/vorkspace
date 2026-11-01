@@ -1,4 +1,3 @@
-
 #[test]
 fn project_deletion_admission_releases_after_completion() {
     let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();

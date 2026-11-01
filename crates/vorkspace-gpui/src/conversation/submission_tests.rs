@@ -152,7 +152,7 @@ fn dropped_sender_releases_the_current_ui_and_pauses_queue_without_replay(cx: &m
                     can_remember: false,
                 });
                 let question = cx.new(|cx| {
-                    crate::questions::QuestionCard::new(
+                    crate::composer::questions::QuestionCard::new(
                         vorkspace_core::agent::Question {
                             id: "question".into(),
                             title: "Question".into(),

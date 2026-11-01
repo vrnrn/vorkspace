@@ -1,7 +1,7 @@
 //! Project workspace selection, independent of the project's identity. Existing
 //! conversations keep their execution directory and running provider process.
 use super::*;
-use crate::worktree_switcher::{Event, TabSession, WorktreeFocus, WorktreeSwitcher};
+use crate::git_tools::worktree_switcher::{Event, TabSession, WorktreeFocus, WorktreeSwitcher};
 use vorkspace_core::files::path_key;
 
 impl Shell {

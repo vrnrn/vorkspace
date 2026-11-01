@@ -5,7 +5,7 @@ impl Shell {
     pub(super) fn active_review(
         &mut self,
         cx: &mut Context<Self>,
-    ) -> Option<Entity<crate::review::ReviewPane>> {
+    ) -> Option<Entity<crate::git_tools::review::ReviewPane>> {
         let id = self.workspace.active?;
         self.review_for(id, cx)
     }
@@ -13,7 +13,7 @@ impl Shell {
         &mut self,
         id: i64,
         cx: &mut Context<Self>,
-    ) -> Option<Entity<crate::review::ReviewPane>> {
+    ) -> Option<Entity<crate::git_tools::review::ReviewPane>> {
         if let Some(review) = self.reviews.get(&id) {
             return Some(review.clone());
         }
@@ -27,13 +27,13 @@ impl Shell {
     pub(super) fn make_review(
         &mut self,
         id: i64,
-        state: crate::review::ReviewState,
+        state: crate::git_tools::review::ReviewState,
         cx: &mut Context<Self>,
-    ) -> Entity<crate::review::ReviewPane> {
-        use crate::review::ReviewEvent;
+    ) -> Entity<crate::git_tools::review::ReviewPane> {
+        use crate::git_tools::review::ReviewEvent;
         let git = self.git.clone();
         let review = cx.new(|cx| {
-            let mut pane = crate::review::ReviewPane::new(git, state, cx);
+            let mut pane = crate::git_tools::review::ReviewPane::new(git, state, cx);
             pane.pane_draggable = true;
             pane
         });
@@ -90,7 +90,7 @@ impl Shell {
     /// in beside the chat when it is new.
     pub(super) fn open_review(
         &mut self,
-        tab: crate::review::ReviewTab,
+        tab: crate::git_tools::review::ReviewTab,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -99,12 +99,12 @@ impl Shell {
     /// Explorer search previews reuse a clean file tab; explicit opens keep it.
     pub(super) fn open_review_with_preview(
         &mut self,
-        tab: crate::review::ReviewTab,
+        tab: crate::git_tools::review::ReviewTab,
         pin: Option<bool>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let crate::review::ReviewTab::File { cwd, path } = &tab {
+        if let crate::git_tools::review::ReviewTab::File { cwd, path } = &tab {
             let recent = self.workspace.recent_files.entry(cwd.clone()).or_default();
             recent.retain(|old| old != path);
             recent.insert(0, path.clone());

@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{Render, ScrollHandle, TestAppContext, WindowBounds, WindowHandle, WindowOptions};
 

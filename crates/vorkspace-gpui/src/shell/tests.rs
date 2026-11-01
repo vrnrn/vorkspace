@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{EntityInputHandler, TestAppContext, WindowHandle};
 use vorkspace_core::store::Store;
@@ -634,7 +633,7 @@ fn tab_lifecycle_closing_a_file_only_tab_restores_the_project_chat(cx: &mut Test
     window
         .update(cx, |shell, w, cx| {
             shell.open_review(
-                crate::review::ReviewTab::Commit {
+                crate::git_tools::review::ReviewTab::Commit {
                     cwd: "/work/vorkspace".into(),
                     sha: "abcdef1".into(),
                     short_sha: "abcdef1".into(),
@@ -1347,7 +1346,7 @@ fn left_tool_tabs_keep_file_review_and_shortcuts_live(cx: &mut TestAppContext) {
     window
         .update(cx, |shell, w, cx| {
             shell.open_review(
-                crate::review::ReviewTab::File {
+                crate::git_tools::review::ReviewTab::File {
                     cwd: "/work/vorkspace".into(),
                     path: "README.md".into(),
                 },
@@ -2630,7 +2629,7 @@ fn pane_limit_rejected_chat_drop_keeps_attached_dirty_file(cx: &mut TestAppConte
             shell.add(summary, cx);
             shell.workspace.split(source, SplitDir::Right);
             shell.open_review(
-                crate::review::ReviewTab::File {
+                crate::git_tools::review::ReviewTab::File {
                     cwd: directory.path().to_string_lossy().into_owned(),
                     path: path.to_string_lossy().into_owned(),
                 },
@@ -3035,7 +3034,7 @@ fn pane_surfaces_follow_the_edge_at_a_constant_width(cx: &mut TestAppContext) {
                 .elapsed(Duration::from_secs(1));
             shell.open(id, w, cx);
             shell.open_review(
-                crate::review::ReviewTab::Changes {
+                crate::git_tools::review::ReviewTab::Changes {
                     cwd: "/work/vorkspace".into(),
                     path: None,
                     staged: None,
@@ -3211,7 +3210,7 @@ fn explorer_files_share_the_review_pane_and_dirty_close_can_cancel_or_save(
         .update(cx, |shell, w, cx| {
             shell.open(id, w, cx);
             shell.open_review(
-                crate::review::ReviewTab::File {
+                crate::git_tools::review::ReviewTab::File {
                     cwd: "/tmp".into(),
                     path: path.to_string_lossy().into_owned(),
                 },
@@ -3693,7 +3692,7 @@ fn assert_closed_header_stays_hidden(cx: &mut TestAppContext, file: bool) {
             shell.open(session, w, cx);
             if file {
                 shell.open_review(
-                    crate::review::ReviewTab::File {
+                    crate::git_tools::review::ReviewTab::File {
                         cwd: "/work/vorkspace".into(),
                         path: "/tmp/header-close.rs".into(),
                     },
@@ -3977,7 +3976,7 @@ fn closing_the_last_review_tab_removes_the_pane(cx: &mut TestAppContext) {
         .update(cx, |shell, window, cx| {
             shell.open(b, window, cx);
             shell.open_review(
-                crate::review::ReviewTab::Commit {
+                crate::git_tools::review::ReviewTab::Commit {
                     cwd: "/work/vorkspace".into(),
                     sha: "abcdef1".into(),
                     short_sha: "abcdef1".into(),

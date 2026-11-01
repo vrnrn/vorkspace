@@ -1,5 +1,5 @@
 use super::*;
-use crate::explorer::DraggedFile;
+use crate::file_tools::explorer::DraggedFile;
 use gpui::ExternalPaths;
 
 impl Conversation {

@@ -3,9 +3,9 @@
 //! CommitDiff.tsx load their files four at a time off the UI thread and
 //! build each diff there too; the view only lays out rows.
 use crate::{
-    diff_view::{DiffEvent, DiffFile, DiffView},
-    file_editor::{FileEditor, FileEvent},
-    git_status::{GitChanged, ProjectGit},
+    file_tools::file_editor::{FileEditor, FileEvent},
+    git_tools::diff_view::{DiffEvent, DiffFile, DiffView},
+    git_tools::git_status::{GitChanged, ProjectGit},
     popover::{Anchor, Menu, MenuAction, MenuEvent, menu_popover},
     right_panel::{selection, spinner, stroke},
 };

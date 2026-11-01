@@ -2,7 +2,7 @@
 mod preview;
 
 use crate::{
-    explorer::DraggedFile,
+    file_tools::explorer::DraggedFile,
     input::{self, Input},
     popover::{Anchor, AnchorSlot, popover},
 };

@@ -1,4 +1,3 @@
-
 use super::*;
 use vorkspace_core::follow_up::{Message, State};
 

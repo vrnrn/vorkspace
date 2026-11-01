@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn source(entries: &[(&str, &str)]) -> DesktopPreferences {

@@ -6,7 +6,7 @@ mod document;
 mod ui;
 
 use crate::{
-    diff_view::{DiffEvent, DiffView},
+    git_tools::diff_view::{DiffEvent, DiffView},
     input::{self, Input},
     popover::AnchorSlot,
 };

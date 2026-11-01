@@ -1,4 +1,3 @@
-
 use super::*;
 fn protocol(kind: Kind) -> Protocol {
     Protocol::new(Request {

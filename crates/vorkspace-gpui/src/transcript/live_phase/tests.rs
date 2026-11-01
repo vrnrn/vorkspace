@@ -1,4 +1,3 @@
-
 use super::super::{Body, TranscriptView};
 use super::*;
 use gpui::{

@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn unsupported_history_never_resolves_or_starts_a_provider() {

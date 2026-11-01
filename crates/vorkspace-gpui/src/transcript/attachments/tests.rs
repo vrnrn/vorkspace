@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{TestAppContext, WindowOptions};
 use image::{ImageBuffer, ImageFormat, Rgba};

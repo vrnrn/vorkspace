@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{Entity, Render, TestAppContext, WindowBounds, WindowOptions, point};
 use std::{cell::RefCell, rc::Rc, time::Duration};

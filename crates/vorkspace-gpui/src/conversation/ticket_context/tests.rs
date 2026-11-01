@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{TestAppContext, WindowHandle};
 fn fixture(cx: &mut TestAppContext) -> WindowHandle<Conversation> {

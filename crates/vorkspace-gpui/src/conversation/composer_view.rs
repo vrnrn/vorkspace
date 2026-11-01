@@ -353,7 +353,7 @@ impl Conversation {
             self.settings
                 .worktree_base
                 .as_deref()
-                .map(crate::git_picker::base_label)
+                .map(crate::git_tools::git_picker::base_label)
                 .map(str::to_owned)
                 .or(self.branch.clone())
         } else {

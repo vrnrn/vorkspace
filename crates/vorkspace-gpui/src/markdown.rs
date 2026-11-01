@@ -698,7 +698,7 @@ pub(crate) fn resolve_file_links(row: &mut MarkdownRow, base: &str) {
                 && !target.starts_with("mailto:")
                 && (!target.contains("://") || target.starts_with("file://"))
             {
-                let (path, location) = crate::file_editor::file_location(&target, base);
+                let (path, location) = crate::file_tools::file_editor::file_location(&target, base);
                 run.style.link = Some(location.map_or_else(
                     || path.clone(),
                     |(line, col)| format!("{path}:{line}:{col}"),
@@ -721,7 +721,10 @@ fn open_link(url: &str, window: &mut Window, cx: &mut App) {
     if url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:") {
         cx.open_url(url);
     } else if !url.starts_with('#') && (!url.contains("://") || url.starts_with("file://")) {
-        window.dispatch_action(Box::new(crate::file_editor::OpenPath(url.into())), cx);
+        window.dispatch_action(
+            Box::new(crate::file_tools::file_editor::OpenPath(url.into())),
+            cx,
+        );
     }
 }
 

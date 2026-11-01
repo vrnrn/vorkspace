@@ -23,7 +23,7 @@ impl Shell {
         let cwd = self.workspace.project.clone();
         let kind = self.default_kind();
         let p = &self.workspace.preferences;
-        let initial = crate::quick_composer::Launch {
+        let initial = crate::composer::quick_composer::Launch {
             cwd: cwd.clone(),
             kind,
             model: p.default_models.get(kind.id()).cloned(),
@@ -56,7 +56,7 @@ impl Shell {
             },
             move |window, cx| {
                 let view = cx.new(|cx| {
-                    crate::quick_composer::QuickComposer::new(projects, choice, store, cx)
+                    crate::composer::quick_composer::QuickComposer::new(projects, choice, store, cx)
                 });
                 view.update(cx, |v, cx| {
                     v.observe_scale(window, cx);
@@ -71,7 +71,7 @@ impl Shell {
                 self.quick.events = Some(cx.subscribe_in(
                     &view,
                     window,
-                    move |this, _, launch: &crate::quick_composer::Launch, window, cx| {
+                    move |this, _, launch: &crate::composer::quick_composer::Launch, window, cx| {
                         this.quick.last = Some(launch.clone());
                         let _ = handle.update(cx, |_, window, _| window.remove_window());
                         this.quick.window = None;
@@ -85,7 +85,7 @@ impl Shell {
     }
     fn launch_quick_composer(
         &mut self,
-        launch: crate::quick_composer::Launch,
+        launch: crate::composer::quick_composer::Launch,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {

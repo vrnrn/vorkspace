@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{TestAppContext, VisualTestContext};
 
@@ -271,7 +270,7 @@ fn terminal_tabs_retain_output_and_working_copy_across_navigation_and_drag(
             );
             shell.worktree_focus.insert(
                 shell.workspace.project.clone(),
-                crate::worktree_switcher::WorktreeFocus {
+                crate::git_tools::worktree_switcher::WorktreeFocus {
                     path: "/work/feature".into(),
                     branch: Some("feature".into()),
                 },

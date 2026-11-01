@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn git_worktree_check_accepts_plain_folder_and_refuses_nested_project() {

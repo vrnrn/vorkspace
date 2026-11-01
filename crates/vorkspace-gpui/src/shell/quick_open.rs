@@ -1,5 +1,5 @@
 use super::*;
-use crate::quick_open::{Command, Picked, QuickOpen};
+use crate::file_tools::quick_open::{Command, Picked, QuickOpen};
 pub(super) struct Open {
     picker: Entity<QuickOpen>,
     restore: Option<FocusHandle>,
@@ -36,7 +36,7 @@ impl Shell {
                 Picked::File(path) => {
                     let cwd = this.working_copy().to_owned();
                     this.open_review(
-                        crate::review::ReviewTab::File {
+                        crate::git_tools::review::ReviewTab::File {
                             cwd,
                             path: path.clone(),
                         },

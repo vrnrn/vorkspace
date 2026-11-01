@@ -1,4 +1,3 @@
-
 use super::*;
 #[gpui::test]
 fn review_overview_has_no_change_markers_and_supports_scrolling_and_dragging(
@@ -33,7 +32,7 @@ fn review_overview_has_no_change_markers_and_supports_scrolling_and_dragging(
     assert_eq!(rail.size.width, px(18.));
     window
         .update(visual, |_, window, cx| {
-            let (add, del) = crate::editor_scrollbar::diff_colors(cx);
+            let (add, del) = crate::file_tools::editor_scrollbar::diff_colors(cx);
             let scale = window.scale_factor();
             let quads = window.painted_quads();
             let rail_quads: Vec<_> = quads
@@ -396,7 +395,7 @@ fn live_layout_switch_retains_hunks_folds_anchor_tokens_and_comment_draft(
         .unwrap();
     assert!(
         (left.size.width + right.size.width - viewport.size.width).abs()
-            <= px(crate::editor_scrollbar::WIDTH + 1.)
+            <= px(crate::file_tools::editor_scrollbar::WIDTH + 1.)
     );
     window
         .update(visual, |view, _, cx| {

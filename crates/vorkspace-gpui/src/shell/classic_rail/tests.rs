@@ -1,4 +1,3 @@
-
 use super::*;
 use gpui::{TestAppContext, VisualTestContext};
 use serde_json::json;

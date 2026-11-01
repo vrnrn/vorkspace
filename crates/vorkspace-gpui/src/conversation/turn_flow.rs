@@ -620,11 +620,12 @@ impl Conversation {
                             this.questions.retain(|(card, _)| card.read(cx).id() != id);
                         }
                         for request in update.questions.into_iter().filter(|_| !stopping) {
-                            let card =
-                                cx.new(|cx| crate::questions::QuestionCard::new(request, cx));
+                            let card = cx.new(|cx| {
+                                crate::composer::questions::QuestionCard::new(request, cx)
+                            });
                             let events = cx.subscribe(
                                 &card,
-                                |this, _, reply: &crate::questions::Answered, cx| {
+                                |this, _, reply: &crate::composer::questions::Answered, cx| {
                                     if this
                                         .questions
                                         .front()
@@ -668,7 +669,7 @@ impl Conversation {
                             );
                             let keep_open = cx.subscribe(
                                 &card,
-                                |this, _, request: &crate::questions::KeptOpen, cx| {
+                                |this, _, request: &crate::composer::questions::KeptOpen, cx| {
                                     if let Some(controls) = &this.controls {
                                         let _ = controls.send(Control {
                                             id: request.id.clone(),

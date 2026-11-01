@@ -639,7 +639,7 @@ impl Conversation {
                                 {
                                     format!("detached {branch}")
                                 } else if draft && self.settings.new_worktree {
-                                    crate::git_picker::base_label(branch).to_owned()
+                                    crate::git_tools::git_picker::base_label(branch).to_owned()
                                 } else {
                                     branch.clone()
                                 },

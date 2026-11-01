@@ -194,7 +194,7 @@ fn channel_settings_are_anchored_and_keep_the_conversation_and_draft_visible(
         crate::shell::bind_keys(cx);
         input::bind(cx);
         crate::popover::bind(cx);
-        crate::composer_completion::bind(cx);
+        crate::composer::composer_completion::bind(cx);
     });
     let s = setup(cx);
     let id = s.manager.update(cx, |m, cx| {

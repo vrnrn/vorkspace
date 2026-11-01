@@ -3,7 +3,7 @@
 //! and unstaged files as a list or a tree. Every Git call runs off-thread,
 //! one mutation at a time per checkout.
 use crate::{
-    git_status::{GitChanged, ProjectGit},
+    git_tools::git_status::{GitChanged, ProjectGit},
     input::{self, Input},
     popover::{
         Align, Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle, menu_popover,

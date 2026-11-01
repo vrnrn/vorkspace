@@ -138,7 +138,7 @@ impl Shell {
                         Target::File { path, location } => {
                             let cwd = this.working_copy().to_owned();
                             this.open_review(
-                                crate::review::ReviewTab::File {
+                                crate::git_tools::review::ReviewTab::File {
                                     cwd,
                                     path: path.clone(),
                                 },

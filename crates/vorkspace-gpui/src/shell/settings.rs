@@ -231,7 +231,9 @@ impl Shell {
                         Ok(files) => {
                             this.close_settings(window, cx);
                             window.dispatch_action(
-                                Box::new(crate::file_editor::OpenPath(files.memory_path)),
+                                Box::new(crate::file_tools::file_editor::OpenPath(
+                                    files.memory_path,
+                                )),
                                 cx,
                             );
                         }
@@ -434,7 +436,7 @@ impl Shell {
         }
         self.refresh_notification_permission();
         self.configure_quick_composer(cx);
-        crate::file_editor::menus(&self.workspace.preferences, cx);
+        crate::file_tools::file_editor::menus(&self.workspace.preferences, cx);
         vorkspace_core::cli::initialize(&self.workspace.preferences.binary_paths);
         self.keep_visible_idle_agents(cx);
         vorkspace_core::provider::configure_idle_agents(

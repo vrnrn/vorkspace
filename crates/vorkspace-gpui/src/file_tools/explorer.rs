@@ -3,10 +3,10 @@
 //! dropped files and VS Code-style keyboard navigation. Directory reads and
 //! every file operation run off the UI thread.
 use crate::{
-    git_status::{GitChanged, ProjectGit},
+    file_tools::project_search::{ProjectSearch, SearchEvent},
+    git_tools::git_status::{GitChanged, ProjectGit},
     input::{self, Input},
     popover::{Anchor, Menu, MenuAction, MenuEvent, MenuItem, menu_popover},
-    project_search::{ProjectSearch, SearchEvent},
     right_panel::*,
 };
 use gpui::{
