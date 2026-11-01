@@ -396,8 +396,7 @@ fn main() {
     let diagnostics_path = std::path::absolute(&database)
         .ok()
         .and_then(|path| path.parent().map(|root| root.join("diagnostics")));
-    let platform = gpui_platform::current_platform(false);
-    gpui::Application::with_platform(platform)
+    gpui::Application::with_platform(std::rc::Rc::new(gpui_macos::MacPlatform::new(false)))
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             #[cfg(target_os = "macos")]
