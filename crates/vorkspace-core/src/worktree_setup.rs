@@ -108,11 +108,18 @@ pub fn run_due(project: &Path, worktree: &Path, cancel: &AtomicBool) -> Option<S
     })
 }
 
-/// Hold a warning for the next turn, for a turn that can't carry one: a native
-/// slash command has to reach its harness unchanged.
-pub fn defer_notice(worktree: &Path, warning: &str) {
+/// Keep a warning until a prompt carries it. The turn can still end first, such as
+/// when the provider CLI is missing, and a native slash command has to reach its
+/// harness unchanged.
+pub fn hold_notice(worktree: &Path, warning: &str) {
     if let Some(marker) = marker(worktree) {
         write(&marker, NOTICE, warning);
+    }
+}
+/// The warning is in a prompt now, so no later turn repeats it.
+pub fn clear_notice(worktree: &Path) {
+    if let Some(marker) = marker(worktree) {
+        let _ = fs::remove_file(marker);
     }
 }
 
@@ -252,14 +259,15 @@ mod tests {
     }
 
     #[test]
-    fn a_deferred_warning_reaches_the_next_turn_once() {
+    fn a_held_warning_lasts_until_a_prompt_carries_it() {
         let (dir, tree) = repository();
-        defer_notice(&tree, "Worktree setup failed: no network");
+        hold_notice(&tree, "Worktree setup failed: no network");
         assert!(is_due(&tree));
-        assert_eq!(
-            run_due(dir.path(), &tree, &stopped(false)).as_deref(),
-            Some("Worktree setup failed: no network")
-        );
+        let warning = run_due(dir.path(), &tree, &stopped(false)).unwrap();
+        assert_eq!(warning, "Worktree setup failed: no network");
+        hold_notice(&tree, &warning);
+        assert!(is_due(&tree), "this turn ended before reaching a prompt");
+        clear_notice(&tree);
         assert_eq!(run_due(dir.path(), &tree, &stopped(false)), None);
     }
 

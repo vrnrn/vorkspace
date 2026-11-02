@@ -320,6 +320,12 @@ fn run_turn_using(
                 std::path::Path::new(&working),
                 &cancel,
             );
+            if let Some(warning) = &setup_warning {
+                vorkspace_core::worktree_setup::hold_notice(
+                    std::path::Path::new(&working),
+                    warning,
+                );
+            }
             if cancel.load(Ordering::Relaxed) {
                 return Err("Stopped".into());
             }
@@ -391,16 +397,15 @@ fn run_turn_using(
         // A failed setup leaves a usable worktree, so the agent hears about it and
         // can repair it instead of the turn stopping.
         let prompt = match setup_warning.take() {
-            Some(warning) if raw_native_command => {
-                vorkspace_core::worktree_setup::defer_notice(
-                    std::path::Path::new(settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd)),
-                    &warning,
-                );
-                prompt
+            Some(_) if raw_native_command => prompt,
+            Some(warning) => {
+                vorkspace_core::worktree_setup::clear_notice(std::path::Path::new(
+                    settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd),
+                ));
+                format!(
+                    "<vorkspace_context>\nVorkspace adds this context, not the user. {warning}\n</vorkspace_context>\n\n{prompt}"
+                )
             }
-            Some(warning) => format!(
-                "<vorkspace_context>\nVorkspace adds this context, not the user. {warning}\n</vorkspace_context>\n\n{prompt}"
-            ),
             None => prompt,
         };
         let cwd = settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd);

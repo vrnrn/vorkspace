@@ -269,8 +269,8 @@ fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_
     std::fs::remove_dir_all(root).unwrap();
 }
 
-#[test]
-fn the_first_turn_in_a_new_worktree_runs_its_setup() {
+/// One turn in a new worktree, with no provider CLI to reach.
+fn first_turn_with_setup(command: &str) -> (String, Vec<Update>, std::path::PathBuf) {
     let root = std::env::temp_dir().join(format!(
         "vorkspace-worktree-setup-{}",
         vorkspace_core::bot::new_id()
@@ -300,7 +300,7 @@ fn the_first_turn_in_a_new_worktree_runs_its_setup() {
     let repo = repo.canonicalize().unwrap();
     vorkspace_core::worktree_setup::set_commands(&std::collections::HashMap::from([(
         repo.to_string_lossy().into_owned(),
-        "touch prepared".to_owned(),
+        command.to_owned(),
     )]));
     let store = Store::open(std::path::Path::new(":memory:")).unwrap();
     let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
@@ -326,12 +326,31 @@ fn the_first_turn_in_a_new_worktree_runs_its_setup() {
     while let Ok(update) = rx.try_recv() {
         updates.push(update);
     }
-    assert!(updates.iter().any(|u| u.status == "Preparing worktree…"));
     let cwd = updates.iter().find_map(|u| u.worktree_cwd.clone()).unwrap();
+    (cwd, updates, repo)
+}
+fn tidy(repo: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(vorkspace_core::worktree_management::default_root(repo));
+    let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+}
+
+#[test]
+fn the_first_turn_in_a_new_worktree_runs_its_setup() {
+    let (cwd, updates, repo) = first_turn_with_setup("touch prepared");
+    assert!(updates.iter().any(|u| u.status == "Preparing worktree…"));
     assert!(std::path::Path::new(&cwd).join("prepared").exists());
     assert!(!vorkspace_core::worktree_setup::is_due(
         std::path::Path::new(&cwd)
     ));
-    let _ = std::fs::remove_dir_all(root);
-    let _ = std::fs::remove_dir_all(vorkspace_core::worktree_management::default_root(&repo));
+    tidy(&repo);
+}
+
+#[test]
+fn a_setup_failure_outlives_a_turn_that_never_reached_the_agent() {
+    let (cwd, _, repo) = first_turn_with_setup("echo no network >&2; exit 3");
+    let cwd = std::path::Path::new(&cwd);
+    assert!(vorkspace_core::worktree_setup::is_due(cwd));
+    let warning = vorkspace_core::worktree_setup::run_due(&repo, cwd, &AtomicBool::new(false));
+    assert!(warning.unwrap().contains("no network"));
+    tidy(&repo);
 }
