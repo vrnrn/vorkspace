@@ -207,13 +207,14 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             icon,
             dictation,
             setup,
+            model,
         }) => {
             let step = cx
                 .global_mut::<Helper>()
                 .control
                 .configure_setup(recording || dictation, setup);
             service::configure(recording, cx);
-            dictation::configure(dictation, cx);
+            dictation::configure(dictation, model, cx);
             sync_status(icon, cx);
             report_error(cx);
             run(step, cx);
@@ -221,9 +222,15 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
         Event::Command(Command::Relaunch { program, arguments }) => {
             cx.global_mut::<Helper>().relaunch = Some((program, arguments));
         }
-        Event::Command(Command::DownloadModel { request }) => dictation::download(request, cx),
-        Event::Command(Command::ModelStatus { request }) => dictation::model_status(request, cx),
-        Event::Command(Command::CancelModel { request }) => dictation::cancel_model(request, cx),
+        Event::Command(Command::DownloadModel { request, model }) => {
+            dictation::download(request, model, cx)
+        }
+        Event::Command(Command::ModelStatus { request, model }) => {
+            dictation::model_status(request, model, cx)
+        }
+        Event::Command(Command::CancelModel { request, model }) => {
+            dictation::cancel_model(request, model, cx)
+        }
         Event::Command(Command::DictationPermissions) => dictation::permissions(cx),
         Event::Command(Command::CancelDictation) => dictation::cancel(cx),
         Event::Command(Command::Clear) => service::clear(cx),
@@ -292,8 +299,13 @@ fn fixture() -> bool {
     let args = std::env::args().collect::<Vec<_>>();
     if args.get(1).map(String::as_str) == Some("--download-model-fixture") {
         let path = PathBuf::from(args.get(2).expect("model output path"));
-        dictation_model::download(&path, &transcribe_cpp::CancelToken::new(), |_| {})
-            .expect("fixture model download");
+        dictation_model::download(
+            vorkspace_clipboard::ModelId::default(),
+            &path,
+            &transcribe_cpp::CancelToken::new(),
+            |_| {},
+        )
+        .expect("fixture model download");
         return true;
     }
     if args.get(1).map(String::as_str) != Some("--transcribe-fixture") {
@@ -310,8 +322,13 @@ fn fixture() -> bool {
     assert!(pcm.len() <= 16000 * 120);
     println!(
         "{}",
-        dictation_model::transcribe(&model, &pcm, &transcribe_cpp::CancelToken::new())
-            .expect("fixture inference")
+        dictation_model::transcribe(
+            vorkspace_clipboard::ModelId::default(),
+            &model,
+            &pcm,
+            &transcribe_cpp::CancelToken::new()
+        )
+        .expect("fixture inference")
     );
     true
 }

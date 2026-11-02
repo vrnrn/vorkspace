@@ -2,6 +2,7 @@ use crate::controls::secondary_button;
 use crate::settings::SettingsView;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context};
+use vorkspace_clipboard::ModelId;
 
 impl SettingsView {
     pub(super) fn clipboard_group(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -44,7 +45,25 @@ impl SettingsView {
             rows
         };
         let mut rows = rows;
-        rows.push(self.row(Some("dictation-enabled"), true, "Local dictation", Some("Press ⌘, to start, then ⌘, to transcribe and insert into the selected text field. English, on your Mac. Works after quitting Vorkspace. Audio is never saved. Vox uses ⌘.".into()), vec![self.toggle("dictation-enabled", "Enable local dictation", self.prefs.dictation_enabled, false, cx, |this,on,cx|this.choose_dictation(on,cx))]));
+        let selected = self.prefs.dictation_model;
+        let selector = self.select(
+            "dictation-model-selection",
+            "Dictation model",
+            selected.key(),
+            ModelId::ALL
+                .into_iter()
+                .map(|id| (id.key().into(), id.descriptor().label.into(), None))
+                .collect(),
+            Some(232.),
+            cx,
+            |this, value, cx| {
+                if let Some(model) = ModelId::from_key(&value) {
+                    this.choose_dictation_model(model, cx);
+                }
+            },
+        );
+        rows.push(self.row(Some("dictation-model-selection"),false,"Model",Some("0.6B · Q8 GGUF. Changing model stops dictation and leaves it off. Download if prompted, then enable when ready.".into()),vec![selector]));
+        rows.push(self.row(Some("dictation-enabled"), true, "Local dictation", Some("Press ⌘, to start, then ⌘, to transcribe and insert into the selected text field. Transcribed on your Mac. Works after quitting Vorkspace. Audio is never saved. Vox uses ⌘.".into()), vec![self.toggle("dictation-enabled", "Enable local dictation", self.prefs.dictation_enabled, false, cx, |this,on,cx|this.choose_dictation(on,cx))]));
         let (status, ready) = crate::clipboard::get(cx)
             .map(|s| {
                 let s = s.read(cx);
@@ -56,7 +75,7 @@ impl SettingsView {
         rows.push(self.row(
             Some("dictation-model"),
             false,
-            "English model · 731 MB",
+            "Selected model",
             Some(if setting_up && self.dictation_onboarding.as_ref().is_some_and(|o|o.checking()) {
                 "Checking model or connecting to background helper… Cancel to leave dictation off.".into()
             } else if status.is_empty() {

@@ -4472,6 +4472,7 @@ dependencies = [
  "tempfile",
  "transcribe-cpp",
  "ureq",
+ "vorkspace-core",
  "vorkspace-macos",
  "vorkspace-ui",
 ]

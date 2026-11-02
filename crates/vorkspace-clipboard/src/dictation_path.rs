@@ -1,15 +1,19 @@
 //! Shared user storage, independent of the app bundle or its per-install socket.
+use crate::ModelId;
 use std::path::{Path, PathBuf};
-pub const MODEL_NAME: &str = "parakeet-unified-en-0.6b-Q8_0.gguf";
-pub fn resolve(home: Option<&Path>, system_home: Option<&Path>) -> Result<PathBuf, String> {
+pub fn resolve(
+    home: Option<&Path>,
+    system_home: Option<&Path>,
+    model: ModelId,
+) -> Result<PathBuf, String> {
     home.filter(|p|p.is_absolute()).or_else(||system_home.filter(|p|p.is_absolute()))
-        .map(|p|p.join(".vorkspace/dictation").join(MODEL_NAME))
+        .map(|p|p.join(".vorkspace/dictation").join(model.descriptor().filename))
         .ok_or_else(||"Could not locate your home folder. Restore HOME to your absolute home path, then retry dictation setup.".into())
 }
-pub fn model_path() -> Result<PathBuf, String> {
+pub fn model_path(model: ModelId) -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let system = system_home();
-    resolve(home.as_deref(), system.as_deref())
+    resolve(home.as_deref(), system.as_deref(), model)
 }
 fn system_home() -> Option<PathBuf> {
     use std::{
@@ -46,6 +50,10 @@ fn system_home() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const MODEL_NAME: &str = ModelId::UnifiedEnglish.descriptor().filename;
+    fn resolve(home: Option<&Path>, system: Option<&Path>) -> Result<PathBuf, String> {
+        super::resolve(home, system, ModelId::default())
+    }
     #[test]
     fn shared_user_destination_is_stable_across_bundle_relocations() {
         let home = Path::new("/Users/example");

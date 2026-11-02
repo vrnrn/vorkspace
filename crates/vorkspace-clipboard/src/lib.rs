@@ -14,8 +14,9 @@ use std::{
     sync::{Arc, Condvar, Mutex},
     time::{Duration, UNIX_EPOCH},
 };
+pub use vorkspace_core::dictation_model::ModelId;
 
-const PROTOCOL: u32 = 3;
+const PROTOCOL: u32 = 4;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 const CONNECT_ATTEMPTS: usize = 60;
 const CONNECT_DELAY: Duration = Duration::from_millis(50);
@@ -30,6 +31,7 @@ pub enum Command {
         icon: bool,
         dictation: bool,
         setup: bool,
+        model: ModelId,
     },
     /// How to reopen this exact app, including the data it was started with.
     Relaunch {
@@ -38,12 +40,15 @@ pub enum Command {
     },
     DownloadModel {
         request: u64,
+        model: ModelId,
     },
     ModelStatus {
         request: u64,
+        model: ModelId,
     },
     CancelModel {
         request: u64,
+        model: ModelId,
     },
     DictationPermissions,
     CancelDictation,
@@ -62,11 +67,22 @@ pub enum Action {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Notice {
-    Hello { protocol: u32, modified: u128 },
+    Hello {
+        protocol: u32,
+        modified: u128,
+    },
     Error(Option<String>),
     Action(Action),
-    Dictation { status: String, ready: bool },
-    Model { request: u64, state: ModelState },
+    Dictation {
+        model: ModelId,
+        status: String,
+        ready: bool,
+    },
+    Model {
+        request: u64,
+        model: ModelId,
+        state: ModelState,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -173,6 +189,7 @@ pub fn relaunch_command(app: &Path, arguments: Vec<String>) -> Command {
 
 #[derive(Clone, Copy, Default, PartialEq)]
 struct Desired {
+    model: ModelId,
     setup: bool,
     dictation: bool,
     recording: bool,
@@ -217,12 +234,20 @@ impl Supervisor {
         Self { shared, socket }
     }
 
-    pub fn configure(&self, recording: bool, icon: bool, dictation: bool, setup: bool) {
+    pub fn configure(
+        &self,
+        recording: bool,
+        icon: bool,
+        dictation: bool,
+        setup: bool,
+        model: ModelId,
+    ) {
         *self.shared.desired.lock().unwrap() = Desired {
             recording,
             icon,
             dictation,
             setup,
+            model,
         };
         self.shared.wake.notify_all();
         if !recording {
@@ -234,6 +259,7 @@ impl Supervisor {
             icon,
             dictation,
             setup,
+            model,
         };
         if !self.send(command.clone()) && !recording && !dictation && !setup {
             let shared = self.shared.clone();
@@ -338,6 +364,7 @@ fn supervise(
                 icon,
                 dictation,
                 setup,
+                model,
             } = *shared.desired.lock().unwrap();
             if send(
                 &stream,
@@ -346,6 +373,7 @@ fn supervise(
                     icon,
                     dictation,
                     setup,
+                    model,
                 },
             )
             .is_ok()

@@ -1,5 +1,5 @@
-//! One pinned artifact. A verified temporary file is synced and renamed last.
-pub use crate::dictation_path::MODEL_NAME as NAME;
+//! Pinned artifacts share verification, download and inference. A verified temporary file is synced and renamed last.
+pub use crate::ModelId;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
@@ -8,9 +8,6 @@ use std::{
     path::Path,
 };
 use transcribe_cpp::{Backend, CancelToken, Model, ModelOptions, RunOptions};
-pub const BYTES: u64 = 731_357_568;
-pub const SHA256: &str = "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795";
-pub const URL: &str = "https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/7e948f21b7bdbac698d3318db9d350f1096f3b6c/parakeet-unified-en-0.6b-Q8_0.gguf";
 /// Mutation authority for this shared artifact. Readers never need this lock.
 pub struct ModelOwner {
     _lock: File,
@@ -67,14 +64,17 @@ impl ModelOwner {
         }
     }
 }
-pub fn verified(path: &Path) -> bool {
-    verify(path, &CancelToken::new()).is_ok()
+pub fn verified(id: ModelId, path: &Path) -> bool {
+    verify(id, path, &CancelToken::new()).is_ok()
 }
-pub fn verify(path: &Path, cancel: &CancelToken) -> Result<(), String> {
+pub fn verify(id: ModelId, path: &Path, cancel: &CancelToken) -> Result<(), String> {
     let mut file = File::open(path).map_err(|_| {
-        "Download the English model in Settings → Clipboard → Dictation.".to_string()
+        format!(
+            "Download {} in Settings → Clipboard → Dictation.",
+            id.descriptor().label
+        )
     })?;
-    if file.metadata().map_err(|e| e.to_string())?.len() != BYTES {
+    if file.metadata().map_err(|e| e.to_string())?.len() != id.descriptor().bytes {
         return Err("Model size is incorrect. Download it again in Settings.".into());
     }
     let mut hash = Sha256::new();
@@ -89,19 +89,24 @@ pub fn verify(path: &Path, cancel: &CancelToken) -> Result<(), String> {
         }
         hash.update(&buf[..n]);
     }
-    if format!("{:x}", hash.finalize()) != SHA256 {
+    if format!("{:x}", hash.finalize()) != id.descriptor().sha256 {
         return Err("Model checksum failed. Download it again in Settings.".into());
     }
     Ok(())
 }
-pub fn download(path: &Path, cancel: &CancelToken, progress: impl Fn(u64)) -> Result<(), String> {
+pub fn download(
+    id: ModelId,
+    path: &Path,
+    cancel: &CancelToken,
+    progress: impl Fn(u64),
+) -> Result<(), String> {
     if cancel.is_cancelled() {
         return Err("Download cancelled".into());
     }
     let owner = ModelOwner::acquire(path)?;
     owner.reap();
     // Another install may have completed it while the consent sheet was open.
-    if verify(path, cancel).is_ok() {
+    if verify(id, path, cancel).is_ok() {
         return Ok(());
     }
     if cancel.is_cancelled() {
@@ -111,12 +116,13 @@ pub fn download(path: &Path, cancel: &CancelToken, progress: impl Fn(u64)) -> Re
         .timeout_connect(std::time::Duration::from_secs(20))
         .timeout_read(std::time::Duration::from_secs(30))
         .build()
-        .get(URL)
+        .get(id.descriptor().url)
         .call()
         .map_err(|e| format!("Download failed: {e}. Retry in Settings."))?;
-    receive_download(&owner, response.into_reader(), cancel, progress)
+    receive_download(id, &owner, response.into_reader(), cancel, progress)
 }
 fn receive_download(
+    id: ModelId,
     owner: &ModelOwner,
     mut reader: impl Read,
     cancel: &CancelToken,
@@ -150,7 +156,7 @@ fn receive_download(
                 break;
             }
             bytes += n as u64;
-            if bytes > BYTES {
+            if bytes > id.descriptor().bytes {
                 return Err("Model download exceeds expected size".into());
             }
             file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
@@ -159,15 +165,20 @@ fn receive_download(
                 last = bytes;
             }
         }
-        progress(BYTES);
+        progress(id.descriptor().bytes);
         file.sync_all().map_err(|e| e.to_string())?;
-        publish_verified(&tmp, path, cancel)
+        publish_verified(id, &tmp, path, cancel)
     })();
     let _ = std::fs::remove_file(tmp);
     result
 }
-fn publish_verified(tmp: &Path, path: &Path, cancel: &CancelToken) -> Result<(), String> {
-    verify(tmp, cancel)?;
+fn publish_verified(
+    id: ModelId,
+    tmp: &Path,
+    path: &Path,
+    cancel: &CancelToken,
+) -> Result<(), String> {
+    verify(id, tmp, cancel)?;
     if cancel.is_cancelled() {
         return Err("Download cancelled".into());
     }
@@ -176,11 +187,16 @@ fn publish_verified(tmp: &Path, path: &Path, cancel: &CancelToken) -> Result<(),
         .and_then(|f| f.sync_all())
         .map_err(|e| e.to_string())
 }
-pub fn transcribe(path: &Path, pcm: &[f32], cancel: &CancelToken) -> Result<String, String> {
+pub fn transcribe(
+    id: ModelId,
+    path: &Path,
+    pcm: &[f32],
+    cancel: &CancelToken,
+) -> Result<String, String> {
     if pcm.len() < 1600 || pcm.iter().all(|v| v.abs() < 0.001) {
         return Ok(String::new());
     }
-    verify(path, cancel)?;
+    verify(id, path, cancel)?;
     transcribe_cpp::disable_logging();
     let model = Model::load_with(
         path,
@@ -207,7 +223,7 @@ pub fn transcribe(path: &Path, pcm: &[f32], cancel: &CancelToken) -> Result<Stri
             .run(
                 &padded,
                 &RunOptions {
-                    language: Some("en".into()),
+                    language: id.descriptor().language.map(str::to_owned),
                     ..Default::default()
                 },
             )
@@ -227,13 +243,19 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("model");
         assert_eq!(
-            transcribe(&p, &vec![0.; 16000], &CancelToken::new()).unwrap(),
+            transcribe(
+                ModelId::default(),
+                &p,
+                &vec![0.; 16000],
+                &CancelToken::new()
+            )
+            .unwrap(),
             ""
         );
-        assert!(verify(&p, &CancelToken::new()).is_err());
+        assert!(verify(ModelId::default(), &p, &CancelToken::new()).is_err());
         std::fs::write(&p, b"bad").unwrap();
         assert!(
-            verify(&p, &CancelToken::new())
+            verify(ModelId::default(), &p, &CancelToken::new())
                 .unwrap_err()
                 .contains("size")
         );
@@ -244,7 +266,7 @@ mod tests {
         let p = d.path().join("model");
         let token = CancelToken::new();
         token.cancel();
-        assert!(download(&p, &token, |_| {}).is_err());
+        assert!(download(ModelId::default(), &p, &token, |_| {}).is_err());
         assert!(!p.exists());
         assert!(std::fs::read_dir(d.path()).unwrap().next().is_none());
     }
@@ -255,9 +277,11 @@ mod tests {
         let tmp = d.path().join("download");
         std::fs::write(&path, b"previous model").unwrap();
         let file = File::create(&tmp).unwrap();
-        file.set_len(BYTES).unwrap();
+        file.set_len(ModelId::UnifiedEnglish.descriptor().bytes)
+            .unwrap();
         file.sync_all().unwrap();
-        let error = publish_verified(&tmp, &path, &CancelToken::new()).unwrap_err();
+        let error =
+            publish_verified(ModelId::default(), &tmp, &path, &CancelToken::new()).unwrap_err();
         assert!(error.contains("checksum"));
         assert_eq!(std::fs::read(&path).unwrap(), b"previous model");
     }
@@ -331,8 +355,9 @@ mod ownership_tests {
             cancel: token.clone(),
         };
         let worker_token = token.clone();
-        let worker =
-            std::thread::spawn(move || receive_download(&owner, reader, &worker_token, |_| {}));
+        let worker = std::thread::spawn(move || {
+            receive_download(ModelId::default(), &owner, reader, &worker_token, |_| {})
+        });
         entered.wait();
         token.cancel();
         assert!(ModelOwner::acquire(&path).is_err());

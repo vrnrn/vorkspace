@@ -94,7 +94,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Local dictation uses the Parakeet Unified English artifact catalog and local
+Local dictation uses the Parakeet artifact catalog and local
 transcription approach inspected in anomalyco/hex (MIT), commit
 1d4904c6bba9ab91f631c8c79108c3847b1b1c60. See licenses/LICENSE-HEX-MIT.
 The static inference engine is anomalyco/transcribe.cpp (MIT), commit
@@ -104,5 +104,13 @@ The pinned GGUF conversion lists CC-BY-4.0 metadata; both upstream and
 conversion attribution are retained:
 https://huggingface.co/nvidia/parakeet-unified-en-0.6b
 https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf
+
+The optional NVIDIA Parakeet-TDT v3 model and its GGUF conversion list
+CC-BY-4.0. Conversion by handy-computer, pinned to
+85ac09ea12fc4b1112fa76810059364bc6adc9de, Q8_0. The GGUF is a quantized
+conversion of the original model; it is downloaded separately, on request:
+https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/tree/85ac09ea12fc4b1112fa76810059364bc6adc9de
+https://creativecommons.org/licenses/by/4.0/
 
 transcribe.cpp includes GGML (MIT); see licenses/LICENSE-GGML-MIT.

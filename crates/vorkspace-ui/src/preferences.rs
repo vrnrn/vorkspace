@@ -25,6 +25,7 @@ pub struct Preferences {
     pub quick_composer: bool,
     pub clipboard_history: bool,
     pub dictation_enabled: bool,
+    pub dictation_model: vorkspace_core::dictation_model::ModelId,
     pub working_agents: bool,
     pub close_to_tray: bool,
     // Appearance
@@ -141,6 +142,7 @@ impl Default for Preferences {
             quick_composer: false,
             clipboard_history: true,
             dictation_enabled: false,
+            dictation_model: Default::default(),
             working_agents: true,
             close_to_tray: true,
             theme: "dark".into(),

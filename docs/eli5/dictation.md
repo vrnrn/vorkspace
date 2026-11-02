@@ -1,11 +1,17 @@
 # Local dictation
 
 Dictation starts **off**, including when upgrading from settings that predate it.
-Choose Local dictation in Settings → General → Clipboard & Dictation. If the model
-is already verified, it turns on immediately. Otherwise Vorkspace asks before
-downloading Parakeet Unified English (about 731 MB), shows where it will be saved,
-and offers Download or Cancel. Dictation stays off until that download is verified.
-Cancel, or close the dialog, to leave it off. Then click Set up permissions. Allow Microphone and
+The Model dropdown in Settings → General → Clipboard & Dictation offers
+**Parakeet Unified English** (the default) and **Parakeet-TDT v3**. Choosing one
+stops dictation and leaves it off. If it needs a download, Vorkspace asks first,
+naming that model, its size (about 731 MB for Unified or 740 MB for TDT), and
+where it will be saved. Choose Download or Cancel. Cancelling keeps your new
+selection with dictation off. An installed, verified model is reused. After
+changing models, switch Local dictation on when ready.
+
+Switching Local dictation on also checks the selected model and asks to download
+it if needed. Dictation stays off until that download is verified. Nothing
+downloads the other model automatically. Then click Set up permissions. Allow Microphone and
 Accessibility for **vorkspace Clipboard** in macOS Privacy & Security settings.
 That is Vorkspace's small background helper, which also keeps clipboard history.
 
@@ -35,7 +41,9 @@ checks the new model before replacing it.
 
 The model and its temporary downloads live in **~/.vorkspace/dictation/**. Moving
 the app does not change this folder. All your Vorkspace installs share it, and
-only one can download or clean up unfinished downloads at a time. Other installs
+only one can download or clean up unfinished downloads for the same model at
+a time. Both models can stay installed together; downloading one leaves the
+other alone. Other installs
 can still read a verified model. If one is busy, wait and retry; an already
 verified model will not be downloaded again. If Vorkspace cannot find your home
 folder, it explains the problem instead of saving the model elsewhere.
@@ -44,3 +52,9 @@ Nothing downloads on startup or before you choose Download. A slow connection to
 the background helper keeps your request waiting. Cancel stops the acquisition;
 its worker finishes cleanup before another download can start. Replies from that
 cancelled request cannot turn dictation on later. No old cache is moved automatically.
+
+Your model choice is saved and sent to the background helper, so it still applies
+after quitting or reopening the main app. Changing models discards old dictation
+work. Old download messages cannot mark the new model ready or turn it on. TDT is
+available as an option; this does not claim Vorkspace has qualified its speed or
+transcription quality.

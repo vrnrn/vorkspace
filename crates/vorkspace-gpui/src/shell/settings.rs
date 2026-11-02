@@ -443,6 +443,7 @@ impl Shell {
             // Retain the saved preference key so existing users keep their choice.
             self.workspace.preferences.bot_menu_bar_icon,
             self.workspace.preferences.dictation_enabled,
+            self.workspace.preferences.dictation_model,
             cx,
         );
         if let Some(vox) = &self.vox {

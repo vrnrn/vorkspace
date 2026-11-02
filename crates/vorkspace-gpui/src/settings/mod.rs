@@ -308,7 +308,7 @@ impl SettingsView {
         }
         cx.on_release(|this, cx| {
             if let Some(onboarding) = this.dictation_onboarding.take() {
-                crate::clipboard::cancel_model(onboarding.request, cx);
+                crate::clipboard::cancel_model(onboarding.request, onboarding.model, cx);
             }
         })
         .detach();

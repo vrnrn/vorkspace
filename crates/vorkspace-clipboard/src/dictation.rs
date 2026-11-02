@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 use transcribe_cpp::CancelToken;
-use vorkspace_clipboard::{ModelState, dictation_model as model, dictation_path};
+use vorkspace_clipboard::{ModelId, ModelState, dictation_model as model, dictation_path};
 use vorkspace_clipboard::{
     Notice,
     dictation_state::{Attempt, DownloadSlot, Phase},
@@ -33,8 +33,11 @@ pub struct Service {
     cancel: CancelToken,
     download_cancel: CancelToken,
     downloads: DownloadSlot,
-    pending_download: Option<u64>,
-    model_notice: Option<(u64, ModelState)>,
+    pending_download: Option<(u64, ModelId)>,
+    selected: ModelId,
+    capture_model: Option<ModelId>,
+    download_model: Option<ModelId>,
+    model_notice: Option<(u64, ModelId, ModelState)>,
     initializing: bool,
     verification: u64,
     ready: bool,
@@ -43,7 +46,7 @@ pub struct Service {
     panel: Option<gpui::WindowHandle<panel::Panel>>,
 }
 pub fn init(cx: &mut App) {
-    let path = dictation_path::model_path();
+    let path = dictation_path::model_path(ModelId::default());
     let service = cx.new(|_| Service {
         attempt: Attempt::default(),
         lease: None,
@@ -53,11 +56,14 @@ pub fn init(cx: &mut App) {
         download_cancel: CancelToken::new(),
         downloads: DownloadSlot::default(),
         pending_download: None,
+        selected: ModelId::default(),
+        capture_model: None,
+        download_model: None,
         model_notice: None,
         initializing: true,
         verification: 0,
         ready: false,
-        status: "Checking the English model…".into(),
+        status: "Checking selected model…".into(),
         model: path,
         panel: None,
     });
@@ -71,17 +77,34 @@ fn get(cx: &App) -> Entity<Service> {
 pub fn status(cx: &App) {
     get(cx).read(cx).publish(cx)
 }
-pub fn configure(enabled: bool, cx: &mut App) {
+pub fn configure(enabled: bool, selected: ModelId, cx: &mut App) {
     get(cx).update(cx, |s, cx| {
-        if s.attempt.enabled == enabled {
+        let changed = s.selected != selected;
+        if s.attempt.enabled == enabled && !changed {
             return;
         }
-        s.attempt.enabled = enabled;
-        if !enabled {
+        // Retire the previous owner before changing model identity. Cancelling
+        // inference/download keeps its worker slot until the completion joins.
+        if changed || !enabled {
             s.hotkey = None;
             s.cancel(cx);
-            if let Some(id) = s.downloads.id().or(s.pending_download) {
-                s.cancel_download(id, cx);
+            if let Some((request, model)) = s
+                .pending_download
+                .or_else(|| s.downloads.id().zip(s.download_model))
+            {
+                s.cancel_download(request, model, cx);
+            }
+        }
+        s.attempt.enabled = enabled;
+        if changed {
+            s.selected = selected;
+            s.model = dictation_path::model_path(selected);
+            s.verification += 1;
+            s.ready = false;
+        }
+        if !enabled {
+            if changed {
+                s.check_ready(cx);
             }
             return;
         }
@@ -107,21 +130,26 @@ pub fn permissions(_: &mut App) {
 pub fn cancel(cx: &mut App) {
     get(cx).update(cx, |s, cx| {
         s.cancel(cx);
-        if let Some(id) = s.downloads.id().or(s.pending_download) {
-            s.cancel_download(id, cx);
+        if let Some((id, model)) = s
+            .pending_download
+            .or_else(|| s.downloads.id().zip(s.download_model))
+        {
+            s.cancel_download(id, model, cx);
         }
     })
 }
-pub fn cancel_model(request: u64, cx: &mut App) {
-    get(cx).update(cx, |s, cx| s.cancel_download(request, cx));
+pub fn cancel_model(request: u64, model: ModelId, cx: &mut App) {
+    get(cx).update(cx, |s, cx| s.cancel_download(request, model, cx));
 }
-pub fn model_status(request: u64, cx: &mut App) {
+pub fn model_status(request: u64, model: ModelId, cx: &mut App) {
     get(cx).update(cx, |s, cx| {
-        if let Some((id, state)) = &s.model_notice
+        if let Some((id, saved_model, state)) = &s.model_notice
             && *id == request
+            && *saved_model == model
         {
             crate::notify(
                 &Notice::Model {
+                    model,
                     request,
                     state: state.clone(),
                 },
@@ -130,15 +158,18 @@ pub fn model_status(request: u64, cx: &mut App) {
             return;
         }
         // Read-only recovery after reconnect or helper replacement; never replay download.
-        let path = s.model.clone();
+        let path = dictation_path::model_path(model);
         cx.spawn(async move |this, cx| {
             let ready = cx
                 .background_executor()
-                .spawn(async move { path.and_then(|p| model::verify(&p, &CancelToken::new())) })
+                .spawn(
+                    async move { path.and_then(|p| model::verify(model, &p, &CancelToken::new())) },
+                )
                 .await;
             let _ = this.update(cx, |_, cx| {
                 crate::notify(
                     &Notice::Model {
+                        model,
                         request,
                         state: if ready.is_ok() {
                             ModelState::Ready
@@ -153,12 +184,26 @@ pub fn model_status(request: u64, cx: &mut App) {
         .detach();
     });
 }
-pub fn download(request: u64, cx: &mut App) {
+pub fn download(request: u64, model: ModelId, cx: &mut App) {
     get(cx).update(cx, |s, cx| {
+        if model != s.selected {
+            crate::notify(
+                &Notice::Model {
+                    request,
+                    model,
+                    state: ModelState::Cancelled,
+                },
+                cx,
+            );
+            return;
+        }
         if s.initializing {
-            if s.pending_download.is_some_and(|old| old != request) {
+            if s.pending_download
+                .is_some_and(|old| old != (request, model))
+            {
                 crate::notify(
                     &Notice::Model {
+                        model,
                         request,
                         state: ModelState::Error(
                             "A model request is already checking. Cancel or wait, then retry."
@@ -169,10 +214,10 @@ pub fn download(request: u64, cx: &mut App) {
                 );
                 return;
             }
-            s.pending_download = Some(request);
-            s.model_event(request, ModelState::Checking, cx);
+            s.pending_download = Some((request, model));
+            s.model_event(request, model, ModelState::Checking, cx);
         } else {
-            s.start_download(request, cx);
+            s.start_download(request, model, cx);
         }
     });
 }
@@ -181,16 +226,17 @@ impl Service {
         self.verification += 1;
         let epoch = self.verification;
         let path = self.model.clone();
+        let selected = self.selected;
         self.initializing = true;
         self.ready = false;
-        self.status = "Checking the English model…".into();
+        self.status = format!("Checking {}…", selected.descriptor().label);
         self.publish(cx);
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
                     path.as_ref()
-                        .map(|p| model::verified(p))
+                        .map(|p| model::verified(selected, p))
                         .map_err(Clone::clone)
                 })
                 .await;
@@ -207,33 +253,46 @@ impl Service {
         self.status = result.map_or_else(
             |e| e,
             |r| {
-                if r {
+                if r && self.attempt.enabled {
                     "Ready · ⌘, to start and stop".into()
+                } else if r {
+                    format!(
+                        "{} verified. Enable dictation to start.",
+                        self.selected.descriptor().label
+                    )
                 } else {
-                    "Download the English model to begin.".into()
+                    format!("Download {} to begin.", self.selected.descriptor().label)
                 }
             },
         );
         self.publish(cx);
-        if let Some(request) = self.pending_download.take() {
-            self.start_download(request, cx);
+        if let Some((request, model)) = self.pending_download.take() {
+            self.start_download(request, model, cx);
         }
     }
 
-    fn model_event(&mut self, request: u64, state: ModelState, cx: &App) {
-        self.model_notice = Some((request, state.clone()));
-        crate::notify(&Notice::Model { request, state }, cx);
+    fn model_event(&mut self, request: u64, model: ModelId, state: ModelState, cx: &App) {
+        self.model_notice = Some((request, model, state.clone()));
+        crate::notify(
+            &Notice::Model {
+                request,
+                model,
+                state,
+            },
+            cx,
+        );
     }
-    fn cancel_download(&mut self, request: u64, cx: &mut Context<Self>) {
-        if self.pending_download == Some(request) {
+    fn cancel_download(&mut self, request: u64, model: ModelId, cx: &mut Context<Self>) {
+        if self.pending_download == Some((request, model)) {
             self.pending_download = None;
-            self.model_event(request, ModelState::Cancelled, cx);
-        } else if self.downloads.cancel(request) {
+            self.model_event(request, model, ModelState::Cancelled, cx);
+        } else if self.download_model == Some(model) && self.downloads.cancel(request) {
             self.download_cancel.cancel();
-            self.model_event(request, ModelState::Cancelling, cx);
+            self.model_event(request, model, ModelState::Cancelling, cx);
         } else {
             crate::notify(
                 &Notice::Model {
+                    model,
                     request,
                     state: ModelState::Cancelled,
                 },
@@ -241,14 +300,22 @@ impl Service {
             );
         }
     }
-    fn start_download(&mut self, request: u64, cx: &mut Context<Self>) {
-        if self.pending_download == Some(request) {
+    fn start_download(&mut self, request: u64, model: ModelId, cx: &mut Context<Self>) {
+        if self.pending_download == Some((request, model)) {
             self.pending_download = None;
         }
-        if self.downloads.id() == Some(request) {
-            if let Some((_, state)) = &self.model_notice {
+        if model != self.selected {
+            self.model_event(request, model, ModelState::Cancelled, cx);
+            return;
+        }
+        if self.downloads.id() == Some(request) && self.download_model == Some(model) {
+            if let Some((id, saved_model, state)) = &self.model_notice
+                && *id == request
+                && *saved_model == model
+            {
                 crate::notify(
                     &Notice::Model {
+                        model,
                         request,
                         state: state.clone(),
                     },
@@ -260,13 +327,14 @@ impl Service {
         let path = match self.model.clone() {
             Ok(p) => p,
             Err(e) => {
-                self.model_event(request, ModelState::Error(e), cx);
+                self.model_event(request, model, ModelState::Error(e), cx);
                 return;
             }
         };
         if self.attempt.phase != Phase::Idle || !self.downloads.begin(request) {
             crate::notify(
                 &Notice::Model {
+                    model,
                     request,
                     state: ModelState::Error(
                         "A previous dictation or model job is still finishing. Retry in a moment."
@@ -279,15 +347,19 @@ impl Service {
         }
         self.verification += 1;
         self.initializing = false;
+        self.download_model = Some(model);
         self.download_cancel = CancelToken::new();
         let cancel = self.download_cancel.clone();
-        self.model_event(request, ModelState::Downloading(0), cx);
+        self.model_event(request, model, ModelState::Downloading(0), cx);
         let (tx, rx) = async_channel::bounded(1);
         cx.spawn(async move |this, cx| {
             while let Ok(bytes) = rx.recv().await {
                 let _ = this.update(cx, |s, cx| {
-                    if s.downloads.accepts(request) {
-                        s.model_event(request, ModelState::Downloading(bytes), cx);
+                    if s.selected == model
+                        && s.download_model == Some(model)
+                        && s.downloads.accepts(request)
+                    {
+                        s.model_event(request, model, ModelState::Downloading(bytes), cx);
                     }
                 });
             }
@@ -297,7 +369,7 @@ impl Service {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    model::download(&path, &cancel, |bytes| {
+                    model::download(model, &path, &cancel, |bytes| {
                         let _ = tx.try_send(bytes);
                     })
                 })
@@ -306,7 +378,8 @@ impl Service {
                 let Some(publish) = s.downloads.finish(request) else {
                     return;
                 };
-                let state = if !publish {
+                s.download_model = None;
+                let state = if !publish || s.selected != model {
                     ModelState::Cancelled
                 } else {
                     match result {
@@ -314,19 +387,20 @@ impl Service {
                             s.verification += 1;
                             s.initializing = false;
                             s.ready = true;
+                            s.status = format!("{} verified.", model.descriptor().label);
                             ModelState::Ready
                         }
                         Err(e) => ModelState::Error(e),
                     }
                 };
-                s.model_event(request, state, cx);
-                if s.attempt.enabled {
+                s.model_event(request, model, state, cx);
+                if s.attempt.enabled && s.selected == model {
                     s.check_ready(cx);
                 } else {
                     s.publish(cx);
                 }
-                if let Some(pending) = s.pending_download.take() {
-                    s.start_download(pending, cx);
+                if let Some((pending, pending_model)) = s.pending_download.take() {
+                    s.start_download(pending, pending_model, cx);
                 }
             });
         })
@@ -336,6 +410,7 @@ impl Service {
     fn publish(&self, cx: &App) {
         crate::notify(
             &Notice::Dictation {
+                model: self.selected,
                 status: self.shortcut_error.as_ref().map_or_else(
                     || self.status.clone(),
                     |e| format!("{}\n⌘,: {e}", self.status),
@@ -344,9 +419,10 @@ impl Service {
             },
             cx,
         );
-        if let Some((request, state)) = &self.model_notice {
+        if let Some((request, model, state)) = &self.model_notice {
             crate::notify(
                 &Notice::Model {
+                    model: *model,
                     request: *request,
                     state: state.clone(),
                 },
@@ -398,6 +474,7 @@ impl Service {
     fn cancel(&mut self, cx: &mut Context<Self>) {
         self.cancel.cancel();
         self.attempt.cancel();
+        self.capture_model = None;
         unsafe { vorkspace_dictation_cancel() };
         self.hide(cx);
         if self.attempt.phase == Phase::Idle {
@@ -434,8 +511,7 @@ impl Service {
                 }
                 if self.initializing {
                     self.status =
-                        "Checking the English model… Try dictation when verification finishes."
-                            .into();
+                        "Checking selected model… Try dictation when verification finishes.".into();
                     self.publish(cx);
                     self.lease = None;
                     return;
@@ -443,7 +519,10 @@ impl Service {
                 if !self.ready {
                     self.attempt.epoch += 1;
                     self.error(
-                        "Download the English model in Settings → Clipboard → Dictation.".into(),
+                        format!(
+                            "Download {} in Settings → Clipboard → Dictation.",
+                            self.selected.descriptor().label
+                        ),
                         cx,
                     );
                     return;
@@ -451,6 +530,7 @@ impl Service {
                 let Some(epoch) = self.attempt.begin() else {
                     return;
                 };
+                self.capture_model = Some(self.selected);
                 let result = unsafe { vorkspace_dictation_start() };
                 if result != 0 {
                     self.attempt.cancel();
@@ -492,6 +572,9 @@ impl Service {
         }
     }
     fn stop(&mut self, cx: &mut Context<Self>) {
+        let Some(selected) = self.capture_model else {
+            return;
+        };
         let Some(epoch) = self.attempt.stop() else {
             return;
         };
@@ -506,16 +589,19 @@ impl Service {
         }
         unsafe { vorkspace_dictation_stop(receive) };
         let pcm = PCM.with(|v| std::mem::take(&mut *v.borrow_mut()));
-        let path = self.model.clone();
+        self.capture_model = None;
+        let path = dictation_path::model_path(selected);
         let cancel = self.cancel.clone();
         self.status = "Transcribing locally…".into();
         self.publish(cx);
         self.display("Transcribing…", false, cx);
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { path.and_then(|p| model::transcribe(&p, &pcm, &cancel)) })
-                .await;
+            let result =
+                cx.background_executor()
+                    .spawn(async move {
+                        path.and_then(|p| model::transcribe(selected, &p, &pcm, &cancel))
+                    })
+                    .await;
             // Shortcut modifiers must be released, but cancellation stays responsive.
             for _ in 0..50 {
                 if !unsafe { vorkspace_dictation_modifiers_down() } {
@@ -526,7 +612,8 @@ impl Service {
                     .await;
             }
             let _ = this.update(cx, |s, cx| {
-                if !s.attempt.complete(epoch) {
+                let current = s.attempt.complete(epoch);
+                if !current || s.selected != selected {
                     s.lease = None;
                     return;
                 }
@@ -582,7 +669,7 @@ fn native_error(code: i32) -> &'static str {
 }
 
 pub fn shutdown(cx: &mut App) {
-    configure(false, cx);
+    configure(false, get(cx).read(cx).selected, cx);
     // A posted Cmd-V may not have reached the destination yet. Keep the clipboard
     // available through its normal read window before restoring and terminating.
     cx.spawn(async move |cx| {
@@ -608,14 +695,17 @@ mod model_tests {
             cx.set_global(crate::Helper::default());
             init(cx);
             let service = get(cx);
-            download(99, cx);
-            assert_eq!(service.read(cx).pending_download, Some(99));
+            download(99, ModelId::default(), cx);
+            assert_eq!(
+                service.read(cx).pending_download,
+                Some((99, ModelId::default()))
+            );
             assert!(service.read(cx).downloads.id().is_none());
-            cancel_model(99, cx);
+            cancel_model(99, ModelId::default(), cx);
             assert!(service.read(cx).pending_download.is_none());
             assert_eq!(
                 service.read(cx).model_notice,
-                Some((99, ModelState::Cancelled))
+                Some((99, ModelId::default(), ModelState::Cancelled))
             );
         });
     }
@@ -630,6 +720,7 @@ mod model_tests {
             service.update(cx, |s, _| {
                 assert!(s.downloads.begin(7));
                 s.download_cancel = CancelToken::new();
+                s.download_model = Some(ModelId::default());
             });
             cancel(cx);
             service.update(cx, |s, _| {
@@ -674,7 +765,7 @@ mod model_tests {
             service.update(cx, |s, _| {
                 s.model = Err("isolated model destination unavailable".into())
             });
-            download(88, cx);
+            download(88, ModelId::default(), cx);
             service.update(cx, |s, cx| {
                 s.checked(s.verification, Ok(false), cx);
                 assert!(s.pending_download.is_none());
@@ -682,6 +773,7 @@ mod model_tests {
                     s.model_notice,
                     Some((
                         88,
+                        ModelId::default(),
                         ModelState::Error("isolated model destination unavailable".into())
                     ))
                 );

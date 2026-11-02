@@ -1,10 +1,13 @@
 //! Explicit, unsaved consent until a model has passed integrity verification.
 use super::*;
 use crate::controls::{primary_button, secondary_button};
-use vorkspace_clipboard::{ModelState, dictation_model, dictation_path};
+#[cfg(not(test))]
+use vorkspace_clipboard::dictation_model;
+use vorkspace_clipboard::{ModelId, ModelState, dictation_path};
 #[derive(Clone, Debug)]
 pub(super) struct Onboarding {
     pub request: u64,
+    pub model: ModelId,
     destination: Result<std::path::PathBuf, String>,
     enable: bool,
     phase: ModelState,
@@ -15,6 +18,18 @@ impl Onboarding {
     }
 }
 impl SettingsView {
+    pub(super) fn choose_dictation_model(&mut self, model: ModelId, cx: &mut Context<Self>) {
+        if self.prefs.dictation_model == model {
+            return;
+        }
+        self.cancel_dictation_setup(cx);
+        crate::clipboard::select_model(model, cx);
+        self.update(cx, |p| {
+            p.dictation_enabled = false;
+            p.dictation_model = model;
+        });
+        self.begin_dictation_setup(false, cx);
+    }
     pub(super) fn choose_dictation(&mut self, on: bool, cx: &mut Context<Self>) {
         if !on {
             self.cancel_dictation_setup(cx);
@@ -29,9 +44,11 @@ impl SettingsView {
             return;
         }
         let request = crate::clipboard::next_model_request();
-        let destination = dictation_path::model_path();
+        let model = self.prefs.dictation_model;
+        let destination = dictation_path::model_path(model);
         self.dictation_onboarding = Some(Onboarding {
             request,
+            model,
             destination: destination.clone(),
             enable,
             phase: ModelState::Checking,
@@ -41,7 +58,7 @@ impl SettingsView {
         cx.spawn(async move |this, cx| {
             let ready = cx
                 .background_executor()
-                .spawn(async move { destination.map(|p| dictation_model::verified(&p)) })
+                .spawn(async move { destination.map(|p| dictation_model::verified(model, &p)) })
                 .await;
             let _ = this.update(cx, |this, cx| this.dictation_checked(request, ready, cx));
         })
@@ -58,7 +75,10 @@ impl SettingsView {
         let Some(onboarding) = &mut self.dictation_onboarding else {
             return;
         };
-        if onboarding.request != request || onboarding.phase != ModelState::Checking {
+        if onboarding.model != self.prefs.dictation_model
+            || onboarding.request != request
+            || onboarding.phase != ModelState::Checking
+        {
             return;
         }
         onboarding.phase = match result {
@@ -74,7 +94,7 @@ impl SettingsView {
     }
     pub(super) fn cancel_dictation_setup(&mut self, cx: &mut Context<Self>) {
         if let Some(onboarding) = self.dictation_onboarding.take() {
-            crate::clipboard::cancel_model(onboarding.request, cx);
+            crate::clipboard::cancel_model(onboarding.request, onboarding.model, cx);
         }
         cx.notify();
     }
@@ -82,10 +102,13 @@ impl SettingsView {
         let Some(onboarding) = self.dictation_onboarding.take() else {
             return;
         };
+        if onboarding.model != self.prefs.dictation_model {
+            return;
+        }
         if onboarding.enable {
             self.update(cx, |p| p.dictation_enabled = true);
         } else {
-            crate::clipboard::finish_model(onboarding.request, cx);
+            crate::clipboard::finish_model(onboarding.request, onboarding.model, cx);
         }
         cx.notify();
     }
@@ -107,7 +130,7 @@ impl SettingsView {
         // The only network admission point is this explicit Download action.
         let request = crate::clipboard::next_model_request();
         onboarding.request = request;
-        match crate::clipboard::dictation_download(request, cx) {
+        match crate::clipboard::dictation_download(request, onboarding.model, cx) {
             Ok(()) => onboarding.phase = ModelState::Downloading(0),
             Err(e) => onboarding.phase = ModelState::Error(e),
         }
@@ -115,13 +138,15 @@ impl SettingsView {
     }
     pub(super) fn dictation_notice(&mut self, cx: &mut Context<Self>) {
         let notice = crate::clipboard::get(cx).and_then(|s| s.read(cx).model_notice.clone());
-        let Some((request, state)) = notice else {
+        let Some((request, model, state)) = notice else {
             return;
         };
         let Some(onboarding) = &mut self.dictation_onboarding else {
             return;
         };
-        if onboarding.request != request
+        if model != onboarding.model
+            || model != self.prefs.dictation_model
+            || onboarding.request != request
             || !matches!(
                 onboarding.phase,
                 ModelState::Checking | ModelState::Downloading(_) | ModelState::Cancelling
@@ -158,11 +183,14 @@ impl SettingsView {
             ModelState::Ready => {
                 "The existing model is verified. Download only if you want to replace it.".into()
             }
-            ModelState::Downloading(bytes) if *bytes == dictation_model::BYTES => {
+            ModelState::Downloading(bytes) if *bytes == onboarding.model.descriptor().bytes => {
                 "Verifying download…".into()
             }
             ModelState::Downloading(bytes) => {
-                format!("Downloading… {}%", bytes * 100 / dictation_model::BYTES)
+                format!(
+                    "Downloading… {}%",
+                    bytes * 100 / onboarding.model.descriptor().bytes
+                )
             }
             ModelState::Cancelling => "Cancelling download…".into(),
             ModelState::Cancelled => "Download cancelled. Dictation is still off.".into(),
@@ -192,7 +220,7 @@ impl SettingsView {
                 .border_1().border_color(content(0.1)).text_color(content(1.))
                 .p_4().flex().flex_col().gap_3()
                 .child(div().text_size(px(16.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Download dictation model?"))
-                .child(div().text_size(px(13.)).child("Parakeet Unified English · about 731 MB"))
+                .child(div().text_size(px(13.)).child(format!("{} · about {} MB",onboarding.model.descriptor().label, (onboarding.model.descriptor().bytes + 500_000) / 1_000_000)))
                 .child(div().text_size(px(12.)).text_color(content(0.85)).child("Downloaded once for all Vorkspace installs on this Mac. Speech is transcribed locally."))
                 .child(div().text_size(px(12.)).child(format!("Save to: {destination}")))
                 .child(div().id("dictation-setup-status").text_size(px(12.)).text_color(content(0.85)).child(status))
@@ -286,7 +314,7 @@ mod tests {
             let service = crate::clipboard::get(cx).unwrap();
             assert_eq!(
                 service.read(cx).model_notice,
-                Some((cancelled, ModelState::Checking))
+                Some((cancelled, ModelId::default(), ModelState::Checking))
             );
             v.cancel_dictation_setup(cx);
             v.choose_dictation(true, cx);
@@ -381,10 +409,11 @@ mod preview_tests {
                         view.discovery_loading = false;
                         view.dictation_onboarding = Some(Onboarding {
                             request: 1,
+                            model: ModelId::default(),
                             destination: Ok(std::path::PathBuf::from(
                                 "/Users/example/.vorkspace/dictation",
                             )
-                            .join(dictation_model::NAME)),
+                            .join(ModelId::default().descriptor().filename)),
                             enable: true,
                             phase,
                         });

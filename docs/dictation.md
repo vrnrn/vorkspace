@@ -1,13 +1,20 @@
 # Local dictation
 
 Dictation is **off by default**, including old preferences that have no dictation
-setting. Choose **Local dictation** in Settings → General → Clipboard & Dictation.
-Settings checks the shared model first. If it is already verified, dictation is
-enabled without another download. Otherwise a consent dialog names **Parakeet
-Unified English**, its approximate **731 MB** size, and the destination
-`~/.vorkspace/dictation/`, with **Download** and **Cancel** actions. The saved
+setting. In Settings → General → Clipboard & Dictation, the **Model** dropdown
+chooses **Parakeet Unified English** (the default) or **Parakeet-TDT v3**. Both
+are 0.6B Q8 GGUF artifacts. Selecting a model stops dictation and leaves it off;
+selection alone never enables capture. If the selected artifact is missing,
+Settings asks for Download or Cancel, naming that model, its approximate size
+(**731 MB** Unified, **740 MB** TDT), and `~/.vorkspace/dictation/` as destination.
+Cancelling keeps the newly selected model with dictation off. A verified installed
+artifact is reused without a download. After changing models, choose **Local
+dictation** to enable it.
+
+Enabling also checks the selected artifact and prompts if needed. The saved
 preference remains off until download and integrity verification succeed. Cancel
-or dismiss the dialog to leave it off. Use **Set up permissions** afterward. macOS must allow
+or dismiss the dialog to leave it off. Only that selected model is downloaded.
+Use **Set up permissions** afterward. macOS must allow
 Microphone and Accessibility for **vorkspace Clipboard**, the nested helper at
 `vorkspace.app/Contents/Helpers/vorkspace Clipboard.app`. Denied permissions can
 be changed in System Settings → Privacy & Security. Development bundles have
@@ -56,12 +63,34 @@ artifact catalog were inspected in Hex at
 `1d4904c6bba9ab91f631c8c79108c3847b1b1c60`; retained MIT notices ship in Resources.
 There is no cloud inference, rewriting, history or idle warm capture.
 
-The model is `handy-computer/parakeet-unified-en-0.6b-gguf` revision
+Unified uses `handy-computer/parakeet-unified-en-0.6b-gguf` revision
 `7e948f21b7bdbac698d3318db9d350f1096f3b6c`, file
 `parakeet-unified-en-0.6b-Q8_0.gguf`, exactly 731,357,568 bytes, SHA-256
 `4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795`.
 NVIDIA supplies the original model under its Open Model License; the conversion
 catalog lists CC-BY-4.0 metadata. See bundled NOTICE and the linked model cards.
+
+TDT uses [`handy-computer/parakeet-tdt-0.6b-v3-gguf`](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/tree/85ac09ea12fc4b1112fa76810059364bc6adc9de)
+revision `85ac09ea12fc4b1112fa76810059364bc6adc9de`, file
+`parakeet-tdt-0.6b-v3-Q8_0.gguf`, exactly 739,508,576 bytes, SHA-256
+`5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7`.
+The [NVIDIA original](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) and pinned
+conversion list CC-BY-4.0. The runtime reads the GGUF head metadata and dispatches
+to its TDT decoder (legacy v2/v3 default); Unified uses the same load/session API.
+Unified supplies the English language hint; the pinned TDT artifact has no language
+prompt input. TDT is a selectable alternative, without a Vorkspace runtime,
+accuracy or performance qualification claim.
+
+A typed model identity and descriptor in `vorkspace-core` own these pins; both
+models share the helper's verification, download and inference implementation.
+The preference persists the selected identity, including while dictation is off.
+Helper control protocol 4 carries it in configuration and every model request
+and notice, preserving the choice after Quit/reconnect and replacing older helpers
+through the existing handshake. Capture and transcription snapshot the model.
+A selection change cancels the old attempt before changing helper ownership;
+its epoch and model identity fence insertion. Download identity and model identity
+fence progress/readiness, retaining cancelled worker admission until completion.
+
 Only the explicit model download uses the network. Download progress and errors
 return over control IPC. Download writes an owner-only exclusive temporary file,
 checks size and SHA-256, syncs, and renames last. A failed download leaves the
@@ -69,7 +98,9 @@ previous model intact. All user model files, download temporary assets and the
 per-model lock live inside `~/.vorkspace/dictation/`. This path is independent of
 bundle location, so installed and development helpers share the same artifact.
 An exclusive kernel file lock grants download and orphan-cleanup authority to one
-writer across all helpers. Only that writer reaps abandoned downloads; a competing
+writer for that exact artifact across all helpers. The two published models,
+locks and temporary downloads have distinct names and can coexist; cleaning up
+one model never removes the other. Only that writer reaps abandoned downloads; a competing
 live writer's temporary data is untouched. Published models remain readable while
 another helper acquires a replacement. Initialization and each inference validate
 the model off the UI thread. Missing HOME uses the operating system's account-home
@@ -97,5 +128,5 @@ external runtime library or model bundled into the app.
 
 Debug builds expose `vorkspace-clipboard --download-model-fixture /absolute/model.gguf`
 and `--transcribe-fixture /absolute/model.gguf /absolute/mono-16khz-pcm16.wav` for
-explicit, isolated fixture checks. These do not start capture, register shortcuts,
+explicit, isolated Unified fixture checks (these debug-only commands use Unified). These do not start capture, register shortcuts,
 or access the user's app database. Fixture transcription prints its result.

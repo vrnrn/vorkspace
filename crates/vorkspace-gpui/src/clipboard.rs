@@ -4,7 +4,7 @@
 use gpui::{App, AppContext, Context, Entity, Global};
 #[cfg(not(test))]
 use vorkspace_clipboard::Supervisor;
-use vorkspace_clipboard::{Action, Command, ModelState, Notice};
+use vorkspace_clipboard::{Action, Command, ModelId, ModelState, Notice};
 gpui::actions!(clipboard, [Toggle, Settings, Composer, Quit, Reopen]);
 
 struct Clipboard(Entity<Service>);
@@ -15,9 +15,10 @@ pub(crate) struct Service {
     icon: bool,
     recording: bool,
     dictation: bool,
-    model_request: Option<(u64, bool)>,
+    selected: ModelId,
+    model_request: Option<(u64, ModelId, bool)>,
     pending_model: Option<Command>,
-    pub model_notice: Option<(u64, ModelState)>,
+    pub model_notice: Option<(u64, ModelId, ModelState)>,
     pub dictation_status: String,
     pub dictation_ready: bool,
     /// The panel's Quit also stops the helper, once the app really does quit.
@@ -43,22 +44,50 @@ fn service(cx: &mut App) -> Entity<Service> {
         service
     })
 }
-pub(crate) fn configure(recording: bool, icon: bool, dictation: bool, cx: &mut App) {
-    service(cx).update(cx, |s, cx| {
+pub(crate) fn configure(
+    recording: bool,
+    icon: bool,
+    dictation: bool,
+    selected: ModelId,
+    cx: &mut App,
+) {
+    let entity = service(cx);
+    let old = entity.read(cx);
+    let cancel = if old.selected != selected {
+        old.model_request.map(|(id, model, _)| (id, model))
+    } else {
+        None
+    };
+    if let Some((id, model)) = cancel {
+        cancel_model(id, model, cx);
+    }
+    entity.update(cx, |s, cx| {
+        if s.selected != selected {
+            s.dictation_ready = false;
+            s.model_notice = None;
+            s.dictation_status = "Checking selected model…".into();
+        }
+        s.selected = selected;
         s.icon = icon;
         s.recording = recording;
         s.dictation = dictation;
         if dictation
             && s.model_notice
                 .as_ref()
-                .is_some_and(|(_, state)| *state == ModelState::Ready)
+                .is_some_and(|(_, model, state)| *model == selected && *state == ModelState::Ready)
         {
             s.model_request = None;
         }
         #[cfg(not(test))]
         {
             if let Some(supervisor) = &s.supervisor {
-                supervisor.configure(recording, icon, dictation, s.model_request.is_some());
+                supervisor.configure(
+                    recording,
+                    icon,
+                    dictation,
+                    s.model_request.is_some(),
+                    selected,
+                );
             }
             s.sync_status(cx);
         }
@@ -73,7 +102,14 @@ impl Service {
         state: ModelState,
         cx: &mut Context<Self>,
     ) {
-        self.notice(Notice::Model { request, state }, cx);
+        self.notice(
+            Notice::Model {
+                request,
+                model: ModelId::default(),
+                state,
+            },
+            cx,
+        );
     }
 
     #[cfg(not(test))]
@@ -123,6 +159,7 @@ impl Service {
                     self.icon,
                     self.dictation,
                     self.model_request.is_some(),
+                    self.selected,
                 );
             }
             self.sync_status(cx);
@@ -153,8 +190,8 @@ impl Service {
                         if !self.send(command.clone()) {
                             self.pending_model = Some(command);
                         }
-                    } else if let Some((request, _)) = self.model_request {
-                        self.send(Command::ModelStatus { request });
+                    } else if let Some((request, model, _)) = self.model_request {
+                        self.send(Command::ModelStatus { request, model });
                     }
                 }
                 self.error = error;
@@ -166,14 +203,26 @@ impl Service {
                 self.stop_helper_on_quit = true;
                 cx.dispatch_action(&Quit);
             }
-            Notice::Dictation { status, ready } => {
+            Notice::Dictation {
+                model,
+                status,
+                ready,
+            } => {
+                if model != self.selected {
+                    return;
+                }
                 self.dictation_status = status;
                 self.dictation_ready = ready;
                 cx.notify();
             }
-            Notice::Model { request, mut state } => {
-                if let Some((current, cancelled)) = self.model_request
+            Notice::Model {
+                request,
+                model,
+                mut state,
+            } => {
+                if let Some((current, current_model, cancelled)) = self.model_request
                     && current == request
+                    && current_model == model
                 {
                     if cancelled && !state.terminal() && state != ModelState::Cancelling {
                         return;
@@ -186,28 +235,31 @@ impl Service {
                         self.pending_model = None;
                         self.sync_configuration(cx);
                     }
+                    if model != self.selected {
+                        cx.notify();
+                        return;
+                    }
                     self.dictation_status = match &state {
                         ModelState::Checking => {
                             "Checking model or connecting to background helper…".into()
                         }
-                        ModelState::Downloading(bytes)
-                            if *bytes == vorkspace_clipboard::dictation_model::BYTES =>
-                        {
-                            "Verifying English model…".into()
+                        ModelState::Downloading(bytes) if *bytes == model.descriptor().bytes => {
+                            format!("Verifying {}…", model.descriptor().label)
                         }
                         ModelState::Downloading(bytes) => format!(
-                            "Downloading English model… {}%",
-                            bytes * 100 / vorkspace_clipboard::dictation_model::BYTES
+                            "Downloading {}… {}%",
+                            model.descriptor().label,
+                            bytes * 100 / model.descriptor().bytes
                         ),
                         ModelState::Cancelling => "Cancelling model download…".into(),
                         ModelState::Cancelled => "Model download cancelled.".into(),
-                        ModelState::Ready => "English model verified.".into(),
+                        ModelState::Ready => format!("{} verified.", model.descriptor().label),
                         ModelState::Missing => {
-                            "Download the English model to enable dictation.".into()
+                            format!("Download {} to enable dictation.", model.descriptor().label)
                         }
                         ModelState::Error(e) => e.clone(),
                     };
-                    self.model_notice = Some((request, state));
+                    self.model_notice = Some((request, model, state));
                     cx.notify();
                 }
             }
@@ -250,13 +302,13 @@ pub(crate) fn quit_cancelled(cx: &mut App) {
 pub(crate) fn app_quitting(cx: &mut App) {
     if let Some(s) = get(cx) {
         let s = s.read(cx);
-        if let Some((request, _)) = s.model_request {
-            s.send(Command::CancelModel { request });
+        if let Some((request, model, _)) = s.model_request {
+            s.send(Command::CancelModel { request, model });
         }
         if s.model_request.is_some() {
             #[cfg(not(test))]
             if let Some(supervisor) = &s.supervisor {
-                supervisor.configure(s.recording, s.icon, s.dictation, false);
+                supervisor.configure(s.recording, s.icon, s.dictation, false, s.selected);
             }
         }
         if s.stop_helper_on_quit {
@@ -264,12 +316,21 @@ pub(crate) fn app_quitting(cx: &mut App) {
             // replacement during the app's own slower shutdown.
             #[cfg(not(test))]
             if let Some(supervisor) = &s.supervisor {
-                supervisor.configure(false, false, false, false);
+                supervisor.configure(false, false, false, false, s.selected);
             }
         }
     }
 }
 
+/// Publish selection immediately to the helper, before deferred preference observers.
+pub(crate) fn select_model(model: ModelId, cx: &mut App) {
+    let s = service(cx);
+    let (recording, icon) = {
+        let s = s.read(cx);
+        (s.recording, s.icon)
+    };
+    configure(recording, icon, false, model, cx);
+}
 pub(crate) fn next_model_request() -> u64 {
     static NEXT: std::sync::OnceLock<std::sync::atomic::AtomicU64> = std::sync::OnceLock::new();
     NEXT.get_or_init(|| {
@@ -282,15 +343,20 @@ pub(crate) fn next_model_request() -> u64 {
     })
     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
-pub(crate) fn dictation_download(request: u64, cx: &mut App) -> Result<(), String> {
+pub(crate) fn dictation_download(request: u64, model: ModelId, cx: &mut App) -> Result<(), String> {
     service(cx).update(cx, |s, cx| {
-        if s.model_request.is_some_and(|(id, _)| id != request) {
+        if s.selected != model {
+            return Err("The selected model changed. Choose Download again.".into());
+        }
+        if s.model_request
+            .is_some_and(|(id, active_model, _)| id != request || active_model != model)
+        {
             return Err("A previous model request is still finishing. Retry in a moment.".into());
         }
-        s.model_request = Some((request, false));
-        s.model_notice = Some((request, ModelState::Checking));
+        s.model_request = Some((request, model, false));
+        s.model_notice = Some((request, model, ModelState::Checking));
         s.sync_configuration(cx);
-        let command = Command::DownloadModel { request };
+        let command = Command::DownloadModel { request, model };
         if !s.send(command.clone()) {
             s.pending_model = Some(command);
             s.dictation_status = "Connecting to background helper…".into();
@@ -299,23 +365,23 @@ pub(crate) fn dictation_download(request: u64, cx: &mut App) -> Result<(), Strin
         Ok(())
     })
 }
-pub(crate) fn cancel_model(request: u64, cx: &mut App) {
+pub(crate) fn cancel_model(request: u64, model: ModelId, cx: &mut App) {
     if let Some(service) = get(cx) {
         service.update(cx, |s, cx| {
-            if s.model_request.is_some_and(|(id, _)| id == request) {
-                if matches!(s.pending_model,Some(Command::DownloadModel{request:id}) if id==request)
+            if s.model_request.is_some_and(|(id, active_model, _)| id == request && active_model==model) {
+                if matches!(s.pending_model,Some(Command::DownloadModel{request:id, model:active_model}) if id==request && active_model==model)
                 {
                     // Never admitted to a helper: revoke the queued action locally.
                     s.pending_model = None;
                     s.model_request = None;
-                    s.model_notice = Some((request, ModelState::Cancelled));
+                    s.model_notice = Some((request, model, ModelState::Cancelled));
                     s.sync_configuration(cx);
                     cx.notify();
                     return;
                 }
-                s.model_request = Some((request, true));
-                s.model_notice = Some((request, ModelState::Cancelling));
-                let command = Command::CancelModel { request };
+                s.model_request = Some((request, model, true));
+                s.model_notice = Some((request, model, ModelState::Cancelling));
+                let command = Command::CancelModel { request, model };
                 if !s.send(command.clone()) {
                     s.pending_model = Some(command);
                 }
@@ -324,10 +390,12 @@ pub(crate) fn cancel_model(request: u64, cx: &mut App) {
         });
     }
 }
-pub(crate) fn finish_model(request: u64, cx: &mut App) {
+pub(crate) fn finish_model(request: u64, model: ModelId, cx: &mut App) {
     if let Some(service) = get(cx) {
         service.update(cx, |s, cx| {
-            if s.model_request.is_some_and(|(id, _)| id == request) {
+            if s.model_request
+                .is_some_and(|(id, active_model, _)| id == request && active_model == model)
+            {
                 s.model_request = None;
                 s.pending_model = None;
                 s.sync_configuration(cx);
@@ -363,7 +431,7 @@ mod tests {
     #[gpui::test]
     fn a_cancelled_panel_quit_leaves_the_helper_running(cx: &mut TestAppContext) {
         let service = cx.update(|cx| {
-            configure(true, true, false, cx);
+            configure(true, true, false, ModelId::default(), cx);
             get(cx).unwrap()
         });
         service.update(cx, |s, cx| s.notice(Notice::Action(Action::Quit), cx));
@@ -374,9 +442,9 @@ mod tests {
 
     #[gpui::test]
     fn close_to_tray_needs_the_icon(cx: &mut TestAppContext) {
-        cx.update(|cx| configure(true, false, false, cx));
+        cx.update(|cx| configure(true, false, false, ModelId::default(), cx));
         assert!(!cx.update(|cx| menu_bar_ready(cx)));
-        cx.update(|cx| configure(false, true, false, cx));
+        cx.update(|cx| configure(false, true, false, ModelId::default(), cx));
         assert!(cx.update(|cx| menu_bar_ready(cx)));
     }
 }
@@ -389,21 +457,27 @@ mod model_tests {
         cx: &mut gpui::TestAppContext,
     ) {
         cx.update(|cx| {
-            assert!(dictation_download(10, cx).is_ok());
+            assert!(dictation_download(10, ModelId::default(), cx).is_ok());
             let service = get(cx).unwrap();
             service.update(cx, |s, cx| {
                 assert_eq!(
                     s.pending_model,
-                    Some(Command::DownloadModel { request: 10 })
+                    Some(Command::DownloadModel {
+                        request: 10,
+                        model: ModelId::default()
+                    })
                 );
-                assert_eq!(s.model_request, Some((10, false)));
+                assert_eq!(s.model_request, Some((10, ModelId::default(), false)));
                 s.notice(Notice::Error(None), cx);
                 assert_eq!(
                     s.pending_model,
-                    Some(Command::DownloadModel { request: 10 })
+                    Some(Command::DownloadModel {
+                        request: 10,
+                        model: ModelId::default()
+                    })
                 );
             });
-            cancel_model(10, cx);
+            cancel_model(10, ModelId::default(), cx);
             assert!(service.read(cx).model_request.is_none());
             assert!(service.read(cx).pending_model.is_none());
         });
@@ -413,15 +487,19 @@ mod model_tests {
         cx: &mut gpui::TestAppContext,
     ) {
         cx.update(|cx| {
-            dictation_download(10, cx).unwrap();
+            dictation_download(10, ModelId::default(), cx).unwrap();
             let service = get(cx).unwrap();
             service.update(cx, |s, _| s.pending_model = None);
-            cancel_model(10, cx);
-            assert_eq!(service.read(cx).model_request, Some((10, true)));
-            assert!(dictation_download(11, cx).is_err());
+            cancel_model(10, ModelId::default(), cx);
+            assert_eq!(
+                service.read(cx).model_request,
+                Some((10, ModelId::default(), true))
+            );
+            assert!(dictation_download(11, ModelId::default(), cx).is_err());
             service.update(cx, |s, cx| {
                 s.notice(
                     Notice::Model {
+                        model: ModelId::default(),
                         request: 10,
                         state: ModelState::Downloading(2048),
                     },
@@ -430,11 +508,12 @@ mod model_tests {
             });
             assert_eq!(
                 service.read(cx).model_notice,
-                Some((10, ModelState::Cancelling))
+                Some((10, ModelId::default(), ModelState::Cancelling))
             );
             service.update(cx, |s, cx| {
                 s.notice(
                     Notice::Model {
+                        model: ModelId::default(),
                         request: 10,
                         state: ModelState::Ready,
                     },
@@ -444,22 +523,26 @@ mod model_tests {
             assert!(service.read(cx).model_request.is_none());
             assert_eq!(
                 service.read(cx).model_notice,
-                Some((10, ModelState::Cancelled))
+                Some((10, ModelId::default(), ModelState::Cancelled))
             );
-            dictation_download(11, cx).unwrap();
+            dictation_download(11, ModelId::default(), cx).unwrap();
             service.update(cx, |s, cx| {
                 s.notice(
                     Notice::Model {
+                        model: ModelId::default(),
                         request: 10,
                         state: ModelState::Downloading(100),
                     },
                     cx,
                 )
             });
-            assert_eq!(service.read(cx).model_request, Some((11, false)));
+            assert_eq!(
+                service.read(cx).model_request,
+                Some((11, ModelId::default(), false))
+            );
             assert_eq!(
                 service.read(cx).model_notice,
-                Some((11, ModelState::Checking))
+                Some((11, ModelId::default(), ModelState::Checking))
             );
         });
     }

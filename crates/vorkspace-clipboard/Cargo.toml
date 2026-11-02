@@ -19,6 +19,7 @@ async-channel = "2"
 libc = "0.2"
 gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
 gpui_macos = { package = "gpui-pre-macos", version = "=0.3.9", default-features = false }
+vorkspace-core = { path = "../vorkspace-core" }
 vorkspace-macos = { path = "../vorkspace-macos" }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSScreen", "NSResponder", "NSView", "NSWindow", "objc2-core-foundation"] }
