@@ -269,8 +269,14 @@ fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Setup commands are process-wide, so plain `cargo test` threads take turns here.
+static SETUP_COMMANDS: Mutex<()> = Mutex::new(());
+
 /// One turn in a new worktree, with no provider CLI to reach.
 fn first_turn_with_setup(command: &str) -> (String, Vec<Update>, std::path::PathBuf) {
+    let _commands = SETUP_COMMANDS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let root = std::env::temp_dir().join(format!(
         "vorkspace-worktree-setup-{}",
         vorkspace_core::bot::new_id()
