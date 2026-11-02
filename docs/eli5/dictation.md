@@ -15,6 +15,19 @@ downloads the other model automatically. Then click Set up permissions. Allow Mi
 Accessibility for **vorkspace Clipboard** in macOS Privacy & Security settings.
 That is Vorkspace's small background helper, which also keeps clipboard history.
 
+The Microphone dropdown uses the Mac's **built-in microphone** by default, including
+the internal mic on MacBooks. You can choose **System default** or a specific
+connected microphone instead. The list refreshes automatically. If your Mac has
+no built-in input, choose another option. A saved microphone that is disconnected
+stays marked unavailable; dictation asks you to connect it or choose another.
+It never quietly picks a different input. Your choice is saved and still applies
+after quitting or reopening Vorkspace.
+
+A microphone change applies to the **next recording**. If the current input is
+lost or interrupted, recording stops and its audio is discarded. No microphone
+records while dictation is idle. Microphone and Accessibility permission still
+belong to the background helper.
+
 Click the field you want to write into. Press **⌘,**, speak, then press **⌘,**
 again. A red microphone at the notch means recording. Amber with dots means the
 Mac is turning speech into text. Leave the original field selected until the
@@ -25,7 +38,14 @@ limit. Vox uses **⌘.**. Settings is available from the application menu.
 Everything is transcribed on your Mac. Downloading the model needs internet;
 recording does not. Audio stays in memory temporarily and is never saved. There
 is no dictation history. Long recordings are handled in short pieces, which may
-affect wording and punctuation. Some password fields and custom controls cannot be used.
+affect wording and punctuation. Password fields cannot receive dictation.
+Ordinary Mac, browser and Vorkspace text boxes use the same Paste action. Some
+custom apps hide their text boxes from macOS; dictation then checks the app and
+window and watches for other input. Avoid typing, clicking or scrolling until
+insertion finishes. It never brings an app forward or clicks a field for you.
+If an app secretly moves its own cursor without telling macOS, that change cannot
+always be detected. The app must also support Paste; dictation cannot confirm
+that it accepted the words.
 
 Dictation and clipboard history can be switched on separately. Either keeps the
 helper alive when the main app quits. Switch both off, or use Quit in the helper's

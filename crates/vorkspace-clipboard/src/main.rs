@@ -208,13 +208,14 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             dictation,
             setup,
             model,
+            microphone,
         }) => {
             let step = cx
                 .global_mut::<Helper>()
                 .control
                 .configure_setup(recording || dictation, setup);
             service::configure(recording, cx);
-            dictation::configure(dictation, model, cx);
+            dictation::configure(dictation, model, &microphone, cx);
             sync_status(icon, cx);
             report_error(cx);
             run(step, cx);

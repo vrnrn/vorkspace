@@ -15,8 +15,8 @@ use vorkspace_clipboard::{
 use vorkspace_macos::{global_hotkey::Registration, voice_lease::Lease};
 unsafe extern "C" {
     fn vorkspace_dictation_shutdown();
-    fn vorkspace_dictation_start() -> i32;
-    fn vorkspace_dictation_stop(callback: extern "C" fn(*const f32, usize));
+    fn vorkspace_dictation_start(microphone: *const c_char) -> i32;
+    fn vorkspace_dictation_stop(callback: extern "C" fn(*const f32, usize)) -> i32;
     fn vorkspace_dictation_cancel();
     fn vorkspace_dictation_health() -> i32;
     fn vorkspace_dictation_permissions();
@@ -35,6 +35,7 @@ pub struct Service {
     downloads: DownloadSlot,
     pending_download: Option<(u64, ModelId)>,
     selected: ModelId,
+    microphone: String,
     capture_model: Option<ModelId>,
     download_model: Option<ModelId>,
     model_notice: Option<(u64, ModelId, ModelState)>,
@@ -57,6 +58,7 @@ pub fn init(cx: &mut App) {
         downloads: DownloadSlot::default(),
         pending_download: None,
         selected: ModelId::default(),
+        microphone: "builtin".into(),
         capture_model: None,
         download_model: None,
         model_notice: None,
@@ -77,8 +79,11 @@ fn get(cx: &App) -> Entity<Service> {
 pub fn status(cx: &App) {
     get(cx).read(cx).publish(cx)
 }
-pub fn configure(enabled: bool, selected: ModelId, cx: &mut App) {
+pub fn configure(enabled: bool, selected: ModelId, microphone: &str, cx: &mut App) {
     get(cx).update(cx, |s, cx| {
+        // A current attempt owns its device until stop/cancel; preference changes
+        // affect the next admission, including after the main app quits.
+        s.microphone = microphone.into();
         let changed = s.selected != selected;
         if s.attempt.enabled == enabled && !changed {
             return;
@@ -531,7 +536,8 @@ impl Service {
                     return;
                 };
                 self.capture_model = Some(self.selected);
-                let result = unsafe { vorkspace_dictation_start() };
+                let result = CString::new(self.microphone.clone())
+                    .map_or(8, |m| unsafe { vorkspace_dictation_start(m.as_ptr()) });
                 if result != 0 {
                     self.attempt.cancel();
                     self.error(native_error(result).into(), cx);
@@ -572,6 +578,16 @@ impl Service {
         }
     }
     fn stop(&mut self, cx: &mut Context<Self>) {
+        // A stop can race the periodic device-health poll. Never transcribe
+        // buffered audio from a lost/replaced input in that interval.
+        if unsafe { vorkspace_dictation_health() } == 1 {
+            self.cancel(cx);
+            self.error(
+                "Microphone interrupted. Check the selected input and try again.".into(),
+                cx,
+            );
+            return;
+        }
         let Some(selected) = self.capture_model else {
             return;
         };
@@ -587,7 +603,14 @@ impl Service {
                 });
             }
         }
-        unsafe { vorkspace_dictation_stop(receive) };
+        let stopped = unsafe { vorkspace_dictation_stop(receive) };
+        if stopped != 0 {
+            // No worker was admitted: retire Transcribing before normal cancel.
+            self.attempt.complete(epoch);
+            self.cancel(cx);
+            self.error(native_error(stopped).into(), cx);
+            return;
+        }
         let pcm = PCM.with(|v| std::mem::take(&mut *v.borrow_mut()));
         self.capture_model = None;
         let path = dictation_path::model_path(selected);
@@ -658,8 +681,15 @@ fn native_error(code: i32) -> &'static str {
         }
         3 => "Could not start the microphone. Check your input device and try again.",
         4 => {
-            "The original text field is no longer focused or accessible. Keep it selected while dictating and try again."
+            "No usable destination. Select a text field in a visible window, then start again. Secure fields cannot receive dictation."
         }
+        8 => {
+            "Selected microphone unavailable. Choose a connected input in Settings → Clipboard → Microphone."
+        }
+        9 => {
+            "Destination changed while dictating. Keep the same field selected and avoid other input until insertion finishes."
+        }
+        11 => "Microphone interrupted. Check the selected input and try a new recording.",
         5 => "Release modifier keys before insertion. Dictation was discarded; start again.",
         6 => {
             "Could not preserve the current clipboard. Dictation was discarded; try again with a smaller clipboard."
@@ -669,7 +699,9 @@ fn native_error(code: i32) -> &'static str {
 }
 
 pub fn shutdown(cx: &mut App) {
-    configure(false, get(cx).read(cx).selected, cx);
+    let s = get(cx);
+    let (model, microphone) = (s.read(cx).selected, s.read(cx).microphone.clone());
+    configure(false, model, &microphone, cx);
     // A posted Cmd-V may not have reached the destination yet. Keep the clipboard
     // available through its normal read window before restoring and terminating.
     cx.spawn(async move |cx| {
@@ -687,6 +719,28 @@ pub fn shutdown(cx: &mut App) {
 #[cfg(test)]
 mod model_tests {
     use super::*;
+    #[gpui::test]
+    fn microphone_change_applies_next_time_without_cancelling_active_attempt(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            cx.set_global(crate::Helper::default());
+            init(cx);
+            let service = get(cx);
+            let epoch = service.update(cx, |s, _| {
+                s.attempt.enabled = true;
+                s.capture_model = Some(s.selected);
+                s.attempt.begin().unwrap()
+            });
+            configure(true, ModelId::default(), "uid:next-recording", cx);
+            service.update(cx, |s, _| {
+                assert_eq!(s.microphone, "uid:next-recording");
+                assert_eq!(s.attempt.phase, Phase::Recording);
+                assert_eq!(s.attempt.epoch, epoch);
+                assert_eq!(s.capture_model, Some(ModelId::default()));
+            });
+        });
+    }
     #[gpui::test]
     fn initializing_retains_explicit_download_until_verification_and_cancel_removes_it(
         cx: &mut gpui::TestAppContext,

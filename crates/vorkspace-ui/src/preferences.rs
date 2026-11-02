@@ -25,6 +25,7 @@ pub struct Preferences {
     pub quick_composer: bool,
     pub clipboard_history: bool,
     pub dictation_enabled: bool,
+    pub dictation_microphone: String,
     pub dictation_model: vorkspace_core::dictation_model::ModelId,
     pub working_agents: bool,
     pub close_to_tray: bool,
@@ -142,6 +143,7 @@ impl Default for Preferences {
             quick_composer: false,
             clipboard_history: true,
             dictation_enabled: false,
+            dictation_microphone: "builtin".into(),
             dictation_model: Default::default(),
             working_agents: true,
             close_to_tray: true,
@@ -323,6 +325,16 @@ fn apply_window_scale<T: 'static>(window: &mut gpui::Window, cx: &mut gpui::Cont
 #[cfg(test)]
 mod dictation_tests {
     use super::*;
+    #[test]
+    fn dictation_microphone_defaults_and_preserves_native_uid() {
+        let prefs: Preferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(prefs.dictation_microphone, "builtin");
+        let prefs: Preferences =
+            serde_json::from_str(r#"{"dictation_microphone":"uid:device-42"}"#).unwrap();
+        let restored: Preferences =
+            serde_json::from_str(&serde_json::to_string(&prefs).unwrap()).unwrap();
+        assert_eq!(restored.dictation_microphone, "uid:device-42");
+    }
     #[test]
     fn dictation_requires_explicit_serialized_opt_in() {
         assert!(!Preferences::default().dictation_enabled);

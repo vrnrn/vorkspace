@@ -75,6 +75,7 @@ fn the_helper_outlives_the_app_while_recording_and_exits_when_turned_off() {
     send(
         &app,
         &Command::Configure {
+            microphone: "builtin".into(),
             model: vorkspace_clipboard::ModelId::default(),
             setup: false,
             dictation: false,
@@ -90,6 +91,7 @@ fn the_helper_outlives_the_app_while_recording_and_exits_when_turned_off() {
     send(
         &app,
         &Command::Configure {
+            microphone: "builtin".into(),
             model: vorkspace_clipboard::ModelId::default(),
             setup: false,
             dictation: false,
@@ -110,6 +112,7 @@ fn turning_recording_off_stops_a_helper_the_app_never_connected_to() {
     send(
         &app,
         &Command::Configure {
+            microphone: "builtin".into(),
             model: vorkspace_clipboard::ModelId::default(),
             setup: false,
             dictation: false,
@@ -126,6 +129,7 @@ fn turning_recording_off_stops_a_helper_the_app_never_connected_to() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
     exits(&mut helper);
     assert!(!supervisor.connected());
@@ -142,6 +146,7 @@ fn with_recording_off_the_supervisor_never_starts_a_helper() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
     std::thread::sleep(Duration::from_millis(300));
     assert!(!supervisor.connected());
@@ -173,6 +178,7 @@ fn the_supervisor_restarts_a_lost_helper_and_replaces_an_outdated_one() {
     send(
         &app,
         &Command::Configure {
+            microphone: "builtin".into(),
             model: vorkspace_clipboard::ModelId::default(),
             setup: false,
             dictation: false,
@@ -198,6 +204,7 @@ fn the_supervisor_restarts_a_lost_helper_and_replaces_an_outdated_one() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
     until(|| supervisor.connected());
     exits(&mut outdated);
@@ -210,6 +217,7 @@ fn the_supervisor_restarts_a_lost_helper_and_replaces_an_outdated_one() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
     until(|| !supervisor.connected());
     // A shortcut held by another running copy is a fair report; a failed start isn't.
@@ -235,6 +243,7 @@ fn a_clear_during_a_reconnect_reaches_the_helper() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
     let (helper, _) = listener.accept().unwrap();
     send(&helper, &Notice::hello(Path::new(HELPER))).unwrap();
@@ -242,6 +251,7 @@ fn a_clear_during_a_reconnect_reaches_the_helper() {
     assert_eq!(
         receive(&mut reader),
         Some(Command::Configure {
+            microphone: "builtin".into(),
             model: vorkspace_clipboard::ModelId::default(),
             setup: false,
             dictation: false,
@@ -257,6 +267,7 @@ fn a_clear_during_a_reconnect_reaches_the_helper() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
 }
 
@@ -273,6 +284,7 @@ fn turning_recording_off_cancels_a_waiting_clear() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
     supervisor.configure(
         true,
@@ -280,6 +292,7 @@ fn turning_recording_off_cancels_a_waiting_clear() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
     // The stop opens its own short connection, which hangs up without a command.
     let (helper, mut reader) = loop {
@@ -298,10 +311,12 @@ fn turning_recording_off_cancels_a_waiting_clear() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
     assert_eq!(
         receive(&mut reader),
         Some(Command::Configure {
+            microphone: "builtin".into(),
             model: vorkspace_clipboard::ModelId::default(),
             setup: false,
             dictation: false,
@@ -328,6 +343,7 @@ fn a_panel_action_survives_replacing_its_outdated_helper() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
     let (helper, _) = listener.accept().unwrap();
     send(&helper, &Notice::hello(Path::new("/no/such/helper"))).unwrap();
@@ -350,6 +366,7 @@ fn a_panel_action_survives_replacing_its_outdated_helper() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
 }
 
@@ -364,6 +381,7 @@ fn a_panel_quit_is_not_undone_by_the_supervisor() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
     until(|| supervisor.connected());
     supervisor.configure(
@@ -372,6 +390,7 @@ fn a_panel_quit_is_not_undone_by_the_supervisor() {
         false,
         false,
         vorkspace_clipboard::ModelId::default(),
+        "builtin",
     );
     until(|| !supervisor.connected());
     // Past the supervisor's retry delay, while the app is still shutting down.
@@ -389,6 +408,7 @@ fn dictation_alone_keeps_the_same_helper_alive_across_disconnect_and_reconfigure
     send(
         &app,
         &Command::Configure {
+            microphone: "builtin".into(),
             model: vorkspace_clipboard::ModelId::default(),
             setup: false,
             recording: false,
@@ -404,6 +424,7 @@ fn dictation_alone_keeps_the_same_helper_alive_across_disconnect_and_reconfigure
     send(
         &app,
         &Command::Configure {
+            microphone: "builtin".into(),
             model: vorkspace_clipboard::ModelId::default(),
             setup: false,
             recording: true,
@@ -419,6 +440,7 @@ fn dictation_alone_keeps_the_same_helper_alive_across_disconnect_and_reconfigure
     send(
         &app,
         &Command::Configure {
+            microphone: "builtin".into(),
             model: vorkspace_clipboard::ModelId::default(),
             setup: false,
             recording: false,
@@ -439,6 +461,7 @@ fn setup_without_clipboard_or_dictation_never_persists_after_app_disconnect() {
     send(
         &app,
         &Command::Configure {
+            microphone: "builtin".into(),
             model: vorkspace_clipboard::ModelId::default(),
             recording: false,
             icon: false,
@@ -471,4 +494,46 @@ fn setup_without_clipboard_or_dictation_never_persists_after_app_disconnect() {
     drop(reader);
     drop(app);
     exits(&mut helper);
+}
+
+#[test]
+fn microphone_uid_is_retained_across_supervisor_reconnect() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("uid-reconnect.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let supervisor = Supervisor::start(PathBuf::from(HELPER), socket, relaunch(), |_| {});
+    supervisor.configure(
+        false,
+        false,
+        true,
+        false,
+        vorkspace_clipboard::ModelId::default(),
+        "uid:fixture-mic",
+    );
+    for _ in 0..2 {
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+        send(&stream, &Notice::hello(Path::new(HELPER))).unwrap();
+        let mut reader = BufReader::new(&stream);
+        let Some(Command::Configure {
+            microphone,
+            dictation,
+            ..
+        }) = receive(&mut reader)
+        else {
+            panic!("missing configuration")
+        };
+        assert_eq!(microphone, "uid:fixture-mic");
+        assert!(dictation);
+        assert_eq!(receive(&mut reader), Some(relaunch()));
+        // Dropping the socket forces the real supervisor's reconnect path.
+    }
+    supervisor.configure(
+        false,
+        false,
+        false,
+        false,
+        vorkspace_clipboard::ModelId::default(),
+        "uid:fixture-mic",
+    );
 }

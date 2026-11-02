@@ -44,16 +44,48 @@ epoch and requests cooperative inference cancellation, retaining the worker slot
 until completion; a late result cannot insert text into a later attempt. Vox
 retains the lease through its panel lifecycle, including shutdown.
 
-Insertion verifies Accessibility trust, frontmost PID and the original focused
-AX element immediately before sending one Cmd-V. It waits briefly for modifiers
+Settings also offers a **Microphone** dropdown. Fresh or missing preferences use
+**Built-in microphone**, resolved from CoreAudio's built-in transport metadata,
+including the internal microphone on MacBooks. It does not guess from a device
+name or select the first external input. Macs without an internal input show
+Built-in microphone (unavailable); choose **System default** or a connected device.
+Explicit devices are persisted by native UID, independent of Vox's WebKit IDs.
+Devices refresh every two seconds while the main app is open. A missing saved
+choice remains selected and marked unavailable; recording fails with a choice to
+connect it or select another input, rather than silently switching microphones.
+
+Changes apply to the **next recording**. The helper retains that preference after
+main-app Quit and receives it again on reconnect. Each recording resolves its
+choice once, sets the engine input audio unit's CurrentDevice, verifies the route,
+and then reads its format before installing a tap. Configuration change, device
+loss, permission loss or an unexpected route cancels recording and discards audio.
+System default is resolved at admission; changing the system input during capture
+does not authorize switching the active recording to another microphone.
+
+Insertion verifies Accessibility trust, frontmost PID, visible window identity,
+secure-input state and original focus evidence immediately before sending one Cmd-V.
+Known text controls can retain their AX object or a stable provider identifier.
+Missing text semantics in custom/GPUI controls use a conservative fallback: the
+original app/window and any exposed opaque AX root must remain the same. Keyboard
+input other than the dictation shortcut, clicks, scrolling, app activation changes,
+and supported AX focus/window notifications invalidate that destination, even if
+it is later selected again. No app is activated and no field is refocused.
+Capture admission failure, missing permission, and a changed destination after
+recording have separate recovery messages. It waits briefly for modifiers
 to lift and otherwise discards. Every rich clipboard item/type is snapshotted
 (up to 32 MiB, otherwise insertion is declined), the transcript is marked transient,
 and restoration occurs after 800 ms only if the pasteboard change count still
 matches. Deliberate helper shutdown waits through the same clipboard read window before
 guarded restoration. There is
 no acknowledgement from the destination app and no automatic replay after a paste.
-Some secure or custom controls do not expose an accessible focused element; those
-controls are unsupported. Field validation does not prove the app accepted Cmd-V.
+Known secure fields and secure keyboard input are blocked. Vorkspace's secret
+Input exposes a password role as well as masking its value. Native, browser and
+custom controls can receive the same synthetic paste; a control still needs to
+handle Cmd-V. An opaque app can change an internal responder programmatically
+without exposing any AX notification or identity change; macOS offers no universal
+field identity in that case. The fallback cannot certify that unobservable change.
+Field validation does not prove the app accepted Cmd-V. Very slow apps and browser
+pasteboard races can lose a paste; insertion is never retried automatically.
 
 ## Model and runtime
 

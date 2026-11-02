@@ -16,6 +16,10 @@ pub(crate) struct Service {
     recording: bool,
     dictation: bool,
     selected: ModelId,
+    microphone: String,
+    pub microphones: Vec<vorkspace_clipboard::InputDevice>,
+    #[cfg(not(test))]
+    _device_poll: Option<gpui::Task<()>>,
     model_request: Option<(u64, ModelId, bool)>,
     pending_model: Option<Command>,
     pub model_notice: Option<(u64, ModelId, ModelState)>,
@@ -49,6 +53,7 @@ pub(crate) fn configure(
     icon: bool,
     dictation: bool,
     selected: ModelId,
+    microphone: &str,
     cx: &mut App,
 ) {
     let entity = service(cx);
@@ -68,6 +73,7 @@ pub(crate) fn configure(
             s.dictation_status = "Checking selected model…".into();
         }
         s.selected = selected;
+        s.microphone = microphone.into();
         s.icon = icon;
         s.recording = recording;
         s.dictation = dictation;
@@ -87,6 +93,7 @@ pub(crate) fn configure(
                     dictation,
                     s.model_request.is_some(),
                     selected,
+                    &s.microphone,
                 );
             }
             s.sync_status(cx);
@@ -114,6 +121,26 @@ impl Service {
 
     #[cfg(not(test))]
     fn start(&mut self, cx: &mut Context<Self>) {
+        self.microphones = vorkspace_clipboard::input_devices();
+        self._device_poll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
+                let devices = vorkspace_clipboard::input_devices();
+                if this
+                    .update(cx, |s, cx| {
+                        if s.microphones != devices {
+                            s.microphones = devices;
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
         let Ok(app) = std::env::current_exe() else {
             self.error = Some("Could not find the clipboard helper.".into());
             return;
@@ -160,6 +187,7 @@ impl Service {
                     self.dictation,
                     self.model_request.is_some(),
                     self.selected,
+                    &self.microphone,
                 );
             }
             self.sync_status(cx);
@@ -308,7 +336,14 @@ pub(crate) fn app_quitting(cx: &mut App) {
         if s.model_request.is_some() {
             #[cfg(not(test))]
             if let Some(supervisor) = &s.supervisor {
-                supervisor.configure(s.recording, s.icon, s.dictation, false, s.selected);
+                supervisor.configure(
+                    s.recording,
+                    s.icon,
+                    s.dictation,
+                    false,
+                    s.selected,
+                    &s.microphone,
+                );
             }
         }
         if s.stop_helper_on_quit {
@@ -316,7 +351,7 @@ pub(crate) fn app_quitting(cx: &mut App) {
             // replacement during the app's own slower shutdown.
             #[cfg(not(test))]
             if let Some(supervisor) = &s.supervisor {
-                supervisor.configure(false, false, false, false, s.selected);
+                supervisor.configure(false, false, false, false, s.selected, &s.microphone);
             }
         }
     }
@@ -325,11 +360,11 @@ pub(crate) fn app_quitting(cx: &mut App) {
 /// Publish selection immediately to the helper, before deferred preference observers.
 pub(crate) fn select_model(model: ModelId, cx: &mut App) {
     let s = service(cx);
-    let (recording, icon) = {
+    let (recording, icon, microphone) = {
         let s = s.read(cx);
-        (s.recording, s.icon)
+        (s.recording, s.icon, s.microphone.clone())
     };
-    configure(recording, icon, false, model, cx);
+    configure(recording, icon, false, model, &microphone, cx);
 }
 pub(crate) fn next_model_request() -> u64 {
     static NEXT: std::sync::OnceLock<std::sync::atomic::AtomicU64> = std::sync::OnceLock::new();
@@ -431,7 +466,7 @@ mod tests {
     #[gpui::test]
     fn a_cancelled_panel_quit_leaves_the_helper_running(cx: &mut TestAppContext) {
         let service = cx.update(|cx| {
-            configure(true, true, false, ModelId::default(), cx);
+            configure(true, true, false, ModelId::default(), "builtin", cx);
             get(cx).unwrap()
         });
         service.update(cx, |s, cx| s.notice(Notice::Action(Action::Quit), cx));
@@ -442,9 +477,9 @@ mod tests {
 
     #[gpui::test]
     fn close_to_tray_needs_the_icon(cx: &mut TestAppContext) {
-        cx.update(|cx| configure(true, false, false, ModelId::default(), cx));
+        cx.update(|cx| configure(true, false, false, ModelId::default(), "builtin", cx));
         assert!(!cx.update(|cx| menu_bar_ready(cx)));
-        cx.update(|cx| configure(false, true, false, ModelId::default(), cx));
+        cx.update(|cx| configure(false, true, false, ModelId::default(), "builtin", cx));
         assert!(cx.update(|cx| menu_bar_ready(cx)));
     }
 }

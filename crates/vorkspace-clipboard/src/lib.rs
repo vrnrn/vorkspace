@@ -16,7 +16,7 @@ use std::{
 };
 pub use vorkspace_core::dictation_model::ModelId;
 
-const PROTOCOL: u32 = 4;
+const PROTOCOL: u32 = 5;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 const CONNECT_ATTEMPTS: usize = 60;
 const CONNECT_DELAY: Duration = Duration::from_millis(50);
@@ -32,6 +32,7 @@ pub enum Command {
         dictation: bool,
         setup: bool,
         model: ModelId,
+        microphone: String,
     },
     /// How to reopen this exact app, including the data it was started with.
     Relaunch {
@@ -187,9 +188,10 @@ pub fn relaunch_command(app: &Path, arguments: Vec<String>) -> Command {
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 struct Desired {
     model: ModelId,
+    microphone: String,
     setup: bool,
     dictation: bool,
     recording: bool,
@@ -241,6 +243,7 @@ impl Supervisor {
         dictation: bool,
         setup: bool,
         model: ModelId,
+        microphone: &str,
     ) {
         *self.shared.desired.lock().unwrap() = Desired {
             recording,
@@ -248,6 +251,7 @@ impl Supervisor {
             dictation,
             setup,
             model,
+            microphone: microphone.into(),
         };
         self.shared.wake.notify_all();
         if !recording {
@@ -260,6 +264,7 @@ impl Supervisor {
             dictation,
             setup,
             model,
+            microphone: microphone.into(),
         };
         if !self.send(command.clone()) && !recording && !dictation && !setup {
             let shared = self.shared.clone();
@@ -365,7 +370,8 @@ fn supervise(
                 dictation,
                 setup,
                 model,
-            } = *shared.desired.lock().unwrap();
+                microphone,
+            } = shared.desired.lock().unwrap().clone();
             if send(
                 &stream,
                 &Command::Configure {
@@ -374,6 +380,7 @@ fn supervise(
                     dictation,
                     setup,
                     model,
+                    microphone,
                 },
             )
             .is_ok()
@@ -581,4 +588,26 @@ mod tests {
         assert_ne!(first, socket_path(Path::new("/tmp/vorkspace.app/helper")));
         assert!(first.to_string_lossy().len() < 104);
     }
+}
+
+/// Native CoreAudio identities. Never pass Vox/WebKit device IDs here.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct InputDevice {
+    pub uid: String,
+    pub name: String,
+    pub builtin: bool,
+}
+#[cfg(target_os = "macos")]
+pub fn input_devices() -> Vec<InputDevice> {
+    use std::ffi::{CStr, c_char};
+    unsafe extern "C" {
+        fn vorkspace_dictation_devices(callback: extern "C" fn(*const c_char));
+    }
+    thread_local! { static DEVICES: std::cell::RefCell<Vec<InputDevice>> = const { std::cell::RefCell::new(Vec::new()) }; }
+    extern "C" fn receive(json: *const c_char) {
+        let value = unsafe { CStr::from_ptr(json) }.to_bytes();
+        DEVICES.with(|d| *d.borrow_mut() = serde_json::from_slice(value).unwrap_or_default());
+    }
+    unsafe { vorkspace_dictation_devices(receive) };
+    DEVICES.with(|d| std::mem::take(&mut *d.borrow_mut()))
 }

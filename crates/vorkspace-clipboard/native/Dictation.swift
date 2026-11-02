@@ -1,6 +1,9 @@
 import AppKit
 import AVFoundation
 import ApplicationServices
+import AudioToolbox
+import CoreAudio
+import Carbon
 
 // Main-thread owner. Only the tap touches PCM, behind the lock. No idle capture.
 private final class DictationCapture {
@@ -9,8 +12,9 @@ private final class DictationCapture {
     var samples = [Float]()
     var failed = false
     var full = false
-    var target: AXUIElement?
-    var pid: pid_t = 0
+    var device: AudioDeviceID = 0
+    var deviceUID = ""
+    var tapped = false
     var observer: NSObjectProtocol?
     init() {
         observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
@@ -21,26 +25,9 @@ private final class DictationCapture {
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     func stop() {
         engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
-        if let observer { NotificationCenter.default.removeObserver(observer) }
+        if tapped { engine.inputNode.removeTap(onBus: 0); tapped = false }
+        if let observer { NotificationCenter.default.removeObserver(observer); self.observer = nil }
     }
-    func focused() -> AXUIElement? {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        let application = AXUIElementCreateApplication(app.processIdentifier)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &value) == .success,
-              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return (value as! AXUIElement)
-    }
-}
-private func editableTarget(_ target: AXUIElement) -> Bool {
-    var role: CFTypeRef?, subrole: CFTypeRef?
-    AXUIElementCopyAttributeValue(target, kAXRoleAttribute as CFString, &role)
-    AXUIElementCopyAttributeValue(target, kAXSubroleAttribute as CFString, &subrole)
-    if subrole as? String == kAXSecureTextFieldSubrole { return false }
-    var editable: DarwinBoolean = false
-    let selected = AXUIElementIsAttributeSettable(target, kAXSelectedTextAttribute as CFString, &editable) == .success && editable.boolValue
-    return selected || [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role as? String ?? "")
 }
 // A late timer from an earlier paste must never discard its successor's snapshot.
 final class ClipboardRestoration {
@@ -51,7 +38,12 @@ final class ClipboardRestoration {
 }
 private let restoration = ClipboardRestoration()
 private var capture: DictationCapture?
-private var targetOwner: DictationCapture?
+private var targetOwner: DictationTarget?
+// Also used by the explicit focus fixture: admits insertion without audio/model work.
+func dictationPrepareInsertion() -> Bool {
+    targetOwner = DictationTarget.admit()
+    return targetOwner != nil
+}
 
 @_cdecl("vorkspace_dictation_permissions")
 func dictationPermissions() {
@@ -60,16 +52,33 @@ func dictationPermissions() {
     _ = AXIsProcessTrustedWithOptions(options)
 }
 
-// 1 mic permission, 2 Accessibility, 3 device failure, 4 target unavailable.
+// 1 mic permission, 2 Accessibility, 3 engine failure, 4 admission unavailable,
+// 8 selected input unavailable. Paste uses 9 for a changed destination.
 @_cdecl("vorkspace_dictation_start")
-func dictationStart() -> Int32 {
+func dictationStart(_ microphone: UnsafePointer<CChar>) -> Int32 {
+    guard capture == nil else { return 3 }
     guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return 1 }
     guard AXIsProcessTrusted() else { return 2 }
+    guard dictationPrepareInsertion() else { return 4 }
     let state = DictationCapture()
-    guard let app = NSWorkspace.shared.frontmostApplication, let target = state.focused() else { return 4 }
-    guard editableTarget(target) else { return 4 }
-    state.target = target; state.pid = app.processIdentifier
+    var started = false
+    defer { if !started { targetOwner = nil; state.stop() } }
+    let devices = inputDevices()
+    guard let device = resolveMicrophone(String(cString: microphone), devices: devices, system: defaultInputDevice()),
+          let identity = devices.first(where: { $0.id == device }) else { return 8 }
+    state.device = device
+    state.deviceUID = identity.uid
     let node = state.engine.inputNode
+    // Select this engine's input unit, never the system-wide default. Re-read
+    // format only after selection; Bluetooth/USB inputs can differ in rate/channels.
+    guard let unit = node.audioUnit else { return 3 }
+    var selected = device
+    guard AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+        kAudioUnitScope_Global, 0, &selected, UInt32(MemoryLayout<AudioDeviceID>.size)) == noErr else { return 8 }
+    var actual: AudioDeviceID = 0
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    guard AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+        kAudioUnitScope_Global, 0, &actual, &size) == noErr, actual == device, audioString(device, kAudioDevicePropertyDeviceUID) == identity.uid else { return 8 }
     let format = node.outputFormat(forBus: 0)
     guard format.sampleRate > 0, format.channelCount > 0,
           let output = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false),
@@ -91,23 +100,42 @@ func dictationStart() -> Int32 {
         if count > 0 { state.samples.append(contentsOf: UnsafeBufferPointer(start: pcm, count: count)) }
         state.full = state.samples.count == 16000 * 120
     }
+    state.tapped = true
     do { try state.engine.start() } catch { state.stop(); return 3 }
-    capture = state; targetOwner = state
+    guard audioString(device, kAudioDevicePropertyDeviceUID) == identity.uid else { return 8 }
+    capture = state; started = true
     return 0
 }
 @_cdecl("vorkspace_dictation_health")
 func dictationHealth() -> Int32 {
     guard let state = capture else { return 0 }
     state.lock.lock(); defer { state.lock.unlock() }
-    if state.failed || !state.engine.isRunning || AVCaptureDevice.authorizationStatus(for: .audio) != .authorized { return 1 }
+    var actual: AudioDeviceID = 0
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    let unit = state.engine.inputNode.audioUnit
+    let routed = unit.map { AudioUnitGetProperty($0, kAudioOutputUnitProperty_CurrentDevice,
+        kAudioUnitScope_Global, 0, &actual, &size) == noErr && actual == state.device } ?? false
+    if state.failed || !routed || (audioScalar(state.device, kAudioDevicePropertyDeviceIsAlive) != 1 || audioString(state.device, kAudioDevicePropertyDeviceUID) != state.deviceUID) || !state.engine.isRunning || AVCaptureDevice.authorizationStatus(for: .audio) != .authorized { return 1 }
     return state.full ? 2 : 0
 }
 @_cdecl("vorkspace_dictation_stop")
-func dictationStop(_ callback: @convention(c) (UnsafePointer<Float>?, Int) -> Void) {
-    guard let state = capture else { callback(nil, 0); return }
+func dictationStop(_ callback: @convention(c) (UnsafePointer<Float>?, Int) -> Void) -> Int32 {
+    guard let state = capture else { callback(nil, 0); return 11 }
+    let health = dictationHealth()
     state.stop(); capture = nil
-    state.lock.lock(); let pcm = state.samples; state.samples.removeAll(); state.lock.unlock()
+    state.lock.lock()
+    let failed = state.failed
+    let pcm = state.samples
+    state.samples.removeAll()
+    state.lock.unlock()
+    // Validate after tap teardown as well: stop can overlap a device notification.
+    guard health != 1, !failed,
+          audioScalar(state.device, kAudioDevicePropertyDeviceIsAlive) == 1,
+          audioString(state.device, kAudioDevicePropertyDeviceUID) == state.deviceUID else {
+        targetOwner = nil; callback(nil, 0); return 11
+    }
     pcm.withUnsafeBufferPointer { callback($0.baseAddress, $0.count) }
+    return 0
 }
 @_cdecl("vorkspace_dictation_cancel")
 func dictationCancel() {
@@ -139,18 +167,15 @@ func restoreClipboard(_ board: NSPasteboard, revision: Int, items: [NSPasteboard
 @_cdecl("vorkspace_dictation_paste")
 func dictationPaste(_ text: UnsafePointer<CChar>) -> Int32 {
     guard AXIsProcessTrusted() else { return 2 }
-    guard let owner = targetOwner, let target = owner.target,
-          NSWorkspace.shared.frontmostApplication?.processIdentifier == owner.pid,
-          let current = owner.focused(), CFEqual(target, current), editableTarget(current) else { return 4 }
+    guard let owner = targetOwner, owner.isCurrent() else { return 9 }
     // Caller waits for shortcut modifiers to lift. Never synthesize a modified paste.
     guard !dictationModifiersDown() else { return 5 }
     restoration.flush()
     let board = NSPasteboard.general
     guard let saved = clipboardSnapshot(board) else { return 6 }
     // Pasteboard providers may have taken time; validate the destination again.
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == owner.pid,
-          let focused = owner.focused(), CFEqual(target, focused), editableTarget(focused),
-          !dictationModifiersDown() else { return 4 }
+    guard owner.isCurrent() else { return 9 }
+    guard !dictationModifiersDown() else { return 5 }
     guard let source = CGEventSource(stateID: .combinedSessionState),
           let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
           let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else { return 7 }
@@ -160,6 +185,9 @@ func dictationPaste(_ text: UnsafePointer<CChar>) -> Int32 {
         restoreClipboard(board, revision: board.changeCount, items: saved); return 7
     }
     let revision = board.changeCount
+    guard owner.isCurrent(), !dictationModifiersDown() else {
+        restoreClipboard(board, revision: revision, items: saved); return 9
+    }
     down.flags = .maskCommand; up.flags = .maskCommand
     // One uncertain external effect, never retried.
     targetOwner = nil

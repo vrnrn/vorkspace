@@ -27,7 +27,7 @@ test("dictation restores rich formats and preserves newer copies", { skip: proce
   const source = fileURLToPath(new URL("../../crates/vorkspace-clipboard/native/Dictation.swift", import.meta.url));
   const tests = fileURLToPath(new URL("../../crates/vorkspace-clipboard/native/DictationTests.swift", import.meta.url));
   const binary = join(directory, "DictationTests");
-  await run("xcrun", ["swiftc", "-parse-as-library", source, tests, "-o", binary]);
+  await run("xcrun", ["swiftc", "-parse-as-library", source, fileURLToPath(new URL("../../crates/vorkspace-clipboard/native/DictationTarget.swift", import.meta.url)), fileURLToPath(new URL("../../crates/vorkspace-clipboard/native/Microphones.swift", import.meta.url)), tests, "-o", binary]);
   const { stdout } = await run(binary, []);
   assert.match(stdout, /Rich clipboard restoration and newer-copy fencing passed/);
 });
