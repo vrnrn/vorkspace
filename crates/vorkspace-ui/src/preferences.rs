@@ -317,3 +317,32 @@ fn apply_window_scale<T: 'static>(window: &mut gpui::Window, cx: &mut gpui::Cont
         cx.notify();
     }
 }
+
+#[cfg(test)]
+mod dictation_tests {
+    use super::*;
+    #[test]
+    fn dictation_requires_explicit_serialized_opt_in() {
+        assert!(!Preferences::default().dictation_enabled);
+        for json in [
+            "{}",
+            r#"{"clipboard_history":true,"vox_enabled":true,"theme":"light"}"#,
+        ] {
+            let prefs: Preferences = serde_json::from_str(json).unwrap();
+            assert!(!prefs.dictation_enabled);
+            let saved = serde_json::to_string(&prefs).unwrap();
+            assert!(
+                !serde_json::from_str::<Preferences>(&saved)
+                    .unwrap()
+                    .dictation_enabled
+            );
+        }
+        let enabled: Preferences = serde_json::from_str(r#"{"dictation_enabled":true}"#).unwrap();
+        assert!(enabled.dictation_enabled);
+        assert!(
+            serde_json::from_str::<Preferences>(&serde_json::to_string(&enabled).unwrap())
+                .unwrap()
+                .dictation_enabled
+        );
+    }
+}

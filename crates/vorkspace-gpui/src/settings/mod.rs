@@ -1,5 +1,6 @@
 //! Settings pages, their navigation rail, and page-header actions.
 mod data;
+mod dictation;
 mod keymap;
 #[cfg(test)]
 mod layout_tests;
@@ -246,6 +247,7 @@ pub(crate) struct SettingsView {
     recording_preview: String,
     recorder_focus: FocusHandle,
     recording_error: Option<String>,
+    dictation_onboarding: Option<dictation::Onboarding>,
     management: Option<management::Editor>,
     management_generation: u64,
     binary_anchors: RefCell<HashMap<vorkspace_core::provider::Kind, AnchorSlot>>,
@@ -296,9 +298,20 @@ impl SettingsView {
         if let Some(center) = crate::accounts::get(cx) {
             center.update(cx, |center, _| center.hide_emails());
         }
-        if let Some(service) = crate::clipboard::get(cx) {
-            cx.observe(&service, |_, _, cx| cx.notify()).detach();
+        {
+            let service = crate::clipboard::ensure(cx);
+            cx.observe(&service, |this, _, cx| {
+                this.dictation_notice(cx);
+                cx.notify();
+            })
+            .detach();
         }
+        cx.on_release(|this, cx| {
+            if let Some(onboarding) = this.dictation_onboarding.take() {
+                crate::clipboard::cancel_model(onboarding.request, cx);
+            }
+        })
+        .detach();
         let search = cx.new(|cx| {
             let mut input = Input::field("Search settings", "Search settings", content(0.35), cx);
             input.set_font_size(12.);
@@ -422,6 +435,7 @@ impl SettingsView {
             recording_preview: String::new(),
             recorder_focus: cx.focus_handle(),
             recording_error: None,
+            dictation_onboarding: None,
             management: None,
             management_generation: 0,
             binary_anchors: RefCell::default(),
@@ -616,6 +630,10 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.dictation_onboarding.is_some() {
+            self.cancel_dictation_setup(cx);
+            return true;
+        }
         if self.dismiss_notification_transient(window, cx) {
             return true;
         }
@@ -1192,6 +1210,7 @@ impl Render for SettingsView {
             })
             .children(self.management_overlay(window, cx))
             .children(self.notification_overlay(cx))
+            .children(self.dictation_overlay(window, cx))
     }
 }
 

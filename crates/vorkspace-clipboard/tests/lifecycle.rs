@@ -75,6 +75,7 @@ fn the_helper_outlives_the_app_while_recording_and_exits_when_turned_off() {
     send(
         &app,
         &Command::Configure {
+            setup: false,
             dictation: false,
             recording: true,
             icon: false,
@@ -88,6 +89,7 @@ fn the_helper_outlives_the_app_while_recording_and_exits_when_turned_off() {
     send(
         &app,
         &Command::Configure {
+            setup: false,
             dictation: false,
             recording: false,
             icon: false,
@@ -106,6 +108,7 @@ fn turning_recording_off_stops_a_helper_the_app_never_connected_to() {
     send(
         &app,
         &Command::Configure {
+            setup: false,
             dictation: false,
             recording: true,
             icon: true,
@@ -114,7 +117,7 @@ fn turning_recording_off_stops_a_helper_the_app_never_connected_to() {
     .unwrap();
     drop(app);
     let supervisor = Supervisor::start(HELPER.into(), socket, relaunch(), |_| {});
-    supervisor.configure(false, true, false);
+    supervisor.configure(false, true, false, false);
     exits(&mut helper);
     assert!(!supervisor.connected());
 }
@@ -124,7 +127,7 @@ fn with_recording_off_the_supervisor_never_starts_a_helper() {
     let directory = tempfile::tempdir().unwrap();
     let socket = socket(&directory);
     let supervisor = Supervisor::start(HELPER.into(), socket.clone(), relaunch(), |_| {});
-    supervisor.configure(false, true, false);
+    supervisor.configure(false, true, false, false);
     std::thread::sleep(Duration::from_millis(300));
     assert!(!supervisor.connected());
     assert!(!socket.exists());
@@ -155,6 +158,7 @@ fn the_supervisor_restarts_a_lost_helper_and_replaces_an_outdated_one() {
     send(
         &app,
         &Command::Configure {
+            setup: false,
             dictation: false,
             recording: true,
             icon: false,
@@ -172,13 +176,13 @@ fn the_supervisor_restarts_a_lost_helper_and_replaces_an_outdated_one() {
     let supervisor = Supervisor::start(installed, socket, relaunch(), move |notice| {
         seen.lock().unwrap().push(notice)
     });
-    supervisor.configure(true, false, false);
+    supervisor.configure(true, false, false, false);
     until(|| supervisor.connected());
     exits(&mut outdated);
     supervisor.send(Command::Shutdown);
     until(|| !supervisor.connected());
     until(|| supervisor.connected());
-    supervisor.configure(false, false, false);
+    supervisor.configure(false, false, false, false);
     until(|| !supervisor.connected());
     // A shortcut held by another running copy is a fair report; a failed start isn't.
     let notices = notices.lock().unwrap();
@@ -197,13 +201,14 @@ fn a_clear_during_a_reconnect_reaches_the_helper() {
     let listener = UnixListener::bind(&socket).unwrap();
     let supervisor = Supervisor::start(HELPER.into(), socket, relaunch(), |_| {});
     supervisor.clear();
-    supervisor.configure(true, false, false);
+    supervisor.configure(true, false, false, false);
     let (helper, _) = listener.accept().unwrap();
     send(&helper, &Notice::hello(Path::new(HELPER))).unwrap();
     let mut reader = BufReader::new(&helper);
     assert_eq!(
         receive(&mut reader),
         Some(Command::Configure {
+            setup: false,
             dictation: false,
             recording: true,
             icon: false
@@ -211,7 +216,7 @@ fn a_clear_during_a_reconnect_reaches_the_helper() {
     );
     assert_eq!(receive(&mut reader), Some(relaunch()));
     assert_eq!(receive(&mut reader), Some(Command::Clear));
-    supervisor.configure(false, false, false);
+    supervisor.configure(false, false, false, false);
 }
 
 #[test]
@@ -221,8 +226,8 @@ fn turning_recording_off_cancels_a_waiting_clear() {
     let listener = UnixListener::bind(&socket).unwrap();
     let supervisor = Supervisor::start(HELPER.into(), socket, relaunch(), |_| {});
     supervisor.clear();
-    supervisor.configure(false, false, false);
-    supervisor.configure(true, false, false);
+    supervisor.configure(false, false, false, false);
+    supervisor.configure(true, false, false, false);
     // The stop opens its own short connection, which hangs up without a command.
     let (helper, mut reader) = loop {
         let (helper, _) = listener.accept().unwrap();
@@ -234,10 +239,11 @@ fn turning_recording_off_cancels_a_waiting_clear() {
     };
     assert_eq!(receive(&mut reader), Some(relaunch()));
     until(|| supervisor.connected());
-    supervisor.configure(false, false, false);
+    supervisor.configure(false, false, false, false);
     assert_eq!(
         receive(&mut reader),
         Some(Command::Configure {
+            setup: false,
             dictation: false,
             recording: false,
             icon: false
@@ -256,7 +262,7 @@ fn a_panel_action_survives_replacing_its_outdated_helper() {
     let supervisor = Supervisor::start(HELPER.into(), socket, relaunch(), move |notice| {
         seen.lock().unwrap().push(notice)
     });
-    supervisor.configure(true, false, false);
+    supervisor.configure(true, false, false, false);
     let (helper, _) = listener.accept().unwrap();
     send(&helper, &Notice::hello(Path::new("/no/such/helper"))).unwrap();
     send(&helper, &Notice::Action(Action::Settings)).unwrap();
@@ -272,7 +278,7 @@ fn a_panel_action_survives_replacing_its_outdated_helper() {
             .contains(&Notice::Action(Action::Settings))
     });
     drop(listener);
-    supervisor.configure(false, false, false);
+    supervisor.configure(false, false, false, false);
 }
 
 #[test]
@@ -280,9 +286,9 @@ fn a_panel_quit_is_not_undone_by_the_supervisor() {
     let directory = tempfile::tempdir().unwrap();
     let socket = socket(&directory);
     let supervisor = Supervisor::start(HELPER.into(), socket.clone(), relaunch(), |_| {});
-    supervisor.configure(true, false, false);
+    supervisor.configure(true, false, false, false);
     until(|| supervisor.connected());
-    supervisor.configure(false, false, false);
+    supervisor.configure(false, false, false, false);
     until(|| !supervisor.connected());
     // Past the supervisor's retry delay, while the app is still shutting down.
     std::thread::sleep(Duration::from_millis(900));
@@ -299,6 +305,7 @@ fn dictation_alone_keeps_the_same_helper_alive_across_disconnect_and_reconfigure
     send(
         &app,
         &Command::Configure {
+            setup: false,
             recording: false,
             icon: false,
             dictation: true,
@@ -312,6 +319,7 @@ fn dictation_alone_keeps_the_same_helper_alive_across_disconnect_and_reconfigure
     send(
         &app,
         &Command::Configure {
+            setup: false,
             recording: true,
             icon: false,
             dictation: false,
@@ -325,11 +333,46 @@ fn dictation_alone_keeps_the_same_helper_alive_across_disconnect_and_reconfigure
     send(
         &app,
         &Command::Configure {
+            setup: false,
             recording: false,
             icon: false,
             dictation: false,
         },
     )
     .unwrap();
+    exits(&mut helper);
+}
+
+#[test]
+fn setup_without_clipboard_or_dictation_never_persists_after_app_disconnect() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket = socket(&directory);
+    let mut helper = start(Path::new(HELPER), &socket);
+    let (app, _) = connect(&socket);
+    send(
+        &app,
+        &Command::Configure {
+            recording: false,
+            icon: false,
+            dictation: false,
+            setup: true,
+        },
+    )
+    .unwrap();
+    // Control IPC remains usable, but neither capture nor acquisition was requested.
+    send(&app, &Command::CancelModel { request: 123 }).unwrap();
+    let mut reader = BufReader::new(&app);
+    until(|| {
+        matches!(
+            receive::<Notice>(&mut reader),
+            Some(Notice::Model {
+                request: 123,
+                state: vorkspace_clipboard::ModelState::Cancelled
+            })
+        )
+    });
+    assert!(helper.0.try_wait().unwrap().is_none());
+    drop(reader);
+    drop(app);
     exits(&mut helper);
 }

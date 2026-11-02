@@ -103,3 +103,63 @@ mod tests {
         assert!(s.stop().is_none());
     }
 }
+
+/// One model worker through cancellation/join. IDs fence UI publication independently
+/// of the OS file lock, which serializes acquisition across helper processes.
+#[derive(Default, Debug)]
+pub struct DownloadSlot {
+    active: Option<(u64, bool)>,
+}
+impl DownloadSlot {
+    pub fn begin(&mut self, id: u64) -> bool {
+        if self.active.is_some() {
+            return false;
+        }
+        self.active = Some((id, false));
+        true
+    }
+    pub fn cancel(&mut self, id: u64) -> bool {
+        if let Some((current, cancelled)) = &mut self.active
+            && *current == id
+        {
+            *cancelled = true;
+            return true;
+        }
+        false
+    }
+    pub fn accepts(&self, id: u64) -> bool {
+        self.active == Some((id, false))
+    }
+    pub fn id(&self) -> Option<u64> {
+        self.active.map(|v| v.0)
+    }
+    pub fn finish(&mut self, id: u64) -> Option<bool> {
+        let (current, cancelled) = self.active?;
+        if current != id {
+            return None;
+        }
+        self.active = None;
+        Some(!cancelled)
+    }
+}
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    #[test]
+    fn cancelled_job_keeps_admission_until_join_and_cannot_publish_into_successor() {
+        let mut s = DownloadSlot::default();
+        assert!(s.begin(1));
+        assert!(s.cancel(1));
+        assert!(!s.accepts(1));
+        assert!(!s.begin(2));
+        assert_eq!(s.finish(99), None);
+        assert_eq!(s.finish(1), Some(false));
+        assert!(s.begin(2));
+        assert!(!s.cancel(1));
+        assert!(!s.accepts(1));
+        assert_eq!(s.finish(1), None);
+        assert!(s.accepts(2));
+        assert_eq!(s.finish(2), Some(true));
+        assert!(!s.accepts(2));
+    }
+}

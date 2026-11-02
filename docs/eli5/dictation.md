@@ -1,7 +1,11 @@
 # Local dictation
 
-Turn on Local dictation in Settings → General → Clipboard & Dictation. Download
-the English speech model, then click Set up permissions. Allow Microphone and
+Dictation starts **off**, including when upgrading from settings that predate it.
+Choose Local dictation in Settings → General → Clipboard & Dictation. If the model
+is already verified, it turns on immediately. Otherwise Vorkspace asks before
+downloading Parakeet Unified English (about 731 MB), shows where it will be saved,
+and offers Download or Cancel. Dictation stays off until that download is verified.
+Cancel, or close the dialog, to leave it off. Then click Set up permissions. Allow Microphone and
 Accessibility for **vorkspace Clipboard** in macOS Privacy & Security settings.
 That is Vorkspace's small background helper, which also keeps clipboard history.
 
@@ -28,3 +32,15 @@ is declined. The helper cannot confirm whether another app accepted Paste, so it
 never retries automatically. If something fails, check the message in Settings
 and make a new recording. Your previous model survives a failed download; Retry
 checks the new model before replacing it.
+
+The model and its temporary downloads live in **~/.vorkspace/dictation/**. Moving
+the app does not change this folder. All your Vorkspace installs share it, and
+only one can download or clean up unfinished downloads at a time. Other installs
+can still read a verified model. If one is busy, wait and retry; an already
+verified model will not be downloaded again. If Vorkspace cannot find your home
+folder, it explains the problem instead of saving the model elsewhere.
+
+Nothing downloads on startup or before you choose Download. A slow connection to
+the background helper keeps your request waiting. Cancel stops the acquisition;
+its worker finishes cleanup before another download can start. Replies from that
+cancelled request cannot turn dictation on later. No old cache is moved automatically.

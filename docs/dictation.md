@@ -1,7 +1,13 @@
 # Local dictation
 
-Enable **Local dictation** in Settings → General → Clipboard & Dictation, download
-English Parakeet Unified (731 MB), and use **Set up permissions**. macOS must allow
+Dictation is **off by default**, including old preferences that have no dictation
+setting. Choose **Local dictation** in Settings → General → Clipboard & Dictation.
+Settings checks the shared model first. If it is already verified, dictation is
+enabled without another download. Otherwise a consent dialog names **Parakeet
+Unified English**, its approximate **731 MB** size, and the destination
+`~/.vorkspace/dictation/`, with **Download** and **Cancel** actions. The saved
+preference remains off until download and integrity verification succeed. Cancel
+or dismiss the dialog to leave it off. Use **Set up permissions** afterward. macOS must allow
 Microphone and Accessibility for **vorkspace Clipboard**, the nested helper at
 `vorkspace.app/Contents/Helpers/vorkspace Clipboard.app`. Denied permissions can
 be changed in System Settings → Privacy & Security. Development bundles have
@@ -59,9 +65,26 @@ catalog lists CC-BY-4.0 metadata. See bundled NOTICE and the linked model cards.
 Only the explicit model download uses the network. Download progress and errors
 return over control IPC. Download writes an owner-only exclusive temporary file,
 checks size and SHA-256, syncs, and renames last. A failed download leaves the
-previous model intact. Initialization and each inference validate the model off
-the UI thread. Models live under `~/Library/Caches/com.vorkspace.dictation/`, keyed
-by the helper's per-install socket identity; moving the app changes that identity.
+previous model intact. All user model files, download temporary assets and the
+per-model lock live inside `~/.vorkspace/dictation/`. This path is independent of
+bundle location, so installed and development helpers share the same artifact.
+An exclusive kernel file lock grants download and orphan-cleanup authority to one
+writer across all helpers. Only that writer reaps abandoned downloads; a competing
+live writer's temporary data is untouched. Published models remain readable while
+another helper acquires a replacement. Initialization and each inference validate
+the model off the UI thread. Missing HOME uses the operating system's account-home
+resolver; unavailable home information produces an actionable error, never temporary
+storage. Existing per-install caches are not automatically migrated.
+
+Startup, configuration reads and disabled shortcuts never download a model.
+Only the consent dialog's Download action admits network acquisition. A request
+made during initial verification or helper reconnect waits rather than disappearing.
+Settings Cancel also cancels an active acquisition. Its worker keeps admission
+and the model lock until it returns and cleans its temporary file. Request IDs fence
+late progress/completion; cancellation cannot enable a later attempt. Reconnect
+recovers status or verifies the published artifact without replaying a download.
+A competing install's writer reports a busy error; Retry checks the artifact again
+and avoids fetching an already verified model.
 
 ## Isolated development
 

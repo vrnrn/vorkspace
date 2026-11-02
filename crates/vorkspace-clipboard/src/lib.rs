@@ -1,6 +1,9 @@
 //! The contract between the app and its clipboard helper, which outlives the app
 //! so that copies keep being recorded after Quit. Only control messages cross the
 //! socket: clipboard contents stay in the helper.
+#[cfg(target_os = "macos")]
+pub mod dictation_model;
+pub mod dictation_path;
 pub mod dictation_state;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
@@ -12,7 +15,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-const PROTOCOL: u32 = 2;
+const PROTOCOL: u32 = 3;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 const CONNECT_ATTEMPTS: usize = 60;
 const CONNECT_DELAY: Duration = Duration::from_millis(50);
@@ -26,13 +29,22 @@ pub enum Command {
         recording: bool,
         icon: bool,
         dictation: bool,
+        setup: bool,
     },
     /// How to reopen this exact app, including the data it was started with.
     Relaunch {
         program: String,
         arguments: Vec<String>,
     },
-    DownloadModel,
+    DownloadModel {
+        request: u64,
+    },
+    ModelStatus {
+        request: u64,
+    },
+    CancelModel {
+        request: u64,
+    },
     DictationPermissions,
     CancelDictation,
     Clear,
@@ -54,6 +66,26 @@ pub enum Notice {
     Error(Option<String>),
     Action(Action),
     Dictation { status: String, ready: bool },
+    Model { request: u64, state: ModelState },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ModelState {
+    Checking,
+    Missing,
+    Downloading(u64),
+    Cancelling,
+    Cancelled,
+    Ready,
+    Error(String),
+}
+impl ModelState {
+    pub fn terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Missing | Self::Ready | Self::Cancelled | Self::Error(_)
+        )
+    }
 }
 
 impl Notice {
@@ -141,13 +173,14 @@ pub fn relaunch_command(app: &Path, arguments: Vec<String>) -> Command {
 
 #[derive(Clone, Copy, Default, PartialEq)]
 struct Desired {
+    setup: bool,
     dictation: bool,
     recording: bool,
     icon: bool,
 }
 impl Desired {
     fn active(&self) -> bool {
-        self.recording || self.dictation
+        self.recording || self.dictation || self.setup
     }
 }
 #[derive(Default)]
@@ -184,11 +217,12 @@ impl Supervisor {
         Self { shared, socket }
     }
 
-    pub fn configure(&self, recording: bool, icon: bool, dictation: bool) {
+    pub fn configure(&self, recording: bool, icon: bool, dictation: bool, setup: bool) {
         *self.shared.desired.lock().unwrap() = Desired {
             recording,
             icon,
             dictation,
+            setup,
         };
         self.shared.wake.notify_all();
         if !recording {
@@ -199,8 +233,9 @@ impl Supervisor {
             recording,
             icon,
             dictation,
+            setup,
         };
-        if !self.send(command.clone()) && !recording && !dictation {
+        if !self.send(command.clone()) && !recording && !dictation && !setup {
             let shared = self.shared.clone();
             let socket = self.socket.clone();
             std::thread::spawn(move || retire(&shared, &socket, command));
@@ -302,6 +337,7 @@ fn supervise(
                 recording,
                 icon,
                 dictation,
+                setup,
             } = *shared.desired.lock().unwrap();
             if send(
                 &stream,
@@ -309,6 +345,7 @@ fn supervise(
                     recording,
                     icon,
                     dictation,
+                    setup,
                 },
             )
             .is_ok()
@@ -370,8 +407,11 @@ pub enum Step {
 
 impl Control {
     pub fn configure(&mut self, recording: bool) -> Option<Step> {
-        self.recording = recording;
-        (!recording).then_some(Step::Exit)
+        self.configure_setup(recording, false)
+    }
+    pub fn configure_setup(&mut self, active: bool, setup: bool) -> Option<Step> {
+        self.recording = active;
+        (!(active || setup)).then_some(Step::Exit)
     }
 
     pub fn connected(&mut self) -> Option<Step> {

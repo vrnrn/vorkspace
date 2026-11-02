@@ -1,7 +1,7 @@
 //! The clipboard helper: a small menu bar process that keeps clipboard history
 //! after the app quits. History stays in memory and dies with this process.
 mod dictation;
-mod dictation_model;
+use vorkspace_clipboard::dictation_model;
 mod dictation_panel;
 mod history;
 #[cfg(not(test))]
@@ -206,11 +206,12 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             recording,
             icon,
             dictation,
+            setup,
         }) => {
             let step = cx
                 .global_mut::<Helper>()
                 .control
-                .configure(recording || dictation);
+                .configure_setup(recording || dictation, setup);
             service::configure(recording, cx);
             dictation::configure(dictation, cx);
             sync_status(icon, cx);
@@ -220,7 +221,9 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
         Event::Command(Command::Relaunch { program, arguments }) => {
             cx.global_mut::<Helper>().relaunch = Some((program, arguments));
         }
-        Event::Command(Command::DownloadModel) => dictation::download(cx),
+        Event::Command(Command::DownloadModel { request }) => dictation::download(request, cx),
+        Event::Command(Command::ModelStatus { request }) => dictation::model_status(request, cx),
+        Event::Command(Command::CancelModel { request }) => dictation::cancel_model(request, cx),
         Event::Command(Command::DictationPermissions) => dictation::permissions(cx),
         Event::Command(Command::CancelDictation) => dictation::cancel(cx),
         Event::Command(Command::Clear) => service::clear(cx),
@@ -261,7 +264,7 @@ fn main() {
         .with_windowing(gpui::WindowingRequest::Headless)
         .run(move |cx: &mut App| {
             cx.set_global(Helper::default());
-            dictation::init(&socket, cx);
+            dictation::init(cx);
             service::configure(false, cx);
             if let Some(service) = service::get(cx) {
                 cx.observe(&service, |_, cx| report_error(cx)).detach();
