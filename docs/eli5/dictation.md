@@ -1,17 +1,20 @@
 # Local dictation
 
 Dictation starts **off**, including when upgrading from settings that predate it.
-The Model dropdown in Settings → General → Clipboard & Dictation offers
-**Parakeet Unified English** (the default) and **Parakeet-TDT v3**. Choosing one
+The Model dropdown in Settings → General → Dictation offers
+**Parakeet Unified English** (the default), **Parakeet-TDT v3**, and
+**Parakeet Flash**. TDT v3 and Flash are experimental. Flash is available on Apple silicon with macOS 14 or newer.
+Choosing one
 stops dictation and leaves it off. If it needs a download, Vorkspace asks first,
-naming that model, its size (about 731 MB for Unified or 740 MB for TDT), and
+naming that model, its size (about 731 MB for Unified, 740 MB for TDT, or 224 MB
+for Flash), and
 where it will be saved. Choose Download or Cancel. Cancelling keeps your new
 selection with dictation off. An installed, verified model is reused. After
 changing models, switch Local dictation on when ready.
 
 Switching Local dictation on also checks the selected model and asks to download
 it if needed. Dictation stays off until that download is verified. Nothing
-downloads the other model automatically. Then click Set up permissions. Allow Microphone and
+downloads another model automatically. Then click Set up permissions. Allow Microphone and
 Accessibility for **vorkspace Clipboard** in macOS Privacy & Security settings.
 That is Vorkspace's small background helper, which also keeps clipboard history.
 
@@ -31,13 +34,34 @@ records while dictation is idle. Microphone and Accessibility permission still
 belong to the background helper.
 
 When enabled, Vorkspace prepares the selected model and keeps it ready in memory.
-Wait for Ready, click your text field, then press **⌘,**. Amber dots mean startup;
-wait for red before speaking. With **Unified English**, stable words appear in the
+Wait for Ready, click your text field, then press **⌘,**. An amber microphone means startup;
+wait for red before speaking. Stable words appear in the
 field while you speak. It waits for words to settle instead of inserting guesses
 and deleting them later. Press **⌘,** again to finish the last words, without
 repeating what is already there. The notch shows a microphone, not your text.
-**TDT v3 is a finish-only alternative**: words arrive after you stop. Settings
-explains which mode your selected model supports.
+Quiet background noise need not hold the last settled word until you speak again.
+TDT checks overlapping pieces of speech, so words can arrive in small bursts.
+Flash is a fast English option that does not add punctuation or capital letters.
+If another updated Vorkspace helper is keeping a dictation model ready, this
+helper waits and retries automatically; disable dictation in the other helper to
+let it continue. Clipboard history can keep running. An older helper that has
+not been updated cannot participate in this coordination.
+
+To teach a name or spelling, open **Custom words**, add a term such as
+`Vorkspace` on its own line, then save. If it is misheard, add a line such as
+`work space => Vorkspace`. The left side is what the model might
+write; the right side is what you want inserted. The correction ignores letter
+case, keeps punctuation around the phrase, and works only on whole words. If
+two rules overlap, the longer one wins. Your saved rules stay on this Mac and
+apply to the next recording, even after you quit the main app.
+
+TDT also uses preferred words as hints while scoring speech; this may help but
+does not guarantee recognition. Unified and Flash correct matching text only;
+a term on its own can correct its capitalization but cannot fix a different
+misheard word unless you add that form. Cancelling leaves
+already inserted words alone and discards text that was still waiting.
+A trailing word or phrase that could match a correction can wait for a word
+boundary or for you to stop so the correction stays safe.
 
 Typing, clicking, navigating, switching apps or fields, losing the microphone,
 changing models or cancelling stops later words. Words already inserted stay.
@@ -50,8 +74,10 @@ worker has stopped.
 
 Everything is transcribed on your Mac. Downloading the model needs internet;
 recording does not. Audio stays in memory temporarily and is never saved. There
-is no dictation history. Unified uses the model's native streaming support. TDT handles long recordings
-in short pieces after Stop, which may affect wording and punctuation. Password fields cannot receive dictation.
+is no dictation history. Unified uses buffered streaming. TDT checks overlapping
+pieces while you speak, which may affect wording and punctuation. Flash uses a
+streaming model and keeps listening after natural pauses.
+Password fields cannot receive dictation.
 Ordinary Mac, browser and Vorkspace text boxes use the same Paste action. Some
 custom apps hide their text boxes from macOS; dictation then checks the app and
 window and watches for other input. Avoid typing, clicking or scrolling until
@@ -63,9 +89,13 @@ that it accepted the words.
 Dictation and clipboard history can be switched on separately. Either keeps the
 helper alive when the main app quits. Switch both off, or use Quit in the helper's
 menu, to stop it. Vox and dictation take turns using the microphone and notch.
+Each app bundle has its own helper, so two bundles can keep two models ready at
+once. Voice features sharing the same temporary folder take turns using the
+microphone and notch.
 
 For each new stable piece, the helper briefly puts only the new words on the
-clipboard and sends Paste once. It waits before replacing an outstanding paste. It saves
+clipboard and sends Paste once. It checks whether the modifier keys are held and
+waits before replacing an outstanding paste. It saves
 all the previous clipboard formats and restores them only if you have not copied
 something newer. Very large or unreadable clipboards are left alone and insertion
 is declined. The helper cannot confirm whether another app accepted Paste, so it
@@ -76,8 +106,8 @@ checks the new model before replacing it.
 The model and its temporary downloads live in **~/.vorkspace/dictation/**. Moving
 the app does not change this folder. All your Vorkspace installs share it, and
 only one can download or clean up unfinished downloads for the same model at
-a time. Both models can stay installed together; downloading one leaves the
-other alone. Other installs
+a time. All three models can stay installed together; downloading one leaves the
+others alone. Other installs
 can still read a verified model. If one is busy, wait and retry; an already
 verified model will not be downloaded again. If Vorkspace cannot find your home
 folder, it explains the problem instead of saving the model elsewhere.
@@ -109,7 +139,9 @@ macOS to show the permission prompt, which still requires your Allow.
 
 Developer builds can feed a known public recording through the same live worker
 twice, measuring words arriving before Stop and checking model reuse. A separate
-check uses a disposable field containing only synthetic text to test several
+offline check joins or crashes disposable helper processes to exercise the model
+lock and retry, using existing models and no microphone. Another checks the last
+word during a noisy pause. A field check uses only synthetic text to test several
 pastes, edits, focus changes and cancellation. This requires the signed helper's
 normal Accessibility permission; a missing grant is reported without changing
 permissions. These checks never use your microphone, composer or database.

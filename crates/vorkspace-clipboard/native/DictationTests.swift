@@ -1,5 +1,6 @@
 import AppKit
 import AudioToolbox
+import Carbon
 func verifyCaptureHealthContract() {
     assert(CaptureHealth.active.rawValue == 0 && CaptureHealth.failed.rawValue == 1)
     assert(CaptureHealth.full.rawValue == 2 && CaptureHealth.starting.rawValue == 3)
@@ -195,7 +196,20 @@ func verifyFocusNotificationLifecycle() {
  let userPaste = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)!
  userPaste.flags = .maskCommand
  assert(!isDictationPasteEvent(NSEvent(cgEvent: userPaste)!, tag: 12345))
+ let pasteUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)!
+ var posted: [(CGEventType, CGEventTapLocation)] = []
+ postDictationPasteEvents(paste, pasteUp) { event, tap in posted.append((event.type, tap)) }
+ assert(posted.count == 2 && posted[0].0 == .keyDown && posted[1].0 == .keyUp)
+ assert(posted.allSatisfy { $0.1 == .cgSessionEventTap })
+ // Every real modifier key must block insertion; no keys held must not block.
+ assert(!dictationModifiersDown { _ in false })
+ for key in [kVK_Command, kVK_RightCommand, kVK_Shift, kVK_RightShift,
+             kVK_Option, kVK_RightOption, kVK_Control, kVK_RightControl] {
+     assert(dictationModifiersDown { $0 == CGKeyCode(key) })
+ }
  print("Attempt-scoped own paste tag accepted; physical paste and old tags refused")
+ print("Both generated paste events use the session tap, in order")
+ print("Every left/right modifier key blocks insertion; released keys permit it")
  print("Rich clipboard restoration and newer-copy fencing passed")
  }
 }

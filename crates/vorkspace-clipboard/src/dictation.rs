@@ -1,5 +1,9 @@
-//! Dictation lives in the clipboard process. IPC carries status/control, never PCM or text.
+//! Dictation lives in the clipboard process. IPC carries configuration and
+//! status, never PCM or recognized transcript text.
 use crate::dictation_panel as panel;
+#[cfg(debug_assertions)]
+#[path = "dictation_engine_fixture.rs"]
+pub(crate) mod engine_fixture;
 #[cfg(debug_assertions)]
 #[path = "dictation_field_fixture.rs"]
 pub(crate) mod field_fixture;
@@ -11,6 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 use transcribe_cpp::CancelToken;
+use vorkspace_clipboard::dictation_engine_lease::{AcquireError, EngineLease};
 use vorkspace_clipboard::dictation_worker::{self as worker, CommittedPrefix, Event, Pipe, Turn};
 use vorkspace_clipboard::{ModelId, ModelState, dictation_model as model, dictation_path};
 use vorkspace_clipboard::{
@@ -33,12 +38,38 @@ unsafe extern "C" {
 }
 struct Dictation(Entity<Service>);
 impl Global for Dictation {}
+#[derive(Default)]
+struct WorkerSlot {
+    running: bool,
+    generation: u64,
+}
+impl WorkerSlot {
+    fn begin(&mut self) -> Option<u64> {
+        if self.running {
+            return None;
+        }
+        self.running = true;
+        self.generation += 1;
+        Some(self.generation)
+    }
+    /// Called after the worker has joined, or when no worker could be started.
+    fn joined(&mut self, generation: u64) -> bool {
+        if !self.running || self.generation != generation {
+            return false;
+        }
+        self.running = false;
+        true
+    }
+}
 pub struct Service {
     #[cfg(debug_assertions)]
     public_audio_fixture: bool,
+    #[cfg(debug_assertions)]
+    fixture_engine_lock: Option<PathBuf>,
     warm: Option<mpsc::SyncSender<Turn>>,
-    worker_running: bool,
-    worker_generation: u64,
+    worker: WorkerSlot,
+    retry_epoch: u64,
+    retry_pending: bool,
     worker_cancel: CancelToken,
     turn: Option<(u64, Pipe)>,
     native_started: bool,
@@ -57,6 +88,7 @@ pub struct Service {
     pending_download: Option<(u64, ModelId)>,
     selected: ModelId,
     microphone: String,
+    words: Result<Vec<vorkspace_core::dictation_words::Rule>, String>,
     capture_model: Option<ModelId>,
     capture_microphone: Option<String>,
     download_model: Option<ModelId>,
@@ -81,15 +113,20 @@ fn get(cx: &App) -> Entity<Service> {
 pub fn status(cx: &App) {
     get(cx).read(cx).publish(cx)
 }
-pub fn configure(enabled: bool, selected: ModelId, microphone: &str, cx: &mut App) {
+pub fn configure(enabled: bool, selected: ModelId, microphone: &str, words: &str, cx: &mut App) {
     get(cx).update(cx, |s, cx| {
         // A current attempt owns its device until stop/cancel; preference changes
         // affect the next admission, including after the main app quits.
         s.microphone = microphone.into();
+        // Each admitted turn takes its own immutable snapshot. A malformed
+        // configuration fails the next admission rather than using stale rules.
+        s.words = vorkspace_core::dictation_words::parse(words);
         let changed = s.selected != selected;
         if s.attempt.enabled == enabled && !changed {
             return;
         }
+        s.retry_epoch = s.retry_epoch.wrapping_add(1);
+        s.retry_pending = false;
         // Retire the previous owner before changing model identity. Cancelling
         // inference/download keeps its worker slot until the completion joins.
         if changed || !enabled {
@@ -234,9 +271,12 @@ impl Service {
         Self {
             #[cfg(debug_assertions)]
             public_audio_fixture: false,
+            #[cfg(debug_assertions)]
+            fixture_engine_lock: None,
             warm: None,
-            worker_running: false,
-            worker_generation: 0,
+            worker: WorkerSlot::default(),
+            retry_epoch: 0,
+            retry_pending: false,
             worker_cancel: CancelToken::new(),
             turn: None,
             native_started: false,
@@ -255,6 +295,7 @@ impl Service {
             pending_download: None,
             selected: ModelId::default(),
             microphone: "builtin".into(),
+            words: Ok(Vec::new()),
             capture_model: None,
             capture_microphone: None,
             download_model: None,
@@ -385,7 +426,7 @@ impl Service {
             );
             return;
         }
-        if self.worker_running {
+        if self.worker.running {
             self.retire_worker();
             self.pending_download = Some((request, model));
             self.model_event(request, model, ModelState::Checking, cx);
@@ -593,7 +634,7 @@ impl Service {
                     self.lease = None;
                     return;
                 }
-                if self.initializing || (self.worker_running && !self.ready) {
+                if self.initializing || (self.worker.running && !self.ready) {
                     self.status =
                         "Preparing selected model locally… Try dictation when Ready.".into();
                     self.publish(cx);
@@ -604,7 +645,7 @@ impl Service {
                     self.attempt.epoch += 1;
                     self.error(
                         format!(
-                            "Download {} in Settings → Clipboard → Dictation.",
+                            "Download {} in Settings → General → Dictation.",
                             self.selected.descriptor().label
                         ),
                         cx,
@@ -700,6 +741,7 @@ impl Service {
             epoch,
             input,
             cancel: self.cancel.clone(),
+            words: self.words.clone()?,
         };
         if self.warm.as_ref().is_none_or(|w| w.try_send(turn).is_err()) {
             return Err("The local model is still preparing. Try again when Ready.".into());
@@ -863,15 +905,64 @@ impl Service {
     }
     fn prepare_worker(&mut self, cx: &mut Context<Self>) {
         self.ready = false;
-        if self.worker_running {
-            return;
-        }
         let Ok(path) = self.model.clone() else {
             return;
         };
-        self.worker_running = true;
-        self.worker_generation += 1;
-        let generation = self.worker_generation;
+        if self.worker.running {
+            return;
+        }
+        #[cfg(debug_assertions)]
+        let admission = self
+            .fixture_engine_lock
+            .as_deref()
+            .map_or_else(EngineLease::acquire, EngineLease::acquire_at);
+        #[cfg(not(debug_assertions))]
+        let admission = EngineLease::acquire();
+        let engine_lease = match admission {
+            Ok(lease) => lease,
+            Err(AcquireError::Busy) => {
+                let status = "Waiting for another Vorkspace dictation model. Disable dictation in that helper; retrying automatically.";
+                if self.status != status {
+                    self.status = status.into();
+                    self.publish(cx);
+                }
+                if !self.retry_pending {
+                    self.retry_pending = true;
+                    let epoch = self.retry_epoch;
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_secs(1)).await;
+                        let _ = this.update(cx, |s, cx| {
+                            if s.retry_epoch != epoch {
+                                return;
+                            }
+                            s.retry_pending = false;
+                            if s.attempt.enabled
+                                && !s.worker.running
+                                && !s.initializing
+                                && s.pending_download.is_none()
+                                && s.downloads.id().is_none()
+                            {
+                                s.prepare_worker(cx);
+                            }
+                        });
+                    })
+                    .detach();
+                }
+                return;
+            }
+            Err(AcquireError::Unavailable(error)) => {
+                self.status = format!(
+                    "Could not coordinate dictation models: {error}. Check access to your home folder, then turn dictation off and on to retry."
+                );
+                self.publish(cx);
+                return;
+            }
+        };
+        // This slot belongs to the helper, not a model or connection; it
+        // remains occupied until the old thread has actually joined.
+        let Some(generation) = self.worker.begin() else {
+            return;
+        };
         let selected = self.selected;
         self.worker_cancel = CancelToken::new();
         let cancel = self.worker_cancel.clone();
@@ -886,31 +977,53 @@ impl Service {
         })
         .detach();
         let (joined_tx, joined_rx) = async_channel::bounded(1);
-        let handle = std::thread::spawn(move || {
-            let result = worker::run(selected, &path, &cancel, rx, events);
-            let _ = joined_tx.send_blocking(result);
-        });
+        let (handle_tx, handle_rx) =
+            mpsc::sync_channel::<Result<std::thread::JoinHandle<Result<(), String>>, String>>(1);
+        // The joiner owns the lease independently of GPUI entity lifetime. It
+        // releases the kernel lock only after the actual model thread joins. It
+        // must start first so a failure to create it cannot strand a worker.
+        let joiner = std::thread::Builder::new()
+            .name("dictation-model-join".into())
+            .spawn(move || {
+                let result = match handle_rx.recv() {
+                    Ok(Ok(handle)) => engine_lease
+                        .join(handle)
+                        .unwrap_or_else(|_| Err("Local model worker stopped unexpectedly".into())),
+                    Ok(Err(error)) => {
+                        drop(engine_lease);
+                        Err(error)
+                    }
+                    Err(_) => {
+                        drop(engine_lease);
+                        Err("Could not start the local model worker".into())
+                    }
+                };
+                let _ = joined_tx.send_blocking(result);
+            });
+        if let Err(error) = joiner {
+            self.worker.joined(generation);
+            self.warm = None;
+            self.status = format!(
+                "Could not start the local model joiner: {error}. Turn dictation off and on to retry."
+            );
+            self.publish(cx);
+            return;
+        }
+        let handle = std::thread::Builder::new()
+            .name("dictation-model".into())
+            .spawn(move || worker::run(selected, &path, &cancel, rx, events))
+            .map_err(|error| format!("Could not start the local model worker: {error}."));
+        // The joiner is already running and waits only on this channel.
+        let _ = handle_tx.send(handle);
         cx.spawn(async move |this, cx| {
-            // Wait asynchronously while weights are warm. Only the actual join
-            // uses the background executor, after the worker has finished.
             let result = joined_rx
                 .recv()
                 .await
                 .unwrap_or_else(|_| Err("Local model worker stopped unexpectedly".into()));
-            let joined = cx
-                .background_executor()
-                .spawn(async move { handle.join().is_ok() })
-                .await;
-            let result = if joined {
-                result
-            } else {
-                Err("Local model worker stopped unexpectedly".into())
-            };
             let _ = this.update(cx, |s, cx| {
-                if s.worker_generation != generation {
+                if !s.worker.joined(generation) {
                     return;
                 }
-                s.worker_running = false;
                 let retired = s.worker_cancel.is_cancelled();
                 s.warm = None;
                 s.ready = false;
@@ -925,7 +1038,7 @@ impl Service {
                 } else if retired && s.attempt.enabled {
                     s.check_ready(cx);
                 } else if let Err(e) = result {
-                    s.status = e;
+                    s.status = format!("{e} Turn dictation off and on to retry.");
                     s.publish(cx);
                 }
             });
@@ -939,7 +1052,7 @@ impl Service {
         event: Event,
         cx: &mut Context<Self>,
     ) {
-        if generation != self.worker_generation {
+        if !self.worker.running || generation != self.worker.generation {
             return;
         }
         // Done also releases a cancelled/retired turn's admission after session drop.
@@ -1072,7 +1185,7 @@ impl Service {
 fn native_error(code: i32) -> &'static str {
     match code {
         1 => {
-            "Microphone access is required. Use Set up permissions in Settings → Clipboard, then enable vorkspace Clipboard in System Settings → Privacy & Security → Microphone."
+            "Microphone access is required. Use Set up permissions in Settings → General → Dictation, then enable vorkspace Clipboard in System Settings → Privacy & Security → Microphone."
         }
         2 => {
             "Accessibility access is required for insertion. Use Set up permissions, then enable vorkspace Clipboard in System Settings → Privacy & Security → Accessibility."
@@ -1082,7 +1195,7 @@ fn native_error(code: i32) -> &'static str {
             "No usable destination. Select a text field in a visible window, then start again. Secure fields cannot receive dictation."
         }
         8 => {
-            "Selected microphone unavailable. Choose a connected input in Settings → Clipboard → Microphone."
+            "Selected microphone unavailable. Choose a connected input in Settings → General → Dictation → Microphone."
         }
         9 => {
             "Destination changed while dictating. Keep the same field selected and avoid other input until insertion finishes."
@@ -1101,12 +1214,12 @@ fn native_error(code: i32) -> &'static str {
 pub fn shutdown(cx: &mut App) {
     let s = get(cx);
     let (model, microphone) = (s.read(cx).selected, s.read(cx).microphone.clone());
-    configure(false, model, &microphone, cx);
+    configure(false, model, &microphone, "", cx);
     // A posted Cmd-V may not have reached the destination yet. Keep the clipboard
     // available through its normal read window before restoring and terminating.
     cx.spawn(async move |cx| {
         loop {
-            let joined = cx.update(|cx| !get(cx).read(cx).worker_running);
+            let joined = cx.update(|cx| !get(cx).read(cx).worker.running);
             if joined {
                 break;
             }
@@ -1148,7 +1261,7 @@ mod model_tests {
                 assert!(s.attempt.recording(epoch));
                 epoch
             });
-            configure(true, ModelId::default(), "uid:next-recording", cx);
+            configure(true, ModelId::default(), "uid:next-recording", "", cx);
             service.update(cx, |s, _| {
                 assert_eq!(s.microphone, "uid:next-recording");
                 assert_eq!(s.attempt.phase, Phase::Recording);
@@ -1257,6 +1370,71 @@ mod model_tests {
 mod capture_tests {
     use super::*;
 
+    #[test]
+    fn retiring_a_worker_holds_the_engine_slot_until_the_real_join() {
+        let mut slot = WorkerSlot::default();
+        let first = slot.begin().unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (exiting_tx, exiting_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            exiting_tx.send(()).unwrap();
+            Ok::<_, &str>(())
+        });
+        started_rx.recv().unwrap();
+        assert!(slot.begin().is_none()); // cancellation or reconfiguration cannot reuse it
+        release_tx.send(()).unwrap();
+        exiting_rx.recv().unwrap();
+        assert!(slot.begin().is_none()); // exiting is not the same as joining
+        assert!(worker.join().unwrap().is_ok());
+        assert!(!slot.joined(first + 1)); // stale completion cannot release the owner
+        assert!(slot.joined(first));
+        let second = slot.begin().unwrap();
+        let failed = std::thread::spawn(|| Err::<(), _>("synthetic load failure"));
+        assert!(failed.join().unwrap().is_err());
+        assert!(slot.joined(second));
+        assert!(slot.begin().is_some());
+    }
+
+    #[cfg(debug_assertions)]
+    #[gpui::test]
+    fn disabling_a_waiting_helper_fences_its_scheduled_retry(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("engine.lock");
+        let owner = EngineLease::acquire_at(&lock).unwrap();
+        let service = cx.update(|cx| {
+            cx.set_global(crate::Helper::default());
+            let service = cx.new(|_| {
+                let mut service = Service::new(Ok(dir.path().join("missing.gguf")));
+                service.fixture_engine_lock = Some(lock);
+                service.initializing = false;
+                service.attempt.enabled = true;
+                service
+            });
+            cx.set_global(Dictation(service.clone()));
+            service.update(cx, |service, cx| {
+                service.prepare_worker(cx);
+                assert!(service.retry_pending);
+                assert!(!service.worker.running);
+                assert!(service.status.contains("retrying automatically"));
+            });
+            configure(false, ModelId::default(), "builtin", "", cx);
+            service
+        });
+        drop(owner);
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let service = service.read(cx);
+            assert!(!service.attempt.enabled);
+            assert!(!service.retry_pending);
+            assert_eq!(service.worker.generation, 0);
+        });
+    }
+
     // No init/check_ready: these production-boundary tests open no microphone,
     // read no model, and schedule no download or transcription worker.
     fn pending(cx: &mut App) -> (Entity<Service>, u64) {
@@ -1264,9 +1442,12 @@ mod capture_tests {
         let service = cx.new(|_| Service {
             #[cfg(debug_assertions)]
             public_audio_fixture: false,
+            #[cfg(debug_assertions)]
+            fixture_engine_lock: None,
             warm: None,
-            worker_running: false,
-            worker_generation: 0,
+            worker: WorkerSlot::default(),
+            retry_epoch: 0,
+            retry_pending: false,
             worker_cancel: CancelToken::new(),
             turn: None,
             native_started: false,
@@ -1288,6 +1469,7 @@ mod capture_tests {
             pending_download: None,
             selected: ModelId::default(),
             microphone: "builtin".into(),
+            words: Ok(Vec::new()),
             capture_model: Some(ModelId::default()),
             capture_microphone: Some("builtin".into()),
             download_model: None,
@@ -1316,18 +1498,24 @@ mod capture_tests {
             service.update(cx, |s, cx| {
                 let (tx, rx) = mpsc::sync_channel(1);
                 s.warm = Some(tx);
+                s.worker.running = true;
+                s.words = vorkspace_core::dictation_words::parse("work space => Vorkspace");
                 assert!(s.begin_turn(epoch + 1).is_err());
                 s.begin_turn(epoch).unwrap();
                 assert!(s.finish_input().is_err());
                 let turn = rx.try_recv().unwrap();
                 assert_eq!(turn.epoch, epoch);
+                s.words = vorkspace_core::dictation_words::parse("work space => Workspace");
+                assert_eq!(turn.words[0].preferred, "Vorkspace");
                 s.feed_audio(&vec![0.25; worker::SAMPLE_RATE + 8]).unwrap();
                 assert!(s.attempt.recording(epoch));
                 assert_eq!(s.attempt.stop(), Some(epoch));
                 s.finish_input().unwrap();
-                assert!(matches!(turn.input.try_recv().unwrap(), worker::Input::Audio(a) if a.len()==worker::SAMPLE_RATE));
-                assert!(matches!(turn.input.try_recv().unwrap(), worker::Input::Audio(a) if a==vec![0.25;8]));
-                assert!(matches!(turn.input.try_recv().unwrap(), worker::Input::Finish));
+                let mut received = Vec::new();
+                while let worker::Input::Audio(audio) = turn.input.try_recv().unwrap() {
+                    received.extend(audio);
+                }
+                assert_eq!(received, vec![0.25; worker::SAMPLE_RATE + 8]);
                 assert!(!s.native_started);
                 s.cancel(cx);
                 assert!(turn.cancel.is_cancelled());
@@ -1341,7 +1529,7 @@ mod capture_tests {
         cx.update(|cx| {
             let (service, _) = pending(cx);
             service.update(cx, |s, cx| {
-                s.worker_running = true;
+                s.worker.running = true;
                 s.start_download(44, s.selected, cx);
                 assert!(!s.worker_cancel.is_cancelled());
                 assert!(s.downloads.id().is_none());
@@ -1350,7 +1538,7 @@ mod capture_tests {
                     s.model_notice,
                     Some((44, _, ModelState::Error(_)))
                 ));
-                s.worker_running = false;
+                s.worker.running = false;
                 s.cancel(cx);
             });
         });
@@ -1361,9 +1549,14 @@ mod capture_tests {
             let (service, _) = pending(cx);
             service.update(cx, |s, cx| {
                 s.ready = false;
-                s.worker_generation = 2;
+                s.worker.generation = 2;
                 s.worker_event(1, s.selected, Event::Ready, cx);
                 assert!(!s.ready);
+                // A delayed Ready from a worker that already joined cannot
+                // make a dead worker look ready during reconnect or failure.
+                s.worker_event(2, s.selected, Event::Ready, cx);
+                assert!(!s.ready);
+                s.worker.running = true;
                 s.worker_cancel.cancel();
                 s.worker_event(2, s.selected, Event::Ready, cx);
                 assert!(!s.ready);
@@ -1378,6 +1571,7 @@ mod capture_tests {
             service.update(cx, |s, cx| {
                 let (pipe, _rx) = Pipe::new();
                 s.turn = Some((epoch, pipe));
+                s.worker.running = true;
                 s.attempt.recording(epoch);
                 s.delivered.advance("synthetic prefix").unwrap();
                 s.pending_text = "synthetic prefix".into();

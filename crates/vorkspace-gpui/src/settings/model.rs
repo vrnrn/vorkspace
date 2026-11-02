@@ -266,7 +266,13 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "dictation-enabled",
         Section::General,
         "Local dictation",
-        "microphone speech local parakeet model download permissions",
+        "microphone speech local parakeet model download permissions custom words dictionary vocabulary aliases corrections",
+    ),
+    (
+        "dictation-words",
+        Section::General,
+        "Custom words",
+        "dictation speech dictionary vocabulary names jargon spelling aliases corrections",
     ),
     (
         "file-tabs",

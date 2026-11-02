@@ -138,6 +138,18 @@ impl Geometry {
             NSSize::new(width as f64, height as f64),
         )
     }
+
+    /// A compact surface attached to the right edge of the physical notch.
+    pub fn right_frame(self, width: f32, height: f32) -> NSRect {
+        let width = width.min((self.screen_width - self.notch_width).max(0.) / 2.);
+        NSRect::new(
+            NSPoint::new(
+                self.x + (self.screen_width + self.notch_width) as f64 / 2.,
+                self.top - height as f64,
+            ),
+            NSSize::new(width as f64, height as f64),
+        )
+    }
 }
 
 pub fn place(
@@ -148,6 +160,22 @@ pub fn place(
     placement: &Placement,
     cx: &gpui::App,
 ) {
+    place_frame(window, geometry.frame(width, height), placement, cx);
+}
+
+/// Place a dictation-only right wing without reserving a left wing.
+pub fn place_right(
+    window: &Window,
+    geometry: Geometry,
+    width: f32,
+    height: f32,
+    placement: &Placement,
+    cx: &gpui::App,
+) {
+    place_frame(window, geometry.right_frame(width, height), placement, cx);
+}
+
+fn place_frame(window: &Window, frame: NSRect, placement: &Placement, cx: &gpui::App) {
     #[cfg(test)]
     if std::env::var_os("VORKSPACE_VOX_NATIVE_SMOKE").is_none() {
         return;
@@ -192,7 +220,6 @@ pub fn place(
             if native.respondsToSelector(sel!(setBecomesKeyOnlyIfNeeded:)) {
                 let _: () = unsafe { msg_send![&native, setBecomesKeyOnlyIfNeeded: true] };
             }
-            let frame = geometry.frame(width, height);
             if native.frame() != frame {
                 native.setFrame_display(frame, false);
             }
@@ -297,5 +324,9 @@ mod tests {
             assert_eq!(frame.origin.x + frame.size.width / 2., -960.);
             assert_eq!(frame.origin.y + frame.size.height, 1080.);
         }
+        let right = geometry.right_frame(54., 32.);
+        assert_eq!(right.origin.x, -960. + geometry.notch_width as f64 / 2.);
+        assert_eq!(right.size.width, 54.);
+        assert_eq!(right.origin.y + right.size.height, 1080.);
     }
 }

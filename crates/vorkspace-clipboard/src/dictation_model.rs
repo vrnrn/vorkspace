@@ -8,6 +8,7 @@ use std::{
     path::Path,
 };
 use transcribe_cpp::{Backend, CancelToken, Model, ModelOptions, RunOptions};
+mod eou;
 /// Mutation authority for this shared artifact. Readers never need this lock.
 pub struct ModelOwner {
     _lock: File,
@@ -68,9 +69,12 @@ pub fn verified(id: ModelId, path: &Path) -> bool {
     verify(id, path, &CancelToken::new()).is_ok()
 }
 pub fn verify(id: ModelId, path: &Path, cancel: &CancelToken) -> Result<(), String> {
+    if id == ModelId::ParakeetRealtimeEou {
+        return eou::verify(path, cancel);
+    }
     let mut file = File::open(path).map_err(|_| {
         format!(
-            "Download {} in Settings → Clipboard → Dictation.",
+            "Download {} in Settings → General → Dictation.",
             id.descriptor().label
         )
     })?;
@@ -89,7 +93,8 @@ pub fn verify(id: ModelId, path: &Path, cancel: &CancelToken) -> Result<(), Stri
         }
         hash.update(&buf[..n]);
     }
-    if format!("{:x}", hash.finalize()) != id.descriptor().sha256 {
+    let expected = id.descriptor().sha256.ok_or("Missing model checksum")?;
+    if format!("{:x}", hash.finalize()) != expected {
         return Err("Model checksum failed. Download it again in Settings.".into());
     }
     Ok(())
@@ -111,6 +116,12 @@ pub fn download(
     }
     if cancel.is_cancelled() {
         return Err("Download cancelled".into());
+    }
+    if id == ModelId::ParakeetRealtimeEou {
+        if !crate::dictation_worker::realtime_supported() {
+            return Err("Parakeet Flash requires Apple silicon and macOS 14 or newer.".into());
+        }
+        return eou::download(&owner, cancel, progress);
     }
     let response = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(20))
@@ -194,10 +205,55 @@ pub fn transcribe(
     pcm: &[f32],
     cancel: &CancelToken,
 ) -> Result<String, String> {
+    transcribe_with_admission(
+        id,
+        path,
+        pcm,
+        cancel,
+        crate::dictation_engine_lease::EngineLease::acquire,
+    )
+}
+fn transcribe_with_admission(
+    id: ModelId,
+    path: &Path,
+    pcm: &[f32],
+    cancel: &CancelToken,
+    acquire: impl FnOnce() -> Result<
+        crate::dictation_engine_lease::EngineLease,
+        crate::dictation_engine_lease::AcquireError,
+    >,
+) -> Result<String, String> {
     if pcm.len() < 1600 || pcm.iter().all(|v| v.abs() < 0.001) {
         return Ok(String::new());
     }
+    // This offline utility bypasses the persistent Service, so it must take
+    // the same admission before loading a model and keep it through teardown.
+    let _lease = acquire().map_err(|error| {
+        use crate::dictation_engine_lease::AcquireError;
+        match error {
+            AcquireError::Busy => {
+                "Another Vorkspace dictation model is running. Disable it and retry.".to_owned()
+            }
+            AcquireError::Unavailable(error) => {
+                format!("Could not coordinate dictation models: {error}.")
+            }
+        }
+    })?;
     verify(id, path, cancel)?;
+    if id == ModelId::ParakeetRealtimeEou {
+        let model = crate::dictation_worker::eou::Engine::load(path)?;
+        model.reset()?;
+        for chunk in pcm.chunks(16000) {
+            if cancel.is_cancelled() {
+                return Err("Cancelled".into());
+            }
+            model.feed(chunk)?;
+        }
+        if cancel.is_cancelled() {
+            return Err("Cancelled".into());
+        }
+        return model.finish();
+    }
     transcribe_cpp::disable_logging();
     let model = Model::load_with(
         path,
@@ -239,6 +295,29 @@ pub fn transcribe(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn offline_transcription_obeys_the_shared_lease_and_releases_on_load_failure() {
+        use crate::dictation_engine_lease::EngineLease;
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("engine.lock");
+        let owner = EngineLease::acquire_at(&lock).unwrap();
+        let missing = dir.path().join("missing.gguf");
+        let audio = [0.1; 1600];
+        let cancel = CancelToken::new();
+        let attempt = || {
+            transcribe_with_admission(ModelId::default(), &missing, &audio, &cancel, || {
+                EngineLease::acquire_at(&lock)
+            })
+        };
+        assert!(
+            attempt()
+                .unwrap_err()
+                .contains("Another Vorkspace dictation model")
+        );
+        drop(owner);
+        assert!(attempt().is_err());
+        assert!(EngineLease::acquire_at(&lock).is_ok());
+    }
     #[test]
     fn silence_needs_no_model_and_bad_artifacts_are_rejected() {
         let d = tempfile::tempdir().unwrap();

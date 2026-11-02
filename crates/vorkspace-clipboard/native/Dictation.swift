@@ -400,15 +400,29 @@ func dictationPaste(_ text: UnsafePointer<CChar>, _ epoch: UInt64, _ delivery: U
     owner.nextDelivery += 1
     down.setIntegerValueField(.eventSourceUserData, value: owner.eventTag)
     up.setIntegerValueField(.eventSourceUserData, value: owner.eventTag)
-    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    postDictationPasteEvents(down, up)
     let restore = { restoreClipboard(board, revision: revision, items: saved) }
     restoration.install(revision: revision, apply: restore)
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { restoration.finish(revision: revision) }
     return 0
 }
+// Paste is a session shortcut. Injecting it at the HID tap can make our
+// synthetic Command flag look like a physically held modifier afterward.
+func postDictationPasteEvents(_ down: CGEvent, _ up: CGEvent,
+                              post: (CGEvent, CGEventTapLocation) -> Void = { $0.post(tap: $1) }) {
+    post(down, .cgSessionEventTap)
+    post(up, .cgSessionEventTap)
+}
 @_cdecl("vorkspace_dictation_modifiers_down")
 func dictationModifiersDown() -> Bool {
-    !CGEventSource.flagsState(.combinedSessionState).intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty
+    dictationModifiersDown { CGEventSource.keyState(.hidSystemState, key: $0) }
+}
+// Synthetic events can leave session flags set. Check the modifier keys rather
+// than treating those flags as proof that the person is holding a key.
+func dictationModifiersDown(pressed: (CGKeyCode) -> Bool) -> Bool {
+    let keys = [kVK_Command, kVK_RightCommand, kVK_Shift, kVK_RightShift,
+                kVK_Option, kVK_RightOption, kVK_Control, kVK_RightControl]
+    return keys.contains { pressed(CGKeyCode($0)) }
 }
 
 @_cdecl("vorkspace_dictation_shutdown")

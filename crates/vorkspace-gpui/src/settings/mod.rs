@@ -248,6 +248,8 @@ pub(crate) struct SettingsView {
     recorder_focus: FocusHandle,
     recording_error: Option<String>,
     dictation_onboarding: Option<dictation::Onboarding>,
+    dictation_words_input: Entity<Input>,
+    dictation_words_error: Option<String>,
     management: Option<management::Editor>,
     management_generation: u64,
     binary_anchors: RefCell<HashMap<vorkspace_core::provider::Kind, AnchorSlot>>,
@@ -338,6 +340,15 @@ impl SettingsView {
             input.set_text(prefs.bedrock_cost_url.clone(), cx);
             input
         });
+        let dictation_words_input = cx.new(|cx| {
+            let mut input = Input::multiline_field(
+                "Custom word corrections",
+                "Vorkspace\nwork space => Vorkspace",
+                cx,
+            );
+            input.set_text(prefs.dictation_words.clone(), cx);
+            input
+        });
         let chat_background_preview = cx.new(|_| ProjectBackground::preview());
         let model_filter = cx.new(|cx| {
             let mut input = Input::field("Search models", "Search models", content(0.35), cx);
@@ -350,6 +361,10 @@ impl SettingsView {
             input
         });
         let mut subscriptions = vec![
+            cx.subscribe(&dictation_words_input, |this, _, _: &input::Changed, cx| {
+                this.dictation_words_error = None;
+                cx.notify();
+            }),
             cx.subscribe(&model_filter, |_, _, _: &input::Changed, cx| cx.notify()),
             cx.subscribe(&skill_filter, |this, input, _: &input::Changed, cx| {
                 this.skill_query = input.read(cx).content.to_string();
@@ -436,6 +451,8 @@ impl SettingsView {
             recorder_focus: cx.focus_handle(),
             recording_error: None,
             dictation_onboarding: None,
+            dictation_words_input,
+            dictation_words_error: None,
             management: None,
             management_generation: 0,
             binary_anchors: RefCell::default(),
@@ -596,6 +613,13 @@ impl SettingsView {
     }
     pub(crate) fn set_preferences(&mut self, prefs: &Preferences, cx: &mut Context<Self>) {
         if &self.prefs != prefs {
+            if self.dictation_words_input.read(cx).content.as_ref() == self.prefs.dictation_words
+                && self.prefs.dictation_words != prefs.dictation_words
+            {
+                self.dictation_words_input.update(cx, |input, cx| {
+                    input.set_text(prefs.dictation_words.clone(), cx)
+                });
+            }
             self.prefs = prefs.clone();
             self.notification_deadline(cx);
             cx.notify();

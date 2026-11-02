@@ -45,7 +45,13 @@ impl SettingsView {
         }
         let request = crate::clipboard::next_model_request();
         let model = self.prefs.dictation_model;
-        let destination = dictation_path::model_path(model);
+        let destination = if model == ModelId::ParakeetRealtimeEou
+            && !vorkspace_clipboard::dictation_worker::realtime_supported()
+        {
+            Err("Parakeet Flash requires Apple silicon and macOS 14 or newer.".into())
+        } else {
+            dictation_path::model_path(model)
+        };
         self.dictation_onboarding = Some(Onboarding {
             request,
             model,
@@ -347,6 +353,43 @@ mod tests {
             v.dictation_notice(cx);
             assert!(v.prefs.dictation_enabled);
             assert!(v.dictation_onboarding.is_none());
+        });
+    }
+    #[gpui::test]
+    fn selecting_flash_stops_dictation_and_waits_for_download_consent(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let view = view(cx);
+        view.update(cx, |v, cx| {
+            v.prefs.dictation_enabled = true;
+            v.choose_dictation_model(ModelId::ParakeetRealtimeEou, cx);
+            assert_eq!(v.prefs.dictation_model, ModelId::ParakeetRealtimeEou);
+            assert!(!v.prefs.dictation_enabled);
+            let request = v.dictation_onboarding.as_ref().unwrap().request;
+            assert_eq!(
+                v.dictation_onboarding.as_ref().unwrap().model,
+                ModelId::ParakeetRealtimeEou
+            );
+            v.dictation_checked(request, Ok(false), cx);
+            assert_eq!(
+                v.dictation_onboarding.as_ref().unwrap().phase,
+                ModelState::Missing
+            );
+            assert!(
+                crate::clipboard::get(cx)
+                    .unwrap()
+                    .read(cx)
+                    .model_notice
+                    .is_none()
+            );
+            v.cancel_dictation_setup(cx);
+            assert!(!v.prefs.dictation_enabled);
+            assert_eq!(
+                serde_json::from_str::<Preferences>(&serde_json::to_string(&v.prefs).unwrap())
+                    .unwrap()
+                    .dictation_model,
+                ModelId::ParakeetRealtimeEou
+            );
         });
     }
 }

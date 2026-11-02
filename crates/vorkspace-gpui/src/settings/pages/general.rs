@@ -217,6 +217,7 @@ impl SettingsView {
         ];
         {
             groups.push(self.clipboard_group(cx));
+            groups.push(self.dictation_group(cx));
         }
         groups.push(self.group(None, false, "About", None, None, about));
         groups

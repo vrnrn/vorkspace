@@ -4,18 +4,36 @@
 use crate::{ModelId, dictation_model};
 use std::{path::Path, sync::mpsc, time::Duration};
 use transcribe_cpp::{
-    Backend, CancelToken, CommitPolicy, Model, ModelOptions, RunOptions, StreamOptions,
+    Backend, CancelToken, CommitPolicy, Model, ModelOptions, ParakeetVocabularyOptions,
+    RunExtension, RunOptions, StreamOptions, TimestampKind,
 };
+use vorkspace_core::dictation_words::{Corrector, Rule};
+pub(crate) mod eou;
+mod tdt_stream;
+
+pub fn realtime_supported() -> bool {
+    eou::supported()
+}
 
 #[cfg(debug_assertions)]
 static MODEL_LOADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 #[cfg(debug_assertions)]
+static TDT_FIXTURE_METRICS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(debug_assertions)]
 pub fn model_loads() -> usize {
     MODEL_LOADS.load(std::sync::atomic::Ordering::Relaxed)
 }
+#[cfg(debug_assertions)]
+pub fn enable_tdt_fixture_metrics() {
+    TDT_FIXTURE_METRICS.store(true, std::sync::atomic::Ordering::Relaxed);
+}
 pub const SAMPLE_RATE: usize = 16000;
 pub const MAX_SAMPLES: usize = SAMPLE_RATE * 120;
-const QUEUED_BLOCKS: usize = 16; // at most 16 seconds, each block <= one second
+// Fixed 100 ms blocks make the queue's memory and delay bounds independent of
+// how often the capture owner happens to drain its native PCM buffer.
+const QUEUED_BLOCK_SAMPLES: usize = SAMPLE_RATE / 10;
+const QUEUED_BLOCKS: usize = 80; // at most eight seconds of pending PCM
 pub enum Input {
     Audio(Vec<f32>),
     Finish,
@@ -24,6 +42,7 @@ pub struct Turn {
     pub epoch: u64,
     pub cancel: CancelToken,
     pub input: mpsc::Receiver<Input>,
+    pub words: Vec<vorkspace_core::dictation_words::Rule>,
 }
 pub enum Event {
     Ready,
@@ -46,7 +65,13 @@ impl Pipe {
         if pcm.is_empty() {
             return Ok(());
         }
-        self.send(Input::Audio(pcm))
+        if pcm.len() <= QUEUED_BLOCK_SAMPLES {
+            return self.send(Input::Audio(pcm));
+        }
+        for block in pcm.chunks(QUEUED_BLOCK_SAMPLES) {
+            self.send(Input::Audio(block.to_vec()))?;
+        }
+        Ok(())
     }
     pub fn finish(&self) -> Result<(), String> {
         self.send(Input::Finish)
@@ -80,11 +105,37 @@ impl CommittedPrefix {
 
 pub struct WarmModel {
     id: ModelId,
-    model: Model,
+    model: WarmEngine,
+}
+enum WarmEngine {
+    Gguf(Model),
+    Realtime(eou::Engine),
 }
 impl WarmModel {
     pub fn load(id: ModelId, path: &Path, cancel: &CancelToken) -> Result<Self, String> {
         dictation_model::verify(id, path, cancel)?;
+        if id == ModelId::ParakeetRealtimeEou {
+            let model = eou::Engine::load(path)?;
+            #[cfg(debug_assertions)]
+            MODEL_LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if cancel.is_cancelled() {
+                return Err("Cancelled".into());
+            }
+            model.reset()?;
+            model.feed(&vec![0.; SAMPLE_RATE])?;
+            if cancel.is_cancelled() {
+                return Err("Cancelled".into());
+            }
+            model.finish()?;
+            model.reset()?;
+            if cancel.is_cancelled() {
+                return Err("Cancelled".into());
+            }
+            return Ok(Self {
+                id,
+                model: WarmEngine::Realtime(model),
+            });
+        }
         transcribe_cpp::disable_logging();
         let model = Model::load_with(
             path,
@@ -121,27 +172,62 @@ impl WarmModel {
                 .feed(&vec![0.; SAMPLE_RATE * 3])
                 .map_err(|e| e.to_string())?;
             stream.finalize().map_err(|e| e.to_string())?;
+        } else {
+            let mut session = model.session().map_err(|e| e.to_string())?;
+            session.set_cancel_token(cancel);
+            session
+                .run(&vec![0.; SAMPLE_RATE], &RunOptions::default())
+                .map_err(|e| format!("Could not prepare local TDT model: {e}"))?;
         }
         if cancel.is_cancelled() {
             return Err("Cancelled".into());
         }
-        Ok(Self { id, model })
+        Ok(Self {
+            id,
+            model: WarmEngine::Gguf(model),
+        })
     }
     pub fn turn(
         &self,
         turn: &Turn,
         mut emit: impl FnMut(Event) -> Result<(), String>,
     ) -> Result<(), String> {
-        let mut session = self.model.session().map_err(|e| e.to_string())?;
-        session.set_cancel_token(&turn.cancel);
-        let run = RunOptions {
-            language: self.id.descriptor().language.map(str::to_owned),
-            ..Default::default()
+        let mut publisher = Publisher::new(turn.words.clone());
+        if let WarmEngine::Realtime(model) = &self.model {
+            model.reset()?;
+            let mut count = 0;
+            let mut tail = StableTail::default();
+            emit(Event::Armed(turn.epoch))?;
+            loop {
+                match receive(turn, &mut count)? {
+                    Input::Audio(pcm) => {
+                        let text = model.feed(&pcm)?;
+                        let stable = tail.observe(&text, &pcm, &publisher.source, false);
+                        if tail.quiet_samples >= SAMPLE_RATE {
+                            publisher.advance_stable(turn, stable, &mut emit)?;
+                        } else {
+                            publisher.advance(turn, stable, false, &mut emit)?;
+                        }
+                    }
+                    Input::Finish => {
+                        let text = model.finish()?;
+                        let stable = tail.observe(&text, &[], &publisher.source, true);
+                        publisher.advance(turn, stable, true, &mut emit)?;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        let WarmEngine::Gguf(model) = &self.model else {
+            unreachable!()
         };
+        let mut session = model.session().map_err(|e| e.to_string())?;
+        session.set_cancel_token(&turn.cancel);
+        let run = run_options(self.id, &turn.words);
         let mut count = 0;
-        let mut prefix = CommittedPrefix::default();
         let mut raw_prefix = CommittedPrefix::default();
         if self.id == ModelId::UnifiedEnglish {
+            let mut tail = StableTail::default();
             let mut stream = session
                 .stream(&run, &stream_options())
                 .map_err(|e| format!("This model could not start native streaming: {e}"))?;
@@ -150,53 +236,145 @@ impl WarmModel {
                 match receive(turn, &mut count)? {
                     Input::Audio(pcm) => {
                         stream.feed(&pcm).map_err(|e| e.to_string())?;
+                        let text = stream.text().committed;
+                        raw_prefix.advance(&text)?;
+                        let stable = tail.observe(&text, &pcm, &publisher.source, false);
+                        if tail.quiet_samples >= SAMPLE_RATE {
+                            publisher.advance_stable(turn, stable, &mut emit)?;
+                        } else {
+                            publisher.advance(turn, stable, false, &mut emit)?;
+                        }
                     }
                     Input::Finish => {
                         stream.finalize().map_err(|e| e.to_string())?;
-                        raw_prefix.advance(&stream.text().committed)?;
-                        publish(
-                            turn,
-                            &mut prefix,
-                            stable_words(&stream.text().committed, true),
-                            &mut emit,
-                        )?;
+                        let text = stream.text().committed;
+                        raw_prefix.advance(&text)?;
+                        let stable = tail.observe(&text, &[], &publisher.source, true);
+                        publisher.advance(turn, stable, true, &mut emit)?;
                         return Ok(());
                     }
                 }
-                raw_prefix.advance(&stream.text().committed)?;
-                publish(
-                    turn,
-                    &mut prefix,
-                    stable_words(&stream.text().committed, false),
-                    &mut emit,
-                )?;
             }
         } else {
-            // The pinned TDT artifact is offline-only. Never simulate streaming by
-            // rerunning a growing clip; retain bounded PCM and infer once at stop.
+            let mut incremental = tdt_stream::TdtStream::new();
+            let options = RunOptions {
+                timestamps: TimestampKind::Word,
+                ..run
+            };
+            let mut decode =
+                |audio: &[f32]| session.run(audio, &options).map_err(|e| e.to_string());
             emit(Event::Armed(turn.epoch))?;
-            let mut pcm = Vec::new();
-            while let Input::Audio(block) = receive(turn, &mut count)? {
-                pcm.extend(block);
+            loop {
+                let (text, finished) = match receive(turn, &mut count)? {
+                    Input::Audio(block) => (incremental.feed(&block, &mut decode)?, false),
+                    Input::Finish => (incremental.finish(&mut decode)?, true),
+                };
+                if let Some(text) = text {
+                    publisher.advance_segment(turn, &text, finished, &mut emit)?;
+                } else if finished {
+                    let text = publisher.source.text.clone();
+                    publisher.advance(turn, &text, true, &mut emit)?;
+                }
+                if finished {
+                    return Ok(());
+                }
             }
-            let mut text = String::new();
-            for chunk in pcm.chunks(SAMPLE_RATE * 20) {
-                if turn.cancel.is_cancelled() {
-                    return Err("Cancelled".into());
-                }
-                if chunk.len() < 1600 || chunk.iter().all(|v| v.abs() < 0.001) {
-                    continue;
-                }
-                let mut padded = chunk.to_vec();
-                padded.resize(padded.len().max(SAMPLE_RATE), 0.);
-                let result = session.run(&padded, &run).map_err(|e| e.to_string())?;
-                if !text.is_empty() {
-                    text.push(' ');
-                }
-                text.push_str(result.text.trim());
-            }
-            publish(turn, &mut prefix, &text, &mut emit)
         }
+    }
+}
+
+fn run_options(id: ModelId, rules: &[Rule]) -> RunOptions {
+    let mut vocabulary = Vec::<String>::new();
+    let mut sounds_like = Vec::new();
+    // Unified's pinned decoder rescores the entire stream at finalization,
+    // which can revise published text. TDT scores each window before it is
+    // committed. All engines still receive deterministic local corrections.
+    for rule in rules.iter().filter(|_| id == ModelId::ParakeetTdtV3) {
+        let index = vocabulary
+            .iter()
+            .position(|word| word == &rule.preferred)
+            .unwrap_or_else(|| {
+                vocabulary.push(rule.preferred.clone());
+                vocabulary.len() - 1
+            });
+        sounds_like.push((index, rule.heard.clone()));
+    }
+    RunOptions {
+        language: id.descriptor().language.map(str::to_owned),
+        family: (!vocabulary.is_empty()).then_some(RunExtension::ParakeetVocabulary(
+            ParakeetVocabularyOptions {
+                boost: None,
+                sounds_like,
+            },
+        )),
+        vocabulary,
+        ..Default::default()
+    }
+}
+
+struct Publisher {
+    source: CommittedPrefix,
+    corrected: String,
+    sent: CommittedPrefix,
+    corrector: Corrector,
+}
+impl Publisher {
+    fn new(rules: Vec<Rule>) -> Self {
+        Self {
+            source: CommittedPrefix::default(),
+            corrected: String::new(),
+            sent: CommittedPrefix::default(),
+            corrector: Corrector::new(rules),
+        }
+    }
+    fn advance(
+        &mut self,
+        turn: &Turn,
+        text: &str,
+        finished: bool,
+        emit: &mut impl FnMut(Event) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.advance_inner(turn, text, finished, false, false, emit)
+    }
+    fn advance_segment(
+        &mut self,
+        turn: &Turn,
+        text: &str,
+        finished: bool,
+        emit: &mut impl FnMut(Event) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.advance_inner(turn, text, finished, true, false, emit)
+    }
+    fn advance_stable(
+        &mut self,
+        turn: &Turn,
+        text: &str,
+        emit: &mut impl FnMut(Event) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.advance_inner(turn, text, false, false, true, emit)
+    }
+    fn advance_inner(
+        &mut self,
+        turn: &Turn,
+        text: &str,
+        finished: bool,
+        closed: bool,
+        stable: bool,
+        emit: &mut impl FnMut(Event) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if turn.cancel.is_cancelled() {
+            return Err("Cancelled".into());
+        }
+        let suffix = self.source.advance(text)?;
+        let corrected = if closed {
+            self.corrector.push_segment(&suffix, finished)
+        } else if stable {
+            self.corrector.push_stable(&suffix)
+        } else {
+            self.corrector.push(&suffix, finished)
+        };
+        self.corrected.push_str(&corrected);
+        publish(turn, &mut self.sent, &self.corrected, emit)
     }
 }
 fn publish(
@@ -292,9 +470,183 @@ fn stable_words(text: &str, final_text: bool) -> &str {
     &text[..end]
 }
 
+/// A streaming model can finish a single word without emitting a trailing
+/// space. Release its immutable prefix after one second of quiet, while never
+/// shortening text that has already left the worker.
+#[derive(Default)]
+struct StableTail {
+    previous: String,
+    quiet_samples: usize,
+    levels: QuietTracker,
+}
+impl StableTail {
+    fn observe<'a>(
+        &mut self,
+        text: &'a str,
+        pcm: &[f32],
+        delivered: &CommittedPrefix,
+        finished: bool,
+    ) -> &'a str {
+        let quiet = self.levels.observe(pcm);
+        if text != self.previous {
+            self.previous = text.to_owned();
+            self.quiet_samples = 0;
+        } else if quiet {
+            self.quiet_samples = self.quiet_samples.saturating_add(pcm.len());
+        } else {
+            self.quiet_samples = 0;
+        }
+        let candidate = stable_words(text, finished || self.quiet_samples >= SAMPLE_RATE);
+        if candidate.len() < delivered.text.len() && text.starts_with(&delivered.text) {
+            &text[..delivered.text.len()]
+        } else {
+            candidate
+        }
+    }
+}
+
+/// A fixed absolute silence gate can hold the last word forever in a room with
+/// a steady noise floor. Compare against recent speech too, with a strict cap;
+/// a word still needs the existing text-stability and duration checks.
+#[derive(Default)]
+struct QuietTracker {
+    levels: std::collections::VecDeque<(usize, f64)>,
+    samples: usize,
+}
+impl QuietTracker {
+    fn observe(&mut self, pcm: &[f32]) -> bool {
+        if pcm.is_empty() || pcm.iter().any(|sample| !sample.is_finite()) {
+            return false;
+        }
+        let rms = (pcm
+            .iter()
+            .map(|sample| f64::from(*sample).powi(2))
+            .sum::<f64>()
+            / pcm.len() as f64)
+            .sqrt();
+        let reference = self
+            .levels
+            .iter()
+            .map(|(_, level)| *level)
+            .fold(0.0_f64, f64::max);
+        let threshold = (reference * 0.2).clamp(0.005, 0.02);
+        self.levels.push_back((pcm.len(), rms));
+        self.samples = self.samples.saturating_add(pcm.len());
+        while self.samples > SAMPLE_RATE * 3 && self.levels.len() > 1 {
+            self.samples -= self.levels.pop_front().unwrap().0;
+        }
+        rms <= threshold
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_tdt_gets_acoustic_vocabulary_and_aliases() {
+        let rules = vorkspace_core::dictation_words::parse(
+            "Kennedy\nwork space => Vorkspace\nvork space => Vorkspace",
+        )
+        .unwrap();
+        {
+            let run = run_options(ModelId::ParakeetTdtV3, &rules);
+            assert_eq!(run.vocabulary, ["Kennedy", "Vorkspace"]);
+            let Some(RunExtension::ParakeetVocabulary(options)) = run.family else {
+                panic!("missing acoustic vocabulary")
+            };
+            assert_eq!(
+                options.sounds_like,
+                [
+                    (0, "Kennedy".into()),
+                    (1, "work space".into()),
+                    (1, "vork space".into())
+                ]
+            );
+        }
+        let unified = run_options(ModelId::UnifiedEnglish, &rules);
+        assert!(unified.vocabulary.is_empty());
+        assert!(unified.family.is_none());
+    }
+    #[test]
+    fn corrected_cumulative_events_are_append_only_and_cancellation_drops_the_tail() {
+        let (_pipe, input) = Pipe::new();
+        let turn = Turn {
+            epoch: 9,
+            cancel: CancelToken::new(),
+            input,
+            words: Vec::new(),
+        };
+        let mut publisher = Publisher::new(
+            vorkspace_core::dictation_words::parse("work space => Vorkspace").unwrap(),
+        );
+        let mut events = Vec::new();
+        publisher
+            .advance(&turn, "Say work ", false, &mut |e| {
+                events.push(e);
+                Ok(())
+            })
+            .unwrap();
+        publisher
+            .advance(&turn, "Say work space, now", false, &mut |e| {
+                events.push(e);
+                Ok(())
+            })
+            .unwrap();
+        let mut received = CommittedPrefix::default();
+        let mut result = String::new();
+        for event in events {
+            if let Event::Committed(epoch, text) = event {
+                assert_eq!(epoch, 9);
+                result.push_str(&received.advance(&text).unwrap());
+            }
+        }
+        assert_eq!(result, "Say Vorkspace, ");
+        turn.cancel.cancel();
+        assert!(
+            publisher
+                .advance(&turn, "Say work space, now!", true, &mut |_| panic!(
+                    "cancelled publication"
+                ))
+                .is_err()
+        );
+    }
+    #[test]
+    fn continuous_chunks_correct_a_cross_chunk_phrase_without_final_replay() {
+        let (_pipe, input) = Pipe::new();
+        let turn = Turn {
+            epoch: 10,
+            cancel: CancelToken::new(),
+            input,
+            words: Vec::new(),
+        };
+        let mut publisher = Publisher::new(
+            vorkspace_core::dictation_words::parse("Kennedy\nfellow Americans => Fellow-Americans")
+                .unwrap(),
+        );
+        let mut values = Vec::new();
+        for (text, final_text) in [
+            ("And so, my fellow ", false),
+            ("And so, my fellow Amer", false),
+            ("And so, my fellow Americans, ask ", false),
+            ("And so, my fellow Americans, ask not.", true),
+        ] {
+            publisher
+                .advance(&turn, text, final_text, &mut |event| {
+                    if let Event::Committed(_, text) = event {
+                        values.push(text);
+                    }
+                    Ok(())
+                })
+                .unwrap();
+        }
+        assert!(values.len() >= 2);
+        assert!(values[0].contains("And so"));
+        assert!(values.windows(2).all(|pair| pair[1].starts_with(&pair[0])));
+        assert_eq!(
+            values.last().unwrap(),
+            "And so, my Fellow-Americans, ask not."
+        );
+    }
     #[test]
     fn unicode_prefix_and_final_suffix_are_once_only() {
         let mut p = CommittedPrefix::default();
@@ -311,6 +663,7 @@ mod tests {
             epoch: 7,
             cancel: CancelToken::new(),
             input,
+            words: Vec::new(),
         };
         let mut prefix = CommittedPrefix::default();
         let mut effects = Vec::new();
@@ -364,10 +717,54 @@ mod tests {
         assert_eq!(stable_words("café\u{2003}世", false), "café\u{2003}");
     }
     #[test]
+    fn a_single_stable_word_is_released_after_quiet_without_retracting_a_prefix() {
+        let mut tail = StableTail::default();
+        let mut delivered = CommittedPrefix::default();
+        let quiet = vec![0.; SAMPLE_RATE / 10];
+        let speech = vec![0.1; SAMPLE_RATE / 10];
+        for _ in 0..15 {
+            assert_eq!(tail.observe("hello", &speech, &delivered, false), "");
+        }
+        assert_eq!(tail.observe("hello", &quiet, &delivered, false), "");
+        for _ in 0..8 {
+            assert_eq!(tail.observe("hello", &quiet, &delivered, false), "");
+        }
+        let stable = tail.observe("hello", &quiet, &delivered, false);
+        assert_eq!(stable, "hello");
+        delivered.advance(stable).unwrap();
+        assert_eq!(tail.observe("helloing", &quiet, &delivered, false), "hello");
+        assert_eq!(
+            tail.observe("helloing world", &quiet, &delivered, false),
+            "helloing "
+        );
+        assert_eq!(
+            tail.observe("helloing world", &[], &delivered, true),
+            "helloing world"
+        );
+    }
+    #[test]
+    fn steady_background_noise_does_not_hold_the_last_stable_word() {
+        let mut tail = StableTail::default();
+        let delivered = CommittedPrefix::default();
+        let speech = vec![0.1; SAMPLE_RATE / 10];
+        let noise = vec![0.01; SAMPLE_RATE / 10];
+        for _ in 0..15 {
+            assert_eq!(tail.observe("hello", &speech, &delivered, false), "");
+        }
+        for _ in 0..9 {
+            assert_eq!(tail.observe("hello", &noise, &delivered, false), "");
+        }
+        assert_eq!(tail.observe("hello", &noise, &delivered, false), "hello");
+        assert_eq!(
+            tail.observe("hello there", &speech, &delivered, false),
+            "hello "
+        );
+    }
+    #[test]
     fn queue_pressure_is_explicit_and_finish_is_ordered() {
         let (pipe, rx) = Pipe::new();
         for _ in 0..QUEUED_BLOCKS {
-            pipe.audio(vec![0.; SAMPLE_RATE]).unwrap();
+            pipe.audio(vec![0.; QUEUED_BLOCK_SAMPLES]).unwrap();
         }
         assert!(pipe.audio(vec![0.]).is_err());
         assert!(pipe.finish().is_err());
@@ -379,12 +776,26 @@ mod tests {
         assert!(matches!(rx.recv().unwrap(), Input::Finish));
     }
     #[test]
+    fn large_capture_drains_cannot_exceed_the_same_eight_second_queue() {
+        let (pipe, rx) = Pipe::new();
+        for _ in 0..8 {
+            pipe.audio(vec![0.5; SAMPLE_RATE]).unwrap();
+        }
+        assert!(pipe.audio(vec![0.5]).is_err());
+        let mut received = Vec::new();
+        while let Ok(Input::Audio(block)) = rx.try_recv() {
+            received.extend(block);
+        }
+        assert_eq!(received, vec![0.5; SAMPLE_RATE * 8]);
+    }
+    #[test]
     fn cancellation_and_audio_bounds_fail_closed() {
         let (pipe, rx) = Pipe::new();
         let turn = Turn {
             epoch: 1,
             cancel: CancelToken::new(),
             input: rx,
+            words: Vec::new(),
         };
         pipe.audio(vec![0.; SAMPLE_RATE]).unwrap();
         assert!(receive(&turn, &mut MAX_SAMPLES.clone()).is_err());

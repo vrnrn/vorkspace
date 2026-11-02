@@ -1,6 +1,8 @@
 //! The contract between the app and its clipboard helper, which outlives the app
 //! so that copies keep being recorded after Quit. Only control messages cross the
 //! socket: clipboard contents stay in the helper.
+#[cfg(target_os = "macos")]
+pub mod dictation_engine_lease;
 #[cfg(all(target_os = "macos", debug_assertions))]
 pub mod dictation_live_fixture;
 #[cfg(target_os = "macos")]
@@ -20,7 +22,7 @@ use std::{
 };
 pub use vorkspace_core::dictation_model::ModelId;
 
-const PROTOCOL: u32 = 5;
+const PROTOCOL: u32 = 7;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 const CONNECT_ATTEMPTS: usize = 60;
 const CONNECT_DELAY: Duration = Duration::from_millis(50);
@@ -37,6 +39,7 @@ pub enum Command {
         setup: bool,
         model: ModelId,
         microphone: String,
+        words: String,
     },
     /// How to reopen this exact app, including the data it was started with.
     Relaunch {
@@ -196,6 +199,7 @@ pub fn relaunch_command(app: &Path, arguments: Vec<String>) -> Command {
 struct Desired {
     model: ModelId,
     microphone: String,
+    words: String,
     setup: bool,
     dictation: bool,
     recording: bool,
@@ -240,6 +244,7 @@ impl Supervisor {
         Self { shared, socket }
     }
 
+    #[allow(clippy::too_many_arguments)] // Mirrors the helper's Configure message.
     pub fn configure(
         &self,
         recording: bool,
@@ -248,6 +253,7 @@ impl Supervisor {
         setup: bool,
         model: ModelId,
         microphone: &str,
+        words: &str,
     ) {
         *self.shared.desired.lock().unwrap() = Desired {
             recording,
@@ -256,6 +262,7 @@ impl Supervisor {
             setup,
             model,
             microphone: microphone.into(),
+            words: words.into(),
         };
         self.shared.wake.notify_all();
         if !recording {
@@ -269,6 +276,7 @@ impl Supervisor {
             setup,
             model,
             microphone: microphone.into(),
+            words: words.into(),
         };
         if !self.send(command.clone()) && !recording && !dictation && !setup {
             let shared = self.shared.clone();
@@ -375,6 +383,7 @@ fn supervise(
                 setup,
                 model,
                 microphone,
+                words,
             } = shared.desired.lock().unwrap().clone();
             if send(
                 &stream,
@@ -385,6 +394,7 @@ fn supervise(
                     setup,
                     model,
                     microphone,
+                    words,
                 },
             )
             .is_ok()

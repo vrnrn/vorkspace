@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn custom_terms_survive_workspace_store_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("state.db");
+    let mut workspace = Workspace::default();
+    workspace.preferences.dictation_words = "Vorkspace\nwork space => Vorkspace".into();
+    let store = vorkspace_core::store::Store::open_vorkspace(&path).unwrap();
+    store
+        .save_ui_state(&serde_json::to_string(&workspace).unwrap())
+        .unwrap();
+    drop(store);
+    let reopened = vorkspace_core::store::Store::open_vorkspace(&path).unwrap();
+    let saved = reopened.ui_state().unwrap().unwrap();
+    let restored = Workspace::restore(Some(&saved), &[], "/fixture");
+    assert_eq!(
+        restored.preferences.dictation_words,
+        "Vorkspace\nwork space => Vorkspace"
+    );
+    assert_eq!(
+        vorkspace_core::dictation_words::parse(&restored.preferences.dictation_words)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(!restored.preferences.dictation_enabled);
+}
+
+#[test]
 fn archived_project_is_not_reopened_by_active_session_or_stale_metadata() {
     let saved = serde_json::json!({
             "projects": ["/work/old", "/work/other"], "project": "/work/old", "active": 42,

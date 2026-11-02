@@ -17,6 +17,7 @@ pub(crate) struct Service {
     dictation: bool,
     selected: ModelId,
     microphone: String,
+    words: String,
     pub microphones: Vec<vorkspace_clipboard::InputDevice>,
     #[cfg(not(test))]
     _device_poll: Option<gpui::Task<()>>,
@@ -54,6 +55,7 @@ pub(crate) fn configure(
     dictation: bool,
     selected: ModelId,
     microphone: &str,
+    words: &str,
     cx: &mut App,
 ) {
     let entity = service(cx);
@@ -74,6 +76,7 @@ pub(crate) fn configure(
         }
         s.selected = selected;
         s.microphone = microphone.into();
+        s.words = words.into();
         s.icon = icon;
         s.recording = recording;
         s.dictation = dictation;
@@ -94,6 +97,7 @@ pub(crate) fn configure(
                     s.model_request.is_some(),
                     selected,
                     &s.microphone,
+                    &s.words,
                 );
             }
             s.sync_status(cx);
@@ -188,6 +192,7 @@ impl Service {
                     self.model_request.is_some(),
                     self.selected,
                     &self.microphone,
+                    &self.words,
                 );
             }
             self.sync_status(cx);
@@ -343,6 +348,7 @@ pub(crate) fn app_quitting(cx: &mut App) {
                     false,
                     s.selected,
                     &s.microphone,
+                    &s.words,
                 );
             }
         }
@@ -351,7 +357,15 @@ pub(crate) fn app_quitting(cx: &mut App) {
             // replacement during the app's own slower shutdown.
             #[cfg(not(test))]
             if let Some(supervisor) = &s.supervisor {
-                supervisor.configure(false, false, false, false, s.selected, &s.microphone);
+                supervisor.configure(
+                    false,
+                    false,
+                    false,
+                    false,
+                    s.selected,
+                    &s.microphone,
+                    &s.words,
+                );
             }
         }
     }
@@ -360,11 +374,11 @@ pub(crate) fn app_quitting(cx: &mut App) {
 /// Publish selection immediately to the helper, before deferred preference observers.
 pub(crate) fn select_model(model: ModelId, cx: &mut App) {
     let s = service(cx);
-    let (recording, icon, microphone) = {
+    let (recording, icon, microphone, words) = {
         let s = s.read(cx);
-        (s.recording, s.icon, s.microphone.clone())
+        (s.recording, s.icon, s.microphone.clone(), s.words.clone())
     };
-    configure(recording, icon, false, model, &microphone, cx);
+    configure(recording, icon, false, model, &microphone, &words, cx);
 }
 pub(crate) fn next_model_request() -> u64 {
     static NEXT: std::sync::OnceLock<std::sync::atomic::AtomicU64> = std::sync::OnceLock::new();
@@ -466,7 +480,7 @@ mod tests {
     #[gpui::test]
     fn a_cancelled_panel_quit_leaves_the_helper_running(cx: &mut TestAppContext) {
         let service = cx.update(|cx| {
-            configure(true, true, false, ModelId::default(), "builtin", cx);
+            configure(true, true, false, ModelId::default(), "builtin", "", cx);
             get(cx).unwrap()
         });
         service.update(cx, |s, cx| s.notice(Notice::Action(Action::Quit), cx));
@@ -477,9 +491,9 @@ mod tests {
 
     #[gpui::test]
     fn close_to_tray_needs_the_icon(cx: &mut TestAppContext) {
-        cx.update(|cx| configure(true, false, false, ModelId::default(), "builtin", cx));
+        cx.update(|cx| configure(true, false, false, ModelId::default(), "builtin", "", cx));
         assert!(!cx.update(|cx| menu_bar_ready(cx)));
-        cx.update(|cx| configure(false, true, false, ModelId::default(), "builtin", cx));
+        cx.update(|cx| configure(false, true, false, ModelId::default(), "builtin", "", cx));
         assert!(cx.update(|cx| menu_bar_ready(cx)));
     }
 }

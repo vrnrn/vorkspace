@@ -15,7 +15,7 @@ pub fn model_path(model: ModelId) -> Result<PathBuf, String> {
     let system = system_home();
     resolve(home.as_deref(), system.as_deref(), model)
 }
-fn system_home() -> Option<PathBuf> {
+pub(crate) fn system_home() -> Option<PathBuf> {
     use std::{
         ffi::{CStr, OsStr},
         os::unix::ffi::OsStrExt,

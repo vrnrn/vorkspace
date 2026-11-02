@@ -6,10 +6,24 @@ fn main() {
     let dictation = manifest.join("native/Dictation.swift");
     let target = manifest.join("native/DictationTarget.swift");
     let microphones = manifest.join("native/Microphones.swift");
+    let eou = manifest.join("native/DictationEOU.swift");
+    let eou_availability = manifest.join("native/DictationEOUAvailability.swift");
+    let eou_sources = [
+        "Mel.swift",
+        "Decoder.swift",
+        "Tokenizer.swift",
+        "Engine.swift",
+    ]
+    .map(|name| manifest.join("native/FluidAudioEOU").join(name));
     println!("cargo:rerun-if-changed={}", target.display());
     println!("cargo:rerun-if-changed={}", microphones.display());
     println!("cargo:rerun-if-changed={}", dictation.display());
     println!("cargo:rerun-if-changed={}", source.display());
+    println!("cargo:rerun-if-changed={}", eou.display());
+    println!("cargo:rerun-if-changed={}", eou_availability.display());
+    for source in &eou_sources {
+        println!("cargo:rerun-if-changed={}", source.display());
+    }
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let library = output.join("libVorkspaceClipboard.a");
     let arch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
@@ -37,6 +51,9 @@ fn main() {
         .arg(dictation)
         .arg(target)
         .arg(microphones)
+        .arg(eou)
+        .arg(eou_availability)
+        .args(&eou_sources)
         .arg("-o")
         .arg(&library)
         .status()
@@ -63,4 +80,6 @@ fn main() {
     // capture, permissions and insertion remain exclusively in the helper.
     println!("cargo:rustc-link-search=native={}", output.display());
     println!("cargo:rustc-link-lib=static=VorkspaceClipboard");
+    println!("cargo:rustc-link-lib=framework=CoreML");
+    println!("cargo:rustc-link-lib=framework=Accelerate");
 }

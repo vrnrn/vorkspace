@@ -6,6 +6,8 @@ use sha2::{Digest, Sha256};
 use std::{collections::VecDeque, ffi::CStr};
 const PREFIX: &str = "Existing: ";
 const JFK: &str = "And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country";
+const FLEURS_TDT: &str = "However, due to the slow communication channels, styles in the west could lag behind by 25-30 years.";
+const FLEURS_EOU: &str = "however due to the slow communication channels styles in the west could lag behind by twenty five to thirty years";
 unsafe extern "C" {
     fn vorkspace_dictation_fixture_read(pid: i32, receive: extern "C" fn(*const c_char)) -> i32;
     fn vorkspace_dictation_fixture_admit(pid: i32, epoch: u64) -> i32;
@@ -35,14 +37,16 @@ fn native(code: i32) -> Result<(), String> {
 /// Every attempted delivery must be observed in order; unexpected edits fail
 /// the run without rewriting the field. Coalescing happens only in Service.
 struct FieldLedger {
+    expected: &'static str,
     issued: u64,
     previous: String,
     visible: String,
     pending: VecDeque<(u64, String)>,
 }
 impl FieldLedger {
-    fn new() -> Self {
+    fn new(expected: &'static str) -> Self {
         Self {
+            expected,
             issued: 0,
             previous: String::new(),
             visible: PREFIX.into(),
@@ -78,11 +82,11 @@ impl FieldLedger {
         Ok(Some(sequence))
     }
     fn complete(&self) -> bool {
-        self.pending.is_empty() && self.visible == format!("{PREFIX}{JFK}")
+        self.pending.is_empty() && self.visible == format!("{PREFIX}{}", self.expected)
     }
 }
 
-pub fn run(model: PathBuf, wav: PathBuf, pid: i32) {
+pub fn run(model: PathBuf, wav: PathBuf, pid: i32, selected: ModelId) {
     // Refuse before reading audio/loading weights if normal AX trust or the
     // disposable target is absent. This is not a permission request.
     match field(pid) {
@@ -96,7 +100,7 @@ pub fn run(model: PathBuf, wav: PathBuf, pid: i32) {
             std::process::exit(2);
         }
     }
-    let pcm = public_pcm(&wav).unwrap_or_else(|e| {
+    let (pcm, expected) = public_pcm(&wav, selected).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(1)
     });
@@ -111,16 +115,17 @@ pub fn run(model: PathBuf, wav: PathBuf, pid: i32) {
                 s.public_audio_fixture = true;
                 s.initializing = false;
                 s.attempt.enabled = true;
+                s.selected = selected;
                 s
             });
             service.update(cx, |s, cx| s.prepare_worker(cx));
             let result_code = result_code.clone();
             cx.spawn(async move |cx| {
-                let result = exercise(&service, &pcm, pid, cx).await;
+                let result = exercise(&service, &pcm, pid, expected, cx).await;
                 // Same cancellation/retirement owner and actual join as normal
                 // disable, followed by the normal clipboard read window.
                 service.update(cx, |s, cx| { s.attempt.enabled = false; s.cancel(cx); s.retire_worker(); });
-                while service.read_with(cx, |s, _| s.worker_running) {
+                while service.read_with(cx, |s, _| s.worker.running) {
                     cx.background_executor().timer(Duration::from_millis(20)).await;
                 }
                 cx.background_executor().timer(Duration::from_millis(850)).await;
@@ -134,31 +139,51 @@ pub fn run(model: PathBuf, wav: PathBuf, pid: i32) {
         });
     std::process::exit(exit.get());
 }
-fn public_pcm(path: &std::path::Path) -> Result<Vec<f32>, String> {
+fn public_pcm(
+    path: &std::path::Path,
+    selected: ModelId,
+) -> Result<(Vec<f32>, &'static str), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    if format!("{:x}", Sha256::digest(&bytes))
-        != "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e"
-    {
-        return Err("Only the pinned public JFK WAV is allowed in the field fixture".into());
+    let (hash, expected) = match selected {
+        ModelId::UnifiedEnglish => (
+            "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+            JFK,
+        ),
+        ModelId::ParakeetTdtV3 => (
+            "7835bd6ffb54ce38a2a9bcde3905ba424faed94d50a474f21a9cbe9209b869df",
+            FLEURS_TDT,
+        ),
+        ModelId::ParakeetRealtimeEou => (
+            "7835bd6ffb54ce38a2a9bcde3905ba424faed94d50a474f21a9cbe9209b869df",
+            FLEURS_EOU,
+        ),
+    };
+    if format!("{:x}", Sha256::digest(&bytes)) != hash {
+        return Err(
+            "Only the pinned public WAV for this model is allowed in the field fixture".into(),
+        );
     }
     let wav = hound::WavReader::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
     let spec = wav.spec();
     if spec.sample_rate != 16000 || spec.channels != 1 || spec.bits_per_sample != 16 {
         return Err("Invalid public PCM format".into());
     }
-    wav.into_samples::<i16>()
+    let pcm = wav
+        .into_samples::<i16>()
         .map(|s| s.map(|v| v as f32 / 32768.).map_err(|e| e.to_string()))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((pcm, expected))
 }
 async fn exercise(
     service: &Entity<Service>,
     pcm: &[f32],
     pid: i32,
+    expected: &'static str,
     cx: &mut gpui::AsyncApp,
 ) -> Result<(), String> {
     let cold = Instant::now();
     while !service.read_with(cx, |s, _| s.ready) {
-        if !service.read_with(cx, |s, _| s.worker_running)
+        if !service.read_with(cx, |s, _| s.worker.running)
             || cold.elapsed() > Duration::from_secs(60)
         {
             return Err("Worker did not prepare".into());
@@ -198,7 +223,7 @@ async fn exercise(
         let mut offset = 0;
         let mut stop = None;
         let mut first = None;
-        let mut ledger = FieldLedger::new();
+        let mut ledger = FieldLedger::new(expected);
         loop {
             let now = Instant::now();
             if now.duration_since(began) > Duration::from_secs(30) {
@@ -292,7 +317,7 @@ mod tests {
     use super::*;
     #[test]
     fn field_acknowledgements_require_actual_ordered_unicode_contents() {
-        let mut ledger = FieldLedger::new();
+        let mut ledger = FieldLedger::new(JFK);
         ledger.issue(1, "Héllo ").unwrap();
         assert_eq!(ledger.observe(PREFIX).unwrap(), None);
         assert_eq!(ledger.observe("Existing: Héllo ").unwrap(), Some(1));
@@ -302,7 +327,7 @@ mod tests {
     }
     #[test]
     fn missing_intermediate_ack_and_replayed_delivery_fail_the_proof() {
-        let mut ledger = FieldLedger::new();
+        let mut ledger = FieldLedger::new(JFK);
         ledger.issue(1, "one ").unwrap();
         ledger.issue(2, "one two").unwrap();
         assert!(ledger.observe("Existing: one two").is_err());
@@ -311,11 +336,28 @@ mod tests {
     }
     #[test]
     fn full_final_ack_is_required_and_a_later_edit_is_not_corrected() {
-        let mut ledger = FieldLedger::new();
+        let mut ledger = FieldLedger::new(JFK);
         ledger.issue(1, JFK).unwrap();
         assert!(!ledger.complete());
         ledger.observe(&format!("{PREFIX}{JFK}")).unwrap();
         assert!(ledger.complete());
         assert!(ledger.observe("Existing: user edit").is_err());
+    }
+    #[test]
+    fn tdt_field_proof_requires_the_tdt_fixture_transcript() {
+        let mut ledger = FieldLedger::new(FLEURS_TDT);
+        ledger.issue(1, FLEURS_TDT).unwrap();
+        ledger.observe(&format!("{PREFIX}{FLEURS_TDT}")).unwrap();
+        assert!(ledger.complete());
+    }
+    #[test]
+    fn flash_field_proof_requires_the_full_public_transcript() {
+        let mut ledger = FieldLedger::new(FLEURS_EOU);
+        ledger.issue(1, "however due to ").unwrap();
+        ledger.observe("Existing: however due to ").unwrap();
+        assert!(!ledger.complete());
+        ledger.issue(2, FLEURS_EOU).unwrap();
+        ledger.observe(&format!("{PREFIX}{FLEURS_EOU}")).unwrap();
+        assert!(ledger.complete());
     }
 }

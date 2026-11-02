@@ -27,6 +27,8 @@ pub struct Preferences {
     pub dictation_enabled: bool,
     pub dictation_microphone: String,
     pub dictation_model: vorkspace_core::dictation_model::ModelId,
+    /// One local preferred term or `heard => preferred` correction per line.
+    pub dictation_words: String,
     pub working_agents: bool,
     pub close_to_tray: bool,
     // Appearance
@@ -145,6 +147,7 @@ impl Default for Preferences {
             dictation_enabled: false,
             dictation_microphone: "builtin".into(),
             dictation_model: Default::default(),
+            dictation_words: String::new(),
             working_agents: true,
             close_to_tray: true,
             theme: "dark".into(),
@@ -325,6 +328,40 @@ fn apply_window_scale<T: 'static>(window: &mut gpui::Window, cx: &mut gpui::Cont
 #[cfg(test)]
 mod dictation_tests {
     use super::*;
+    #[test]
+    fn unified_is_default_only_when_the_model_is_missing() {
+        use vorkspace_core::dictation_model::ModelId;
+        assert_eq!(
+            Preferences::default().dictation_model,
+            ModelId::UnifiedEnglish
+        );
+        assert_eq!(
+            serde_json::from_str::<Preferences>("{}")
+                .unwrap()
+                .dictation_model,
+            ModelId::UnifiedEnglish
+        );
+        for model in [ModelId::ParakeetTdtV3, ModelId::ParakeetRealtimeEou] {
+            let json = format!(r#"{{"dictation_model":"{}"}}"#, model.key());
+            let prefs: Preferences = serde_json::from_str(&json).unwrap();
+            assert_eq!(prefs.dictation_model, model);
+            assert_eq!(
+                serde_json::from_str::<Preferences>(&serde_json::to_string(&prefs).unwrap())
+                    .unwrap()
+                    .dictation_model,
+                model
+            );
+        }
+    }
+    #[test]
+    fn custom_words_round_trip_without_enabling_dictation() {
+        let mut prefs: Preferences = serde_json::from_str("{}").unwrap();
+        prefs.dictation_words = "Vorkspace\nwork space => Vorkspace\nclawed => Claude".into();
+        let restored: Preferences =
+            serde_json::from_str(&serde_json::to_string(&prefs).unwrap()).unwrap();
+        assert_eq!(restored.dictation_words, prefs.dictation_words);
+        assert!(!restored.dictation_enabled);
+    }
     #[test]
     fn dictation_microphone_defaults_and_preserves_native_uid() {
         let prefs: Preferences = serde_json::from_str("{}").unwrap();

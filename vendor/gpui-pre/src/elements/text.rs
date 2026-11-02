@@ -1,8 +1,8 @@
 use crate::{
     ActiveTooltip, AnyView, App, Bounds, DispatchPhase, Element, ElementId, GlobalElementId,
     HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size, TextOverflow,
-    TextRun, TextStyle, TooltipId, TruncateFrom, WhiteSpace, Window, WrappedLine,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size, TextAlign,
+    TextOverflow, TextRun, TextStyle, TooltipId, TruncateFrom, WhiteSpace, Window, WrappedLine,
     WrappedLineLayout, register_tooltip_mouse_handlers, set_tooltip_on_window,
 };
 use anyhow::Context as _;
@@ -281,10 +281,10 @@ impl Element for &'static str {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         text_layout: &mut Self::RequestLayoutState,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut App,
     ) {
-        text_layout.prepaint(bounds, self)
+        text_layout.prepaint(bounds, self, window.text_style().text_align)
     }
 
     fn paint(
@@ -355,10 +355,10 @@ impl Element for SharedString {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         text_layout: &mut Self::RequestLayoutState,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut App,
     ) {
-        text_layout.prepaint(bounds, self.as_ref())
+        text_layout.prepaint(bounds, self.as_ref(), window.text_style().text_align)
     }
 
     fn paint(
@@ -581,10 +581,11 @@ impl Element for StyledText {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut App,
     ) {
-        self.layout.prepaint(bounds, &self.text)
+        self.layout
+            .prepaint(bounds, &self.text, window.text_style().text_align)
     }
 
     fn paint(
@@ -628,6 +629,34 @@ struct TextLayoutInner {
     truncate_width: Option<Pixels>,
     size: Option<Size<Pixels>>,
     bounds: Option<Bounds<Pixels>>,
+    alignment: TextAlign,
+}
+
+// These are the same visual-line boundaries and advances that paint_line uses.
+// A wrap boundary is the first glyph on the following line.
+fn visual_line_metrics(line: &WrappedLine, row: usize) -> (usize, usize, Pixels, Pixels) {
+    let boundaries = line.wrap_boundaries();
+    let glyph =
+        |boundary: &crate::WrapBoundary| &line.runs()[boundary.run_ix].glyphs[boundary.glyph_ix];
+    let previous = row
+        .checked_sub(1)
+        .and_then(|index| boundaries.get(index))
+        .map(glyph);
+    let next = boundaries.get(row).map(glyph);
+    (
+        previous.map_or(0, |glyph| glyph.index),
+        next.map_or(line.len(), |glyph| glyph.index),
+        previous.map_or(Pixels::ZERO, |glyph| glyph.position.x),
+        next.map_or(line.unwrapped_layout.width, |glyph| glyph.position.x),
+    )
+}
+
+fn alignment_offset(align: TextAlign, width: Pixels, line_width: Pixels) -> Pixels {
+    match align {
+        TextAlign::Left => Pixels::ZERO,
+        TextAlign::Center => (width - line_width) / 2.,
+        TextAlign::Right => width - line_width,
+    }
 }
 
 impl TextLayout {
@@ -761,6 +790,7 @@ impl TextLayout {
                         truncate_width,
                         size: Some(Size::default()),
                         bounds: None,
+                        alignment: TextAlign::Left,
                     });
                     return Size::default();
                 };
@@ -780,6 +810,7 @@ impl TextLayout {
                     truncate_width,
                     size: Some(size),
                     bounds: None,
+                    alignment: TextAlign::Left,
                 });
 
                 size
@@ -787,13 +818,14 @@ impl TextLayout {
         })
     }
 
-    fn prepaint(&self, bounds: Bounds<Pixels>, text: &str) {
+    fn prepaint(&self, bounds: Bounds<Pixels>, text: &str, alignment: TextAlign) {
         let mut element_state = self.0.borrow_mut();
         let element_state = element_state
             .as_mut()
             .with_context(|| format!("measurement has not been performed on {text}"))
             .unwrap();
         element_state.bounds = Some(bounds);
+        element_state.alignment = alignment;
     }
 
     fn paint(&self, text: &str, window: &mut Window, cx: &mut App) {
@@ -882,7 +914,12 @@ impl TextLayout {
                 line_origin.y = line_bottom;
                 line_start_ix += line.len() + 1;
             } else {
-                let position_within_line = position - line_origin;
+                let mut position_within_line = position - line_origin;
+                let row = ((position_within_line.y / line_height).floor() as usize)
+                    .min(line.wrap_boundaries().len());
+                let (_, _, start_x, end_x) = visual_line_metrics(line, row);
+                position_within_line.x -=
+                    alignment_offset(element_state.alignment, bounds.size.width, end_x - start_x);
                 match line.index_for_position(position_within_line, line_height) {
                     Ok(index_within_line) => return Ok(line_start_ix + index_within_line),
                     Err(index_within_line) => return Err(line_start_ix + index_within_line),
@@ -917,11 +954,82 @@ impl TextLayout {
                 continue;
             } else {
                 let ix_within_line = index - line_start_ix;
-                return Some(line_origin + line.position_for_index(ix_within_line, line_height)?);
+                let mut position = line.position_for_index(ix_within_line, line_height)?;
+                let row =
+                    ((position.y / line_height).round() as usize).min(line.wrap_boundaries().len());
+                let (_, _, start_x, end_x) = visual_line_metrics(line, row);
+                position.x +=
+                    alignment_offset(element_state.alignment, bounds.size.width, end_x - start_x);
+                return Some(line_origin + position);
             }
         }
 
         None
+    }
+
+    /// Visit the painted rectangles for a UTF-8 byte range in visual-line order.
+    /// Line indices, rather than repeated floating-point y comparisons, keep
+    /// the final wrapped line present at fractional display and UI scales.
+    pub fn for_each_bounds_for_range(
+        &self,
+        range: Range<usize>,
+        mut visit: impl FnMut(Bounds<Pixels>),
+    ) {
+        let element_state = self.0.borrow();
+        let element_state = element_state
+            .as_ref()
+            .expect("measurement has not been performed");
+        let bounds = element_state
+            .bounds
+            .expect("prepaint has not been performed");
+        if range.start >= range.end || element_state.line_height <= Pixels::ZERO {
+            return;
+        }
+        let mut line_start = 0;
+        let mut y = bounds.top();
+        for line in &element_state.lines {
+            for row in 0..=line.wrap_boundaries().len() {
+                let (row_start, row_end, start_x, end_x) = visual_line_metrics(line, row);
+                let selected_start = range.start.max(line_start + row_start);
+                let selected_end = range.end.min(line_start + row_end);
+                if selected_start >= selected_end {
+                    continue;
+                }
+                let offset =
+                    alignment_offset(element_state.alignment, bounds.size.width, end_x - start_x);
+                // Wrap boundaries already have shaped advances. Only the
+                // first glyph and partial endpoints need an index lookup.
+                let start = selected_start - line_start;
+                let end = selected_end - line_start;
+                let left = bounds.left()
+                    + offset
+                    + if start == row_start && row_start != 0 {
+                        Pixels::ZERO
+                    } else {
+                        line.unwrapped_layout.x_for_index(start) - start_x
+                    };
+                let mut right = bounds.left()
+                    + offset
+                    + if end == row_end {
+                        end_x - start_x
+                    } else {
+                        line.unwrapped_layout.x_for_index(end) - start_x
+                    };
+                // Preserve the usual full-width continuation for left-aligned
+                // prose; aligned cells use their actual visual line width.
+                if element_state.alignment == TextAlign::Left && range.end > line_start + row_end {
+                    right = bounds.right();
+                }
+                if right > left {
+                    visit(Bounds::new(
+                        crate::point(left, y + element_state.line_height * row),
+                        crate::size(right - left, element_state.line_height),
+                    ));
+                }
+            }
+            line_start += line.len() + 1;
+            y += line.size(element_state.line_height).height;
+        }
     }
 
     /// Retrieve the layout for the line containing the given byte index.
@@ -1153,37 +1261,14 @@ impl Element for InteractiveText {
                 let mut link_hitboxes = Vec::new();
                 if !self.clickable_ranges.is_empty() {
                     let layout = self.text.layout();
-                    let bounds = layout.bounds();
-                    let height = layout.line_height();
-                        for range in &self.clickable_ranges {
-                            let start = range.start.min(self.text.text.len());
-                            let end = range.end.min(self.text.text.len());
-                            if start >= end {
-                                continue;
-                            }
-                            if let (Some(a), Some(b)) = (
-                                layout.position_for_index(start),
-                                layout.position_for_index(end),
-                            ) {
-                                let mut y = a.y;
-                                while y <= b.y {
-                                    let left = if y == a.y { a.x } else { bounds.left() };
-                                    let right = if y == b.y { b.x } else { bounds.right() };
-                                    if right > left {
-                                        let rect = Bounds::new(
-                                            crate::point(left, y),
-                                            crate::size(right - left, height),
-                                        );
-                                        link_hitboxes.push(window.insert_hitbox(
-                                            rect,
-                                            HitboxBehavior::Normal,
-                                        ));
-                                    }
-                                    y += height;
-                                }
-                            }
-                        }
+                    for range in &self.clickable_ranges {
+                        let start = range.start.min(self.text.text.len());
+                        let end = range.end.min(self.text.text.len());
+                        layout.for_each_bounds_for_range(start..end, |rect| {
+                            link_hitboxes.push(window.insert_hitbox(rect, HitboxBehavior::Normal));
+                        });
                     }
+                }
 
                 ((hitbox, link_hitboxes), interactive_state)
             },
@@ -1210,7 +1295,6 @@ impl Element for InteractiveText {
             |interactive_state, window| {
                 let mut interactive_state = interactive_state.unwrap_or_default();
                 if let Some(click_listener) = self.click_listener.take() {
-
                     let text_layout = text_layout.clone();
                     let mouse_down = interactive_state.mouse_down_index.clone();
                     if let Some(mouse_down_index) = mouse_down.get() {

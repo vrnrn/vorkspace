@@ -546,25 +546,9 @@ impl Element for SelectedText {
             self.text.len(),
         );
         if !selected.is_empty() {
-            let bounds = self.layout.bounds();
-            let height = self.layout.line_height();
-            if let (Some(a), Some(b)) = (
-                self.layout.position_for_index(selected.start),
-                self.layout.position_for_index(selected.end),
-            ) {
-                let mut y = a.y;
-                while y <= b.y {
-                    let left = if y == a.y { a.x } else { bounds.left() };
-                    let right = if y == b.y { b.x } else { bounds.right() };
-                    if right > left {
-                        window.paint_quad(gpui::fill(
-                            Bounds::new(gpui::point(left, y), size(right - left, height)),
-                            content(0.2),
-                        ))
-                    }
-                    y += height;
-                }
-            }
+            self.layout.for_each_bounds_for_range(selected, |bounds| {
+                window.paint_quad(gpui::fill(bounds, content(0.2)));
+            });
         }
         self.child.paint(window, cx);
     }
@@ -872,5 +856,7 @@ impl TranscriptView {
     }
 }
 
+#[cfg(test)]
+mod paint_tests;
 #[cfg(test)]
 mod tests;

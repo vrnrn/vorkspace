@@ -1,12 +1,15 @@
 # Local dictation
 
 Dictation is **off by default**, including old preferences that have no dictation
-setting. In Settings → General → Clipboard & Dictation, the **Model** dropdown
-chooses **Parakeet Unified English** (the default) or **Parakeet-TDT v3**. Both
-are 0.6B Q8 GGUF artifacts. Selecting a model stops dictation and leaves it off;
+setting. In Settings → General → Dictation, the **Model** dropdown
+chooses **Parakeet Unified English** (the default), **Parakeet-TDT v3**, or
+**Parakeet Flash**. TDT v3 and Flash are experimental. Flash is offered on Apple silicon with macOS 14 or newer.
+Unified and TDT are 0.6B Q8 GGUF artifacts; Flash is a 120M Core ML model.
+Selecting a model stops dictation and leaves it off;
 selection alone never enables capture. If the selected artifact is missing,
 Settings asks for Download or Cancel, naming that model, its approximate size
-(**731 MB** Unified, **740 MB** TDT), and `~/.vorkspace/dictation/` as destination.
+(**731 MB** Unified, **740 MB** TDT, **224 MB** Flash), and
+`~/.vorkspace/dictation/` as destination.
 Cancelling keeps the newly selected model with dictation off. A verified installed
 artifact is reused without a download. After changing models, choose **Local
 dictation** to enable it.
@@ -20,25 +23,64 @@ Microphone and Accessibility for **vorkspace Clipboard**, the nested helper at
 be changed in System Settings → Privacy & Security. Development bundles have
 their own executable location; authorize that helper when testing it.
 
-While enabled, the helper verifies and loads the selected weights once, probes
-Unified's native stream with synthetic silence, and publishes **Preparing** until
+While enabled, the helper verifies and loads the selected weights once, prewarms
+the selected model with synthetic silence, and publishes **Preparing** until
 that work finishes. It keeps one compatible model warm without opening the mic.
 Each turn gets a new session; its scratch arenas are freed when the turn joins.
 Disabling, changing models or publishing a download fences old work and joins the
 worker before starting a successor. Disabled dictation never loads weights.
 
-Press **⌘,** once to start. Amber with dots means preparation or microphone
+Press **⌘,** once to start. An amber microphone means preparation or microphone
 startup; wait for the red microphone before speaking. Red and **Recording** appear
 only after the prepared session and native capture owner can accept audio.
-**Unified English streams stable words directly into the focused field during
-capture.** Tentative hypotheses never leave the helper. Native windows advance every 560 ms
-with 560 ms right context and three agreeing prefixes; a trailing partial word
-waits for a whitespace boundary or finalization. Press **⌘,** again to drain
+The models insert stable words directly into the focused field during capture.
+Tentative hypotheses never leave the helper. With no custom words, Unified's native windows advance every 560 ms
+with 560 ms right context and three agreeing prefixes; a trailing word waits for
+a whitespace boundary, one second of quiet without a text change, or finalization.
+Quiet is measured against both an absolute floor and recent speech, so a steady
+low background level does not indefinitely hold the last stable word.
+Press **⌘,** again to drain
 and finalize; only the remaining committed suffix is inserted. The nonactivating
-notch keeps its empty left wing and microphone indicator; it displays no transcript.
-**TDT v3 is finish-only**: its pinned offline artifact does not support native
-streaming. It stays warm while enabled and transcribes bounded 20-second pieces
-only after Stop. Settings describes the selected model's actual mode.
+notch shows only the right-hand microphone indicator; status and errors remain available to accessibility and in Settings.
+TDT v3 uses repeated inference on overlapping audio windows with the same warm
+offline model. Preview windows are processed about every 600 ms; the helper waits
+for three agreeing word hypotheses and additional right context before insertion.
+After quiet, it can release an agreed word while holding unstable trailing
+punctuation until the next word or final result. Numeric words keep the stricter
+hold because their written form can change between previews.
+Previously inserted words are matched by text and time across window changes. If
+an overlap cannot be reconciled safely, insertion stops rather than replaying it.
+Flash uses the FluidAudio EOU engine's cached streaming encoder and decoder,
+keeping utterance-boundary hints from ending the recording. Its state resets
+between dictation turns, not for each raw boundary hint.
+Its English output has no punctuation or capitalization. A trailing word
+uses the same quiet-period hold as Unified.
+
+### Custom words
+
+In **Custom words**, enter one preferred term per line, for example `Vorkspace`,
+and choose **Save custom words**. If a term is misrecognized, add a line such as
+`work space => Vorkspace`.
+The left side is what the recognizer may output; the right side is the desired
+text. A rule can also correct capitalization by using the same words on both
+sides. Rules are local, case-insensitive and Unicode-normalized; whitespace
+within a phrase can vary, punctuation in a rule must match literally, and
+surrounding punctuation is kept. Matches respect word boundaries; when rules
+overlap, the longest match wins. A recording snapshots the saved rules when it
+starts, including after the main app quits; changes apply to the next recording.
+
+All models apply these exact text corrections locally before insertion. In
+addition, TDT supplies preferred spellings and heard aliases to
+transcribe.cpp's Parakeet acoustic vocabulary rescoring. The decoder limits the
+number and tokenization of eligible words and may skip a term it cannot encode;
+acoustic scoring is not a guarantee that a word will be recognized. Unified's
+decoder rescores only at finalization and could revise already inserted text, so
+Unified and Flash use only text corrections, including case correction for a
+standalone term. Text corrections are deterministic and are not acoustic bias.
+The helper holds incomplete possible aliases across chunks and segments and never revises
+an inserted prefix; cancellation discards the still-held suffix. A trailing
+word or phrase that could match a correction may wait for a word boundary or
+Stop so the rule can be applied without rewriting text already inserted.
 
 Starting-toggle cancels without transcription. Another toggle while finishing,
 Settings Cancel, real typing, clicks/navigation, focus/app changes, input loss or
@@ -46,8 +88,8 @@ model change stops further insertion. Words already inserted remain untouched.
 A cancelled stream is never replayed, even after an uncertain paste or stream
 error. Recording stops after two minutes. No microphone opens while idle. Audio
 is transient, never written or logged. The existing 16 kHz native capture owner
-drains incremental PCM through an eight-second native buffer and a bounded
-16-block worker queue (each block at most one second). Overflow fails the turn
+drains incremental PCM through an eight-second native buffer and an eight-second
+worker queue (up to 80 blocks of at most 100 ms). Overflow fails the turn
 explicitly rather than silently dropping audio. Inference/Metal work runs on the
 helper's dedicated worker; Stop and cancellation do not wait for inference.
 
@@ -65,6 +107,19 @@ ownership. Admission precedes showing a panel. Cancellation fences the attempt
 epoch and requests cooperative inference cancellation, retaining the worker slot
 until completion; a late result cannot insert text into a later attempt. Vox
 retains the lease through its panel lifecycle, including shutdown.
+Updated helpers for the same macOS account also acquire a separate model lease
+before loading any dictation engine. It uses the account home resolved by the
+operating system, independent of bundle location, HOME and TMPDIR; it does not
+control clipboard history or Vox. The helper retains the lease through actual
+worker join, including cancellation and load failure. A waiting helper reports
+the conflict and retries automatically. A crash releases the kernel lock. The
+owner-only `~/.vorkspace-dictation-engine.lock` file is retained even when idle:
+removing a live lock file would defeat coordination. Older helpers which do not
+use this lease can still load another engine; this is not a guarantee against
+non-cooperating processes. The separate shared voice lease admits only one
+microphone/notch owner among processes using the same per-user temporary
+directory; a different temporary-directory environment can create a separate
+voice lease.
 
 Settings also offers a **Microphone** dropdown. Fresh or missing preferences use
 **Built-in microphone**, resolved from CoreAudio's built-in transport metadata,
@@ -113,8 +168,10 @@ stable identifier, are accepted. An observed mismatch or unavailable read retire
 the destination permanently; a later matching or unknown read cannot revive it.
 No app is activated and no field is refocused.
 Capture admission failure, missing permission, and a changed destination after
-recording have separate recovery messages. It waits briefly for modifiers
-to lift and otherwise discards. Every rich clipboard item/type is snapshotted
+recording have separate recovery messages. It waits briefly for the actual
+Command, Control, Option and Shift keys to lift and otherwise discards. Paste
+events enter at the session tap so their synthetic modifier flags do not alter
+hardware key state. Every rich clipboard item/type is snapshotted
 (up to 32 MiB, otherwise insertion is declined), each suffix is marked transient,
 and restoration occurs after 800 ms only if the pasteboard change count still
 matches. Further suffixes coalesce while that paste owns the clipboard; they never
@@ -135,7 +192,7 @@ pasteboard races can lose a paste; insertion is never retried automatically.
 
 ## Model and runtime
 
-Inference uses static `transcribe.cpp` with Metal and embedded Metal kernels,
+Unified and TDT inference use static `transcribe.cpp` with Metal and embedded Metal kernels,
 pinned to `7045d1c0fe7cee37747b2792977421d435e75fca`. The minimal local flow and
 artifact catalog were inspected in Hex at
 `1d4904c6bba9ab91f631c8c79108c3847b1b1c60`; retained MIT notices ship in Resources.
@@ -159,10 +216,20 @@ Unified supplies the English language hint; the pinned TDT artifact has no langu
 prompt input. TDT is a selectable alternative, without a Vorkspace runtime,
 accuracy or performance qualification claim.
 
-A typed model identity and descriptor in `vorkspace-core` own these pins; both
-models share the helper's verification, download and inference implementation.
+Flash uses the 160 ms Core ML snapshot from
+[`FluidInference/parakeet-realtime-eou-120m-coreml`](https://huggingface.co/FluidInference/parakeet-realtime-eou-120m-coreml/tree/40a23f4c0b333aa17ad8c0f2ea47ec2347f2f355/160ms),
+revision `40a23f4c0b333aa17ad8c0f2ea47ec2347f2f355`, and the adapted
+FluidAudio EOU engine pinned at `386f7195670b77f2954c7ee143ec63fcb50b6c3b`.
+The snapshot contains three compiled Core ML models and a vocabulary. NVIDIA's
+original is governed by the NVIDIA Open Model License. Every file is checked
+with SHA-256; Git-tracked metadata also uses its pinned Git blob identity. Flash loads
+only verified local files, uses the Neural Engine and CPU, and never downloads
+from the inference engine.
+
+A typed model identity and descriptor in `vorkspace-core` own these pins; all
+models share the helper's lifecycle and consent flow.
 The preference persists the selected identity, including while dictation is off.
-Helper control protocol 4 carries it in configuration and every model request
+Helper control protocol 7 carries it and the saved custom-word configuration, and carries model identity in every model request
 and notice, preserving the choice after Quit/reconnect and replacing older helpers
 through the existing handshake. Capture and transcription snapshot the model.
 A selection change cancels the old attempt before changing helper ownership;
@@ -170,15 +237,16 @@ its epoch and model identity fence insertion. Download identity and model identi
 fence progress/readiness, retaining cancelled worker admission until completion.
 
 Only the explicit model download uses the network. Download progress and errors
-return over control IPC. Download writes an owner-only exclusive temporary file,
-checks size and SHA-256, syncs, and renames last. A failed download leaves the
+return over control IPC. GGUF downloads use an owner-only exclusive temporary file;
+Flash uses an owner-only staging directory with each pinned member verified.
+Downloads sync and publish last. A failed download leaves the
 previous model intact. All user model files, download temporary assets and the
 per-model lock live inside `~/.vorkspace/dictation/`. This path is independent of
 bundle location, so installed and development helpers share the same artifact.
 An exclusive kernel file lock grants download and orphan-cleanup authority to one
-writer for that exact artifact across all helpers. The two published models,
+writer for that exact artifact across all helpers. The three published models,
 locks and temporary downloads have distinct names and can coexist; cleaning up
-one model never removes the other. Only that writer reaps abandoned downloads; a competing
+one model never removes another. Only that writer reaps abandoned GGUF downloads; a competing
 live writer's temporary data is untouched. Published models remain readable while
 another helper acquires a replacement. Initialization verifies the artifact off the UI thread; enabled worker
 preparation verifies before loading. Turns reuse those immutable weights without
@@ -205,10 +273,11 @@ This command does not install or launch. The helper bundle has its own microphon
 usage description and audio-input signing entitlement. Static inference needs no
 external runtime library or model bundled into the app.
 
-Debug builds expose `vorkspace-clipboard --download-model-fixture /absolute/model.gguf`
-and `--transcribe-fixture /absolute/model.gguf /absolute/mono-16khz-pcm16.wav` for
-explicit, isolated Unified fixture checks (these debug-only commands use Unified). These do not start capture, register shortcuts,
-or access the user's app database. Fixture transcription prints its result.
+Debug builds expose `vorkspace-clipboard --download-model-fixture /absolute/model [unified|tdt-v3|eou]`
+for explicit, isolated downloads and `--transcribe-fixture /absolute/model.gguf
+/absolute/mono-16khz-pcm16.wav` for a Unified check. These do not start capture,
+register shortcuts, or access the user's app database. Fixture transcription
+prints its result. Downloads still require explicit consent.
 
 `vorkspace-clipboard --capture-health-fixture builtin` runs a debug-only,
 2.5-second microphone health probe inside the helper's headless GPUI lifecycle.
@@ -226,11 +295,17 @@ audio or clearing the failure, so notification and first-buffer ordering can be
 compared. Use an isolated signed
 bundle and output directory; do not replace a running helper to diagnose capture.
 
-`vorkspace-clipboard --live-dictation-fixture /absolute/model.gguf /absolute/public.wav`
+`vorkspace-clipboard --live-dictation-fixture /absolute/model /absolute/public.wav [unified|tdt-v3|eou] [repeats] [turns] [gap-seconds] [rules]`
 feeds public 16 kHz mono PCM16 fixture audio at real-time cadence through the
-production persistent worker twice, asserts committed text precedes Stop, and
+production persistent worker (twice by default), asserts committed text precedes Stop, and
 prints fixture-only text and preparation/first-stable/stop-to-final timings. It
-opens no microphone or destination and writes no user state. Debug-only
+opens no microphone or destination. It acquires the normal model lease; for an
+isolated fixture, `VORKSPACE_DICTATION_FIXTURE_LOCK` can name an absolute test
+lock path. The scripts in `crates/vorkspace-clipboard/tests/` check continuous
+public speech, noisy pauses on all engines and real multi-process model-owner
+transitions using explicitly supplied existing models and isolated paths. The debug-only
+`--tdt-window-fixture /absolute/model.gguf /absolute/public.wav` also prints TDT
+window hypotheses and word timings for the supplied fixture. Debug-only
 `--insertion-fixture PID success|edit|focus|cancel` preflights the signed helper's
 Accessibility trust without prompting. It only admits a frontmost disposable
 native field identified as `vorkspace-live-fixture`, then exercises production
@@ -238,10 +313,11 @@ incremental paste and refusal. `native/DictationFocusFixture.swift` supplies tha
 field with a known prefix. Missing trust is a live-proof blocker, not a passing
 headless insertion test. Use a new isolated bundle; never replace a running helper.
 
-Debug-only `--live-field-fixture /absolute/model.gguf /absolute/jfk.wav PID`
+Debug-only `--live-field-fixture /absolute/model /absolute/public.wav PID [unified|tdt-v3|eou]`
 combines the production service's warm worker, bounded turn input, committed-event
 handler, offsets and native paste owner. It accepts only the pinned public JFK
-WAV and a frontmost disposable tagged field containing `Existing: `. It checks
+WAV for Unified or the pinned English FLEURS WAV for TDT and Flash, and a frontmost
+disposable tagged field containing `Existing: `. It checks
 actual AX field contents after each posted cumulative update, requires visible
 stable text before Finish, checks final text once, and reports first-field and
 Stop-to-final-field timings separately from the 800 ms clipboard read window.

@@ -31,6 +31,7 @@ objc2-image-io = { version = "0.3.2", default-features = false, features = ["std
 [target.'cfg(target_os = "macos")'.dependencies]
 transcribe-cpp = { git = "https://github.com/anomalyco/transcribe.cpp", rev = "7045d1c0fe7cee37747b2792977421d435e75fca" }
 sha2 = "0.10"
+sha1 = "0.10"
 ureq = "2.12"
 hound = "3.5"
 vorkspace-ui = { path = "../vorkspace-ui" }

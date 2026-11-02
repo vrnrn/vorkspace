@@ -445,6 +445,7 @@ impl Shell {
             self.workspace.preferences.dictation_enabled,
             self.workspace.preferences.dictation_model,
             &self.workspace.preferences.dictation_microphone,
+            &self.workspace.preferences.dictation_words,
             cx,
         );
         if let Some(vox) = &self.vox {

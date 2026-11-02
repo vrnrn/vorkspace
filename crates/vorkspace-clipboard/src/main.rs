@@ -209,13 +209,14 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             setup,
             model,
             microphone,
+            words,
         }) => {
             let step = cx
                 .global_mut::<Helper>()
                 .control
                 .configure_setup(recording || dictation, setup);
             service::configure(recording, cx);
-            dictation::configure(dictation, model, &microphone, cx);
+            dictation::configure(dictation, model, &microphone, &words, cx);
             sync_status(icon, cx);
             report_error(cx);
             run(step, cx);
@@ -298,7 +299,41 @@ fn main() {
 #[cfg(debug_assertions)]
 fn fixture() -> bool {
     let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1).map(String::as_str) == Some("--dictation-engine-service-fixture") {
+        let selected = match args.get(4).map(String::as_str) {
+            None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
+            Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
+            Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
+            _ => panic!("expected unified, tdt-v3 or eou"),
+        };
+        dictation::engine_fixture::run(
+            PathBuf::from(args.get(2).expect("isolated lock path")),
+            PathBuf::from(args.get(3).expect("model path")),
+            selected,
+        );
+        return true;
+    }
+    if args.get(1).map(String::as_str) == Some("--dictation-engine-owner-fixture") {
+        let selected = match args.get(4).map(String::as_str) {
+            None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
+            Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
+            Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
+            _ => panic!("expected unified, tdt-v3 or eou"),
+        };
+        vorkspace_clipboard::dictation_live_fixture::engine_owner(
+            Path::new(args.get(2).expect("isolated lock path")),
+            Path::new(args.get(3).expect("model path")),
+            selected,
+        );
+        return true;
+    }
     if args.get(1).map(String::as_str) == Some("--live-field-fixture") {
+        let selected = match args.get(5).map(String::as_str) {
+            None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
+            Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
+            Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
+            _ => panic!("expected unified, tdt-v3 or eou"),
+        };
         dictation::field_fixture::run(
             PathBuf::from(args.get(2).expect("public fixture model path")),
             PathBuf::from(args.get(3).expect("public JFK WAV path")),
@@ -306,6 +341,7 @@ fn fixture() -> bool {
                 .expect("disposable target PID")
                 .parse()
                 .expect("positive target PID"),
+            selected,
         );
         return true;
     }
@@ -373,22 +409,43 @@ fn fixture() -> bool {
         return true;
     }
 
+    if args.get(1).map(String::as_str) == Some("--tdt-window-fixture") {
+        vorkspace_clipboard::dictation_live_fixture::inspect_tdt_windows(
+            std::path::Path::new(args.get(2).expect("TDT model path")),
+            std::path::Path::new(args.get(3).expect("public WAV path")),
+        );
+        return true;
+    }
     if args.get(1).map(String::as_str) == Some("--live-dictation-fixture") {
+        let model = match args.get(4).map(String::as_str) {
+            None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
+            Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
+            Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
+            _ => panic!("expected unified, tdt-v3 or eou"),
+        };
         vorkspace_clipboard::dictation_live_fixture::run(
             std::path::Path::new(args.get(2).expect("fixture model path")),
             std::path::Path::new(args.get(3).expect("public WAV path")),
+            model,
+            args.get(5)
+                .map_or(1, |n| n.parse().expect("fixture repeats")),
+            args.get(6).map_or(2, |n| n.parse().expect("fixture turns")),
+            args.get(7)
+                .map_or(1, |n| n.parse().expect("fixture gap seconds")),
+            args.get(8).map_or("", String::as_str),
         );
         return true;
     }
     if args.get(1).map(String::as_str) == Some("--download-model-fixture") {
         let path = PathBuf::from(args.get(2).expect("model output path"));
-        dictation_model::download(
-            vorkspace_clipboard::ModelId::default(),
-            &path,
-            &transcribe_cpp::CancelToken::new(),
-            |_| {},
-        )
-        .expect("fixture model download");
+        let selected = match args.get(3).map(String::as_str) {
+            None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
+            Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
+            Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
+            _ => panic!("expected unified, tdt-v3 or eou"),
+        };
+        dictation_model::download(selected, &path, &transcribe_cpp::CancelToken::new(), |_| {})
+            .expect("fixture model download");
         return true;
     }
     if args.get(1).map(String::as_str) != Some("--transcribe-fixture") {
