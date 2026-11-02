@@ -123,7 +123,10 @@ impl SettingsView {
         } else {
             "Uses the Mac’s built-in microphone by default. Applies to the next recording. Devices refresh automatically; a disconnected input stops recording without switching microphones."
         }.into()), vec![selector]));
-        rows.push(self.row(Some("dictation-enabled"), true, "Local dictation", Some("Press ⌘, to start, then ⌘, to transcribe and insert into the selected text field. Transcribed on your Mac. Works after quitting Vorkspace. Audio is never saved. Vox uses ⌘.".into()), vec![self.toggle("dictation-enabled", "Enable local dictation", self.prefs.dictation_enabled, false, cx, |this,on,cx|this.choose_dictation(on,cx))]));
+        rows.push(self.row(Some("dictation-enabled"), true, "Local dictation", Some(match self.prefs.dictation_model {
+            vorkspace_clipboard::ModelId::UnifiedEnglish => "Live on your Mac: stable words appear in the focused field as you speak. Press ⌘, to start or finish. Editing or changing focus stops further insertion. Audio is never saved. Works after Quit; Vox uses ⌘.",
+            vorkspace_clipboard::ModelId::ParakeetTdtV3 => "Finish-only on your Mac: this TDT artifact does not stream. Press ⌘, to record, then ⌘, to transcribe and insert. The model stays warm while enabled. Audio is never saved. Works after Quit; Vox uses ⌘.",
+        }.into()), vec![self.toggle("dictation-enabled", "Enable local dictation", self.prefs.dictation_enabled, false, cx, |this,on,cx|this.choose_dictation(on,cx))]));
         let (status, ready) = crate::clipboard::get(cx)
             .map(|s| {
                 let s = s.read(cx);

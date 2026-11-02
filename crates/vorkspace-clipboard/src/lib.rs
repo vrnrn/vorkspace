@@ -1,10 +1,14 @@
 //! The contract between the app and its clipboard helper, which outlives the app
 //! so that copies keep being recorded after Quit. Only control messages cross the
 //! socket: clipboard contents stay in the helper.
+#[cfg(all(target_os = "macos", debug_assertions))]
+pub mod dictation_live_fixture;
 #[cfg(target_os = "macos")]
 pub mod dictation_model;
 pub mod dictation_path;
 pub mod dictation_state;
+#[cfg(target_os = "macos")]
+pub mod dictation_worker;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io::{self, BufRead, BufReader, Write},

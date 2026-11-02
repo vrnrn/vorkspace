@@ -83,6 +83,7 @@ private final class DictationCapture {
     let engine = AVAudioEngine()
     let lock = NSLock()
     var samples = [Float]()
+    var totalSamples = 0
     var retainSamples = true
     #if DEBUG
     var diagnostic = CaptureDiagnostics()
@@ -152,6 +153,7 @@ private final class DictationCapture {
 // A late timer from an earlier paste must never discard its successor's snapshot.
 final class ClipboardRestoration {
     private var pending: (revision: Int, apply: () -> Void)?
+    var busy: Bool { pending != nil }
     func flush() { let old = pending; pending = nil; old?.apply() }
     func install(revision: Int, apply: @escaping () -> Void) { pending = (revision, apply) }
     func finish(revision: Int) { guard pending?.revision == revision else { return }; flush() }
@@ -160,8 +162,8 @@ private let restoration = ClipboardRestoration()
 private var capture: DictationCapture?
 private var targetOwner: DictationTarget?
 // Also used by the explicit focus fixture: admits insertion without audio/model work.
-func dictationPrepareInsertion() -> Bool {
-    targetOwner = DictationTarget.admit()
+func dictationPrepareInsertion(_ epoch: UInt64 = 0) -> Bool {
+    targetOwner = DictationTarget.admit(epoch: epoch)
     return targetOwner != nil
 }
 
@@ -174,12 +176,19 @@ func dictationPermissions() {
 
 // 1 mic permission, 2 Accessibility, 3 engine failure, 4 admission unavailable,
 // 8 selected input unavailable. Paste uses 9 for a changed destination.
+@_cdecl("vorkspace_dictation_admit")
+func dictationAdmit(_ epoch: UInt64) -> Int32 {
+    guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return 1 }
+    guard AXIsProcessTrusted() else { return 2 }
+    guard dictationPrepareInsertion(epoch) else { return 4 }
+    return 0
+}
 @_cdecl("vorkspace_dictation_start")
-func dictationStart(_ microphone: UnsafePointer<CChar>) -> Int32 {
+func dictationStart(_ microphone: UnsafePointer<CChar>, _ epoch: UInt64) -> Int32 {
     guard capture == nil else { return 3 }
     guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return 1 }
     guard AXIsProcessTrusted() else { return 2 }
-    guard dictationPrepareInsertion() else { return 4 }
+    guard let owner = targetOwner, owner.epoch == epoch, owner.isCurrent() else { return 9 }
     return startCapture(String(cString: microphone))
 }
 // Microphone ownership is independent of insertion admission. Only normal
@@ -226,10 +235,12 @@ private func startCapture(_ microphone: String, retainSamples: Bool = true) -> I
           let output = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false),
           let converter = AVAudioConverter(from: format, to: output) else { return 3 }
     state.format = format
-    if retainSamples { state.samples.reserveCapacity(16000 * 120) }
+    if retainSamples { state.samples.reserveCapacity(16000 * 8) }
     node.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * 16000 / format.sampleRate + 32)
-        guard let result = AVAudioPCMBuffer(pcmFormat: output, frameCapacity: capacity) else { return }
+        guard let result = AVAudioPCMBuffer(pcmFormat: output, frameCapacity: capacity) else {
+            state.lock.lock(); state.lifecycle.fail(); state.lock.unlock(); return
+        }
         var supplied = false
         var error: NSError?
         let conversionStatus = converter.convert(to: result, error: &error) { _, status in
@@ -248,17 +259,20 @@ private func startCapture(_ microphone: String, retainSamples: Bool = true) -> I
         state.diagnostic.conversionStatus = conversionStatus.rawValue
         if let error { state.diagnostic.conversionError = "\(error.domain):\(error.code)" }
         #endif
-        if error != nil { state.lifecycle.fail(); return }
+        if error != nil || conversionStatus == .error { state.lifecycle.fail(); return }
         if result.frameLength > 0 { state.lifecycle.receivedInput() }
         guard state.lifecycle.active else { return }
         #if DEBUG
         state.diagnostic.acceptedFrames += Int(result.frameLength)
         #endif
         guard state.retainSamples else { return }
-        guard let pcm = result.floatChannelData?[0] else { return }
-        let count = min(Int(result.frameLength), 16000 * 120 - state.samples.count)
+        guard let pcm = result.floatChannelData?[0] else { state.lifecycle.fail(); return }
+        let count = min(Int(result.frameLength), 16000 * 120 - state.totalSamples)
+        // A stalled consumer is an explicit failure, never a hole in the audio.
+        guard state.samples.count + count <= 16000 * 8 else { state.lifecycle.fail(); return }
         if count > 0 { state.samples.append(contentsOf: UnsafeBufferPointer(start: pcm, count: count)) }
-        state.full = state.samples.count == 16000 * 120
+        state.totalSamples += count
+        state.full = state.totalSamples == 16000 * 120
     }
     state.tapped = true
     guard state.beginStarting() else { return 3 }
@@ -299,6 +313,18 @@ func dictationHealth() -> Int32 {
     }
     return state.lifecycle.health(full: state.full).rawValue
 }
+@_cdecl("vorkspace_dictation_drain")
+func dictationDrain(_ callback: @convention(c) (UnsafePointer<Float>?, Int) -> Void) {
+    guard let state = capture else { return }
+    state.lock.lock()
+    let count = min(state.samples.count, 16000)
+    let pcm = Array(state.samples.prefix(count))
+    state.samples.removeFirst(count)
+    state.lock.unlock()
+    pcm.withUnsafeBufferPointer { callback($0.baseAddress, $0.count) }
+}
+@_cdecl("vorkspace_dictation_target_current")
+func dictationTargetCurrent() -> Bool { targetOwner?.isCurrent() == true }
 @_cdecl("vorkspace_dictation_stop")
 func dictationStop(_ callback: @convention(c) (UnsafePointer<Float>?, Int) -> Void) -> Int32 {
     guard let state = capture else { callback(nil, 0); return 11 }
@@ -346,12 +372,12 @@ func restoreClipboard(_ board: NSPasteboard, revision: Int, items: [NSPasteboard
     if !items.isEmpty { board.writeObjects(items) }
 }
 @_cdecl("vorkspace_dictation_paste")
-func dictationPaste(_ text: UnsafePointer<CChar>) -> Int32 {
+func dictationPaste(_ text: UnsafePointer<CChar>, _ epoch: UInt64, _ delivery: UInt64) -> Int32 {
     guard AXIsProcessTrusted() else { return 2 }
-    guard let owner = targetOwner, owner.isCurrent() else { return 9 }
+    guard let owner = targetOwner, owner.epoch == epoch, owner.nextDelivery == delivery, owner.isCurrent() else { return 9 }
     // Caller waits for shortcut modifiers to lift. Never synthesize a modified paste.
     guard !dictationModifiersDown() else { return 5 }
-    restoration.flush()
+    guard !restoration.busy else { return 12 }
     let board = NSPasteboard.general
     guard let saved = clipboardSnapshot(board) else { return 6 }
     // Pasteboard providers may have taken time; validate the destination again.
@@ -371,7 +397,9 @@ func dictationPaste(_ text: UnsafePointer<CChar>) -> Int32 {
     }
     down.flags = .maskCommand; up.flags = .maskCommand
     // One uncertain external effect, never retried.
-    targetOwner = nil
+    owner.nextDelivery += 1
+    down.setIntegerValueField(.eventSourceUserData, value: owner.eventTag)
+    up.setIntegerValueField(.eventSourceUserData, value: owner.eventTag)
     down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
     let restore = { restoreClipboard(board, revision: revision, items: saved) }
     restoration.install(revision: revision, apply: restore)
@@ -513,5 +541,66 @@ func dictationCaptureProbe(_ microphone: UnsafePointer<CChar>, _ requestPermissi
     if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]),
        let json = String(data: data, encoding: .utf8) { json.withCString { report($0) } }
     return code
+}
+#endif
+
+#if DEBUG
+// Explicit disposable-field proof through the production insertion owner. This
+// never prompts for TCC, opens a microphone, or accesses a database/composer.
+@_cdecl("vorkspace_dictation_insertion_probe")
+func dictationInsertionProbe(_ pid: Int32, _ scenario: UnsafePointer<CChar>,
+                             _ report: @convention(c) (UnsafePointer<CChar>) -> Void) -> Int32 {
+    precondition(Thread.isMainThread)
+    _ = NSApplication.shared
+    var result: [String: Any] = ["bundleID": Bundle.main.bundleIdentifier ?? "unbundled",
+        "bundlePath": Bundle.main.bundlePath, "AXTrusted": AXIsProcessTrusted(),
+        "microphoneOpened": false, "scenario": String(cString: scenario)]
+    func finish(_ code: Int32, _ outcome: String) -> Int32 {
+        dictationShutdown()
+        result["outcome"] = outcome; result["code"] = code
+        if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]),
+           let json = String(data: data, encoding: .utf8) { json.withCString { report($0) } }
+        return code
+    }
+    guard AXIsProcessTrusted() else { return finish(2, "blocked-accessibility-trust-no-paste-attempted") }
+    guard pid > 0, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+          let field = axElement(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute),
+          axString(field, kAXIdentifierAttribute) == "vorkspace-live-fixture" else {
+        return finish(9, "disposable-fixture-must-be-frontmost")
+    }
+    let epoch: UInt64 = 975
+    guard dictationPrepareInsertion(epoch) else { return finish(4, "admission-refused") }
+    func pump(_ duration: Double) { RunLoop.current.run(until: Date().addingTimeInterval(duration)) }
+    pump(0.2)
+    let first = "Hello".withCString { dictationPaste($0, epoch, 0) }
+    result["firstCode"] = first
+    guard first == 0 else { return finish(first, "first-insertion-failed") }
+    pump(1.0)
+    result["afterFirst"] = axString(field, kAXValueAttribute) ?? "unavailable"
+    let mode = String(cString: scenario)
+    if mode == "cancel" { dictationCancel() }
+    if mode == "edit" || mode == "focus" {
+        let source = CGEventSource(stateID: .combinedSessionState)!
+        let key: CGKeyCode = mode == "focus" ? 48 : 7 // Tab or physical-style x
+        let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true)!
+        let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)!
+        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+        pump(0.3)
+    }
+    let second = " 世界".withCString { dictationPaste($0, epoch, 1) }
+    result["secondCode"] = second
+    if mode != "success" {
+        pump(0.3)
+        result["final"] = axString(field, kAXValueAttribute) ?? "unavailable"
+        return finish(second == 9 ? 0 : 10, second == 9 ? "later-insertion-refused" : "unexpected-insertion")
+    }
+    guard second == 0 else { return finish(second, "own-event-invalidated-next-insertion") }
+    pump(1.0)
+    let third = ".".withCString { dictationPaste($0, epoch, 2) }
+    result["thirdCode"] = third
+    pump(1.0)
+    result["final"] = axString(field, kAXValueAttribute) ?? "unavailable"
+    let correct = axString(field, kAXValueAttribute) == "Existing: Hello 世界."
+    return finish(correct && third == 0 ? 0 : 10, correct ? "multiple-live-deltas-no-duplicates" : "unexpected-final-field")
 }
 #endif

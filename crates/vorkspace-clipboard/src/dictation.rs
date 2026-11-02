@@ -1,12 +1,14 @@
 //! Dictation lives in the clipboard process. IPC carries status/control, never PCM or text.
 use crate::dictation_panel as panel;
 use gpui::{App, AppContext, Context, Entity, Global, Task};
+use std::sync::mpsc;
 use std::{
     ffi::{CString, c_char},
     path::PathBuf,
     time::{Duration, Instant},
 };
 use transcribe_cpp::CancelToken;
+use vorkspace_clipboard::dictation_worker::{self as worker, CommittedPrefix, Event, Pipe, Turn};
 use vorkspace_clipboard::{ModelId, ModelState, dictation_model as model, dictation_path};
 use vorkspace_clipboard::{
     Notice,
@@ -15,17 +17,31 @@ use vorkspace_clipboard::{
 use vorkspace_macos::{global_hotkey::Registration, voice_lease::Lease};
 unsafe extern "C" {
     fn vorkspace_dictation_shutdown();
-    fn vorkspace_dictation_start(microphone: *const c_char) -> i32;
+    fn vorkspace_dictation_admit(epoch: u64) -> i32;
+    fn vorkspace_dictation_start(microphone: *const c_char, epoch: u64) -> i32;
+    fn vorkspace_dictation_drain(callback: extern "C" fn(*const f32, usize));
+    fn vorkspace_dictation_target_current() -> bool;
     fn vorkspace_dictation_stop(callback: extern "C" fn(*const f32, usize)) -> i32;
     fn vorkspace_dictation_cancel();
     fn vorkspace_dictation_health() -> i32;
     fn vorkspace_dictation_permissions();
-    fn vorkspace_dictation_paste(text: *const c_char) -> i32;
+    fn vorkspace_dictation_paste(text: *const c_char, epoch: u64, delivery: u64) -> i32;
     fn vorkspace_dictation_modifiers_down() -> bool;
 }
 struct Dictation(Entity<Service>);
 impl Global for Dictation {}
 pub struct Service {
+    warm: Option<mpsc::SyncSender<Turn>>,
+    worker_running: bool,
+    worker_generation: u64,
+    worker_cancel: CancelToken,
+    turn: Option<(u64, Pipe)>,
+    native_started: bool,
+    pending_text: String,
+    delivered: CommittedPrefix,
+    delivery: u64,
+    finished: Option<Result<(), String>>,
+    modifier_deadline: Option<Instant>,
     attempt: Attempt,
     lease: Option<Lease>,
     hotkey: Option<(Registration, Task<()>)>,
@@ -49,6 +65,17 @@ pub struct Service {
 pub fn init(cx: &mut App) {
     let path = dictation_path::model_path(ModelId::default());
     let service = cx.new(|_| Service {
+        warm: None,
+        worker_running: false,
+        worker_generation: 0,
+        worker_cancel: CancelToken::new(),
+        turn: None,
+        native_started: false,
+        pending_text: String::new(),
+        delivered: CommittedPrefix::default(),
+        delivery: 0,
+        finished: None,
+        modifier_deadline: None,
         attempt: Attempt::default(),
         lease: None,
         hotkey: None,
@@ -93,6 +120,7 @@ pub fn configure(enabled: bool, selected: ModelId, microphone: &str, cx: &mut Ap
         if changed || !enabled {
             s.hotkey = None;
             s.cancel(cx);
+            s.retire_worker();
             if let Some((request, model)) = s
                 .pending_download
                 .or_else(|| s.downloads.id().zip(s.download_model))
@@ -270,6 +298,9 @@ impl Service {
                 }
             },
         );
+        if self.ready && self.attempt.enabled {
+            self.prepare_worker(cx);
+        }
         self.publish(cx);
         if let Some((request, model)) = self.pending_download.take() {
             self.start_download(request, model, cx);
@@ -327,6 +358,24 @@ impl Service {
                     cx,
                 );
             }
+            return;
+        }
+        if self.attempt.phase != Phase::Idle {
+            self.model_event(
+                request,
+                model,
+                ModelState::Error(
+                    "A dictation turn is still active. Finish or cancel it before downloading."
+                        .into(),
+                ),
+                cx,
+            );
+            return;
+        }
+        if self.worker_running {
+            self.retire_worker();
+            self.pending_download = Some((request, model));
+            self.model_event(request, model, ModelState::Checking, cx);
             return;
         }
         let path = match self.model.clone() {
@@ -479,6 +528,17 @@ impl Service {
     fn cancel(&mut self, cx: &mut Context<Self>) {
         self.cancel.cancel();
         self.attempt.cancel();
+        if self.turn.is_some() {
+            if self.finished.is_some() {
+                self.turn = None;
+                self.attempt.phase = Phase::Idle;
+            } else {
+                self.attempt.phase = Phase::Cancelling;
+            }
+        }
+        self.pending_text.clear();
+        self.finished = None;
+        self.native_started = false;
         self.capture_model = None;
         unsafe { vorkspace_dictation_cancel() };
         self.hide(cx);
@@ -515,9 +575,9 @@ impl Service {
                     self.lease = None;
                     return;
                 }
-                if self.initializing {
+                if self.initializing || (self.worker_running && !self.ready) {
                     self.status =
-                        "Checking selected model… Try dictation when verification finishes.".into();
+                        "Preparing selected model locally… Try dictation when Ready.".into();
                     self.publish(cx);
                     self.lease = None;
                     return;
@@ -537,17 +597,41 @@ impl Service {
                     return;
                 };
                 self.capture_model = Some(self.selected);
-                let result = CString::new(self.microphone.clone())
-                    .map_or(8, |m| unsafe { vorkspace_dictation_start(m.as_ptr()) });
-                if result != 0 {
+                let admitted = unsafe { vorkspace_dictation_admit(epoch) };
+                if admitted != 0 {
                     self.attempt.cancel();
-                    self.error(native_error(result).into(), cx);
-                    return;
-                }
-                if !self.display_capture(cx) {
+                    self.error(native_error(admitted).into(), cx);
                     return;
                 }
                 self.cancel = CancelToken::new();
+                self.pending_text.clear();
+                self.delivered = CommittedPrefix::default();
+                self.delivery = 0;
+                self.finished = None;
+                self.modifier_deadline = None;
+                self.native_started = false;
+                let (pipe, input) = Pipe::new();
+                let turn = Turn {
+                    epoch,
+                    input,
+                    cancel: self.cancel.clone(),
+                };
+                if self.warm.as_ref().is_none_or(|w| w.try_send(turn).is_err()) {
+                    self.cancel(cx);
+                    self.error(
+                        "The local model is still preparing. Try again when Ready.".into(),
+                        cx,
+                    );
+                    return;
+                }
+                self.turn = Some((epoch, pipe));
+                if !self.display("Preparing dictation…", panel::State::Starting, cx) {
+                    self.fail_turn(
+                        "Could not show the dictation indicator. Try again.".into(),
+                        cx,
+                    );
+                    return;
+                }
                 cx.spawn(async move |this, cx| {
                     let started = Instant::now();
                     loop {
@@ -556,25 +640,35 @@ impl Service {
                             .await;
                         let keep = this
                             .update(cx, |s, cx| {
-                                // Health can commit native arming: fence before that effect too.
-                                if s.attempt.epoch != epoch
-                                    || !matches!(
-                                        s.attempt.phase,
-                                        Phase::Starting | Phase::Recording
-                                    )
+                                if s.turn.as_ref().map(|t| t.0) != Some(epoch) {
+                                    return false;
+                                }
+                                if s.attempt.phase == Phase::Cancelling {
+                                    return true;
+                                }
+                                if s.native_started
+                                    && matches!(s.attempt.phase, Phase::Starting | Phase::Recording)
                                 {
-                                    return false;
+                                    if !unsafe { vorkspace_dictation_target_current() } {
+                                        s.cancel(cx);
+                                        return true;
+                                    }
+                                    let health = CaptureHealth::from(unsafe {
+                                        vorkspace_dictation_health()
+                                    });
+                                    if !s.capture_health(epoch, health, cx) {
+                                        return s.turn.is_some();
+                                    }
+                                    if let Err(e) = s.drain(false) {
+                                        s.fail_turn(e, cx);
+                                        return true;
+                                    }
+                                    if started.elapsed() >= Duration::from_secs(120) {
+                                        s.stop(cx);
+                                    }
                                 }
-                                let health =
-                                    CaptureHealth::from(unsafe { vorkspace_dictation_health() });
-                                if !s.capture_health(epoch, health, cx) {
-                                    return false;
-                                }
-                                if started.elapsed() >= Duration::from_secs(120) {
-                                    s.stop(cx);
-                                    return false;
-                                }
-                                true
+                                s.deliver(epoch, cx);
+                                s.turn.is_some()
                             })
                             .unwrap_or(false);
                         if !keep {
@@ -676,8 +770,24 @@ impl Service {
         let Some(epoch) = self.attempt.stop() else {
             return;
         };
-        // Stop and drain synchronously before inference; no PCM is persisted.
-        thread_local! {static PCM:std::cell::RefCell<Vec<f32>>=const {std::cell::RefCell::new(Vec::new())};}
+        let _ = (selected, epoch);
+        if let Err(e) = self.drain(true).and_then(|_| {
+            self.turn
+                .as_ref()
+                .ok_or("Missing dictation worker".to_string())?
+                .1
+                .finish()
+        }) {
+            self.fail_turn(e, cx);
+            return;
+        }
+        self.native_started = false;
+        self.status = "Finishing locally… · ⌘, to cancel".into();
+        self.publish(cx);
+        self.display("Finishing…", panel::State::Transcribing, cx);
+    }
+    fn drain(&self, stop: bool) -> Result<(), String> {
+        thread_local! { static PCM: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) }; }
         extern "C" fn receive(p: *const f32, n: usize) {
             if n > 0 && !p.is_null() {
                 PCM.with(|v| {
@@ -685,72 +795,230 @@ impl Service {
                 });
             }
         }
-        let stopped = unsafe { vorkspace_dictation_stop(receive) };
-        if stopped != 0 {
-            // No worker was admitted: retire Transcribing before normal cancel.
-            self.attempt.complete(epoch);
-            self.cancel(cx);
-            self.error(native_error(stopped).into(), cx);
+        let code = if stop {
+            unsafe { vorkspace_dictation_stop(receive) }
+        } else {
+            unsafe { vorkspace_dictation_drain(receive) };
+            0
+        };
+        let pcm = PCM.with(|v| std::mem::take(&mut *v.borrow_mut()));
+        if code != 0 {
+            return Err(native_error(code).into());
+        }
+        if let Some((_, pipe)) = &self.turn {
+            for block in pcm.chunks(worker::SAMPLE_RATE) {
+                pipe.audio(block.to_vec())?;
+            }
+        }
+        Ok(())
+    }
+    fn fail_turn(&mut self, error: String, cx: &mut Context<Self>) {
+        let lease = self.lease.take();
+        self.cancel(cx);
+        self.lease = lease;
+        self.error(error, cx);
+    }
+    fn retire_worker(&mut self) {
+        self.warm = None;
+        self.worker_cancel.cancel();
+        self.ready = false;
+    }
+    fn prepare_worker(&mut self, cx: &mut Context<Self>) {
+        self.ready = false;
+        if self.worker_running {
             return;
         }
-        let pcm = PCM.with(|v| std::mem::take(&mut *v.borrow_mut()));
-        self.capture_model = None;
-        let path = dictation_path::model_path(selected);
-        let cancel = self.cancel.clone();
-        self.status = "Transcribing locally…".into();
-        self.publish(cx);
-        self.display("Transcribing…", panel::State::Transcribing, cx);
+        let Ok(path) = self.model.clone() else {
+            return;
+        };
+        self.worker_running = true;
+        self.worker_generation += 1;
+        let generation = self.worker_generation;
+        let selected = self.selected;
+        self.worker_cancel = CancelToken::new();
+        let cancel = self.worker_cancel.clone();
+        let (tx, rx) = mpsc::sync_channel(1);
+        let (events, incoming) = async_channel::bounded(32);
+        self.warm = Some(tx);
+        self.status = format!("Preparing {} locally…", selected.descriptor().label);
         cx.spawn(async move |this, cx| {
-            let result =
-                cx.background_executor()
-                    .spawn(async move {
-                        path.and_then(|p| model::transcribe(selected, &p, &pcm, &cancel))
-                    })
-                    .await;
-            // Shortcut modifiers must be released, but cancellation stays responsive.
-            for _ in 0..50 {
-                if !unsafe { vorkspace_dictation_modifiers_down() } {
-                    break;
-                }
-                cx.background_executor()
-                    .timer(Duration::from_millis(20))
-                    .await;
+            while let Ok(event) = incoming.recv().await {
+                let _ = this.update(cx, |s, cx| s.worker_event(generation, selected, event, cx));
             }
+        })
+        .detach();
+        let (joined_tx, joined_rx) = async_channel::bounded(1);
+        let handle = std::thread::spawn(move || {
+            let result = worker::run(selected, &path, &cancel, rx, events);
+            let _ = joined_tx.send_blocking(result);
+        });
+        cx.spawn(async move |this, cx| {
+            // Wait asynchronously while weights are warm. Only the actual join
+            // uses the background executor, after the worker has finished.
+            let result = joined_rx
+                .recv()
+                .await
+                .unwrap_or_else(|_| Err("Local model worker stopped unexpectedly".into()));
+            let joined = cx
+                .background_executor()
+                .spawn(async move { handle.join().is_ok() })
+                .await;
+            let result = if joined {
+                result
+            } else {
+                Err("Local model worker stopped unexpectedly".into())
+            };
             let _ = this.update(cx, |s, cx| {
-                let current = s.attempt.complete(epoch);
-                if !current || s.selected != selected {
-                    s.lease = None;
+                if s.worker_generation != generation {
                     return;
                 }
-                match result {
-                    Ok(text) if text.is_empty() => {
-                        unsafe { vorkspace_dictation_cancel() };
-                        s.status = "No speech detected · ⌘, to try again".into();
-                        s.hide(cx);
-                        s.lease = None;
-                        s.publish(cx);
-                    }
-                    Ok(text) => {
-                        let result = CString::new(text)
-                            .map_or(7, |t| unsafe { vorkspace_dictation_paste(t.as_ptr()) });
-                        if result != 0 {
-                            unsafe { vorkspace_dictation_cancel() };
-                            s.error(native_error(result).into(), cx);
-                        } else {
-                            s.status = "Ready · ⌘, to start and stop".into();
-                            s.hide(cx);
-                            s.lease = None;
-                            s.publish(cx);
-                        }
-                    }
-                    Err(e) => {
-                        unsafe { vorkspace_dictation_cancel() };
-                        s.error(e, cx);
-                    }
+                s.worker_running = false;
+                let retired = s.worker_cancel.is_cancelled();
+                s.warm = None;
+                s.ready = false;
+                if s.turn.is_some() {
+                    s.cancel(cx);
+                    s.turn = None;
+                    s.attempt.phase = Phase::Idle;
+                    s.lease = None;
+                }
+                if let Some((id, model)) = s.pending_download.take() {
+                    s.start_download(id, model, cx);
+                } else if retired && s.attempt.enabled {
+                    s.check_ready(cx);
+                } else if let Err(e) = result {
+                    s.status = e;
+                    s.publish(cx);
                 }
             });
         })
         .detach();
+    }
+    fn worker_event(
+        &mut self,
+        generation: u64,
+        selected: ModelId,
+        event: Event,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.worker_generation {
+            return;
+        }
+        // Done also releases a cancelled/retired turn's admission after session drop.
+        if let Event::Done(epoch, _) = &event
+            && self.turn.as_ref().map(|t| t.0) == Some(*epoch)
+            && self.attempt.phase == Phase::Cancelling
+        {
+            self.turn = None;
+            self.attempt.complete(*epoch);
+            if self.panel.is_none() {
+                self.lease = None;
+            }
+            return;
+        }
+        if self.worker_cancel.is_cancelled() || selected != self.selected || !self.attempt.enabled {
+            return;
+        }
+        match event {
+            Event::Ready => {
+                self.ready = true;
+                self.status = "Ready · ⌘, to start and stop".into();
+                self.publish(cx);
+            }
+            Event::Armed(epoch)
+                if self.attempt.epoch == epoch && self.attempt.phase == Phase::Starting =>
+            {
+                let code = CString::new(self.microphone.clone()).map_or(8, |m| unsafe {
+                    vorkspace_dictation_start(m.as_ptr(), epoch)
+                });
+                if code != 0 {
+                    self.fail_turn(native_error(code).into(), cx);
+                    return;
+                }
+                self.native_started = true;
+                self.display_capture(cx);
+            }
+            Event::Committed(epoch, text)
+                if self.attempt.epoch == epoch
+                    && matches!(self.attempt.phase, Phase::Recording | Phase::Transcribing) =>
+            {
+                if !text.starts_with(&self.pending_text) {
+                    self.fail_turn(
+                        "Local dictation changed a committed prefix; insertion stopped.".into(),
+                        cx,
+                    );
+                } else {
+                    self.pending_text = text;
+                    self.deliver(epoch, cx);
+                }
+            }
+            Event::Done(epoch, result) if self.attempt.epoch == epoch => {
+                self.finished = Some(result);
+                self.deliver(epoch, cx);
+            }
+            _ => {}
+        }
+    }
+    fn deliver(&mut self, epoch: u64, cx: &mut Context<Self>) {
+        if self.attempt.epoch != epoch
+            || !matches!(self.attempt.phase, Phase::Recording | Phase::Transcribing)
+        {
+            return;
+        }
+        if let Some(Err(e)) = self.finished.take_if(|r| r.is_err()) {
+            self.fail_turn(e, cx);
+            self.turn = None;
+            self.attempt.phase = Phase::Idle;
+            return;
+        }
+        if unsafe { vorkspace_dictation_modifiers_down() } {
+            let deadline = *self
+                .modifier_deadline
+                .get_or_insert_with(|| Instant::now() + Duration::from_secs(2));
+            if Instant::now() >= deadline {
+                self.fail_turn(native_error(5).into(), cx);
+            }
+            return;
+        }
+        self.modifier_deadline = None;
+        // Obtain the suffix without consuming it while the previous paste still
+        // owns the clipboard. Code 12 means no external effect was attempted.
+        let mut next = self.delivered.clone();
+        let delta = next.advance(&self.pending_text);
+        match delta {
+            Err(e) => {
+                self.delivered = next;
+                self.fail_turn(e, cx);
+                return;
+            }
+            Ok(text) if !text.is_empty() => {
+                let code = CString::new(text).map_or(7, |t| unsafe {
+                    vorkspace_dictation_paste(t.as_ptr(), epoch, self.delivery)
+                });
+                if code == 12 {
+                    return;
+                }
+                self.delivered = next;
+                self.delivery += 1;
+                if code != 0 {
+                    self.fail_turn(native_error(code).into(), cx);
+                    return;
+                }
+            }
+            _ => {
+                self.delivered = next;
+            }
+        }
+        if self.finished.take().is_some() {
+            self.turn = None;
+            self.capture_model = None;
+            self.attempt.complete(epoch);
+            unsafe { vorkspace_dictation_cancel() };
+            self.hide(cx);
+            self.lease = None;
+            self.status = "Ready · ⌘, to start and stop".into();
+            self.publish(cx);
+        }
     }
 }
 fn native_error(code: i32) -> &'static str {
@@ -772,9 +1040,11 @@ fn native_error(code: i32) -> &'static str {
             "Destination changed while dictating. Keep the same field selected and avoid other input until insertion finishes."
         }
         11 => "Microphone interrupted. Check the selected input and try a new recording.",
-        5 => "Release modifier keys before insertion. Dictation was discarded; start again.",
+        5 => {
+            "Release modifier keys before insertion. Further insertion stopped; existing words are kept."
+        }
         6 => {
-            "Could not preserve the current clipboard. Dictation was discarded; try again with a smaller clipboard."
+            "Could not preserve the current clipboard. Further insertion stopped; try again with a smaller clipboard."
         }
         _ => "Could not insert dictation. No automatic retry; try a new recording.",
     }
@@ -787,6 +1057,15 @@ pub fn shutdown(cx: &mut App) {
     // A posted Cmd-V may not have reached the destination yet. Keep the clipboard
     // available through its normal read window before restoring and terminating.
     cx.spawn(async move |cx| {
+        loop {
+            let joined = cx.update(|cx| !get(cx).read(cx).worker_running);
+            if joined {
+                break;
+            }
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+        }
         cx.background_executor()
             .timer(Duration::from_millis(800))
             .await;
@@ -810,6 +1089,10 @@ mod model_tests {
             init(cx);
             let service = get(cx);
             let epoch = service.update(cx, |s, _| {
+                // This control-only fixture owns no model worker. Retire init's
+                // pending read before enabling its synthetic active attempt.
+                s.verification += 1;
+                s.model = Err("control-only fixture".into());
                 s.attempt.enabled = true;
                 s.capture_model = Some(s.selected);
                 let epoch = s.attempt.begin().unwrap();
@@ -929,6 +1212,17 @@ mod capture_tests {
     fn pending(cx: &mut App) -> (Entity<Service>, u64) {
         cx.set_global(crate::Helper::default());
         let service = cx.new(|_| Service {
+            warm: None,
+            worker_running: false,
+            worker_generation: 0,
+            worker_cancel: CancelToken::new(),
+            turn: None,
+            native_started: false,
+            pending_text: String::new(),
+            delivered: CommittedPrefix::default(),
+            delivery: 0,
+            finished: None,
+            modifier_deadline: None,
             attempt: Attempt {
                 enabled: true,
                 ..Default::default()
@@ -958,6 +1252,87 @@ mod capture_tests {
             epoch
         });
         (service, epoch)
+    }
+
+    #[gpui::test]
+    fn active_turn_cannot_retire_weights_to_start_a_download(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let (service, _) = pending(cx);
+            service.update(cx, |s, cx| {
+                s.worker_running = true;
+                s.start_download(44, s.selected, cx);
+                assert!(!s.worker_cancel.is_cancelled());
+                assert!(s.downloads.id().is_none());
+                assert!(s.pending_download.is_none());
+                assert!(matches!(
+                    s.model_notice,
+                    Some((44, _, ModelState::Error(_)))
+                ));
+                s.worker_running = false;
+                s.cancel(cx);
+            });
+        });
+    }
+    #[gpui::test]
+    fn superseded_worker_ready_cannot_publish_readiness(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let (service, _) = pending(cx);
+            service.update(cx, |s, cx| {
+                s.ready = false;
+                s.worker_generation = 2;
+                s.worker_event(1, s.selected, Event::Ready, cx);
+                assert!(!s.ready);
+                s.worker_cancel.cancel();
+                s.worker_event(2, s.selected, Event::Ready, cx);
+                assert!(!s.ready);
+                s.cancel(cx);
+            });
+        });
+    }
+    #[gpui::test]
+    fn partial_delivery_cancel_and_model_switch_fence_stale_output(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let (service, epoch) = pending(cx);
+            service.update(cx, |s, cx| {
+                let (pipe, _rx) = Pipe::new();
+                s.turn = Some((epoch, pipe));
+                s.attempt.recording(epoch);
+                s.delivered.advance("synthetic prefix").unwrap();
+                s.pending_text = "synthetic prefix".into();
+                s.cancel(cx);
+                assert_eq!(s.attempt.phase, Phase::Cancelling);
+                assert!(s.attempt.begin().is_none());
+                s.selected = ModelId::ParakeetTdtV3;
+                s.worker_event(
+                    0,
+                    ModelId::UnifiedEnglish,
+                    Event::Committed(epoch, "synthetic prefix stale".into()),
+                    cx,
+                );
+                assert!(s.pending_text.is_empty());
+                s.worker_event(0, ModelId::UnifiedEnglish, Event::Done(epoch, Ok(())), cx);
+                assert_eq!(s.attempt.phase, Phase::Idle);
+                assert!(s.turn.is_none());
+                assert_eq!(s.delivered.advance("synthetic prefix").unwrap(), "");
+            });
+        });
+    }
+    #[gpui::test]
+    fn cancel_after_worker_done_releases_admission_without_waiting_for_another_done(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let (service, epoch) = pending(cx);
+            service.update(cx, |s, cx| {
+                let (pipe, _rx) = Pipe::new();
+                s.turn = Some((epoch, pipe));
+                s.finished = Some(Ok(()));
+                s.cancel(cx);
+                assert_eq!(s.attempt.phase, Phase::Idle);
+                assert!(s.turn.is_none());
+                assert!(s.attempt.begin().is_some());
+            });
+        });
     }
 
     #[gpui::test]

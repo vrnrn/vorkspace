@@ -102,22 +102,27 @@ private struct FocusSnapshot {
     }
 }
 final class DictationTarget {
+    let epoch: UInt64
+    let eventTag = Int64.random(in: 1...Int64.max)
+    var nextDelivery: UInt64 = 0
     private let original: FocusSnapshot
     private var continuity: DestinationContinuity
     private var inputMonitor: Any?
     private var activation: NSObjectProtocol?
     private var observer: AXObserver?
-    private init(_ snapshot: FocusSnapshot) {
+    private init(_ snapshot: FocusSnapshot, epoch: UInt64) {
+        self.epoch = epoch
         original = snapshot
         continuity = DestinationContinuity(original: snapshot.evidence)
     }
-    static func admit() -> DictationTarget? {
+    static func admit(epoch: UInt64) -> DictationTarget? {
         guard AXIsProcessTrusted(), let snapshot = FocusSnapshot.read(), snapshot.evidence.exposure != .blocked else { return nil }
-        let owner = DictationTarget(snapshot)
+        let owner = DictationTarget(snapshot, epoch: epoch)
         // Global monitor sees other processes only. The helper never activates or
         // accepts keyboard focus. Any intervening user input can change a custom
         // responder even when its AX root stays identical, so fail closed.
         owner.inputMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown, .scrollWheel]) { [weak owner] event in
+            if let owner, isDictationPasteEvent(event, tag: owner.eventTag) { return }
             if event.type == .keyDown && event.keyCode == 43 && event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command { return }
             owner?.continuity.invalidate()
         }
@@ -160,4 +165,13 @@ final class DictationTarget {
         if let activation { NSWorkspace.shared.notificationCenter.removeObserver(activation) }
         if let observer { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes) }
     }
+}
+
+// Only our attempt's own tagged Cmd-V is exempt. A physical/user Cmd-V,
+// unrelated injected event, or another attempt's tag still retires the target.
+func isDictationPasteEvent(_ event: NSEvent, tag: Int64) -> Bool {
+    event.type == .keyDown && event.keyCode == 9 &&
+    event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command &&
+    event.cgEvent?.getIntegerValueField(.eventSourceUserData) == tag &&
+    event.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) == Int64(getpid())
 }

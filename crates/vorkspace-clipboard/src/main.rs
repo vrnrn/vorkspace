@@ -298,6 +298,26 @@ fn main() {
 #[cfg(debug_assertions)]
 fn fixture() -> bool {
     let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1).map(String::as_str) == Some("--insertion-fixture") {
+        unsafe extern "C" {
+            fn vorkspace_dictation_insertion_probe(
+                pid: i32,
+                scenario: *const std::ffi::c_char,
+                report: extern "C" fn(*const std::ffi::c_char),
+            ) -> i32;
+        }
+        extern "C" fn report(p: *const std::ffi::c_char) {
+            println!(
+                "{}",
+                unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy()
+            );
+        }
+        let pid = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let scenario =
+            std::ffi::CString::new(args.get(3).map(String::as_str).unwrap_or("success")).unwrap();
+        let code = unsafe { vorkspace_dictation_insertion_probe(pid, scenario.as_ptr(), report) };
+        std::process::exit(code);
+    }
     if args.get(1).map(String::as_str) == Some("--capture-health-fixture") {
         unsafe extern "C" {
             fn vorkspace_dictation_capture_probe(
@@ -342,6 +362,13 @@ fn fixture() -> bool {
         return true;
     }
 
+    if args.get(1).map(String::as_str) == Some("--live-dictation-fixture") {
+        vorkspace_clipboard::dictation_live_fixture::run(
+            std::path::Path::new(args.get(2).expect("fixture model path")),
+            std::path::Path::new(args.get(3).expect("public WAV path")),
+        );
+        return true;
+    }
     if args.get(1).map(String::as_str) == Some("--download-model-fixture") {
         let path = PathBuf::from(args.get(2).expect("model output path"));
         dictation_model::download(

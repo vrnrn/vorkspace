@@ -187,6 +187,7 @@ fn publish_verified(
         .and_then(|f| f.sync_all())
         .map_err(|e| e.to_string())
 }
+/// One-shot offline verification utility. Interactive turns use dictation_worker.
 pub fn transcribe(
     id: ModelId,
     path: &Path,

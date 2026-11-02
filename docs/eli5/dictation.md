@@ -30,21 +30,28 @@ recording; setup notices are not treated as an interrupted recording. No microph
 records while dictation is idle. Microphone and Accessibility permission still
 belong to the background helper.
 
-Click the field you want to write into. Press **⌘,** and wait for the microphone
-to turn red before speaking, then press **⌘,** again to finish. Amber with dots
-first means the microphone is getting ready. Pressing **⌘,** during that wait
-cancels without turning audio into words. A red microphone means recording. Amber
-with dots afterward means the Mac is turning speech into text. Leave the original field selected until the
-words arrive. Switching fields discards the words, including switching away and
-back. Repeated macOS focus notices do not discard words when the same field is
-still selected; a changed destination or a failed check requires a new recording. Pressing the
-shortcut during transcription cancels it; Settings also has Cancel. Recording has
-a two-minute limit. Vox uses **⌘.**. Settings is available from the application menu.
+When enabled, Vorkspace prepares the selected model and keeps it ready in memory.
+Wait for Ready, click your text field, then press **⌘,**. Amber dots mean startup;
+wait for red before speaking. With **Unified English**, stable words appear in the
+field while you speak. It waits for words to settle instead of inserting guesses
+and deleting them later. Press **⌘,** again to finish the last words, without
+repeating what is already there. The notch shows a microphone, not your text.
+**TDT v3 is a finish-only alternative**: words arrive after you stop. Settings
+explains which mode your selected model supports.
+
+Typing, clicking, navigating, switching apps or fields, losing the microphone,
+changing models or cancelling stops later words. Words already inserted stay.
+Switching away and back does not restart insertion. Unchanged macOS focus notices
+are harmless. Pressing **⌘,** during startup cancels; pressing it while finishing
+also cancels. Settings has Cancel too. Recording has a two-minute limit. Vox uses
+**⌘.**. Settings is available from the application menu. No microphone is open
+while idle, and switching dictation off releases the prepared model after its
+worker has stopped.
 
 Everything is transcribed on your Mac. Downloading the model needs internet;
 recording does not. Audio stays in memory temporarily and is never saved. There
-is no dictation history. Long recordings are handled in short pieces, which may
-affect wording and punctuation. Password fields cannot receive dictation.
+is no dictation history. Unified uses the model's native streaming support. TDT handles long recordings
+in short pieces after Stop, which may affect wording and punctuation. Password fields cannot receive dictation.
 Ordinary Mac, browser and Vorkspace text boxes use the same Paste action. Some
 custom apps hide their text boxes from macOS; dictation then checks the app and
 window and watches for other input. Avoid typing, clicking or scrolling until
@@ -57,7 +64,8 @@ Dictation and clipboard history can be switched on separately. Either keeps the
 helper alive when the main app quits. Switch both off, or use Quit in the helper's
 menu, to stop it. Vox and dictation take turns using the microphone and notch.
 
-The helper briefly puts the words on the clipboard and sends Paste once. It saves
+For each new stable piece, the helper briefly puts only the new words on the
+clipboard and sends Paste once. It waits before replacing an outstanding paste. It saves
 all the previous clipboard formats and restores them only if you have not copied
 something newer. Very large or unreadable clipboards are left alone and insertion
 is declined. The helper cannot confirm whether another app accepted Paste, so it
@@ -80,8 +88,7 @@ its worker finishes cleanup before another download can start. Replies from that
 cancelled request cannot turn dictation on later. No old cache is moved automatically.
 
 Your model choice is saved and sent to the background helper, so it still applies
-after quitting or reopening the main app. Changing models discards old dictation
-work. Old download messages cannot mark the new model ready or turn it on. TDT is
+after quitting or reopening the main app. Changing models cancels old dictation work and keeps already inserted words. Old download messages cannot mark the new model ready or turn it on. TDT is
 available as an option; this does not claim Vorkspace has qualified its speed or
 transcription quality.
 
@@ -89,7 +96,8 @@ The helper tells its audio engine which microphone to use, then waits for the
 first input and checks that the same microphone stays selected. It discards the
 brief startup audio until this check finishes. If input never arrives, it stops
 within two seconds. macOS startup notices do not interrupt this preparation; a
-notice during the final check or recording still discards the attempt. It discards a recording if the device changes,
+notice during the final check or recording still stops later insertion. It stops
+a recording if the device changes,
 permission is lost, or the engine is interrupted.
 
 Development builds also have a short microphone check. It runs for 2.5 seconds,
@@ -98,3 +106,10 @@ or turning it into words. It does not paste, need Accessibility access, or take
 over dictation shortcuts. macOS Microphone permission is still required; the
 check reports when that permission is missing. Developers can explicitly ask
 macOS to show the permission prompt, which still requires your Allow.
+
+Developer builds can feed a known public recording through the same live worker
+twice, measuring words arriving before Stop and checking model reuse. A separate
+check uses a disposable field containing only synthetic text to test several
+pastes, edits, focus changes and cancellation. This requires the signed helper's
+normal Accessibility permission; a missing grant is reported without changing
+permissions. These checks never use your microphone, composer or database.

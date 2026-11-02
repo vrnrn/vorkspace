@@ -14,15 +14,22 @@ import AppKit
             let field = args[2] == "secure" ? NSSecureTextField() : NSTextField()
             field.frame = NSRect(x: 30, y: 100, width: 540, height: 36)
             field.placeholderString = "Synthetic fixture only"
+            field.setAccessibilityIdentifier("vorkspace-live-fixture")
+            field.stringValue = "Existing: "
+            let other = NSTextField(frame: NSRect(x: 30, y: 40, width: 540, height: 36))
+            other.setAccessibilityIdentifier("vorkspace-live-fixture-other")
+            window.contentView!.addSubview(other)
+            field.nextKeyView = other
             window.contentView!.addSubview(field)
             window.makeKeyAndOrderFront(nil); app.activate(ignoringOtherApps: true)
             window.makeFirstResponder(field)
+            field.currentEditor()?.selectedRange = NSRange(location: field.stringValue.utf16.count, length: 0)
             var ticks = 0
             let timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
                 ticks += 1
                 let state = "\(field.stringValue)\nfocus=\(window.firstResponder === field.currentEditor())\n"
                 try! state.write(toFile: output, atomically: true, encoding: .utf8)
-                if ticks == 200 { app.terminate(nil) }
+                if ticks == 600 { app.terminate(nil) }
             }
             withExtendedLifetime((window, field, timer)) { app.run() }
             return
@@ -37,7 +44,7 @@ import AppKit
         // Allow monitors to process asynchronous notifications before insertion.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fatalError("Fixture lost focus") }
-            let code = "synthetic dictation fixture".withCString { dictationPaste($0) }
+            let code = "synthetic dictation fixture".withCString { dictationPaste($0, 0, 0) }
             print("Insertion result=\(code)")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 dictationShutdown(); app.stop(nil)

@@ -20,16 +20,36 @@ Microphone and Accessibility for **vorkspace Clipboard**, the nested helper at
 be changed in System Settings → Privacy & Security. Development bundles have
 their own executable location; authorize that helper when testing it.
 
-Press **⌘,** once to start. The compact amber microphone and ellipsis mean the
-microphone is starting; wait for the red microphone before speaking. Red and
-**Recording** appear only after the native owner accepts audio. Press **⌘,** again
-to finish, or during startup to cancel without transcription. The nonactivating
-notch keeps its empty left wing. Amber and ellipsis also indicate local
-transcription. Keep the intended text field selected until insertion. Switching fields discards the result. Another
-toggle during transcription cancels it. Settings also has Cancel. Recording stops
-automatically after two minutes. No microphone is open while idle; audio is held
-only in bounded memory and never written or logged. Long clips are inferred in
-20-second chunks; wording and punctuation across those boundaries may differ.
+While enabled, the helper verifies and loads the selected weights once, probes
+Unified's native stream with synthetic silence, and publishes **Preparing** until
+that work finishes. It keeps one compatible model warm without opening the mic.
+Each turn gets a new session; its scratch arenas are freed when the turn joins.
+Disabling, changing models or publishing a download fences old work and joins the
+worker before starting a successor. Disabled dictation never loads weights.
+
+Press **⌘,** once to start. Amber with dots means preparation or microphone
+startup; wait for the red microphone before speaking. Red and **Recording** appear
+only after the prepared session and native capture owner can accept audio.
+**Unified English streams stable words directly into the focused field during
+capture.** Tentative hypotheses never leave the helper. Native windows advance every 560 ms
+with 560 ms right context and three agreeing prefixes; a trailing partial word
+waits for a whitespace boundary or finalization. Press **⌘,** again to drain
+and finalize; only the remaining committed suffix is inserted. The nonactivating
+notch keeps its empty left wing and microphone indicator; it displays no transcript.
+**TDT v3 is finish-only**: its pinned offline artifact does not support native
+streaming. It stays warm while enabled and transcribes bounded 20-second pieces
+only after Stop. Settings describes the selected model's actual mode.
+
+Starting-toggle cancels without transcription. Another toggle while finishing,
+Settings Cancel, real typing, clicks/navigation, focus/app changes, input loss or
+model change stops further insertion. Words already inserted remain untouched.
+A cancelled stream is never replayed, even after an uncertain paste or stream
+error. Recording stops after two minutes. No microphone opens while idle. Audio
+is transient, never written or logged. The existing 16 kHz native capture owner
+drains incremental PCM through an eight-second native buffer and a bounded
+16-block worker queue (each block at most one second). Overflow fails the turn
+explicitly rather than silently dropping audio. Inference/Metal work runs on the
+helper's dedicated worker; Stop and cancellation do not wait for inference.
 
 The same background helper owns clipboard history and dictation. Either feature
 keeps it running after main-app Quit; disabling both stops it. Clipboard history
@@ -79,7 +99,9 @@ System default is resolved at admission; changing the system input during captur
 does not authorize switching the active recording to another microphone.
 
 Insertion verifies Accessibility trust, frontmost PID, visible window identity,
-secure-input state and original focus evidence immediately before sending one Cmd-V.
+secure-input state and original focus evidence immediately before every incremental Cmd-V. Each attempt and delivery has an identity;
+only that attempt's own Cmd-V events carry its random CGEvent user-data tag and
+helper source PID. Physical Cmd-V and unrelated synthetic events remain user input.
 Known text controls can retain their AX object or a stable provider identifier.
 Missing text semantics in custom/GPUI controls use a conservative fallback: the
 original app/window and any exposed opaque AX root must remain the same. Keyboard
@@ -93,9 +115,13 @@ No app is activated and no field is refocused.
 Capture admission failure, missing permission, and a changed destination after
 recording have separate recovery messages. It waits briefly for modifiers
 to lift and otherwise discards. Every rich clipboard item/type is snapshotted
-(up to 32 MiB, otherwise insertion is declined), the transcript is marked transient,
+(up to 32 MiB, otherwise insertion is declined), each suffix is marked transient,
 and restoration occurs after 800 ms only if the pasteboard change count still
-matches. Deliberate helper shutdown waits through the same clipboard read window before
+matches. Further suffixes coalesce while that paste owns the clipboard; they never
+replace an outstanding paste's contents. Restoration retains all rich formats and
+leaves a newer user copy intact. Delivery offsets advance only once for each
+attempted effect, preserving UTF-8 and whitespace; finalization never pastes the
+whole transcript again. Deliberate helper shutdown waits through the same clipboard read window before
 guarded restoration. There is
 no acknowledgement from the destination app and no automatic replay after a paste.
 Known secure fields and secure keyboard input are blocked. Vorkspace's secret
@@ -154,8 +180,9 @@ writer for that exact artifact across all helpers. The two published models,
 locks and temporary downloads have distinct names and can coexist; cleaning up
 one model never removes the other. Only that writer reaps abandoned downloads; a competing
 live writer's temporary data is untouched. Published models remain readable while
-another helper acquires a replacement. Initialization and each inference validate
-the model off the UI thread. Missing HOME uses the operating system's account-home
+another helper acquires a replacement. Initialization verifies the artifact off the UI thread; enabled worker
+preparation verifies before loading. Turns reuse those immutable weights without
+rehashing or loading them again. Missing HOME uses the operating system's account-home
 resolver; unavailable home information produces an actionable error, never temporary
 storage. Existing per-install caches are not automatically migrated.
 
@@ -198,3 +225,15 @@ observing a failure only until its fixed 2.5-second deadline, without retaining
 audio or clearing the failure, so notification and first-buffer ordering can be
 compared. Use an isolated signed
 bundle and output directory; do not replace a running helper to diagnose capture.
+
+`vorkspace-clipboard --live-dictation-fixture /absolute/model.gguf /absolute/public.wav`
+feeds public 16 kHz mono PCM16 fixture audio at real-time cadence through the
+production persistent worker twice, asserts committed text precedes Stop, and
+prints fixture-only text and preparation/first-stable/stop-to-final timings. It
+opens no microphone or destination and writes no user state. Debug-only
+`--insertion-fixture PID success|edit|focus|cancel` preflights the signed helper's
+Accessibility trust without prompting. It only admits a frontmost disposable
+native field identified as `vorkspace-live-fixture`, then exercises production
+incremental paste and refusal. `native/DictationFocusFixture.swift` supplies that
+field with a known prefix. Missing trust is a live-proof blocker, not a passing
+headless insertion test. Use a new isolated bundle; never replace a running helper.

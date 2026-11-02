@@ -184,6 +184,18 @@ func verifyFocusNotificationLifecycle() {
  restoration.install(revision: 1) { first += 1 }; restoration.flush()
  restoration.install(revision: 2) { second += 1 }; restoration.finish(revision: 1)
  assert(first == 1 && second == 0); restoration.flush(); assert(second == 1)
+ assert(!restoration.busy)
+ let source = CGEventSource(stateID: .combinedSessionState)!
+ let paste = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)!
+ paste.flags = .maskCommand
+ paste.setIntegerValueField(.eventSourceUserData, value: 12345)
+ let tagged = NSEvent(cgEvent: paste)!
+ assert(isDictationPasteEvent(tagged, tag: 12345))
+ assert(!isDictationPasteEvent(tagged, tag: 67890))
+ let userPaste = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)!
+ userPaste.flags = .maskCommand
+ assert(!isDictationPasteEvent(NSEvent(cgEvent: userPaste)!, tag: 12345))
+ print("Attempt-scoped own paste tag accepted; physical paste and old tags refused")
  print("Rich clipboard restoration and newer-copy fencing passed")
  }
 }
