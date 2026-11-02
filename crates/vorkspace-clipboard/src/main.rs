@@ -1,5 +1,8 @@
 //! The clipboard helper: a small menu bar process that keeps clipboard history
 //! after the app quits. History stays in memory and dies with this process.
+mod dictation;
+mod dictation_model;
+mod dictation_panel;
 mod history;
 #[cfg(not(test))]
 mod menu;
@@ -102,7 +105,9 @@ fn run(step: Option<Step>, cx: &mut App) {
                 let _ = Process::new(program).args(arguments).spawn();
             }
         }
-        Some(Step::Exit) => cx.quit(),
+        Some(Step::Exit) => {
+            dictation::shutdown(cx);
+        }
         None => {}
     }
 }
@@ -188,6 +193,7 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             helper.reported_error = None;
             let step = helper.control.connected();
             report_error(cx);
+            dictation::status(cx);
             run(step, cx);
         }
         Event::Disconnected => {
@@ -196,9 +202,17 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             let step = helper.control.disconnected();
             run(step, cx);
         }
-        Event::Command(Command::Configure { recording, icon }) => {
-            let step = cx.global_mut::<Helper>().control.configure(recording);
+        Event::Command(Command::Configure {
+            recording,
+            icon,
+            dictation,
+        }) => {
+            let step = cx
+                .global_mut::<Helper>()
+                .control
+                .configure(recording || dictation);
             service::configure(recording, cx);
+            dictation::configure(dictation, cx);
             sync_status(icon, cx);
             report_error(cx);
             run(step, cx);
@@ -206,9 +220,14 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
         Event::Command(Command::Relaunch { program, arguments }) => {
             cx.global_mut::<Helper>().relaunch = Some((program, arguments));
         }
+        Event::Command(Command::DownloadModel) => dictation::download(cx),
+        Event::Command(Command::DictationPermissions) => dictation::permissions(cx),
+        Event::Command(Command::CancelDictation) => dictation::cancel(cx),
         Event::Command(Command::Clear) => service::clear(cx),
         Event::Command(Command::Toggle) => toggle(false, cx),
-        Event::Command(Command::Shutdown) => cx.quit(),
+        Event::Command(Command::Shutdown) => {
+            dictation::shutdown(cx);
+        }
     }
 }
 
@@ -221,6 +240,11 @@ fn socket_argument() -> Option<PathBuf> {
 }
 
 fn main() {
+    #[cfg(debug_assertions)]
+    if fixture() {
+        return;
+    }
+
     let Some(socket) = socket_argument() else {
         eprintln!("vorkspace-clipboard is started by vorkspace: --socket PATH");
         std::process::exit(2);
@@ -237,6 +261,7 @@ fn main() {
         .with_windowing(gpui::WindowingRequest::Headless)
         .run(move |cx: &mut App| {
             cx.set_global(Helper::default());
+            dictation::init(&socket, cx);
             service::configure(false, cx);
             if let Some(service) = service::get(cx) {
                 cx.observe(&service, |_, cx| report_error(cx)).detach();
@@ -257,4 +282,33 @@ fn main() {
             })
             .detach();
         });
+}
+
+#[cfg(debug_assertions)]
+fn fixture() -> bool {
+    let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1).map(String::as_str) == Some("--download-model-fixture") {
+        let path = PathBuf::from(args.get(2).expect("model output path"));
+        dictation_model::download(&path, &transcribe_cpp::CancelToken::new(), |_| {})
+            .expect("fixture model download");
+        return true;
+    }
+    if args.get(1).map(String::as_str) != Some("--transcribe-fixture") {
+        return false;
+    }
+    let model = PathBuf::from(args.get(2).expect("model path"));
+    let wav = hound::WavReader::open(args.get(3).expect("WAV path")).unwrap();
+    assert_eq!(wav.spec().channels, 1);
+    assert_eq!(wav.spec().sample_rate, 16000);
+    let pcm = wav
+        .into_samples::<i16>()
+        .map(|v| v.unwrap() as f32 / 32768.)
+        .collect::<Vec<_>>();
+    assert!(pcm.len() <= 16000 * 120);
+    println!(
+        "{}",
+        dictation_model::transcribe(&model, &pcm, &transcribe_cpp::CancelToken::new())
+            .expect("fixture inference")
+    );
+    true
 }

@@ -52,6 +52,7 @@ impl VoxHost for NoHost {
 }
 
 pub(crate) struct Vox {
+    voice_lease: Option<vorkspace_macos::voice_lease::Lease>,
     owner: Host,
     store: Database,
     host: Option<host::Host>,
@@ -172,6 +173,7 @@ impl Vox {
     }
 
     fn release_panel(&mut self) {
+        self.voice_lease = None;
         self.notch.placement.close();
         self.panel = None;
         self.screen_watch = None;
@@ -209,6 +211,7 @@ impl Vox {
         cwd: String,
     ) -> Self {
         Self {
+            voice_lease: None,
             owner,
             store,
             host: None,
@@ -308,6 +311,17 @@ impl Vox {
     fn start(&mut self, _window: &Window, cx: &mut Context<Self>) {
         if !self.enabled || self.host.is_some() || self.state == "connecting" {
             return;
+        }
+        if self.voice_lease.is_none() {
+            match vorkspace_macos::voice_lease::Lease::acquire() {
+                Ok(lease) => self.voice_lease = Some(lease),
+                Err(error) => {
+                    self.error = Some(error);
+                    self.notch.close();
+                    cx.notify();
+                    return;
+                }
+            }
         }
         self.generation += 1;
         let generation = self.generation;
@@ -447,6 +461,7 @@ impl Vox {
                 }
                 if state == "idle" {
                     self.active.store(false, Ordering::Relaxed);
+                    self.voice_lease = None;
                     self.state = "idle".into();
                     self.face = "vox".into();
                 }

@@ -24,6 +24,7 @@ pub struct Preferences {
     pub notes: bool,
     pub quick_composer: bool,
     pub clipboard_history: bool,
+    pub dictation_enabled: bool,
     pub working_agents: bool,
     pub close_to_tray: bool,
     // Appearance
@@ -139,6 +140,7 @@ impl Default for Preferences {
             notes: true,
             quick_composer: false,
             clipboard_history: true,
+            dictation_enabled: false,
             working_agents: true,
             close_to_tray: true,
             theme: "dark".into(),

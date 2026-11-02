@@ -43,6 +43,56 @@ impl SettingsView {
             ));
             rows
         };
-        self.group(Some("clipboard"), false, "Clipboard", None, None, rows)
+        let mut rows = rows;
+        rows.push(self.row(Some("dictation-enabled"), true, "Local dictation", Some("Press ⌘, to start, then ⌘, to transcribe and insert into the selected text field. English, on your Mac. Works after quitting Vorkspace. Audio is never saved. Vox uses ⌘.".into()), vec![self.toggle("dictation-enabled", "Enable local dictation", self.prefs.dictation_enabled, false, cx, |this,on,cx|this.update(cx, |p|p.dictation_enabled=on))]));
+        let (status, ready) = crate::clipboard::get(cx)
+            .map(|s| {
+                let s = s.read(cx);
+                (s.dictation_status.clone(), s.dictation_ready)
+            })
+            .unwrap_or_default();
+        let enabled = self.prefs.dictation_enabled;
+        rows.push(self.row(
+            Some("dictation-model"),
+            false,
+            "English model · 731 MB",
+            Some(if status.is_empty() {
+                "Enable dictation to download the model and set up permissions.".into()
+            } else {
+                status.into()
+            }),
+            vec![
+                    secondary_button("dictation-download", "Download model", false, !enabled)
+                        .child(if ready {
+                            "Download again"
+                        } else {
+                            "Download model"
+                        })
+                        .on_click(|_, _, cx| crate::clipboard::dictation_download(cx))
+                        .into_any_element(),
+                    secondary_button(
+                        "dictation-permissions",
+                        "Set up permissions",
+                        false,
+                        !enabled,
+                    )
+                    .child("Set up permissions")
+                    .on_click(|_, _, cx| crate::clipboard::dictation_permissions(cx))
+                    .into_any_element(),
+                    secondary_button("dictation-cancel", "Cancel dictation", false, !enabled)
+                        .child("Cancel")
+                        .on_click(|_, _, cx| crate::clipboard::dictation_cancel(cx))
+                        .into_any_element(),
+                ],
+        ));
+        rows.push(self.row(None, false, "Permissions", Some("Allow Microphone and Accessibility for vorkspace Clipboard, the bundled background helper. If access was denied, enable it in System Settings → Privacy & Security. Keep the intended field focused until insertion completes.".into()), vec![]));
+        self.group(
+            Some("clipboard"),
+            false,
+            "Clipboard & Dictation",
+            None,
+            None,
+            rows,
+        )
     }
 }

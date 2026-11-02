@@ -93,3 +93,16 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Local dictation uses the Parakeet Unified English artifact catalog and local
+transcription approach inspected in anomalyco/hex (MIT), commit
+1d4904c6bba9ab91f631c8c79108c3847b1b1c60. See licenses/LICENSE-HEX-MIT.
+The static inference engine is anomalyco/transcribe.cpp (MIT), commit
+7045d1c0fe7cee37747b2792977421d435e75fca; see licenses/LICENSE-TRANSCRIBE-MIT.
+The separately downloaded NVIDIA Parakeet Unified English model is governed by the NVIDIA Open Model License.
+The pinned GGUF conversion lists CC-BY-4.0 metadata; both upstream and
+conversion attribution are retained:
+https://huggingface.co/nvidia/parakeet-unified-en-0.6b
+https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf
+
+transcribe.cpp includes GGML (MIT); see licenses/LICENSE-GGML-MIT.

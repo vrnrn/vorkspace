@@ -3,6 +3,8 @@ use std::{env, path::PathBuf, process::Command};
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let source = manifest.join("native/Clipboard.swift");
+    let dictation = manifest.join("native/Dictation.swift");
+    println!("cargo:rerun-if-changed={}", dictation.display());
     println!("cargo:rerun-if-changed={}", source.display());
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let library = output.join("libVorkspaceClipboard.a");
@@ -24,6 +26,7 @@ fn main() {
             &format!("{arch}-apple-macos11.0"),
         ])
         .arg(source)
+        .arg(dictation)
         .arg("-o")
         .arg(&library)
         .status()

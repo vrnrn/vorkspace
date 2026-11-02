@@ -3,7 +3,7 @@ use super::*;
 use gpui::{App, Global, WindowHandle};
 
 pub(crate) const SHORTCUT_COMMAND: &str = "App: Vox";
-pub(crate) const DEFAULT_SHORTCUT: &str = "ctrl-alt-space";
+pub(crate) const DEFAULT_SHORTCUT: &str = "cmd-.";
 
 #[derive(Default)]
 struct Controller {
@@ -23,6 +23,8 @@ pub(crate) fn configure(prefs: &vorkspace_ui::preferences::Preferences, cx: &mut
         cx.set_global(Controller::default());
     }
     let shortcut = match prefs.keybindings.get(SHORTCUT_COMMAND) {
+        Some(Some(shortcut)) if shortcut == "ctrl-alt-space" => DEFAULT_SHORTCUT,
+        Some(Some(shortcut)) if shortcut == "cmd-," => "",
         Some(Some(shortcut)) => shortcut.as_str(),
         Some(None) => "",
         None => DEFAULT_SHORTCUT,
@@ -101,43 +103,39 @@ pub(crate) fn toggle(voice: gpui::Entity<Vox>, cx: &mut App) {
     if !voice.read(cx).enabled || voice.read(cx).running() {
         return;
     }
+    // Acquire before creating any native surface, so the active owner never flashes over.
+    if voice.read(cx).voice_lease.is_none() {
+        match vorkspace_macos::voice_lease::Lease::acquire() {
+            Ok(lease) => voice.update(cx, |v, _| v.voice_lease = Some(lease)),
+            Err(error) => {
+                voice.update(cx, |v, cx| {
+                    v.error = Some(error);
+                    cx.notify();
+                });
+                return;
+            }
+        }
+    }
     let geometry = native::Geometry::read();
     let width = geometry.notch_width;
     let height = geometry.notch_height;
     let root = voice.clone();
-    let result = cx.open_window(
-        gpui::WindowOptions {
-            titlebar: None,
-            kind: gpui::WindowKind::PopUp,
-            focus: false,
-            show: false,
-            inactive_frame_interval: None,
-            is_movable: false,
-            is_resizable: false,
-            is_minimizable: false,
-            window_background: gpui::WindowBackgroundAppearance::Transparent,
-            window_bounds: Some(gpui::WindowBounds::Windowed(gpui::Bounds::new(
-                gpui::point(px(0.), px(0.)),
-                gpui::size(px(width), px(height)),
-            ))),
-            ..Default::default()
-        },
-        move |window, cx| {
-            root.update(cx, |voice, cx| {
-                voice.notch.open(geometry);
-                voice.attach_panel(window, cx);
-                native::place(window, geometry, width, height, &voice.notch.placement, cx);
-                voice.start(window, cx);
-            });
-            root
-        },
-    );
+    let result = cx.open_window(native::window_options(geometry), move |window, cx| {
+        root.update(cx, |voice, cx| {
+            voice.notch.open(geometry);
+            voice.attach_panel(window, cx);
+            native::place(window, geometry, width, height, &voice.notch.placement, cx);
+            voice.start(window, cx);
+        });
+        root
+    });
     match result {
         Ok(panel) => {
             cx.global_mut::<Controller>().panel = Some(panel);
             voice.update(cx, |voice, _| voice.panel = Some(panel));
         }
         Err(error) => voice.update(cx, |voice, cx| {
+            voice.voice_lease = None;
             voice.error = Some(format!("Could not open Vox: {error}"));
             cx.notify();
         }),

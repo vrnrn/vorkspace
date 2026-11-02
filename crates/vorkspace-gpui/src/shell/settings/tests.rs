@@ -117,7 +117,11 @@ fn settings_replace_native_rail_and_tabs_and_return_to_the_same_session(cx: &mut
         .update(cx, |shell, w, cx| shell.focus_active(w, cx))
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_keystrokes("cmd-,");
+    window
+        .update(visual, |_, w, cx| {
+            w.dispatch_action(Box::new(OpenSettings), cx)
+        })
+        .unwrap();
     visual.run_until_parked();
     let navigation = visual.debug_bounds("settings-nav").unwrap();
     let content = visual.debug_bounds("settings-view").unwrap();
@@ -223,7 +227,47 @@ fn native_setting_edits_persist_and_theme_switches_live(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn shortcut_recording_rebinds_native_settings_and_reset_restores_it(cx: &mut TestAppContext) {
+fn global_dictation_and_vox_chords_never_dispatch_local_actions(cx: &mut TestAppContext) {
+    cx.update(super::super::bind_keys);
+    let (window, _, _) = window(cx);
+    window
+        .update(cx, |shell, w, cx| shell.focus_active(w, cx))
+        .unwrap();
+    cx.update(|cx| {
+        assert!(cx.key_bindings().borrow().bindings().all(|b| {
+            !b.keystrokes()
+                .iter()
+                .any(|k| matches!(k.unparse().as_str(), "cmd-," | "cmd-."))
+        }))
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    for chord in ["cmd-,", "cmd-."] {
+        visual.simulate_keystrokes(chord);
+        visual.run_until_parked();
+    }
+    window
+        .update(visual, |shell, _, _| assert!(shell.settings.is_none()))
+        .unwrap();
+    window
+        .update(visual, |_, w, cx| {
+            w.dispatch_action(Box::new(OpenSettings), cx)
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, _| {
+            assert!(
+                shell.settings.is_some(),
+                "Settings remains accessible through its menu action"
+            )
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn shortcut_recording_rebinds_settings_and_reset_leaves_global_chords_reserved(
+    cx: &mut TestAppContext,
+) {
     cx.update(crate::input::bind);
     cx.update(super::super::bind_keys);
     let (window, _, _) = window(cx);
@@ -300,8 +344,8 @@ fn shortcut_recording_rebinds_native_settings_and_reset_restores_it(cx: &mut Tes
     window
         .update(visual, |shell, _, _| {
             assert!(
-                shell.settings.is_some(),
-                "reset restores the native default shortcut"
+                shell.settings.is_none(),
+                "reset keeps the dictation chord reserved and Settings accessible from menus"
             )
         })
         .unwrap();

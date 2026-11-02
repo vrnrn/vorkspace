@@ -296,6 +296,9 @@ impl SettingsView {
         if let Some(center) = crate::accounts::get(cx) {
             center.update(cx, |center, _| center.hide_emails());
         }
+        if let Some(service) = crate::clipboard::get(cx) {
+            cx.observe(&service, |_, _, cx| cx.notify()).detach();
+        }
         let search = cx.new(|cx| {
             let mut input = Input::field("Search settings", "Search settings", content(0.35), cx);
             input.set_font_size(12.);

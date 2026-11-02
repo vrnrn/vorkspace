@@ -1,6 +1,7 @@
 //! The contract between the app and its clipboard helper, which outlives the app
 //! so that copies keep being recorded after Quit. Only control messages cross the
 //! socket: clipboard contents stay in the helper.
+pub mod dictation_state;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io::{self, BufRead, BufReader, Write},
@@ -11,7 +12,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-const PROTOCOL: u32 = 1;
+const PROTOCOL: u32 = 2;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 const CONNECT_ATTEMPTS: usize = 60;
 const CONNECT_DELAY: Duration = Duration::from_millis(50);
@@ -24,12 +25,16 @@ pub enum Command {
     Configure {
         recording: bool,
         icon: bool,
+        dictation: bool,
     },
     /// How to reopen this exact app, including the data it was started with.
     Relaunch {
         program: String,
         arguments: Vec<String>,
     },
+    DownloadModel,
+    DictationPermissions,
+    CancelDictation,
     Clear,
     Toggle,
     Shutdown,
@@ -48,6 +53,7 @@ pub enum Notice {
     Hello { protocol: u32, modified: u128 },
     Error(Option<String>),
     Action(Action),
+    Dictation { status: String, ready: bool },
 }
 
 impl Notice {
@@ -135,8 +141,14 @@ pub fn relaunch_command(app: &Path, arguments: Vec<String>) -> Command {
 
 #[derive(Clone, Copy, Default, PartialEq)]
 struct Desired {
+    dictation: bool,
     recording: bool,
     icon: bool,
+}
+impl Desired {
+    fn active(&self) -> bool {
+        self.recording || self.dictation
+    }
 }
 #[derive(Default)]
 struct Shared {
@@ -172,15 +184,23 @@ impl Supervisor {
         Self { shared, socket }
     }
 
-    pub fn configure(&self, recording: bool, icon: bool) {
-        *self.shared.desired.lock().unwrap() = Desired { recording, icon };
+    pub fn configure(&self, recording: bool, icon: bool, dictation: bool) {
+        *self.shared.desired.lock().unwrap() = Desired {
+            recording,
+            icon,
+            dictation,
+        };
         self.shared.wake.notify_all();
         if !recording {
             // Stopping recording drops the history a queued clear was aimed at.
             *self.shared.clear_pending.lock().unwrap() = false;
         }
-        let command = Command::Configure { recording, icon };
-        if !self.send(command.clone()) && !recording {
+        let command = Command::Configure {
+            recording,
+            icon,
+            dictation,
+        };
+        if !self.send(command.clone()) && !recording && !dictation {
             let shared = self.shared.clone();
             let socket = self.socket.clone();
             std::thread::spawn(move || retire(&shared, &socket, command));
@@ -221,7 +241,7 @@ fn retire(shared: &Shared, socket: &Path, command: Command) {
             return;
         };
         let accepted = receive::<Notice>(&mut BufReader::new(&stream)).is_some();
-        if shared.desired.lock().unwrap().recording {
+        if shared.desired.lock().unwrap().active() {
             return;
         }
         if accepted {
@@ -243,7 +263,7 @@ fn supervise(
         drop(
             shared
                 .wake
-                .wait_while(shared.desired.lock().unwrap(), |desired| !desired.recording)
+                .wait_while(shared.desired.lock().unwrap(), |desired| !desired.active())
                 .unwrap(),
         );
         let Some(stream) = connect(helper, socket) else {
@@ -278,8 +298,20 @@ fn supervise(
             // Under this lock, a configure either lands before publication and is
             // sent here, or sees the stream and sends itself.
             let mut published = shared.stream.lock().unwrap();
-            let Desired { recording, icon } = *shared.desired.lock().unwrap();
-            if send(&stream, &Command::Configure { recording, icon }).is_ok()
+            let Desired {
+                recording,
+                icon,
+                dictation,
+            } = *shared.desired.lock().unwrap();
+            if send(
+                &stream,
+                &Command::Configure {
+                    recording,
+                    icon,
+                    dictation,
+                },
+            )
+            .is_ok()
                 && send(&stream, relaunch).is_ok()
             {
                 *published = stream.try_clone().ok();

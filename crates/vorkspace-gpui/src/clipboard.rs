@@ -14,6 +14,9 @@ pub(crate) struct Service {
     pub error: Option<String>,
     icon: bool,
     recording: bool,
+    dictation: bool,
+    pub dictation_status: String,
+    pub dictation_ready: bool,
     /// The panel's Quit also stops the helper, once the app really does quit.
     stop_helper_on_quit: bool,
     #[cfg(not(test))]
@@ -37,14 +40,15 @@ fn service(cx: &mut App) -> Entity<Service> {
         service
     })
 }
-pub(crate) fn configure(recording: bool, icon: bool, cx: &mut App) {
+pub(crate) fn configure(recording: bool, icon: bool, dictation: bool, cx: &mut App) {
     service(cx).update(cx, |s, cx| {
         s.icon = icon;
         s.recording = recording;
+        s.dictation = dictation;
         #[cfg(not(test))]
         {
             if let Some(supervisor) = &s.supervisor {
-                supervisor.configure(recording, icon);
+                supervisor.configure(recording, icon, dictation);
             }
             s.sync_status(cx);
         }
@@ -80,7 +84,7 @@ impl Service {
 
     #[cfg(not(test))]
     fn sync_status(&mut self, cx: &mut Context<Self>) {
-        if !self.icon || self.recording {
+        if !self.icon || self.recording || self.dictation {
             self.status = None;
         } else if self.status.is_none() {
             let app = std::cell::RefCell::new(cx.to_async());
@@ -97,12 +101,13 @@ impl Service {
         }
     }
 
-    fn send(&self, command: Command) {
+    fn send(&self, command: Command) -> bool {
         #[cfg(not(test))]
         if let Some(supervisor) = &self.supervisor {
-            supervisor.send(command);
+            return supervisor.send(command);
         }
         let _ = command;
+        false
     }
 
     fn notice(&mut self, notice: Notice, cx: &mut Context<Self>) {
@@ -116,6 +121,11 @@ impl Service {
             Notice::Action(Action::Quit) => {
                 self.stop_helper_on_quit = true;
                 cx.dispatch_action(&Quit);
+            }
+            Notice::Dictation { status, ready } => {
+                self.dictation_status = status;
+                self.dictation_ready = ready;
+                cx.notify();
             }
             Notice::Hello { .. } => {}
         }
@@ -137,7 +147,7 @@ pub(crate) fn menu_bar_ready(cx: &App) -> bool {
         let s = s.read(cx);
         #[cfg(not(test))]
         return s.icon
-            && if s.recording {
+            && if s.recording || s.dictation {
                 s.supervisor.as_ref().is_some_and(Supervisor::connected)
             } else {
                 s.status.is_some()
@@ -161,10 +171,30 @@ pub(crate) fn app_quitting(cx: &mut App) {
             // replacement during the app's own slower shutdown.
             #[cfg(not(test))]
             if let Some(supervisor) = &s.supervisor {
-                supervisor.configure(false, false);
+                supervisor.configure(false, false, false);
             }
         }
     }
+}
+
+pub(crate) fn dictation_download(cx: &mut App) {
+    dictation_command(Command::DownloadModel, cx);
+}
+pub(crate) fn dictation_permissions(cx: &mut App) {
+    dictation_command(Command::DictationPermissions, cx);
+}
+pub(crate) fn dictation_cancel(cx: &mut App) {
+    dictation_command(Command::CancelDictation, cx);
+}
+
+fn dictation_command(command: Command, cx: &mut App) {
+    service(cx).update(cx, |s, cx| {
+        if !s.send(command) {
+            s.dictation_status =
+                "Background helper is reconnecting. Retry this action in a moment.".into();
+            cx.notify();
+        }
+    });
 }
 
 #[cfg(test)]
@@ -175,7 +205,7 @@ mod tests {
     #[gpui::test]
     fn a_cancelled_panel_quit_leaves_the_helper_running(cx: &mut TestAppContext) {
         let service = cx.update(|cx| {
-            configure(true, true, cx);
+            configure(true, true, false, cx);
             get(cx).unwrap()
         });
         service.update(cx, |s, cx| s.notice(Notice::Action(Action::Quit), cx));
@@ -186,9 +216,9 @@ mod tests {
 
     #[gpui::test]
     fn close_to_tray_needs_the_icon(cx: &mut TestAppContext) {
-        cx.update(|cx| configure(true, false, cx));
+        cx.update(|cx| configure(true, false, false, cx));
         assert!(!cx.update(|cx| menu_bar_ready(cx)));
-        cx.update(|cx| configure(false, true, cx));
+        cx.update(|cx| configure(false, true, false, cx));
         assert!(cx.update(|cx| menu_bar_ready(cx)));
     }
 }

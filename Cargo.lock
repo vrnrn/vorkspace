@@ -482,6 +482,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmake"
+version = "0.1.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "cocoa"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1636,6 +1645,12 @@ checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "hound"
+version = "3.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
 
 [[package]]
 name = "http"
@@ -4054,6 +4069,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "transcribe-cpp"
+version = "0.4.1"
+source = "git+https://github.com/anomalyco/transcribe.cpp?rev=7045d1c0fe7cee37747b2792977421d435e75fca#7045d1c0fe7cee37747b2792977421d435e75fca"
+dependencies = [
+ "log",
+ "thiserror 2.0.20",
+ "transcribe-cpp-sys",
+]
+
+[[package]]
+name = "transcribe-cpp-sys"
+version = "0.4.1"
+source = "git+https://github.com/anomalyco/transcribe.cpp?rev=7045d1c0fe7cee37747b2792977421d435e75fca#7045d1c0fe7cee37747b2792977421d435e75fca"
+dependencies = [
+ "cmake",
+ "serde_json",
+]
+
+[[package]]
 name = "tree-sitter"
 version = "0.26.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4421,7 +4455,9 @@ version = "1.1.0"
 dependencies = [
  "async-channel",
  "gpui-pre",
+ "gpui-pre-apple",
  "gpui-pre-macos",
+ "hound",
  "image",
  "libc",
  "objc2 0.6.4",
@@ -4432,8 +4468,12 @@ dependencies = [
  "objc2-image-io",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
+ "transcribe-cpp",
+ "ureq",
  "vorkspace-macos",
+ "vorkspace-ui",
 ]
 
 [[package]]
@@ -4541,6 +4581,7 @@ name = "vorkspace-macos"
 version = "1.1.0"
 dependencies = [
  "async-channel",
+ "block2 0.6.2",
  "gpui-pre",
  "libc",
  "objc2 0.6.4",
