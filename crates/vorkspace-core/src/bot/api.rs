@@ -17,6 +17,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "sessions.draft" => "sessionId prompt project",
         "sessions.stop" | "sessions.archive" | "sessions.delete" => "sessionId project",
         "worktrees.create" => "branch base existing project",
+        "worktrees.remove" => "path project",
         "folders.move" => "sessionId folderId newFolderName project",
         "notes.list" => "limit offset",
         "notes.read" => "id",
@@ -196,6 +197,13 @@ pub fn is_read_only(action: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn removing_a_worktree_needs_a_path_and_is_a_mutation() {
+        assert!(validate("worktrees.remove", &json!({"path":"/tree","project":"/p"})).is_ok());
+        assert!(validate("worktrees.remove", &json!({"path":"/tree","force":true})).is_err());
+        assert!(!is_read_only("worktrees.remove"));
+        assert!(is_read_only("worktrees.list"));
+    }
     #[test]
     fn validates_before_mutation() {
         assert!(validate(

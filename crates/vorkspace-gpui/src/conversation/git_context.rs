@@ -79,15 +79,24 @@ impl Conversation {
             .or(self.branch.clone())
             .unwrap_or_else(|| "HEAD".into());
         let id = self.summary.id;
-        let work = cx
-            .background_executor()
-            .spawn(async move { vorkspace_core::git::create_worktree(Path::new(&cwd), &base, id) });
+        let work = cx.background_executor().spawn(async move {
+            let path = vorkspace_core::git::create_worktree(Path::new(&cwd), &base, id)?;
+            let setup = vorkspace_core::worktree_management::prepare(
+                Path::new(&cwd),
+                &path,
+                &Default::default(),
+            );
+            Ok::<_, String>((path, setup))
+        });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.preparing_worktree = false;
                 match result {
-                    Ok(path) => {
+                    Ok((path, setup)) => {
+                        if let Some(warning) = setup {
+                            this.status = warning;
+                        }
                         this.settings.worktree_cwd = Some(path.to_string_lossy().into_owned());
                         this.settings.new_worktree = false;
                         this.save_settings(cx);

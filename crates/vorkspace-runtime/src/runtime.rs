@@ -151,6 +151,7 @@ fn run_turn_using(
     // SessionReview's recorded turn: its project and id, once the baseline is taken.
     let mut checkpoint: Option<(String, String)> = None;
     let mut created_worktree = None;
+    let mut setup_warning = None;
     let mut context = locked(&store)
         .ok()
         .and_then(|s| s.context_usage(summary.id).ok().flatten())
@@ -275,6 +276,24 @@ fn run_turn_using(
             )?;
             let cwd = path.to_string_lossy().into_owned();
             created_worktree = Some(cwd.clone());
+            if vorkspace_core::worktree_management::has_setup(std::path::Path::new(&summary.cwd)) {
+                publish(
+                    &tx,
+                    &cancel,
+                    Update {
+                        activity: activity.label(),
+                        worktree_cwd: Some(cwd.clone()),
+                        start: transcript.rows.len(),
+                        status: "Preparing worktree…".into(),
+                        ..Default::default()
+                    },
+                )?;
+                setup_warning = vorkspace_core::worktree_management::prepare(
+                    std::path::Path::new(&summary.cwd),
+                    &path,
+                    &cancel,
+                );
+            }
             settings.worktree_cwd = Some(cwd.clone());
             settings.new_worktree = false;
             {
@@ -359,6 +378,14 @@ fn run_turn_using(
                 &mut bot_fingerprint,
                 &store,
             )?
+        };
+        // A failed setup leaves a usable worktree, so the agent hears about it and
+        // can repair it instead of the turn stopping.
+        let prompt = match setup_warning.take() {
+            Some(warning) => format!(
+                "<vorkspace_context>\nVorkspace adds this context, not the user. {warning}\n</vorkspace_context>\n\n{prompt}"
+            ),
+            None => prompt,
         };
         let cwd = settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd);
         if settings.bot.is_none()

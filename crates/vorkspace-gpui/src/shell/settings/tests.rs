@@ -306,3 +306,17 @@ fn shortcut_recording_rebinds_native_settings_and_reset_restores_it(cx: &mut Tes
         })
         .unwrap();
 }
+
+#[gpui::test]
+fn deleting_a_worktree_checks_title_tab_terminals(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    window
+        .update(cx, |shell, _, cx| {
+            let terminal = cx.new(|cx| crate::terminal::Terminal::new("/tmp/tree/sub".into(), cx));
+            assert!(!shell.terminals_using("/tmp/tree", cx));
+            shell.terminal_tabs.insert(1, terminal);
+            assert!(shell.terminals_using("/tmp/tree", cx));
+            assert!(!shell.terminals_using("/tmp/other", cx));
+        })
+        .unwrap();
+}

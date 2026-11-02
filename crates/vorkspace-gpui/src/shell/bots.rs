@@ -107,6 +107,10 @@ impl Shell {
 
 /// The shell's half of the contract `Bots` depends on.
 impl BotsHost for gpui::WeakEntity<Shell> {
+    fn terminals_using(&self, path: &str, cx: &App) -> bool {
+        self.upgrade()
+            .is_some_and(|shell| shell.read(cx).terminals_using(path, cx))
+    }
     fn session_views(&self, cx: &App) -> Vec<BotSession> {
         self.upgrade()
             .map(|shell| shell.read(cx).bot_session_views(cx))

@@ -68,6 +68,8 @@ pub struct Preferences {
     pub idle_agents: u32,
     pub claude_hooks: bool,
     pub binary_paths: HashMap<String, String>,
+    /// Project path to the command that prepares its new worktrees.
+    pub worktree_setup: HashMap<String, String>,
     pub disabled_skill_paths: Vec<String>,
     pub skill_source_paths: Vec<String>,
     pub default_provider: Option<String>,
@@ -173,6 +175,7 @@ impl Default for Preferences {
             idle_agents: 3,
             claude_hooks: true,
             binary_paths: HashMap::new(),
+            worktree_setup: HashMap::new(),
             disabled_skill_paths: Vec::new(),
             skill_source_paths: Vec::new(),
             default_provider: None,

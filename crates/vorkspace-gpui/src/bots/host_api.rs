@@ -33,6 +33,7 @@ pub(crate) struct AppStart {
 }
 
 pub(crate) trait BotsHost {
+    fn terminals_using(&self, path: &str, cx: &App) -> bool;
     fn session_views(&self, cx: &App) -> Vec<BotSession>;
     fn session_entity(&self, id: i64, cx: &App) -> Option<Entity<Conversation>>;
     fn ensure_session(&self, id: i64, cx: &mut App) -> Option<Entity<Conversation>>;

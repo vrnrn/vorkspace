@@ -398,9 +398,9 @@ impl Bots {
                 let mut launch=match bot::launch::Launch::parse(&input,&source_provider,&source_project,&project,settings,false){Ok(launch)=>launch,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
                 if launch.provider.id()!=source_provider { launch.settings.account=crate::accounts::get(cx).map(|center|center.read(cx).selected(launch.provider,&project)).unwrap_or_default(); }
                 self.call_work(call,&actor.id,target,move|store|{
-                    let mut store=locked(&store)?;
-                    let summary=launch.create(&mut store,&project)?;
-                    Ok((json!({"sessionId":summary.id,"accepted":true,"project":project}),Effect::Start(Box::new(super::host_api::AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
+                    let summary={let mut store=locked(&store)?;launch.create(&mut store,&project)?};
+                    let setup=launch.prepare_worktree(&project);
+                    Ok((json!({"sessionId":summary.id,"accepted":true,"project":project,"setupWarning":setup}),Effect::Start(Box::new(super::host_api::AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
                 },cx);return;
             }
             "minions.list"=>{
@@ -570,8 +570,9 @@ impl Bots {
                 let effect=if action=="todos.list"{Effect::None}else{Effect::Todos};
                 self.call_work(call,&actor.id,target,move|store|Ok((locked(&store)?.todo_action(&board,&action,&input)?,effect)),cx);return;
             }
-            "soul.read"|"soul.update"|"memory.read"|"memory.search"|"memory.add"|"memory.replace"|"memory.remove"|"habits.list"|"habits.add"|"habits.update"|"habits.run"|"habits.remove"|"notes.list"|"notes.read"|"notes.write"|"worktrees.list"|"worktrees.create"=>{
+            "soul.read"|"soul.update"|"memory.read"|"memory.search"|"memory.add"|"memory.replace"|"memory.remove"|"habits.list"|"habits.add"|"habits.update"|"habits.run"|"habits.remove"|"notes.list"|"notes.read"|"notes.write"|"worktrees.remove"|"worktrees.list"|"worktrees.create"=>{
                 let caller=call.session;let projects=bot.projects.clone();
+                let terminals_free=input.get("path").and_then(Value::as_str).is_none_or(|path|!self.owner.terminals_using(path,cx));
                 self.call_work(call,&actor.id,target.clone(),move|store|{
                     let value=match action.as_str(){
                         "soul.read"=>json!(files::read(&root,&target,None,"SOUL.md")?),
@@ -586,8 +587,9 @@ if let Some(instructions)=input.get("instructions").and_then(Value::as_str){if i
 if let Some(schedule)=input.get("schedule"){h.schedule=serde_json::from_value(schedule.clone()).map_err(|e|e.to_string())?;h.schedule.validate()?;h.next_run_at=h.schedule.next(now_ms())?;}
 if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=enabled;if enabled{h.next_run_at=h.schedule.next(now_ms())?;}}}Ok(json!(h))})?},
                         "notes.list"|"notes.read"|"notes.write"=>{let db=locked(&store)?;let notes=db.notes()?;let allowed=|n:&&vorkspace_core::response::Note|projects.iter().any(|p|vorkspace_core::files::path_key(p)==vorkspace_core::files::path_key(&n.source_cwd));match action.as_str(){"notes.list"=>json!(notes.iter().filter(allowed).skip(input.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize).take(input.get("limit").and_then(Value::as_u64).unwrap_or(50).min(200) as usize).collect::<Vec<_>>()),"notes.read"=>{let id=id(&input,"id")? as u64;json!(notes.iter().filter(allowed).find(|n|n.id==id).ok_or("Note not found in assigned projects")?)},_=>{let id=input.get("id").and_then(Value::as_u64).unwrap_or_else(now_ms);if notes.iter().any(|n|n.id==id&&!projects.iter().any(|p|p==&n.source_cwd)){return Err("Note is outside assigned projects".into());}let cwd=notes.iter().find(|n|n.id==id).map(|n|n.source_cwd.clone()).or_else(||projects.first().cloned()).ok_or("Assign a project before writing notes")?;let note=vorkspace_core::response::Note{id,title:text(&input,"title",512)?,body:text(&input,"body",256*1024)?,tags:input.get("tags").and_then(Value::as_array).map(|tags|tags.iter().filter_map(Value::as_str).map(str::to_owned).collect()).or_else(||notes.iter().find(|n|n.id==id).map(|n|n.tags.clone())).unwrap_or_default(),source_session:caller,source_cwd:cwd};db.save_note(&note)?;json!(note)}}},
-                        "worktrees.list"=>json!(vorkspace_core::git::snapshot(Path::new(&project))?.worktrees.iter().map(|w|json!({"path":w.path,"branch":w.branch,"head":w.head,"main":w.main})).collect::<Vec<_>>()),
-                        "worktrees.create"=>{let branch=text(&input,"branch",240)?;let tree=vorkspace_core::git::create_project_worktree(Path::new(&project),&branch,input.get("base").and_then(Value::as_str),flag(&input,"existing",false))?;json!({"path":tree.path,"branch":tree.branch})},
+                        "worktrees.list"=>vorkspace_core::store::describe_worktrees(Path::new(&project),&store)?,
+                        "worktrees.create"=>{let branch=text(&input,"branch",240)?;let tree=vorkspace_core::git::create_project_worktree(Path::new(&project),&branch,input.get("base").and_then(Value::as_str),flag(&input,"existing",false))?;let setup=vorkspace_core::worktree_management::prepare(Path::new(&project),Path::new(&tree.path),&Default::default());json!({"path":tree.path,"branch":tree.branch,"setupWarning":setup})},
+                        "worktrees.remove"=>{if !terminals_free{return Err("Close the terminals using this worktree first.".into());}let path=text(&input,"path",4096)?;vorkspace_core::store::remove_unused_worktree(Path::new(&project),&path,&store)?;json!({"removed":true})},
                         _=>unreachable!(),
                     };Ok((value,Effect::None))
                 },cx);return;

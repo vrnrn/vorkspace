@@ -32,9 +32,7 @@ pub(super) struct Discovery {
 #[derive(Clone, Debug)]
 pub(super) struct Tree {
     pub tree: git::Worktree,
-    pub locked: bool,
-    pub dirty: Option<bool>,
-    pub unpushed: usize,
+    pub assessment: vorkspace_core::worktree_management::Assessment,
 }
 #[derive(Default)]
 pub(super) struct ResultTrees {
@@ -97,14 +95,9 @@ pub(super) fn discover(cwd: &str) -> Discovery {
                     .into_iter()
                     .filter(|t| !t.main)
                     .map(|tree| {
-                        let status =
-                            vorkspace_core::worktree_management::status(Path::new(cwd), &tree);
-                        Tree {
-                            tree,
-                            locked: status.0,
-                            dirty: status.1,
-                            unpushed: status.2,
-                        }
+                        let assessment =
+                            vorkspace_core::worktree_management::assess(Path::new(cwd), &tree);
+                        Tree { tree, assessment }
                     })
                     .collect();
             }

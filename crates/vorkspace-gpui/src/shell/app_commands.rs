@@ -452,9 +452,9 @@ impl Shell {
                 if launch.provider.id()!=provider { launch.settings.account=crate::accounts::get(cx).map(|center|center.read(cx).selected(launch.provider,&project)).unwrap_or_default(); }
                 let caller=call.session;
                 self.app_background(call,move|store|{
-                    let mut store=locked(&store)?;
-                    let summary=launch.create_started(&mut store,&project,caller)?;
-                    Ok((json!({"sessionId":summary.id,"accepted":true}),Effect::Start(Box::new(AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
+                    let summary={let mut store=locked(&store)?;launch.create_started(&mut store,&project,caller)?};
+                    let setup=launch.prepare_worktree(&project);
+                    Ok((json!({"sessionId":summary.id,"accepted":true,"setupWarning":setup}),Effect::Start(Box::new(AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
                 },cx);return;
             }
             "sessions.read" => {
@@ -506,16 +506,25 @@ impl Shell {
                 self.app_background(call, move |store| { locked(&store)?.save_groups(&project, &groups)?; Ok((json!({"moved":true}), Effect::Groups(project, groups))) }, cx); return;
             }
             "worktrees.list" => {
-                self.app_background(call, move |_| { let snapshot = vorkspace_core::git::snapshot(std::path::Path::new(&project))?; Ok((json!(snapshot.worktrees.iter().map(|w| json!({"path":w.path,"branch":w.branch,"head":w.head,"main":w.main,"missing":w.missing})).collect::<Vec<_>>()), Effect::None)) }, cx); return;
+                self.app_background(call, move |store| { let value = vorkspace_core::store::describe_worktrees(std::path::Path::new(&project),&store)?; Ok((value, Effect::None)) }, cx); return;
             }
             "worktrees.create"=>{
                 self.app_background(call,move |_|{
                     let branch=text(&input,"branch",240)?;
                     let tree=vorkspace_core::git::create_project_worktree(std::path::Path::new(&project),&branch,input.get("base").and_then(Value::as_str),input.get("existing").and_then(Value::as_bool).unwrap_or(false))?;
-                    Ok((json!({"path":tree.path,"branch":tree.branch}),Effect::None))
+                    let setup=vorkspace_core::worktree_management::prepare(std::path::Path::new(&project),std::path::Path::new(&tree.path),&Default::default());
+                    Ok((json!({"path":tree.path,"branch":tree.branch,"setupWarning":setup}),Effect::None))
                 },cx);return;
             }
-            _ => Err("Unknown Operator action. Supported: models.list, sessions.list/read/start/send/draft/stop/archive/delete, folders.list/move, notes.list/read/write, todos.list/add/update/remove, worktrees.list/create.".into()),
+            "worktrees.remove"=>{
+                let path=match text(&input,"path",4096){Ok(path)=>path,Err(error)=>{self.finish_app_call(call,Err(error));return;}};
+                if self.terminals_using(&path,cx){self.finish_app_call(call,Err("Close the terminals using this worktree first.".into()));return;}
+                self.app_background(call,move|store|{
+                    vorkspace_core::store::remove_unused_worktree(std::path::Path::new(&project),&path,&store)?;
+                    Ok((json!({"removed":true}),Effect::None))
+                },cx);return;
+            }
+            _ => Err("Unknown Operator action. Supported: models.list, sessions.list/read/start/send/draft/stop/archive/delete, folders.list/move, notes.list/read/write, todos.list/add/update/remove, worktrees.list/create/remove.".into()),
         };
         self.finish_app_call(call, result);
         let _ = window;

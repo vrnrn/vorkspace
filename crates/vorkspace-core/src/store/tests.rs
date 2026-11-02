@@ -369,3 +369,34 @@ fn wal_restart_preserves_partial_output_and_provider_context() {
         Some("thread-1")
     );
 }
+
+#[test]
+fn agents_must_archive_sessions_before_removing_a_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| crate::git::git(dir.path(), args).unwrap();
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "fixture@example.invalid"]);
+    git(&["config", "user.name", "Fixture"]);
+    git(&["commit", "--allow-empty", "-m", "Initial"]);
+    let tree = crate::git::create_named_worktree(dir.path(), "shared").unwrap();
+    let store = Store::open_vorkspace(&dir.path().join("sessions.db")).unwrap();
+    let session = store.create("codex", &tree.path).unwrap();
+    let store = std::sync::Mutex::new(store);
+    let refused =
+        super::bot_state::remove_unused_worktree(dir.path(), &tree.path, &store).unwrap_err();
+    assert!(refused.contains("Archive"), "{refused}");
+    assert!(std::path::Path::new(&tree.path).exists());
+    let rows = super::describe_worktrees(dir.path(), &store).unwrap();
+    assert_eq!(rows[1]["removable"], false);
+    assert_eq!(rows[1]["sessions"][0], session.id);
+    store
+        .lock()
+        .unwrap()
+        .set_archived(session.id, true)
+        .unwrap();
+    let rows = super::describe_worktrees(dir.path(), &store).unwrap();
+    assert_eq!(rows[1]["removable"], true);
+    super::bot_state::remove_unused_worktree(dir.path(), &tree.path, &store).unwrap();
+    assert!(!std::path::Path::new(&tree.path).exists());
+    let _ = std::fs::remove_dir_all(crate::worktree_management::default_root(dir.path()));
+}

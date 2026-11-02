@@ -256,6 +256,9 @@ pub(crate) struct SettingsView {
     discovery: data::Discovery,
     discovery_loading: bool,
     discovery_task: Option<Task<()>>,
+    worktree_sizes: HashMap<String, u64>,
+    worktree_sizes_project: String,
+    worktree_sizes_task: Option<Task<()>>,
     selected_project: String,
     mcp_filter: String,
     fields: HashMap<&'static str, Entity<Input>>,
@@ -426,6 +429,9 @@ impl SettingsView {
             discovery: data::Discovery::default(),
             discovery_loading: false,
             discovery_task: None,
+            worktree_sizes: HashMap::new(),
+            worktree_sizes_project: String::new(),
+            worktree_sizes_task: None,
             selected_project,
             mcp_filter: "all".into(),
             fields: HashMap::new(),
@@ -648,6 +654,37 @@ impl SettingsView {
         false
     }
     /// Change preferences and tell the shell to keep them.
+    /// `du` over a large build folder takes seconds, so it never holds up the page.
+    fn load_worktree_sizes(&mut self, cx: &mut Context<Self>) {
+        if self.worktree_sizes_project == self.selected_project || self.discovery_loading {
+            return;
+        }
+        self.worktree_sizes_project = self.selected_project.clone();
+        self.worktree_sizes.clear();
+        let paths = self
+            .discovery
+            .worktrees
+            .trees
+            .iter()
+            .map(|tree| tree.tree.path.clone())
+            .collect::<Vec<_>>();
+        let work = cx.background_executor().spawn(async move {
+            paths
+                .into_iter()
+                .filter_map(|path| {
+                    let size = vorkspace_core::worktree_management::disk_size(&path)?;
+                    Some((path, size))
+                })
+                .collect::<HashMap<_, _>>()
+        });
+        self.worktree_sizes_task = Some(cx.spawn(async move |this, cx| {
+            let sizes = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.worktree_sizes = sizes;
+                cx.notify();
+            });
+        }));
+    }
     fn update(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Preferences)) {
         change(&mut self.prefs);
         self.notification_deadline(cx);

@@ -47,6 +47,8 @@ JavaScript is maintained directly under `host/` and `embedded/`. No browser fron
 
 GPUI renders the desktop. WebKit is limited to Vox and sandboxed HTML previews. Sparkle can verify and install explicitly configured macOS updates.
 
+A session keeps its own worktree. `worktree_management` is the single owner of what removing one would cost, so Settings and the app actions share its checks. Settings can discard work after a warning; agents can't, because `worktrees.remove` refuses uncommitted or unique work, and the shell refuses open dock or title-tab terminals. A fully merged branch is removed with its worktree. A project's setup command comes from the user's preferences, never from the repository, so opening a project can't choose what runs on this Mac. It runs in each new worktree before the agent starts, outside the database lock, with a 10-minute limit. A failure keeps the worktree and is reported, including to the agent.
+
 Close to Tray hides the one workspace window instead of quitting, and clicking the Dock icon brings it back. It needs the menu bar icon, so it falls back to quitting when the icon is off.
 
 Bots are opened inside the main workspace. The macOS menu bar opens clipboard history, also available with ⌘⇧C. General settings control the icon and contain a Clipboard group between Workspace and About. Quick Composer, Settings and Quit remain available in the clipboard menu.

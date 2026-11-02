@@ -9,6 +9,7 @@ pub(super) enum Target {
     Mcp,
     Skill,
     Worktree,
+    WorktreeSetup,
     DeleteTree(data::Tree),
     ResetBot(super::BotSetting),
 }
@@ -43,6 +44,7 @@ impl SettingsView {
             Target::Cli(_) => ("CLI path", "Auto-detected path"),
             Target::Mcp => ("Name (optional with mcpServers)", "my-server"),
             Target::Skill => ("Skill name", "skill-name"),
+            Target::WorktreeSetup => ("Setup command", "npm ci"),
             _ => ("New branch name", "feature/my-task"),
         };
         let name = cx.new(|cx| {
@@ -50,6 +52,18 @@ impl SettingsView {
             input.set_font_size(12.);
             input
         });
+        if matches!(target, Target::WorktreeSetup) {
+            name.update(cx, |input, cx| {
+                input.set_text(
+                    self.prefs
+                        .worktree_setup
+                        .get(&self.selected_project)
+                        .cloned()
+                        .unwrap_or_default(),
+                    cx,
+                )
+            });
+        }
         if let Target::Cli(kind) = target {
             name.update(cx, |input, cx| {
                 input.set_text(
@@ -234,6 +248,19 @@ impl SettingsView {
             cx.notify();
             return;
         }
+        if matches!(target, Target::WorktreeSetup) {
+            let project = self.selected_project.clone();
+            let command = editor.name.read(cx).content.trim().to_owned();
+            self.update(cx, |p| {
+                if command.is_empty() {
+                    p.worktree_setup.remove(&project);
+                } else {
+                    p.worktree_setup.insert(project, command);
+                }
+            });
+            self.management_finished(Ok(()), cx);
+            return;
+        }
         if let Target::DeleteTree(tree) = target {
             cx.emit(SettingsEvent::RemoveWorktree {
                 cwd,
@@ -250,13 +277,23 @@ impl SettingsView {
                 Target::Skill => {
                     vorkspace_core::skills::create_blank(&cwd, &name, scope == "user").map(|_| ())
                 }
-                Target::Worktree => vorkspace_core::git::create_project_worktree(
-                    std::path::Path::new(&cwd),
-                    &name,
-                    Some(&base),
-                    existing,
-                )
-                .map(|_| ()),
+                Target::Worktree => {
+                    let project = std::path::Path::new(&cwd);
+                    let tree = vorkspace_core::git::create_project_worktree(
+                        project,
+                        &name,
+                        Some(&base),
+                        existing,
+                    )?;
+                    match vorkspace_core::worktree_management::prepare(
+                        project,
+                        std::path::Path::new(&tree.path),
+                        &Default::default(),
+                    ) {
+                        Some(warning) => Err(warning),
+                        None => Ok(()),
+                    }
+                }
                 _ => Ok(()),
             }
         });
@@ -479,6 +516,12 @@ impl SettingsView {
                     "Creates a starter SKILL.md in .agents/skills. Edit it in your file editor.",
                 ));
             }
+            Target::WorktreeSetup => {
+                rows.push(name.clone().into_any_element());
+                rows.push(note(
+                    "Runs in each new worktree before its agent starts, with VORKSPACE_PROJECT_PATH and VORKSPACE_WORKTREE_PATH set. Leave it empty for none. A failure is reported, and the worktree is kept.",
+                ));
+            }
             Target::Worktree => {
                 rows.push(note(format!("An independent working copy of {}. Existing uncommitted changes stay in their current working copy.",self.selected_project)));
                 rows.push(self.select(
@@ -591,21 +634,24 @@ impl SettingsView {
                         }
                     ));
                 }
-                if tree.dirty != Some(false) {
+                if tree.assessment.dirty != Some(false) {
                     consequences = consequences.child(
                         div()
                             .text_color(gpui::rgb(0xfbbf24))
                             .child("All uncommitted and untracked changes here are discarded."),
                     );
                 }
-                consequences = consequences.child(format!(
-                    "The {} branch and its commits are kept.",
-                    tree.tree.branch.as_deref().unwrap_or("worktree")
-                ));
-                if tree.unpushed > 0 {
+                consequences = consequences.child(match &tree.tree.branch {
+                    Some(branch) if tree.assessment.merged => {
+                        format!("The {branch} branch is fully merged, so it's removed too.")
+                    }
+                    Some(branch) => format!("The {branch} branch and its commits are kept."),
+                    None => "This worktree has no branch, and nothing in it is unique.".into(),
+                });
+                if tree.assessment.unpushed > 0 && !tree.assessment.merged {
                     consequences = consequences.child(format!(
                         "{} unpublished commits stay on the branch.",
-                        tree.unpushed
+                        tree.assessment.unpushed
                     ));
                 }
                 rows.push(consequences.into_any_element());
@@ -727,6 +773,7 @@ impl SettingsView {
                 }
             }
             Target::Worktree => "Create worktree",
+            Target::WorktreeSetup => "Save command",
             Target::ResetBot(_) => {
                 if busy {
                     "Resetting…"
@@ -780,6 +827,7 @@ impl SettingsView {
             Target::Cli(kind) => format!("{} CLI details", kind.label()),
             Target::Mcp => "Add MCP server".into(),
             Target::Worktree => "Create worktree".into(),
+            Target::WorktreeSetup => "Worktree setup command".into(),
             Target::DeleteTree(_) => "Delete worktree?".into(),
             Target::ResetBot(ref bot) => format!("Reset {} to its defaults?", bot.name),
             _ => String::new(),

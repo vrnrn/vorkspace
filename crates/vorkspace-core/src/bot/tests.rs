@@ -686,6 +686,9 @@ fn the_minion_guide_follows_the_setting() {
     assert!(!context(&bot, &files, Path::new("/bin/v")).contains("minions.hire"));
     set_minions_enabled(true);
     let enabled = context(&bot, &files, Path::new("/bin/v"));
+    assert!(enabled.contains("workspaceMode worktree"));
+    assert!(enabled.contains("worktrees.remove"));
+    assert!(enabled.contains("Never force a removal"));
     set_minions_enabled(false);
     assert!(enabled.contains("minions.hire"));
     assert!(enabled.contains("reuse useful members"));

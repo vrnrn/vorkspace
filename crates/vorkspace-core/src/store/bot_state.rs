@@ -229,3 +229,82 @@ pub fn root(store: &Store) -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join(format!("vorkspace-test-{}", new_id())))
         .join("bots")
 }
+
+impl Launch {
+    /// Runs outside the database lock, because setup can take minutes.
+    pub fn prepare_worktree(&self, project: &str) -> Option<String> {
+        if !matches!(self.workspace, Workspace::New(_)) {
+            return None;
+        }
+        let worktree = self.settings.worktree_cwd.as_deref()?;
+        crate::worktree_management::prepare(
+            std::path::Path::new(project),
+            std::path::Path::new(worktree),
+            &Default::default(),
+        )
+    }
+}
+
+impl Store {
+    /// Unarchived sessions working in `path`.
+    pub fn sessions_using(&self, path: &str) -> Result<Vec<i64>, String> {
+        let worktrees = self.session_worktrees()?;
+        Ok(self
+            .sessions()?
+            .into_iter()
+            .filter(|session| !session.archived)
+            .filter(|session| {
+                let execution = worktrees
+                    .get(&session.id)
+                    .and_then(Option::as_deref)
+                    .unwrap_or(&session.cwd);
+                crate::files::is_equal_or_inside(execution, path)
+            })
+            .map(|session| session.id)
+            .collect())
+    }
+}
+
+/// Git runs without the database lock, which is held per session lookup.
+pub fn describe_worktrees(
+    project: &std::path::Path,
+    store: &std::sync::Mutex<Store>,
+) -> Result<Value, String> {
+    crate::worktree_management::describe(project, |path| {
+        store
+            .lock()
+            .map_err(|_| "The session store is unavailable.".to_owned())?
+            .sessions_using(path)
+    })
+}
+
+/// Remove for an agent: nobody is working there and nothing would be lost. The
+/// database lock is released while Git runs.
+pub fn remove_unused_worktree(
+    project: &std::path::Path,
+    path: &str,
+    store: &std::sync::Mutex<Store>,
+) -> Result<(), String> {
+    let lock = || {
+        store
+            .lock()
+            .map_err(|_| "The session store is unavailable.".to_owned())
+    };
+    if crate::files::remote::is_remote(project) {
+        return Err("Remote worktrees are removed from Settings.".into());
+    }
+    let sessions = lock()?.sessions_using(path)?;
+    if !sessions.is_empty() {
+        return Err(format!(
+            "Archive the {} sessions using this worktree first.",
+            sessions.len()
+        ));
+    }
+    let main = crate::git::snapshot(project)?;
+    let main = main.worktrees.first().ok_or("No main working copy found")?;
+    crate::worktree_management::remove_if_safe(
+        std::path::Path::new(&main.path),
+        std::path::Path::new(path),
+    )?;
+    lock()?.detach_worktree(path, &main.path).map(|_| ())
+}

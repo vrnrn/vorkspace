@@ -441,6 +441,9 @@ impl Shell {
         self.configure_quick_composer(cx);
         crate::menu_bar::refresh(&self.workspace.preferences, cx);
         vorkspace_core::cli::initialize(&self.workspace.preferences.binary_paths);
+        vorkspace_core::worktree_management::set_setup_commands(
+            &self.workspace.preferences.worktree_setup,
+        );
         self.keep_visible_idle_agents(cx);
         vorkspace_core::provider::configure_idle_agents(
             self.workspace.preferences.idle_agents as usize,
@@ -528,6 +531,14 @@ impl Shell {
         self.invalidate_chrome(cx);
         cx.notify();
     }
+    /// Dock and title-tab shells have separate owners, and either can sit inside it.
+    pub(crate) fn terminals_using(&self, path: &str, cx: &App) -> bool {
+        self.terminals
+            .values()
+            .flatten()
+            .chain(self.terminal_tabs.values())
+            .any(|t| vorkspace_core::files::is_equal_or_inside(&t.read(cx).cwd, path))
+    }
     fn remove_settings_worktree(
         &mut self,
         cwd: String,
@@ -537,12 +548,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         use vorkspace_core::files::is_equal_or_inside;
-        if self
-            .terminals
-            .values()
-            .flatten()
-            .any(|t| is_equal_or_inside(&t.read(cx).cwd, &path))
-        {
+        if self.terminals_using(&path, cx) {
             self.finish_worktree_action(
                 Err("Close the terminals using this worktree first.".into()),
                 cx,
@@ -578,7 +584,7 @@ impl Shell {
             if let Err(e)=result {let _=this.update(cx,|this,cx|this.finish_worktree_action(Err(e),cx));return;}
             let pending=match this.update_in(cx,|this,window,cx| {
                 // Recheck before deleting any conversations after the preflight worker.
-                if this.terminals.values().flatten().any(|t|is_equal_or_inside(&t.read(cx).cwd,&path))||ids.iter().any(|id|this.sessions.get(id).is_some_and(|s|s.read(cx).busy)) {return Err("This worktree is now in use. Close its terminals and stop its sessions first.".to_owned());}
+                if this.terminals_using(&path,cx)||ids.iter().any(|id|this.sessions.get(id).is_some_and(|s|s.read(cx).busy)) {return Err("This worktree is now in use. Close its terminals and stop its sessions first.".to_owned());}
                 if delete_sessions {for id in &ids{this.delete_session(*id,window,cx);}}
                 Ok((this.group_writes.take(),this.store.clone()))
             }) {Ok(Ok(v))=>v,Ok(Err(e))=>{let _=this.update(cx,|this,cx|this.finish_worktree_action(Err(e),cx));return;},Err(_)=>return};

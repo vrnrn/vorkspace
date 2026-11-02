@@ -45,3 +45,5 @@ When someone is no longer useful, the parent uses `minions.fire` to retire them.
 - **Bot Reports Stay Scoped**: Managing a chat stops that Bot from watching it for a future completion report. Other Bots keep their own monitoring; an already queued message remains saved.
 
 If a direct task fails, later work waits. The parent can inspect what happened, then retry or discard that task. A retry starts a new attempt; it does not assume the earlier attempt did nothing.
+
+Bots give delegated work that edits files its own worktree, then clean up. When work is finished they archive its sessions and remove the worktree, but only if nothing would be lost. A worktree with uncommitted or unmerged work, an open terminal, or a live session is left alone, and the Bot tells you instead. There's no way for a Bot to force it.
