@@ -5,22 +5,70 @@ import AudioToolbox
 import CoreAudio
 import Carbon
 
-// Main-thread owner. Only the tap touches PCM, behind the lock. No idle capture.
+// One attempt, never reset. Protected by the capture's PCM lock. Expected
+// setup has no observer; changes after beginArming are sticky, including changes
+// racing the baseline read or teardown. No delay or failed=false reset is used.
+struct CaptureLifecycle {
+    private enum Phase { case setup, arming, active }
+    private var phase = Phase.setup
+    private(set) var failed = false
+    var active: Bool { phase == .active && !failed }
+    mutating func configurationChanged() {
+        if phase != .setup { failed = true }
+    }
+    mutating func fail() { failed = true }
+    mutating func beginArming() -> Bool {
+        guard phase == .setup, !failed else { return false }
+        phase = .arming
+        return true
+    }
+    mutating func arm(healthy: Bool) -> Bool {
+        guard phase == .arming else { return false }
+        if !healthy { failed = true }
+        guard !failed else { return false }
+        phase = .active
+        return true
+    }
+}
+// Main-thread owner. Only the tap and notification callback touch locked state.
+// No idle capture, and no engine operations while holding the PCM lock.
 private final class DictationCapture {
     let engine = AVAudioEngine()
     let lock = NSLock()
     var samples = [Float]()
-    var failed = false
+    var lifecycle = CaptureLifecycle()
     var full = false
     var device: AudioDeviceID = 0
     var deviceUID = ""
+    var format: AVAudioFormat?
     var tapped = false
     var observer: NSObjectProtocol?
-    init() {
+    func arm() -> Bool {
+        lock.lock(); let arming = lifecycle.beginArming(); lock.unlock()
+        guard arming else { return false }
+        // Route/format/tap setup and engine.start have completed. Register before
+        // validating the fresh baseline, so an interruption during validation
+        // cannot be erased by a successful readback. queue:nil delivers on the
+        // posting thread; no main-queue setup notification is carried into capture.
         observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
             guard let self else { return }
-            self.lock.lock(); self.failed = true; self.lock.unlock()
+            self.lock.lock(); self.lifecycle.configurationChanged(); self.lock.unlock()
         }
+        let healthy = routeIsHealthy()
+        lock.lock(); defer { lock.unlock() }
+        return lifecycle.arm(healthy: healthy)
+    }
+    func routeIsHealthy() -> Bool {
+        guard let format, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+              audioScalar(device, kAudioDevicePropertyDeviceIsAlive) == 1,
+              audioString(device, kAudioDevicePropertyDeviceUID) == deviceUID else { return false }
+        let node = engine.inputNode
+        guard let unit = node.audioUnit else { return false }
+        var actual: AudioDeviceID = 0
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        return AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global, 0, &actual, &size) == noErr && actual == device
+            && node.outputFormat(forBus: 0).isEqual(format) && engine.isRunning
     }
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     func stop() {
@@ -83,6 +131,7 @@ func dictationStart(_ microphone: UnsafePointer<CChar>) -> Int32 {
     guard format.sampleRate > 0, format.channelCount > 0,
           let output = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false),
           let converter = AVAudioConverter(from: format, to: output) else { return 3 }
+    state.format = format
     state.samples.reserveCapacity(16000 * 120)
     node.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * 16000 / format.sampleRate + 32)
@@ -94,7 +143,7 @@ func dictationStart(_ microphone: UnsafePointer<CChar>) -> Int32 {
             supplied = true; status.pointee = .haveData; return buffer
         }
         state.lock.lock(); defer { state.lock.unlock() }
-        if error != nil { state.failed = true; return }
+        if error != nil { state.lifecycle.fail(); return }
         guard let pcm = result.floatChannelData?[0] else { return }
         let count = min(Int(result.frameLength), 16000 * 120 - state.samples.count)
         if count > 0 { state.samples.append(contentsOf: UnsafeBufferPointer(start: pcm, count: count)) }
@@ -102,20 +151,16 @@ func dictationStart(_ microphone: UnsafePointer<CChar>) -> Int32 {
     }
     state.tapped = true
     do { try state.engine.start() } catch { state.stop(); return 3 }
-    guard audioString(device, kAudioDevicePropertyDeviceUID) == identity.uid else { return 8 }
+    guard state.arm() else { return 3 }
     capture = state; started = true
     return 0
 }
 @_cdecl("vorkspace_dictation_health")
 func dictationHealth() -> Int32 {
     guard let state = capture else { return 0 }
+    let healthy = state.routeIsHealthy()
     state.lock.lock(); defer { state.lock.unlock() }
-    var actual: AudioDeviceID = 0
-    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-    let unit = state.engine.inputNode.audioUnit
-    let routed = unit.map { AudioUnitGetProperty($0, kAudioOutputUnitProperty_CurrentDevice,
-        kAudioUnitScope_Global, 0, &actual, &size) == noErr && actual == state.device } ?? false
-    if state.failed || !routed || (audioScalar(state.device, kAudioDevicePropertyDeviceIsAlive) != 1 || audioString(state.device, kAudioDevicePropertyDeviceUID) != state.deviceUID) || !state.engine.isRunning || AVCaptureDevice.authorizationStatus(for: .audio) != .authorized { return 1 }
+    if !state.lifecycle.active || !healthy { return 1 }
     return state.full ? 2 : 0
 }
 @_cdecl("vorkspace_dictation_stop")
@@ -124,7 +169,7 @@ func dictationStop(_ callback: @convention(c) (UnsafePointer<Float>?, Int) -> Vo
     let health = dictationHealth()
     state.stop(); capture = nil
     state.lock.lock()
-    let failed = state.failed
+    let failed = state.lifecycle.failed
     let pcm = state.samples
     state.samples.removeAll()
     state.lock.unlock()

@@ -41,6 +41,24 @@ func destinationMatches(_ original: FocusEvidence, _ current: FocusEvidence, sam
     // below fence every observed navigation; never downgrade a known text node.
     return original.elementPresent == current.elementPresent && (sameElement || !original.elementPresent)
 }
+// A notification is a request to read authority, not evidence of a change.
+// Both explicit navigation and any observed mismatch/unavailability retire this
+// owner permanently; later duplicate/unknown reads cannot resurrect it.
+struct DestinationContinuity {
+    let original: FocusEvidence
+    private(set) var interrupted = false
+    mutating func invalidate() { interrupted = true }
+    mutating func observe(_ current: FocusEvidence?, sameElement: Bool, sameIdentity: Bool, sameWindow: Bool) -> Bool {
+        guard !interrupted else { return false }
+        guard let current, sameWindow,
+              destinationMatches(original, current, sameElement: sameElement,
+                sameIdentity: sameIdentity, interrupted: false) else {
+            interrupted = true
+            return false
+        }
+        return true
+    }
+}
 private struct FocusSnapshot {
     let evidence: FocusEvidence
     let element: AXUIElement?
@@ -85,11 +103,14 @@ private struct FocusSnapshot {
 }
 final class DictationTarget {
     private let original: FocusSnapshot
-    private var interrupted = false
+    private var continuity: DestinationContinuity
     private var inputMonitor: Any?
     private var activation: NSObjectProtocol?
     private var observer: AXObserver?
-    private init(_ snapshot: FocusSnapshot) { original = snapshot }
+    private init(_ snapshot: FocusSnapshot) {
+        original = snapshot
+        continuity = DestinationContinuity(original: snapshot.evidence)
+    }
     static func admit() -> DictationTarget? {
         guard AXIsProcessTrusted(), let snapshot = FocusSnapshot.read(), snapshot.evidence.exposure != .blocked else { return nil }
         let owner = DictationTarget(snapshot)
@@ -98,17 +119,20 @@ final class DictationTarget {
         // responder even when its AX root stays identical, so fail closed.
         owner.inputMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown, .scrollWheel]) { [weak owner] event in
             if event.type == .keyDown && event.keyCode == 43 && event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command { return }
-            owner?.interrupted = true
+            owner?.continuity.invalidate()
         }
         guard owner.inputMonitor != nil else { return nil }
         owner.activation = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak owner] note in
             guard let owner else { return }
-            if (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier != owner.original.evidence.pid { owner.interrupted = true }
+            if (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier != owner.original.evidence.pid { owner.continuity.invalidate() }
         }
         var observer: AXObserver?
         if AXObserverCreate(snapshot.evidence.pid, { _, _, _, context in
             guard let context else { return }
-            Unmanaged<DictationTarget>.fromOpaque(context).takeUnretainedValue().interrupted = true
+            // Recreated wrappers or duplicate focus/window notifications can still
+            // describe the same destination. isCurrent records a real mismatch
+            // (or failed read) irreversibly, using the same final-paste policy.
+            _ = Unmanaged<DictationTarget>.fromOpaque(context).takeUnretainedValue().isCurrent()
         }, &observer) == .success, let observer {
             owner.observer = observer
             let application = AXUIElementCreateApplication(snapshot.evidence.pid)
@@ -121,13 +145,15 @@ final class DictationTarget {
         return owner
     }
     func isCurrent() -> Bool {
-        guard let current = FocusSnapshot.read() else { return false }
-        if let window = original.focusedWindow {
-            guard let currentWindow = current.focusedWindow, CFEqual(window, currentWindow) else { return false }
-        }
-        let sameElement = original.element.flatMap { a in current.element.map { CFEqual(a, $0) } } ?? false
-        return destinationMatches(original.evidence, current.evidence, sameElement: sameElement,
-            sameIdentity: original.identity != nil && original.identity == current.identity, interrupted: interrupted)
+        guard !continuity.interrupted else { return false }
+        let current = FocusSnapshot.read()
+        let sameWindow = original.focusedWindow.map { window in
+            current?.focusedWindow.map { CFEqual(window, $0) } ?? false
+        } ?? true
+        let sameElement = original.element.flatMap { a in current?.element.map { CFEqual(a, $0) } } ?? false
+        return continuity.observe(current?.evidence, sameElement: sameElement,
+            sameIdentity: original.identity != nil && original.identity == current?.identity,
+            sameWindow: sameWindow)
     }
     deinit {
         if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }

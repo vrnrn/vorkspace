@@ -57,8 +57,13 @@ connect it or select another input, rather than silently switching microphones.
 Changes apply to the **next recording**. The helper retains that preference after
 main-app Quit and receives it again on reconnect. Each recording resolves its
 choice once, sets the engine input audio unit's CurrentDevice, verifies the route,
-and then reads its format before installing a tap. Configuration change, device
-loss, permission loss or an unexpected route cancels recording and discards audio.
+and then reads its format before installing a tap. Expected setup completes before
+configuration-change observation is armed. After engine start, the helper registers
+that observer and validates a fresh route, UID, format, permission and running-engine
+baseline before admitting the recording. A notification during that validation or
+active capture remains a failure even if a later read looks healthy. Configuration
+change during capture, device loss, permission loss or an unexpected route cancels
+recording and discards audio.
 System default is resolved at admission; changing the system input during capture
 does not authorize switching the active recording to another microphone.
 
@@ -67,9 +72,13 @@ secure-input state and original focus evidence immediately before sending one Cm
 Known text controls can retain their AX object or a stable provider identifier.
 Missing text semantics in custom/GPUI controls use a conservative fallback: the
 original app/window and any exposed opaque AX root must remain the same. Keyboard
-input other than the dictation shortcut, clicks, scrolling, app activation changes,
-and supported AX focus/window notifications invalidate that destination, even if
-it is later selected again. No app is activated and no field is refocused.
+input other than the dictation shortcut, clicks, scrolling and app activation changes
+invalidate that destination, even if it is later selected again. Supported AX
+focus/window notifications trigger the same authoritative continuity check as
+insertion: unchanged duplicates, including recreated text wrappers with the same
+stable identifier, are accepted. An observed mismatch or unavailable read retires
+the destination permanently; a later matching or unknown read cannot revive it.
+No app is activated and no field is refocused.
 Capture admission failure, missing permission, and a changed destination after
 recording have separate recovery messages. It waits briefly for modifiers
 to lift and otherwise discards. Every rich clipboard item/type is snapshotted

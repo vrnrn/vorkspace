@@ -24,16 +24,20 @@ It never quietly picks a different input. Your choice is saved and still applies
 after quitting or reopening Vorkspace.
 
 A microphone change applies to the **next recording**. If the current input is
-lost or interrupted, recording stops and its audio is discarded. No microphone
+lost or interrupted, recording stops and its audio is discarded. The helper finishes
+setting up the chosen microphone and checks that it is ready before accepting a
+recording; setup notices are not treated as an interrupted recording. No microphone
 records while dictation is idle. Microphone and Accessibility permission still
 belong to the background helper.
 
 Click the field you want to write into. Press **⌘,**, speak, then press **⌘,**
 again. A red microphone at the notch means recording. Amber with dots means the
 Mac is turning speech into text. Leave the original field selected until the
-words arrive. Switching fields discards the words. Pressing the shortcut during
-transcription cancels it; Settings also has Cancel. Recording has a two-minute
-limit. Vox uses **⌘.**. Settings is available from the application menu.
+words arrive. Switching fields discards the words, including switching away and
+back. Repeated macOS focus notices do not discard words when the same field is
+still selected; a changed destination or a failed check requires a new recording. Pressing the
+shortcut during transcription cancels it; Settings also has Cancel. Recording has
+a two-minute limit. Vox uses **⌘.**. Settings is available from the application menu.
 
 Everything is transcribed on your Mac. Downloading the model needs internet;
 recording does not. Audio stays in memory temporarily and is never saved. There
