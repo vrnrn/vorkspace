@@ -4,6 +4,7 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
+    io::{Read, Seek, SeekFrom},
     os::{
         fd::AsRawFd,
         unix::process::{CommandExt, ExitStatusExt},
@@ -23,6 +24,7 @@ const OUTPUT_LIMIT: usize = 2000;
 const DUE: &str = "due";
 const RUNNING: &str = "running";
 const INTERRUPTED: &str = "interrupted";
+const NOTICE: &str = "notice";
 static COMMANDS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
 /// Per-project commands from the user's own preferences. They never come from the
@@ -83,6 +85,10 @@ pub fn run_due(project: &Path, worktree: &Path, cancel: &AtomicBool) -> Option<S
         std::thread::sleep(POLL);
     }
     let (state, command) = read(&marker)?;
+    if state == NOTICE {
+        let _ = fs::remove_file(&marker);
+        return Some(command);
+    }
     if state != DUE {
         let _ = fs::remove_file(&marker);
         return Some(format!(
@@ -100,6 +106,25 @@ pub fn run_due(project: &Path, worktree: &Path, cancel: &AtomicBool) -> Option<S
     result.err().map(|failure| match failure {
         Failure::Interrupted(reason) | Failure::Failed(reason) => reason,
     })
+}
+
+/// Hold a warning for the next turn, for a turn that can't carry one: a native
+/// slash command has to reach its harness unchanged.
+pub fn defer_notice(worktree: &Path, warning: &str) {
+    if let Some(marker) = marker(worktree) {
+        write(&marker, NOTICE, warning);
+    }
+}
+
+/// Only the end of the log: a verbose command can write far more than a warning needs.
+fn tail(path: &Path, limit: usize) -> String {
+    let mut text = Vec::new();
+    if let Ok(mut file) = File::open(path) {
+        let length = file.metadata().map_or(0, |metadata| metadata.len());
+        let _ = file.seek(SeekFrom::Start(length.saturating_sub(limit as u64)));
+        let _ = file.take(limit as u64).read_to_end(&mut text);
+    }
+    String::from_utf8_lossy(&text).into_owned()
 }
 
 #[derive(Debug)]
@@ -159,8 +184,7 @@ fn run(
             "Worktree setup was interrupted and may be incomplete. Its command was: {command}"
         )));
     }
-    let text = fs::read(output.path()).unwrap_or_default();
-    let text = String::from_utf8_lossy(&text[text.len().saturating_sub(OUTPUT_LIMIT)..]);
+    let text = tail(output.path(), OUTPUT_LIMIT);
     Err(failed(format!("failed: {}", text.trim())))
 }
 
@@ -217,6 +241,26 @@ mod tests {
         let warning = run_due(dir.path(), &tree, &stopped(false)).unwrap();
         assert!(warning.contains("cannot install"), "{warning}");
         assert!(!is_due(&tree));
+    }
+
+    #[test]
+    fn only_the_end_of_a_large_log_is_read() {
+        let log = tempfile::NamedTempFile::new().unwrap();
+        fs::write(log.path(), format!("{}the reason", "x".repeat(100_000))).unwrap();
+        assert_eq!(tail(log.path(), 10), "the reason");
+        assert_eq!(tail(Path::new("/no/such/log"), 10), "");
+    }
+
+    #[test]
+    fn a_deferred_warning_reaches_the_next_turn_once() {
+        let (dir, tree) = repository();
+        defer_notice(&tree, "Worktree setup failed: no network");
+        assert!(is_due(&tree));
+        assert_eq!(
+            run_due(dir.path(), &tree, &stopped(false)).as_deref(),
+            Some("Worktree setup failed: no network")
+        );
+        assert_eq!(run_due(dir.path(), &tree, &stopped(false)), None);
     }
 
     #[test]
