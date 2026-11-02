@@ -29,6 +29,7 @@ test("dictation notification lifecycles, rich formats and newer copies", { skip:
   const binary = join(directory, "DictationTests");
   await run("xcrun", ["swiftc", "-parse-as-library", source, fileURLToPath(new URL("../../crates/vorkspace-clipboard/native/DictationTarget.swift", import.meta.url)), fileURLToPath(new URL("../../crates/vorkspace-clipboard/native/Microphones.swift", import.meta.url)), tests, "-o", binary]);
   const { stdout } = await run(binary, []);
+  assert.match(stdout, /Measured aggregate route reversion and permission\/device\/format\/engine refusal regressions passed/);
   assert.match(stdout, /Capture setup, arming-race, active-interruption and fresh-baseline regressions passed/);
   assert.match(stdout, /Duplicate AX notification, stable identity, changed destination and sticky refusal regressions passed/);
   assert.match(stdout, /Rich clipboard restoration and newer-copy fencing passed/);

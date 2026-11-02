@@ -82,3 +82,14 @@ after quitting or reopening the main app. Changing models discards old dictation
 work. Old download messages cannot mark the new model ready or turn it on. TDT is
 available as an option; this does not claim Vorkspace has qualified its speed or
 transcription quality.
+
+The helper tells its audio engine which microphone to use, then checks that the
+same microphone stays selected. It discards a recording if the device changes,
+permission is lost, or the engine is interrupted.
+
+Development builds also have a short microphone check. It runs for 2.5 seconds,
+reports device and buffer counts, and immediately discards audio without saving
+or turning it into words. It does not paste, need Accessibility access, or take
+over dictation shortcuts. macOS Microphone permission is still required; the
+check reports when that permission is missing. Developers can explicitly ask
+macOS to show the permission prompt, which still requires your Allow.

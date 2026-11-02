@@ -30,12 +30,39 @@ struct CaptureLifecycle {
         return true
     }
 }
+// Snapshot policy shared by admission and every health read. A matching format
+// alone cannot certify a device: a default aggregate may keep the same format.
+struct CaptureRouteEvidence {
+    var expectedDevice: AudioDeviceID
+    var actualDevice: AudioDeviceID
+    var expectedUID: String
+    var actualUID: String?
+    var authorized: Bool
+    var alive: Bool
+    var deviceStatus: OSStatus
+    var formatMatches: Bool
+    var running: Bool
+    var failure: String? {
+        if !authorized { return "permission" }
+        if !alive { return "device-not-alive" }
+        if actualUID != expectedUID { return "device-uid" }
+        if deviceStatus != noErr { return "current-device-osstatus:\(deviceStatus)" }
+        if actualDevice != expectedDevice { return "current-device-mismatch" }
+        if !formatMatches { return "format-mismatch" }
+        if !running { return "engine-not-running" }
+        return nil
+    }
+}
 // Main-thread owner. Only the tap and notification callback touch locked state.
 // No idle capture, and no engine operations while holding the PCM lock.
 private final class DictationCapture {
     let engine = AVAudioEngine()
     let lock = NSLock()
     var samples = [Float]()
+    var retainSamples = true
+    #if DEBUG
+    var diagnostic = CaptureDiagnostics()
+    #endif
     var lifecycle = CaptureLifecycle()
     var full = false
     var device: AudioDeviceID = 0
@@ -52,26 +79,40 @@ private final class DictationCapture {
         // posting thread; no main-queue setup notification is carried into capture.
         observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
             guard let self else { return }
-            self.lock.lock(); self.lifecycle.configurationChanged(); self.lock.unlock()
+            self.lock.lock()
+            #if DEBUG
+            if self.diagnostic.notifications.count < 16 {
+                self.diagnostic.notifications.append(self.diagnostic.teardownStarted ? "controlled-teardown" : (self.lifecycle.active ? "active" : "arming-or-failed"))
+            }
+            #endif
+            self.lifecycle.configurationChanged(); self.lock.unlock()
         }
         let healthy = routeIsHealthy()
         lock.lock(); defer { lock.unlock() }
         return lifecycle.arm(healthy: healthy)
     }
-    func routeIsHealthy() -> Bool {
-        guard let format, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
-              audioScalar(device, kAudioDevicePropertyDeviceIsAlive) == 1,
-              audioString(device, kAudioDevicePropertyDeviceUID) == deviceUID else { return false }
+    func routeIsHealthy() -> Bool { routeFailure() == nil }
+    func routeFailure() -> String? {
+        guard let format else { return "missing-format" }
         let node = engine.inputNode
-        guard let unit = node.audioUnit else { return false }
+        guard let unit = node.audioUnit else { return "missing-audio-unit" }
         var actual: AudioDeviceID = 0
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        return AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global, 0, &actual, &size) == noErr && actual == device
-            && node.outputFormat(forBus: 0).isEqual(format) && engine.isRunning
+        let status = AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global, 0, &actual, &size)
+        return CaptureRouteEvidence(
+            expectedDevice: device, actualDevice: actual,
+            expectedUID: deviceUID, actualUID: audioString(device, kAudioDevicePropertyDeviceUID),
+            authorized: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+            alive: audioScalar(device, kAudioDevicePropertyDeviceIsAlive) == 1,
+            deviceStatus: status, formatMatches: node.outputFormat(forBus: 0).isEqual(format),
+            running: engine.isRunning).failure
     }
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     func stop() {
+        #if DEBUG
+        lock.lock(); diagnostic.teardownStarted = true; lock.unlock()
+        #endif
         engine.stop()
         if tapped { engine.inputNode.removeTap(onBus: 0); tapped = false }
         if let observer { NotificationCenter.default.removeObserver(observer); self.observer = nil }
@@ -108,11 +149,22 @@ func dictationStart(_ microphone: UnsafePointer<CChar>) -> Int32 {
     guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return 1 }
     guard AXIsProcessTrusted() else { return 2 }
     guard dictationPrepareInsertion() else { return 4 }
+    return startCapture(String(cString: microphone))
+}
+// Microphone ownership is independent of insertion admission. Only normal
+// dictation prepares a destination; the debug capture probe never pastes.
+private func startCapture(_ microphone: String, retainSamples: Bool = true) -> Int32 {
+    guard capture == nil else { return 3 }
+    guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return 1 }
     let state = DictationCapture()
+    state.retainSamples = retainSamples
+    #if DEBUG
+    if !retainSamples { diagnosticCapture = state }
+    #endif
     var started = false
     defer { if !started { targetOwner = nil; state.stop() } }
     let devices = inputDevices()
-    guard let device = resolveMicrophone(String(cString: microphone), devices: devices, system: defaultInputDevice()),
+    guard let device = resolveMicrophone(microphone, devices: devices, system: defaultInputDevice()),
           let identity = devices.first(where: { $0.id == device }) else { return 8 }
     state.device = device
     state.deviceUID = identity.uid
@@ -120,9 +172,20 @@ func dictationStart(_ microphone: UnsafePointer<CChar>) -> Int32 {
     // Select this engine's input unit, never the system-wide default. Re-read
     // format only after selection; Bluetooth/USB inputs can differ in rate/channels.
     guard let unit = node.audioUnit else { return 3 }
-    var selected = device
-    guard AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
-        kAudioUnitScope_Global, 0, &selected, UInt32(MemoryLayout<AudioDeviceID>.size)) == noErr else { return 8 }
+    // Select through the engine's AU owner. Mutating the legacy AudioUnit
+    // underneath it leaves default-device tracking enabled, which can replace
+    // this route asynchronously with CADefaultDeviceAggregate at engine start.
+    do {
+        try node.auAudioUnit.setDeviceID(device)
+        #if DEBUG
+        state.diagnostic.selectionStatus = noErr
+        #endif
+    } catch {
+        #if DEBUG
+        state.diagnostic.selectionStatus = OSStatus((error as NSError).code)
+        #endif
+        return 8
+    }
     var actual: AudioDeviceID = 0
     var size = UInt32(MemoryLayout<AudioDeviceID>.size)
     guard AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
@@ -132,25 +195,40 @@ func dictationStart(_ microphone: UnsafePointer<CChar>) -> Int32 {
           let output = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false),
           let converter = AVAudioConverter(from: format, to: output) else { return 3 }
     state.format = format
-    state.samples.reserveCapacity(16000 * 120)
+    if retainSamples { state.samples.reserveCapacity(16000 * 120) }
     node.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * 16000 / format.sampleRate + 32)
         guard let result = AVAudioPCMBuffer(pcmFormat: output, frameCapacity: capacity) else { return }
         var supplied = false
         var error: NSError?
-        converter.convert(to: result, error: &error) { _, status in
+        let conversionStatus = converter.convert(to: result, error: &error) { _, status in
             if supplied { status.pointee = .noDataNow; return nil }
             supplied = true; status.pointee = .haveData; return buffer
         }
         state.lock.lock(); defer { state.lock.unlock() }
+        _ = conversionStatus
+        #if DEBUG
+        state.diagnostic.callbacks += 1
+        state.diagnostic.inputFrames += Int(buffer.frameLength)
+        state.diagnostic.outputFrames += Int(result.frameLength)
+        state.diagnostic.conversionStatus = conversionStatus.rawValue
+        if let error { state.diagnostic.conversionError = "\(error.domain):\(error.code)" }
+        #endif
         if error != nil { state.lifecycle.fail(); return }
+        guard state.retainSamples else { return }
         guard let pcm = result.floatChannelData?[0] else { return }
         let count = min(Int(result.frameLength), 16000 * 120 - state.samples.count)
         if count > 0 { state.samples.append(contentsOf: UnsafeBufferPointer(start: pcm, count: count)) }
         state.full = state.samples.count == 16000 * 120
     }
     state.tapped = true
-    do { try state.engine.start() } catch { state.stop(); return 3 }
+    do { try state.engine.start() } catch {
+        #if DEBUG
+        let error = error as NSError
+        state.diagnostic.startError = "\(error.domain):\(error.code)"
+        #endif
+        state.stop(); return 3
+    }
     guard state.arm() else { return 3 }
     capture = state; started = true
     return 0
@@ -158,9 +236,15 @@ func dictationStart(_ microphone: UnsafePointer<CChar>) -> Int32 {
 @_cdecl("vorkspace_dictation_health")
 func dictationHealth() -> Int32 {
     guard let state = capture else { return 0 }
-    let healthy = state.routeIsHealthy()
+    let failure = state.routeFailure()
     state.lock.lock(); defer { state.lock.unlock() }
-    if !state.lifecycle.active || !healthy { return 1 }
+    if !state.lifecycle.active || failure != nil {
+        #if DEBUG
+        state.diagnostic.healthFailure = failure ?? (state.diagnostic.conversionError == nil
+            ? "configuration-notification" : "conversion-error")
+        #endif
+        return 1
+    }
     return state.full ? 2 : 0
 }
 @_cdecl("vorkspace_dictation_stop")
@@ -249,3 +333,118 @@ func dictationModifiersDown() -> Bool {
 
 @_cdecl("vorkspace_dictation_shutdown")
 func dictationShutdown() { dictationCancel(); restoration.flush() }
+
+#if DEBUG
+// Explicit opt-in metadata only. No PCM values, levels, transcript, clipboard,
+// destination or model access. Shares the production owner/converter/health/stop.
+private struct CaptureDiagnostics {
+    var selectionStatus: OSStatus?
+    var callbacks = 0
+    var inputFrames = 0
+    var outputFrames = 0
+    var notifications = [String]()
+    var conversionStatus: Int = 0
+    var conversionError: String?
+    var startError: String?
+    var healthFailure: String?
+    var teardownStarted = false
+}
+private var diagnosticCapture: DictationCapture?
+private func captureMetadata(_ state: DictationCapture) -> [String: Any] {
+    let node = state.engine.inputNode
+    var actual: AudioDeviceID = 0
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    let status = node.audioUnit.map { AudioUnitGetProperty($0, kAudioOutputUnitProperty_CurrentDevice,
+        kAudioUnitScope_Global, 0, &actual, &size) }
+    func format(_ f: AVAudioFormat) -> [String: Any] {
+        ["rate": f.sampleRate, "channels": f.channelCount,
+         "commonFormat": f.commonFormat.rawValue, "interleaved": f.isInterleaved,
+         "description": f.description]
+    }
+    let routeFailure = state.routeFailure()
+    let currentFormat = format(node.outputFormat(forBus: 0))
+    let hardwareFormat = format(node.inputFormat(forBus: 0))
+    let running = state.engine.isRunning
+    let attached = node.engine === state.engine
+    state.lock.lock()
+    let d = state.diagnostic
+    let lifecycle = state.lifecycle
+    let retainedSamples = state.samples.count
+    state.lock.unlock()
+    return ["permission": AVCaptureDevice.authorizationStatus(for: .audio).rawValue,
+            "configuredDevice": state.device, "configuredUID": state.deviceUID,
+            "currentDevice": actual, "currentUID": audioString(actual, kAudioDevicePropertyDeviceUID) ?? "unavailable",
+            "getDeviceOSStatus": status as Any? ?? NSNull(),
+            "setDeviceOSStatus": d.selectionStatus as Any? ?? NSNull(),
+            "deviceAlive": audioScalar(state.device, kAudioDevicePropertyDeviceIsAlive) as Any? ?? NSNull(),
+            "configuredFormat": state.format.map(format) as Any? ?? NSNull(),
+            "currentFormat": currentFormat, "hardwareFormat": hardwareFormat,
+            "engineRunning": running, "engineAttached": attached,
+            "controlledTeardown": d.teardownStarted,
+            "routeFailure": routeFailure as Any? ?? NSNull(),
+            "healthFailure": d.healthFailure as Any? ?? NSNull(),
+            "lifecycleFailed": lifecycle.failed, "lifecycleActive": lifecycle.active,
+            "notifications": d.notifications, "callbacks": d.callbacks,
+            "inputFrames": d.inputFrames, "convertedFrames": d.outputFrames,
+            "conversionStatus": d.conversionStatus,
+            "conversionError": d.conversionError as Any? ?? NSNull(),
+            "startError": d.startError as Any? ?? NSNull(), "retainedSamples": retainedSamples]
+}
+
+@_cdecl("vorkspace_dictation_capture_probe")
+func dictationCaptureProbe(_ microphone: UnsafePointer<CChar>, _ requestPermission: Bool, _ interrupt: Bool,
+                           _ report: @convention(c) (UnsafePointer<CChar>) -> Void) -> Int32 {
+    precondition(Thread.isMainThread)
+    _ = NSApplication.shared // Identified bundle owns TCC; never registers shortcuts.
+    var result: [String: Any] = ["bundleID": Bundle.main.bundleIdentifier ?? "unbundled",
+        "bundlePath": Bundle.main.bundlePath, "durationLimitSeconds": 2.5,
+        "microphone": String(cString: microphone), "audioRetained": false,
+        "injectedInterruption": interrupt]
+    if requestPermission && AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+        // Only this explicit flag can display the OS consent prompt. No engine is
+        // opened while waiting, and no Accessibility permission is requested.
+        var answered = false
+        AVCaptureDevice.requestAccess(for: .audio) { _ in DispatchQueue.main.async { answered = true } }
+        let deadline = Date().addingTimeInterval(30)
+        while !answered && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+    }
+    result["permission"] = AVCaptureDevice.authorizationStatus(for: .audio).rawValue
+    var code: Int32 = 1
+    if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
+        result["outcome"] = "blocked-microphone-permission"
+    } else {
+        code = startCapture(String(cString: microphone), retainSamples: false)
+        result["startCode"] = code
+        if let state = diagnosticCapture { result["afterStart"] = captureMetadata(state) }
+        var polls = [[String: Any]]()
+        if code == 0 {
+            let deadline = Date().addingTimeInterval(2.5)
+            while Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                if interrupt && polls.count == 3, let state = diagnosticCapture {
+                    NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: state.engine)
+                }
+                let health = dictationHealth()
+                if let state = diagnosticCapture {
+                    polls.append(["health": health, "metadata": captureMetadata(state)])
+                }
+                if health != 0 { break }
+            }
+            code = dictationStop { _, _ in } // Probe retains no PCM; no insertion.
+            result["stopCode"] = code
+            if let state = diagnosticCapture {
+                result["afterStop"] = captureMetadata(state)
+                if code == 0 && state.diagnostic.outputFrames == 0 { code = 12 }
+            }
+        }
+        result["polls"] = polls
+        result["outcomeCode"] = code
+        result["outcome"] = code == 0 ? "healthy-capture-and-stop" : "capture-failed"
+    }
+    dictationCancel()
+    diagnosticCapture = nil
+    if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]),
+       let json = String(data: data, encoding: .utf8) { json.withCString { report($0) } }
+    return code
+}
+#endif

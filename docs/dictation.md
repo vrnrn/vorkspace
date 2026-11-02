@@ -56,8 +56,11 @@ connect it or select another input, rather than silently switching microphones.
 
 Changes apply to the **next recording**. The helper retains that preference after
 main-app Quit and receives it again on reconnect. Each recording resolves its
-choice once, sets the engine input audio unit's CurrentDevice, verifies the route,
-and then reads its format before installing a tap. Expected setup completes before
+choice once, selects it through `inputNode.auAudioUnit.setDeviceID`, verifies the
+underlying input audio unit's CurrentDevice, and then reads its format before installing a tap. Selection must go through the
+engine's AUAudioUnit owner: setting only the legacy AudioUnit property can leave
+default-device tracking active and let a default aggregate replace the selected
+microphone asynchronously during startup. Expected setup completes before
 configuration-change observation is armed. After engine start, the helper registers
 that observer and validates a fresh route, UID, format, permission and running-engine
 baseline before admitting the recording. A notification during that validation or
@@ -171,3 +174,16 @@ Debug builds expose `vorkspace-clipboard --download-model-fixture /absolute/mode
 and `--transcribe-fixture /absolute/model.gguf /absolute/mono-16khz-pcm16.wav` for
 explicit, isolated Unified fixture checks (these debug-only commands use Unified). These do not start capture, register shortcuts,
 or access the user's app database. Fixture transcription prints its result.
+
+`vorkspace-clipboard --capture-health-fixture builtin` runs a debug-only,
+2.5-second microphone health probe inside the helper's headless GPUI lifecycle.
+It uses production device selection, conversion, health and stop, discards each
+converted buffer immediately, and prints only non-content JSON metadata. It never
+registers shortcuts, starts the supervisor, accesses a text target or clipboard,
+loads a model, or transcribes. It needs Microphone permission for the signed helper
+bundle; Accessibility is unnecessary. Without permission it reports a preflight
+block. The explicit `--request-microphone` flag can show the macOS consent prompt;
+only the user's Allow grants access. `--interrupt-fixture` injects an engine
+configuration notification during the bounded probe to verify failure routing;
+it must report a failed capture and interrupted stop. Use an isolated signed
+bundle and output directory; do not replace a running helper to diagnose capture.

@@ -298,6 +298,50 @@ fn main() {
 #[cfg(debug_assertions)]
 fn fixture() -> bool {
     let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1).map(String::as_str) == Some("--capture-health-fixture") {
+        unsafe extern "C" {
+            fn vorkspace_dictation_capture_probe(
+                microphone: *const std::ffi::c_char,
+                request_permission: bool,
+                interrupt: bool,
+                report: extern "C" fn(*const std::ffi::c_char),
+            ) -> i32;
+        }
+        extern "C" fn report(json: *const std::ffi::c_char) {
+            println!(
+                "{}",
+                unsafe { std::ffi::CStr::from_ptr(json) }.to_string_lossy()
+            );
+        }
+        let microphone =
+            std::ffi::CString::new(args.get(2).map(String::as_str).unwrap_or("builtin"))
+                .expect("microphone choice must contain no NUL");
+        let request = args.iter().any(|arg| arg == "--request-microphone");
+        let interrupt = args.iter().any(|arg| arg == "--interrupt-fixture");
+        gpui::Application::with_platform(std::rc::Rc::new(gpui_macos::MacPlatform::new(false)))
+            .with_windowing(gpui::WindowingRequest::Headless)
+            .run(move |cx| {
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(100))
+                        .await;
+                    cx.update(|_| {
+                        let code = unsafe {
+                            vorkspace_dictation_capture_probe(
+                                microphone.as_ptr(),
+                                request,
+                                interrupt,
+                                report,
+                            )
+                        };
+                        std::process::exit(code);
+                    });
+                })
+                .detach();
+            });
+        return true;
+    }
+
     if args.get(1).map(String::as_str) == Some("--download-model-fixture") {
         let path = PathBuf::from(args.get(2).expect("model output path"));
         dictation_model::download(

@@ -17,9 +17,13 @@ fn main() {
         Ok("x86_64") => "x86_64",
         _ => panic!("Unsupported macOS architecture"),
     };
-    let status = Command::new("xcrun")
+    let mut compiler = Command::new("xcrun");
+    compiler.arg("swiftc");
+    if env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some() {
+        compiler.args(["-D", "DEBUG"]);
+    }
+    let status = compiler
         .args([
-            "swiftc",
             "-parse-as-library",
             "-emit-library",
             "-static",

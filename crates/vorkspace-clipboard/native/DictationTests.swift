@@ -1,4 +1,37 @@
 import AppKit
+import AudioToolbox
+// Exact measured route regression: selecting built-in 79 succeeded, then the
+// legacy setter's default aggregate returned as 117 with a matching tap format.
+// Preserve refusal for that route even when every other check passes.
+func verifyCaptureRouteEvidence() {
+    var route = CaptureRouteEvidence(expectedDevice: 79, actualDevice: 79,
+        expectedUID: "BuiltInMicrophoneDevice", actualUID: "BuiltInMicrophoneDevice",
+        authorized: true, alive: true, deviceStatus: noErr, formatMatches: true, running: true)
+    assert(route.failure == nil)
+    route.actualDevice = 117
+    assert(route.failure == "current-device-mismatch")
+    var admission = CaptureLifecycle()
+    assert(admission.beginArming())
+    assert(!admission.arm(healthy: route.failure == nil))
+    route.actualDevice = 79
+    assert(!admission.arm(healthy: route.failure == nil))
+    route.actualUID = "replacement"
+    assert(route.failure == "device-uid")
+    route.actualUID = "BuiltInMicrophoneDevice"
+    route.deviceStatus = -50
+    assert(route.failure == "current-device-osstatus:-50")
+    route.deviceStatus = noErr; route.formatMatches = false
+    assert(route.failure == "format-mismatch")
+    route.formatMatches = true; route.authorized = false
+    assert(route.failure == "permission")
+    route.authorized = true; route.alive = false
+    assert(route.failure == "device-not-alive")
+    route.alive = true; route.running = false
+    assert(route.failure == "engine-not-running")
+    dictationCancel()
+    assert(dictationStop { pcm, count in assert(pcm == nil && count == 0) } == 11)
+    print("Measured aggregate route reversion and permission/device/format/engine refusal regressions passed")
+}
 // Event traces exercise the production policies without an engine, microphone,
 // Accessibility grant, scheduling delay or ambient desktop destination.
 func verifyCaptureNotificationLifecycle() {
@@ -65,6 +98,7 @@ func verifyFocusNotificationLifecycle() {
 }
 @main struct Tests {
  static func main() {
+ verifyCaptureRouteEvidence()
  verifyCaptureNotificationLifecycle()
  verifyFocusNotificationLifecycle()
  // The old guard rejected these keyboard responders solely for missing AX text semantics.
