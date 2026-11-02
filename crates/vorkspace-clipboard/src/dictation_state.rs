@@ -2,6 +2,7 @@
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Phase {
     Idle,
+    Starting,
     Recording,
     Transcribing,
     Cancelling,
@@ -27,8 +28,15 @@ impl Attempt {
             return None;
         }
         self.epoch += 1;
-        self.phase = Phase::Recording;
+        self.phase = Phase::Starting;
         Some(self.epoch)
+    }
+    pub fn recording(&mut self, epoch: u64) -> bool {
+        if !self.enabled || self.epoch != epoch || self.phase != Phase::Starting {
+            return false;
+        }
+        self.phase = Phase::Recording;
+        true
     }
     pub fn stop(&mut self) -> Option<u64> {
         if self.phase != Phase::Recording {
@@ -68,11 +76,13 @@ mod tests {
             ..Default::default()
         };
         let old = s.begin().unwrap();
+        assert!(s.recording(old));
         s.stop();
         s.cancel();
         assert!(s.begin().is_none());
         assert!(!s.complete(old));
         let new = s.begin().unwrap();
+        assert!(s.recording(new));
         s.stop();
         assert!(!s.complete(old));
         assert!(s.complete(new));
@@ -85,6 +95,7 @@ mod tests {
             ..Default::default()
         };
         let e = s.begin().unwrap();
+        assert!(s.recording(e));
         s.stop();
         s.enabled = false;
         s.cancel();
@@ -93,14 +104,59 @@ mod tests {
         assert!(s.begin().is_some());
     }
     #[test]
+    fn startup_cannot_admit_inference_or_accept_superseded_readiness() {
+        let mut s = Attempt {
+            enabled: true,
+            ..Default::default()
+        };
+        let old = s.begin().unwrap();
+        assert_eq!(s.phase, Phase::Starting);
+        assert!(s.stop().is_none());
+        s.cancel();
+        let current = s.begin().unwrap();
+        assert!(!s.recording(old));
+        assert!(s.recording(current));
+        assert!(!s.recording(current));
+        assert_eq!(s.stop(), Some(current));
+    }
+    #[test]
+    fn native_health_values_match_the_shared_abi() {
+        assert_eq!(CaptureHealth::from(0), CaptureHealth::Active);
+        assert_eq!(CaptureHealth::from(1), CaptureHealth::Failed);
+        assert_eq!(CaptureHealth::from(2), CaptureHealth::Full);
+        assert_eq!(CaptureHealth::from(3), CaptureHealth::Starting);
+        assert_eq!(CaptureHealth::from(4), CaptureHealth::Failed);
+    }
+    #[test]
     fn duplicate_stop_is_not_another_job() {
         let mut s = Attempt {
             enabled: true,
             ..Default::default()
         };
-        s.begin();
+        let e = s.begin().unwrap();
+        assert!(s.recording(e));
         assert!(s.stop().is_some());
         assert!(s.stop().is_none());
+    }
+}
+
+/// C ABI with native Dictation.swift CaptureHealth. Unknown values fail closed.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureHealth {
+    Active = 0,
+    Failed = 1,
+    Full = 2,
+    Starting = 3,
+}
+impl From<i32> for CaptureHealth {
+    fn from(value: i32) -> Self {
+        match value {
+            0 => Self::Active,
+            2 => Self::Full,
+            3 => Self::Starting,
+            _ => Self::Failed,
+        }
     }
 }
 

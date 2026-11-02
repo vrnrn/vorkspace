@@ -30,9 +30,11 @@ recording; setup notices are not treated as an interrupted recording. No microph
 records while dictation is idle. Microphone and Accessibility permission still
 belong to the background helper.
 
-Click the field you want to write into. Press **⌘,**, speak, then press **⌘,**
-again. A red microphone at the notch means recording. Amber with dots means the
-Mac is turning speech into text. Leave the original field selected until the
+Click the field you want to write into. Press **⌘,** and wait for the microphone
+to turn red before speaking, then press **⌘,** again to finish. Amber with dots
+first means the microphone is getting ready. Pressing **⌘,** during that wait
+cancels without turning audio into words. A red microphone means recording. Amber
+with dots afterward means the Mac is turning speech into text. Leave the original field selected until the
 words arrive. Switching fields discards the words, including switching away and
 back. Repeated macOS focus notices do not discard words when the same field is
 still selected; a changed destination or a failed check requires a new recording. Pressing the

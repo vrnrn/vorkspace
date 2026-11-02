@@ -1,5 +1,28 @@
 import AppKit
 import AudioToolbox
+func verifyCaptureHealthContract() {
+    assert(CaptureHealth.active.rawValue == 0 && CaptureHealth.failed.rawValue == 1)
+    assert(CaptureHealth.full.rawValue == 2 && CaptureHealth.starting.rawValue == 3)
+    var lifecycle = CaptureLifecycle()
+    assert(lifecycle.health(full: false) == .failed) // No capture is not active.
+    assert(lifecycle.beginStarting())
+    assert(lifecycle.health(full: true) == .starting)
+    lifecycle.receivedInput()
+    assert(lifecycle.health(full: false) == .starting) // Still needs route commit.
+    assert(lifecycle.beginArming())
+    assert(lifecycle.arm(healthy: true))
+    assert(lifecycle.health(full: false) == .active)
+    assert(lifecycle.health(full: true) == .full)
+    lifecycle.configurationChanged()
+    assert(lifecycle.health(full: false) == .failed)
+    var timeout = CaptureLifecycle()
+    assert(timeout.beginStarting())
+    assert(timeout.checkInputDeadline(now: 2, deadline: 2))
+    assert(timeout.health(full: false) == .failed)
+    dictationCancel()
+    assert(dictationHealth() == CaptureHealth.failed.rawValue)
+    print("Capture health ABI pending, active, full, timeout and absent-owner regression passed")
+}
 // Exact measured route regression: selecting built-in 79 succeeded, then the
 // legacy setter's default aggregate returned as 117 with a matching tap format.
 // Preserve refusal for that route even when every other check passes.
@@ -113,6 +136,7 @@ func verifyFocusNotificationLifecycle() {
 }
 @main struct Tests {
  static func main() {
+ verifyCaptureHealthContract()
  verifyCaptureRouteEvidence()
  verifyCaptureNotificationLifecycle()
  verifyFocusNotificationLifecycle()

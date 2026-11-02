@@ -2,16 +2,39 @@
 use gpui::{prelude::*, *};
 use vorkspace_macos::notch::{self, Geometry, Placement};
 use vorkspace_ui::{clock::Instant, pane_motion::PaneSlide};
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    Starting,
+    Recording,
+    Transcribing,
+    Error,
+}
+impl State {
+    pub fn recording(self) -> bool {
+        self == Self::Recording
+    }
+    pub fn error(self) -> bool {
+        self == Self::Error
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Starting => "Microphone starting — wait for red before speaking",
+            Self::Recording => "Microphone active — recording",
+            Self::Transcribing => "Microphone — transcribing",
+            Self::Error => "Microphone — needs attention",
+        }
+    }
+}
 pub struct Panel {
     pub status: String,
-    pub recording: bool,
+    pub state: State,
     pub placement: Placement,
     geometry: Geometry,
     _screens: Option<notch::ScreenChanges>,
     _screen_task: Option<Task<()>>,
     motion: PaneSlide,
 }
-pub fn open(status: &str, recording: bool, cx: &mut App) -> gpui::Result<WindowHandle<Panel>> {
+pub fn open(status: &str, state: State, cx: &mut App) -> gpui::Result<WindowHandle<Panel>> {
     let geometry = Geometry::read();
     let status = status.to_string();
     cx.open_window(notch::window_options(geometry), move |_, cx| {
@@ -26,7 +49,7 @@ pub fn open(status: &str, recording: bool, cx: &mut App) -> gpui::Result<WindowH
             placement.open();
             Panel {
                 status,
-                recording,
+                state,
                 placement,
                 geometry,
                 _screens: Some(watch),
@@ -53,7 +76,7 @@ impl Render for Panel {
         if !done {
             w.request_animation_frame();
         }
-        let error = !self.recording && self.status != "Transcribing…";
+        let error = self.state.error();
         let width = if error {
             animated_width.max(440.).min(geometry.screen_width)
         } else {
@@ -87,19 +110,15 @@ impl Render for Panel {
                         div()
                             .id("dictation-microphone")
                             .role(Role::Image)
-                            .aria_label(if self.recording {
-                                "Microphone active — recording"
-                            } else {
-                                "Microphone — transcribing or needs attention"
-                            })
+                            .aria_label(self.state.label())
                             .w(px(wing))
                             .h_full()
                             .overflow_hidden()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(microphone(self.recording))
-                            .when(!self.recording && !error, |d| {
+                            .child(microphone(self.state.recording()))
+                            .when(!self.state.recording() && !error, |d| {
                                 d.child(div().text_size(px(11.)).child("…"))
                             }),
                     ),
@@ -167,7 +186,7 @@ mod tests {
             .open_window(size(px(480.), px(180.)), |_, cx| {
                 cx.new(|_| Panel {
                     status: "Recording".into(),
-                    recording: true,
+                    state: State::Recording,
                     placement: Placement::default(),
                     geometry: Geometry::default(),
                     motion: PaneSlide::new(293., 293., 0.),
@@ -176,19 +195,20 @@ mod tests {
                 })
             })
             .unwrap();
-        for (name, status, recording) in [
-            ("recording", "Recording", true),
-            ("transcribing", "Transcribing…", false),
+        for (name, status, state) in [
+            ("starting", "Starting microphone…", State::Starting),
+            ("recording", "Recording", State::Recording),
+            ("transcribing", "Transcribing…", State::Transcribing),
             (
                 "error",
                 "Microphone access is required. Use Set up permissions in Settings → Clipboard, then allow vorkspace Clipboard in Privacy & Security.",
-                false,
+                State::Error,
             ),
         ] {
             window
                 .update(&mut cx, |p, _, cx| {
                     p.status = status.into();
-                    p.recording = recording;
+                    p.state = state;
                     cx.notify();
                 })
                 .unwrap();

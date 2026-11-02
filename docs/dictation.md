@@ -20,10 +20,12 @@ Microphone and Accessibility for **vorkspace Clipboard**, the nested helper at
 be changed in System Settings → Privacy & Security. Development bundles have
 their own executable location; authorize that helper when testing it.
 
-Press **⌘,** once to record and again to finish. The nonactivating notch has an
-empty left wing and a red microphone on the right while recording. An amber
-microphone and ellipsis indicate local transcription. Keep the intended text
-field selected until insertion. Switching fields discards the result. Another
+Press **⌘,** once to start. The compact amber microphone and ellipsis mean the
+microphone is starting; wait for the red microphone before speaking. Red and
+**Recording** appear only after the native owner accepts audio. Press **⌘,** again
+to finish, or during startup to cancel without transcription. The nonactivating
+notch keeps its empty left wing. Amber and ellipsis also indicate local
+transcription. Keep the intended text field selected until insertion. Switching fields discards the result. Another
 toggle during transcription cancels it. Settings also has Cancel. Recording stops
 automatically after two minutes. No microphone is open while idle; audio is held
 only in bounded memory and never written or logged. Long clips are inferred in
@@ -62,8 +64,10 @@ engine's AUAudioUnit owner: setting only the legacy AudioUnit property can leave
 default-device tracking active and let a default aggregate replace the selected
 microphone asynchronously during startup. Observation begins before engine start,
 but the owner remains in a bounded startup phase until converted input arrives.
-Startup buffers are discarded; a fresh route, UID, format, permission and running
-engine snapshot must then commit arming before audio can be accepted. This uses
+Startup health is distinct from active acceptance, so the helper publishes a
+compact pending indicator until readiness. Startup buffers are discarded; a fresh
+route, UID, format, permission and running-engine snapshot must then commit arming
+before audio can be accepted. This uses
 input readiness rather than a fixed sleep or a reset of a failed recording. No
 input within two seconds of engine start returning fails the attempt. A setup
 notification before this boundary cannot invalidate an accepted recording, because

@@ -5,6 +5,10 @@ import AudioToolbox
 import CoreAudio
 import Carbon
 
+// C ABI shared with Rust dictation_state::CaptureHealth. Startup is successful
+// admission, but is not permission to publish the active recording indicator.
+enum CaptureHealth: Int32 { case active = 0, failed = 1, full = 2, starting = 3 }
+
 // No PCM is accepted until actual converted input establishes readiness and a
 // fresh route snapshot commits arming. AVAudioEngine can deliver its own setup
 // notification after start() returns but before the first buffer. Starting is
@@ -17,6 +21,11 @@ struct CaptureLifecycle {
     var active: Bool { phase == .active && !failed }
     var starting: Bool { phase == .starting && !failed }
     var readyToArm: Bool { starting && inputReady }
+    func health(full: Bool) -> CaptureHealth {
+        if failed { return .failed }
+        if starting { return .starting }
+        return active ? (full ? .full : .active) : .failed
+    }
     mutating func configurationChanged() {
         if phase == .arming || phase == .active { failed = true }
     }
@@ -267,7 +276,7 @@ private func startCapture(_ microphone: String, retainSamples: Bool = true) -> I
 }
 @_cdecl("vorkspace_dictation_health")
 func dictationHealth() -> Int32 {
-    guard let state = capture else { return 0 }
+    guard let state = capture else { return CaptureHealth.failed.rawValue }
     state.lock.lock()
     let timedOut = state.lifecycle.checkInputDeadline(now: ProcessInfo.processInfo.systemUptime, deadline: state.inputDeadline)
     let ready = state.lifecycle.readyToArm
@@ -286,9 +295,9 @@ func dictationHealth() -> Int32 {
         state.diagnostic.healthFailure = state.diagnostic.healthFailure ?? failure ?? (state.diagnostic.conversionError == nil
             ? "configuration-notification" : "conversion-error")
         #endif
-        return 1
+        return CaptureHealth.failed.rawValue
     }
-    return state.full ? 2 : 0
+    return state.lifecycle.health(full: state.full).rawValue
 }
 @_cdecl("vorkspace_dictation_stop")
 func dictationStop(_ callback: @convention(c) (UnsafePointer<Float>?, Int) -> Void) -> Int32 {
@@ -301,7 +310,7 @@ func dictationStop(_ callback: @convention(c) (UnsafePointer<Float>?, Int) -> Vo
     state.samples.removeAll()
     state.lock.unlock()
     // Validate after tap teardown as well: stop can overlap a device notification.
-    guard health != 1, !failed,
+    guard health != CaptureHealth.failed.rawValue, !failed,
           audioScalar(state.device, kAudioDevicePropertyDeviceIsAlive) == 1,
           audioString(state.device, kAudioDevicePropertyDeviceUID) == state.deviceUID else {
         targetOwner = nil; callback(nil, 0); return 11

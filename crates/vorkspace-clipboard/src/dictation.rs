@@ -10,7 +10,7 @@ use transcribe_cpp::CancelToken;
 use vorkspace_clipboard::{ModelId, ModelState, dictation_model as model, dictation_path};
 use vorkspace_clipboard::{
     Notice,
-    dictation_state::{Attempt, DownloadSlot, Phase},
+    dictation_state::{Attempt, CaptureHealth, DownloadSlot, Phase},
 };
 use vorkspace_macos::{global_hotkey::Registration, voice_lease::Lease};
 unsafe extern "C" {
@@ -435,11 +435,11 @@ impl Service {
             );
         }
     }
-    fn display(&mut self, status: &str, recording: bool, cx: &mut Context<Self>) -> bool {
+    fn display(&mut self, status: &str, state: panel::State, cx: &mut Context<Self>) -> bool {
         if let Some(p) = self.panel {
             if p.update(cx, |p, _, cx| {
                 p.status = status.into();
-                p.recording = recording;
+                p.state = state;
                 cx.notify();
             })
             .is_ok()
@@ -448,7 +448,7 @@ impl Service {
             }
             self.panel = None;
         }
-        self.panel = panel::open(status, recording, cx).ok();
+        self.panel = panel::open(status, state, cx).ok();
         self.panel.is_some()
     }
     fn hide(&mut self, cx: &mut Context<Self>) {
@@ -463,7 +463,7 @@ impl Service {
     fn error(&mut self, message: String, cx: &mut Context<Self>) {
         self.status = message;
         self.publish(cx);
-        self.display(&self.status.clone(), false, cx);
+        self.display(&self.status.clone(), panel::State::Error, cx);
         let epoch = self.attempt.epoch;
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(6)).await;
@@ -493,6 +493,7 @@ impl Service {
             return;
         }
         match self.attempt.phase {
+            Phase::Starting => self.cancel(cx),
             Phase::Recording => self.stop(cx),
             Phase::Transcribing => self.cancel(cx),
             Phase::Cancelling => {}
@@ -543,44 +544,125 @@ impl Service {
                     self.error(native_error(result).into(), cx);
                     return;
                 }
-                self.status = "Recording · ⌘, to finish".into();
-                self.publish(cx);
-                if !self.display("Recording", true, cx) {
-                    self.cancel(cx);
-                    self.status =
-                        "Could not show the recording indicator. Dictation cancelled; try again."
-                            .into();
-                    self.publish(cx);
+                if !self.display_capture(cx) {
                     return;
                 }
                 self.cancel = CancelToken::new();
                 cx.spawn(async move |this, cx| {
                     let started = Instant::now();
                     loop {
-                        cx.background_executor().timer(Duration::from_millis(100)).await;
-                        let keep = this.update(cx, |s, cx| {
-                            if s.attempt.epoch != epoch || s.attempt.phase != Phase::Recording { return false; }
-                            let health = unsafe { vorkspace_dictation_health() };
-                            if health == 1 {
-                                let lease=s.lease.take();
-                                s.cancel(cx);
-                                s.lease=lease;
-                                s.error("Microphone interrupted. Check your input device and permissions, then try again.".into(), cx);
-                                return false;
-                            }
-                            if health == 2 || started.elapsed() >= Duration::from_secs(120) { s.stop(cx); return false; }
-                            true
-                        }).unwrap_or(false);
-                        if !keep { break; }
+                        cx.background_executor()
+                            .timer(Duration::from_millis(100))
+                            .await;
+                        let keep = this
+                            .update(cx, |s, cx| {
+                                // Health can commit native arming: fence before that effect too.
+                                if s.attempt.epoch != epoch
+                                    || !matches!(
+                                        s.attempt.phase,
+                                        Phase::Starting | Phase::Recording
+                                    )
+                                {
+                                    return false;
+                                }
+                                let health =
+                                    CaptureHealth::from(unsafe { vorkspace_dictation_health() });
+                                if !s.capture_health(epoch, health, cx) {
+                                    return false;
+                                }
+                                if started.elapsed() >= Duration::from_secs(120) {
+                                    s.stop(cx);
+                                    return false;
+                                }
+                                true
+                            })
+                            .unwrap_or(false);
+                        if !keep {
+                            break;
+                        }
                     }
-                }).detach();
+                })
+                .detach();
+            }
+        }
+    }
+    // Publication is derived from the existing attempt phase, in the same main
+    // loop update that observes native readiness. Red never precedes acceptance.
+    fn display_capture(&mut self, cx: &mut Context<Self>) -> bool {
+        let (status, label, state) = match self.attempt.phase {
+            Phase::Starting => (
+                "Starting microphone… · ⌘, to cancel",
+                "Starting microphone…",
+                panel::State::Starting,
+            ),
+            Phase::Recording => (
+                "Recording · ⌘, to finish",
+                "Recording",
+                panel::State::Recording,
+            ),
+            _ => return false,
+        };
+        self.status = status.into();
+        self.publish(cx);
+        if self.display(label, state, cx) {
+            return true;
+        }
+        self.cancel(cx);
+        self.status =
+            "Could not show the recording indicator. Dictation cancelled; try again.".into();
+        self.publish(cx);
+        false
+    }
+    // Shared production control boundary for the poll and deterministic tests.
+    // A cancelled/superseded attempt cannot publish readiness or admit inference.
+    fn capture_health(
+        &mut self,
+        epoch: u64,
+        health: CaptureHealth,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.attempt.epoch != epoch
+            || !matches!(self.attempt.phase, Phase::Starting | Phase::Recording)
+        {
+            return false;
+        }
+        match health {
+            CaptureHealth::Starting if self.attempt.phase == Phase::Starting => true,
+            CaptureHealth::Active | CaptureHealth::Full => {
+                if self.attempt.phase == Phase::Starting
+                    && (!self.attempt.recording(epoch) || !self.display_capture(cx))
+                {
+                    return false;
+                }
+                if health == CaptureHealth::Full {
+                    self.stop(cx);
+                    return false;
+                }
+                true
+            }
+            _ => {
+                let lease = self.lease.take();
+                self.cancel(cx);
+                self.lease = lease;
+                self.error("Microphone interrupted. Check your input device and permissions, then try again.".into(), cx);
+                false
             }
         }
     }
     fn stop(&mut self, cx: &mut Context<Self>) {
+        if self.attempt.phase == Phase::Starting {
+            self.cancel(cx);
+            return;
+        }
+        if self.attempt.phase != Phase::Recording {
+            return;
+        }
         // A stop can race the periodic device-health poll. Never transcribe
         // buffered audio from a lost/replaced input in that interval.
-        if unsafe { vorkspace_dictation_health() } == 1 {
+        if !matches!(
+            CaptureHealth::from(unsafe { vorkspace_dictation_health() }),
+            CaptureHealth::Active | CaptureHealth::Full
+        ) {
             self.cancel(cx);
             self.error(
                 "Microphone interrupted. Check the selected input and try again.".into(),
@@ -617,7 +699,7 @@ impl Service {
         let cancel = self.cancel.clone();
         self.status = "Transcribing locally…".into();
         self.publish(cx);
-        self.display("Transcribing…", false, cx);
+        self.display("Transcribing…", panel::State::Transcribing, cx);
         cx.spawn(async move |this, cx| {
             let result =
                 cx.background_executor()
@@ -730,7 +812,9 @@ mod model_tests {
             let epoch = service.update(cx, |s, _| {
                 s.attempt.enabled = true;
                 s.capture_model = Some(s.selected);
-                s.attempt.begin().unwrap()
+                let epoch = s.attempt.begin().unwrap();
+                assert!(s.attempt.recording(epoch));
+                epoch
             });
             configure(true, ModelId::default(), "uid:next-recording", cx);
             service.update(cx, |s, _| {
@@ -832,6 +916,136 @@ mod model_tests {
                     ))
                 );
             });
+        });
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    // No init/check_ready: these production-boundary tests open no microphone,
+    // read no model, and schedule no download or transcription worker.
+    fn pending(cx: &mut App) -> (Entity<Service>, u64) {
+        cx.set_global(crate::Helper::default());
+        let service = cx.new(|_| Service {
+            attempt: Attempt {
+                enabled: true,
+                ..Default::default()
+            },
+            lease: None,
+            hotkey: None,
+            shortcut_error: None,
+            cancel: CancelToken::new(),
+            download_cancel: CancelToken::new(),
+            downloads: DownloadSlot::default(),
+            pending_download: None,
+            selected: ModelId::default(),
+            microphone: "builtin".into(),
+            capture_model: Some(ModelId::default()),
+            download_model: None,
+            model_notice: None,
+            initializing: false,
+            verification: 0,
+            ready: true,
+            status: String::new(),
+            model: Err("capture-only control fixture must not load a model".into()),
+            panel: None,
+        });
+        let epoch = service.update(cx, |s, cx| {
+            let epoch = s.attempt.begin().unwrap();
+            assert!(s.display_capture(cx));
+            epoch
+        });
+        (service, epoch)
+    }
+
+    #[gpui::test]
+    fn pending_becomes_active_and_red_only_on_native_readiness(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let (service, epoch) = pending(cx);
+            service.update(cx, |s, cx| {
+                assert_eq!(s.attempt.phase, Phase::Starting);
+                assert_eq!(s.status, "Starting microphone… · ⌘, to cancel");
+                let panel = s.panel.unwrap();
+                assert_eq!(panel.read(cx).unwrap().state, panel::State::Starting);
+                assert!(!panel.read(cx).unwrap().state.recording());
+                assert!(!panel.read(cx).unwrap().state.error());
+                assert!(s.capture_health(epoch, CaptureHealth::from(3), cx));
+                assert_eq!(s.attempt.phase, Phase::Starting);
+                assert_eq!(panel.read(cx).unwrap().state, panel::State::Starting);
+                assert!(s.capture_health(epoch, CaptureHealth::from(0), cx));
+                assert_eq!(s.attempt.phase, Phase::Recording);
+                assert_eq!(s.status, "Recording · ⌘, to finish");
+                assert!(panel.read(cx).unwrap().state.recording());
+                assert_eq!(panel.read(cx).unwrap().status, "Recording");
+                assert_eq!(s.attempt.epoch, epoch);
+                assert!(s.capture_health(epoch, CaptureHealth::Active, cx));
+                assert_eq!(s.capture_model, Some(s.selected));
+                s.cancel(cx);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn startup_toggle_cancels_without_error_or_model_admission(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let (service, epoch) = pending(cx);
+            service.update(cx, |s, cx| {
+                s.toggle(cx); // The actual shortcut control path.
+                assert_eq!(s.attempt.phase, Phase::Idle);
+                assert!(s.capture_model.is_none());
+                assert!(s.cancel.is_cancelled());
+                assert!(s.panel.is_none());
+                assert!(s.lease.is_none());
+                assert_eq!(s.status, "Cancelled · ⌘, to start again");
+                assert!(s.attempt.stop().is_none()); // No inference admission.
+                assert!(!s.capture_health(epoch, CaptureHealth::Active, cx));
+                assert!(!s.capture_health(epoch, CaptureHealth::Failed, cx));
+                assert_eq!(s.status, "Cancelled · ⌘, to start again");
+                let new_epoch = s.attempt.begin().unwrap();
+                assert_ne!(new_epoch, epoch);
+                assert!(s.display_capture(cx));
+                assert!(!s.capture_health(epoch, CaptureHealth::Active, cx));
+                assert_eq!(s.attempt.phase, Phase::Starting);
+                assert_eq!(
+                    s.panel.unwrap().read(cx).unwrap().state,
+                    panel::State::Starting
+                );
+                s.stop(cx); // Defensive early-stop path is cancellation too.
+                assert_eq!(s.status, "Cancelled · ⌘, to start again");
+                assert_eq!(s.attempt.phase, Phase::Idle);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn native_timeout_failure_and_active_loss_remain_errors(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            // Native deadline/route/conversion failures all publish Failed.
+            // The Swift policy suite controls the deadline deterministically.
+            for (active, health) in [
+                (false, CaptureHealth::Failed),
+                (false, CaptureHealth::from(-1)),
+                (true, CaptureHealth::Failed),
+                (true, CaptureHealth::Starting),
+            ] {
+                let (service, epoch) = pending(cx);
+                service.update(cx, |s, cx| {
+                    if active {
+                        assert!(s.capture_health(epoch, CaptureHealth::Active, cx));
+                    }
+                    assert!(!s.capture_health(epoch, health, cx));
+                    assert_eq!(s.attempt.phase, Phase::Idle);
+                    assert!(s.capture_model.is_none());
+                    assert!(s.status.starts_with("Microphone interrupted."));
+                    assert_eq!(
+                        s.panel.unwrap().read(cx).unwrap().state,
+                        panel::State::Error
+                    );
+                    s.cancel(cx);
+                });
+            }
         });
     }
 }
