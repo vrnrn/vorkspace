@@ -62,6 +62,10 @@ pub struct CommittedPrefix {
     text: String,
 }
 impl CommittedPrefix {
+    #[cfg(debug_assertions)]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
     pub fn advance(&mut self, text: &str) -> Result<String, String> {
         let suffix = text
             .strip_prefix(&self.text)

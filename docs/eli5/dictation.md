@@ -113,3 +113,11 @@ check uses a disposable field containing only synthetic text to test several
 pastes, edits, focus changes and cancellation. This requires the signed helper's
 normal Accessibility permission; a missing grant is reported without changing
 permissions. These checks never use your microphone, composer or database.
+
+A combined developer check can also send the known public recording through the
+real dictation controller and watch the disposable text field change while the
+recording plays. It checks two turns with one prepared model, keeps the known
+starting text, rejects missing or duplicated words, and times when text actually
+appears. The disposable app resets only its own test text between turns. This
+check requires the helper's normal Accessibility permission and refuses if that
+permission is missing; it does not record your microphone or touch your work.

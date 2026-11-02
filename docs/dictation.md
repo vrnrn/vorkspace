@@ -237,3 +237,18 @@ native field identified as `vorkspace-live-fixture`, then exercises production
 incremental paste and refusal. `native/DictationFocusFixture.swift` supplies that
 field with a known prefix. Missing trust is a live-proof blocker, not a passing
 headless insertion test. Use a new isolated bundle; never replace a running helper.
+
+Debug-only `--live-field-fixture /absolute/model.gguf /absolute/jfk.wav PID`
+combines the production service's warm worker, bounded turn input, committed-event
+handler, offsets and native paste owner. It accepts only the pinned public JFK
+WAV and a frontmost disposable tagged field containing `Existing: `. It checks
+actual AX field contents after each posted cumulative update, requires visible
+stable text before Finish, checks final text once, and reports first-field and
+Stop-to-final-field timings separately from the 800 ms clipboard read window.
+Two turns reuse one load. Between completed turns only the disposable target
+resets its own synthetic text, while still focused; the helper never writes or
+refocuses through AX. Missing normal Accessibility trust refuses before loading
+weights or attempting input. Run the fixed-string insertion scenarios first.
+Use the same stable development signer when updating a permitted task bundle;
+never replace a running bundle. This diagnostic starts no microphone or helper
+service and accesses no user database or preferences.

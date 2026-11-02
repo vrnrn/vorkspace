@@ -1,5 +1,8 @@
 //! Dictation lives in the clipboard process. IPC carries status/control, never PCM or text.
 use crate::dictation_panel as panel;
+#[cfg(debug_assertions)]
+#[path = "dictation_field_fixture.rs"]
+pub(crate) mod field_fixture;
 use gpui::{App, AppContext, Context, Entity, Global, Task};
 use std::sync::mpsc;
 use std::{
@@ -31,6 +34,8 @@ unsafe extern "C" {
 struct Dictation(Entity<Service>);
 impl Global for Dictation {}
 pub struct Service {
+    #[cfg(debug_assertions)]
+    public_audio_fixture: bool,
     warm: Option<mpsc::SyncSender<Turn>>,
     worker_running: bool,
     worker_generation: u64,
@@ -65,39 +70,7 @@ pub struct Service {
 }
 pub fn init(cx: &mut App) {
     let path = dictation_path::model_path(ModelId::default());
-    let service = cx.new(|_| Service {
-        warm: None,
-        worker_running: false,
-        worker_generation: 0,
-        worker_cancel: CancelToken::new(),
-        turn: None,
-        native_started: false,
-        pending_text: String::new(),
-        delivered: CommittedPrefix::default(),
-        delivery: 0,
-        finished: None,
-        modifier_deadline: None,
-        attempt: Attempt::default(),
-        lease: None,
-        hotkey: None,
-        shortcut_error: None,
-        cancel: CancelToken::new(),
-        download_cancel: CancelToken::new(),
-        downloads: DownloadSlot::default(),
-        pending_download: None,
-        selected: ModelId::default(),
-        microphone: "builtin".into(),
-        capture_model: None,
-        capture_microphone: None,
-        download_model: None,
-        model_notice: None,
-        initializing: true,
-        verification: 0,
-        ready: false,
-        status: "Checking selected model…".into(),
-        model: path,
-        panel: None,
-    });
+    let service = cx.new(|_| Service::new(path));
     cx.set_global(Dictation(service.clone()));
     service.update(cx, |s, cx| s.check_ready(cx));
 }
@@ -257,6 +230,44 @@ pub fn download(request: u64, model: ModelId, cx: &mut App) {
     });
 }
 impl Service {
+    fn new(model: Result<PathBuf, String>) -> Self {
+        Self {
+            #[cfg(debug_assertions)]
+            public_audio_fixture: false,
+            warm: None,
+            worker_running: false,
+            worker_generation: 0,
+            worker_cancel: CancelToken::new(),
+            turn: None,
+            native_started: false,
+            pending_text: String::new(),
+            delivered: CommittedPrefix::default(),
+            delivery: 0,
+            finished: None,
+            modifier_deadline: None,
+            attempt: Attempt::default(),
+            lease: None,
+            hotkey: None,
+            shortcut_error: None,
+            cancel: CancelToken::new(),
+            download_cancel: CancelToken::new(),
+            downloads: DownloadSlot::default(),
+            pending_download: None,
+            selected: ModelId::default(),
+            microphone: "builtin".into(),
+            capture_model: None,
+            capture_microphone: None,
+            download_model: None,
+            model_notice: None,
+            initializing: true,
+            verification: 0,
+            ready: false,
+            status: "Checking selected model…".into(),
+            model,
+            panel: None,
+        }
+    }
+
     fn check_ready(&mut self, cx: &mut Context<Self>) {
         self.verification += 1;
         let epoch = self.verification;
@@ -487,6 +498,10 @@ impl Service {
         }
     }
     fn display(&mut self, status: &str, state: panel::State, cx: &mut Context<Self>) -> bool {
+        #[cfg(debug_assertions)]
+        if self.public_audio_fixture {
+            return true;
+        }
         if let Some(p) = self.panel {
             if p.update(cx, |p, _, cx| {
                 p.status = status.into();
@@ -607,28 +622,11 @@ impl Service {
                     self.error(native_error(admitted).into(), cx);
                     return;
                 }
-                self.cancel = CancelToken::new();
-                self.pending_text.clear();
-                self.delivered = CommittedPrefix::default();
-                self.delivery = 0;
-                self.finished = None;
-                self.modifier_deadline = None;
-                self.native_started = false;
-                let (pipe, input) = Pipe::new();
-                let turn = Turn {
-                    epoch,
-                    input,
-                    cancel: self.cancel.clone(),
-                };
-                if self.warm.as_ref().is_none_or(|w| w.try_send(turn).is_err()) {
+                if let Err(e) = self.begin_turn(epoch) {
                     self.cancel(cx);
-                    self.error(
-                        "The local model is still preparing. Try again when Ready.".into(),
-                        cx,
-                    );
+                    self.error(e, cx);
                     return;
                 }
-                self.turn = Some((epoch, pipe));
                 if !self.display("Preparing dictation…", panel::State::Starting, cx) {
                     self.fail_turn(
                         "Could not show the dictation indicator. Try again.".into(),
@@ -683,6 +681,54 @@ impl Service {
                 .detach();
             }
         }
+    }
+    // Audio-source-independent production admission. The debug field fixture
+    // substitutes public PCM for capture, then uses these same queues/events.
+    fn begin_turn(&mut self, epoch: u64) -> Result<(), String> {
+        if self.attempt.epoch != epoch || self.attempt.phase != Phase::Starting {
+            return Err("Dictation turn was superseded before admission".into());
+        }
+        self.cancel = CancelToken::new();
+        self.pending_text.clear();
+        self.delivered = CommittedPrefix::default();
+        self.delivery = 0;
+        self.finished = None;
+        self.modifier_deadline = None;
+        self.native_started = false;
+        let (pipe, input) = Pipe::new();
+        let turn = Turn {
+            epoch,
+            input,
+            cancel: self.cancel.clone(),
+        };
+        if self.warm.as_ref().is_none_or(|w| w.try_send(turn).is_err()) {
+            return Err("The local model is still preparing. Try again when Ready.".into());
+        }
+        self.turn = Some((epoch, pipe));
+        Ok(())
+    }
+    fn feed_audio(&self, pcm: &[f32]) -> Result<(), String> {
+        let pipe = &self
+            .turn
+            .as_ref()
+            .ok_or("Missing dictation worker".to_string())?
+            .1;
+        for block in pcm.chunks(worker::SAMPLE_RATE) {
+            pipe.audio(block.to_vec())?;
+        }
+        Ok(())
+    }
+    fn finish_input(&mut self) -> Result<(), String> {
+        if self.attempt.phase != Phase::Transcribing {
+            return Err("Finish was not admitted".into());
+        }
+        self.turn
+            .as_ref()
+            .ok_or("Missing dictation worker".to_string())?
+            .1
+            .finish()?;
+        self.native_started = false;
+        Ok(())
     }
     // Publication is derived from the existing attempt phase, in the same main
     // loop update that observes native readiness. Red never precedes acceptance.
@@ -775,17 +821,10 @@ impl Service {
             return;
         };
         let _ = (selected, epoch);
-        if let Err(e) = self.drain(true).and_then(|_| {
-            self.turn
-                .as_ref()
-                .ok_or("Missing dictation worker".to_string())?
-                .1
-                .finish()
-        }) {
+        if let Err(e) = self.drain(true).and_then(|_| self.finish_input()) {
             self.fail_turn(e, cx);
             return;
         }
-        self.native_started = false;
         self.status = "Finishing locally… · ⌘, to cancel".into();
         self.publish(cx);
         self.display("Finishing…", panel::State::Transcribing, cx);
@@ -809,12 +848,7 @@ impl Service {
         if code != 0 {
             return Err(native_error(code).into());
         }
-        if let Some((_, pipe)) = &self.turn {
-            for block in pcm.chunks(worker::SAMPLE_RATE) {
-                pipe.audio(block.to_vec())?;
-            }
-        }
-        Ok(())
+        self.feed_audio(&pcm)
     }
     fn fail_turn(&mut self, error: String, cx: &mut Context<Self>) {
         let lease = self.lease.take();
@@ -932,6 +966,11 @@ impl Service {
             Event::Armed(epoch)
                 if self.attempt.epoch == epoch && self.attempt.phase == Phase::Starting =>
             {
+                #[cfg(debug_assertions)]
+                if self.public_audio_fixture {
+                    self.attempt.recording(epoch);
+                    return;
+                }
                 let code = self
                     .capture_microphone
                     .as_ref()
@@ -1223,6 +1262,8 @@ mod capture_tests {
     fn pending(cx: &mut App) -> (Entity<Service>, u64) {
         cx.set_global(crate::Helper::default());
         let service = cx.new(|_| Service {
+            #[cfg(debug_assertions)]
+            public_audio_fixture: false,
             warm: None,
             worker_running: false,
             worker_generation: 0,
@@ -1266,6 +1307,35 @@ mod capture_tests {
         (service, epoch)
     }
 
+    #[gpui::test]
+    fn shared_turn_input_preserves_epoch_chunk_order_finish_and_cancellation(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let (service, epoch) = pending(cx);
+            service.update(cx, |s, cx| {
+                let (tx, rx) = mpsc::sync_channel(1);
+                s.warm = Some(tx);
+                assert!(s.begin_turn(epoch + 1).is_err());
+                s.begin_turn(epoch).unwrap();
+                assert!(s.finish_input().is_err());
+                let turn = rx.try_recv().unwrap();
+                assert_eq!(turn.epoch, epoch);
+                s.feed_audio(&vec![0.25; worker::SAMPLE_RATE + 8]).unwrap();
+                assert!(s.attempt.recording(epoch));
+                assert_eq!(s.attempt.stop(), Some(epoch));
+                s.finish_input().unwrap();
+                assert!(matches!(turn.input.try_recv().unwrap(), worker::Input::Audio(a) if a.len()==worker::SAMPLE_RATE));
+                assert!(matches!(turn.input.try_recv().unwrap(), worker::Input::Audio(a) if a==vec![0.25;8]));
+                assert!(matches!(turn.input.try_recv().unwrap(), worker::Input::Finish));
+                assert!(!s.native_started);
+                s.cancel(cx);
+                assert!(turn.cancel.is_cancelled());
+                s.worker_event(0, s.selected, Event::Done(epoch, Ok(())), cx);
+                assert_eq!(s.attempt.phase, Phase::Idle);
+            });
+        });
+    }
     #[gpui::test]
     fn active_turn_cannot_retire_weights_to_start_a_download(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {

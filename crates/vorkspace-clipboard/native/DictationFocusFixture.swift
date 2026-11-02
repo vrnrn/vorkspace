@@ -24,6 +24,14 @@ import AppKit
             window.makeKeyAndOrderFront(nil); app.activate(ignoringOtherApps: true)
             window.makeFirstResponder(field)
             field.currentEditor()?.selectedRange = NSRange(location: field.stringValue.utf16.count, length: 0)
+            let reset = DistributedNotificationCenter.default().addObserver(
+                forName: NSNotification.Name("com.vorkspace.disposable-dictation.reset.\(getpid())"),
+                object: nil, queue: .main) { _ in
+                    guard app.isActive, let editor = field.currentEditor(), window.firstResponder === editor else { return }
+                    field.stringValue = "Existing: "
+                    editor.string = "Existing: "
+                    editor.selectedRange = NSRange(location: "Existing: ".utf16.count, length: 0)
+                }
             var ticks = 0
             let timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
                 ticks += 1
@@ -31,7 +39,7 @@ import AppKit
                 try! state.write(toFile: output, atomically: true, encoding: .utf8)
                 if ticks == 600 { app.terminate(nil) }
             }
-            withExtendedLifetime((window, field, timer)) { app.run() }
+            withExtendedLifetime((window, field, timer, reset)) { app.run() }
             return
         }
         guard args.count == 3, args[1] == "--probe", let pid = Int32(args[2]) else { fatalError("--target native|secure OUTPUT or --probe PID") }

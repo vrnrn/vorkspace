@@ -298,6 +298,17 @@ fn main() {
 #[cfg(debug_assertions)]
 fn fixture() -> bool {
     let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1).map(String::as_str) == Some("--live-field-fixture") {
+        dictation::field_fixture::run(
+            PathBuf::from(args.get(2).expect("public fixture model path")),
+            PathBuf::from(args.get(3).expect("public JFK WAV path")),
+            args.get(4)
+                .expect("disposable target PID")
+                .parse()
+                .expect("positive target PID"),
+        );
+        return true;
+    }
     if args.get(1).map(String::as_str) == Some("--insertion-fixture") {
         unsafe extern "C" {
             fn vorkspace_dictation_insertion_probe(

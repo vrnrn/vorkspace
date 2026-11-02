@@ -604,3 +604,38 @@ func dictationInsertionProbe(_ pid: Int32, _ scenario: UnsafePointer<CChar>,
     return finish(correct && third == 0 ? 0 : 10, correct ? "multiple-live-deltas-no-duplicates" : "unexpected-final-field")
 }
 #endif
+
+#if DEBUG
+// The full-flow harness can address only the explicit disposable target. These
+// helpers never write through AX, refocus a field, paste, or open a microphone.
+private func dictationFixtureField(_ pid: Int32) -> AXUIElement? {
+    guard AXIsProcessTrusted(), pid > 0,
+          NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+          let field = axElement(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute),
+          axString(field, kAXIdentifierAttribute) == "vorkspace-live-fixture" else { return nil }
+    return field
+}
+@_cdecl("vorkspace_dictation_fixture_read")
+func dictationFixtureRead(_ pid: Int32, _ receive: @convention(c) (UnsafePointer<CChar>) -> Void) -> Int32 {
+    guard AXIsProcessTrusted() else { return 2 }
+    guard let field = dictationFixtureField(pid), let text = axString(field, kAXValueAttribute) else { return 9 }
+    text.withCString { receive($0) }
+    return 0
+}
+@_cdecl("vorkspace_dictation_fixture_admit")
+func dictationFixtureAdmit(_ pid: Int32, _ epoch: UInt64) -> Int32 {
+    guard AXIsProcessTrusted() else { return 2 }
+    guard let field = dictationFixtureField(pid), axString(field, kAXValueAttribute) == "Existing: " else { return 9 }
+    return dictationPrepareInsertion(epoch) ? 0 : 4
+}
+@_cdecl("vorkspace_dictation_fixture_reset")
+func dictationFixtureReset(_ pid: Int32) -> Int32 {
+    guard dictationFixtureField(pid) != nil else { return 9 }
+    // Only the disposable app subscribes. It resets its own known synthetic
+    // field between completed turns, only while that field still owns focus.
+    DistributedNotificationCenter.default().postNotificationName(
+        NSNotification.Name("com.vorkspace.disposable-dictation.reset.\(pid)"),
+        object: nil, userInfo: nil, deliverImmediately: true)
+    return 0
+}
+#endif
