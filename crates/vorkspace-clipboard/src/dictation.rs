@@ -53,6 +53,7 @@ pub struct Service {
     selected: ModelId,
     microphone: String,
     capture_model: Option<ModelId>,
+    capture_microphone: Option<String>,
     download_model: Option<ModelId>,
     model_notice: Option<(u64, ModelId, ModelState)>,
     initializing: bool,
@@ -87,6 +88,7 @@ pub fn init(cx: &mut App) {
         selected: ModelId::default(),
         microphone: "builtin".into(),
         capture_model: None,
+        capture_microphone: None,
         download_model: None,
         model_notice: None,
         initializing: true,
@@ -540,6 +542,7 @@ impl Service {
         self.finished = None;
         self.native_started = false;
         self.capture_model = None;
+        self.capture_microphone = None;
         unsafe { vorkspace_dictation_cancel() };
         self.hide(cx);
         if self.attempt.phase == Phase::Idle {
@@ -597,6 +600,7 @@ impl Service {
                     return;
                 };
                 self.capture_model = Some(self.selected);
+                self.capture_microphone = Some(self.microphone.clone());
                 let admitted = unsafe { vorkspace_dictation_admit(epoch) };
                 if admitted != 0 {
                     self.attempt.cancel();
@@ -928,9 +932,13 @@ impl Service {
             Event::Armed(epoch)
                 if self.attempt.epoch == epoch && self.attempt.phase == Phase::Starting =>
             {
-                let code = CString::new(self.microphone.clone()).map_or(8, |m| unsafe {
-                    vorkspace_dictation_start(m.as_ptr(), epoch)
-                });
+                let code = self
+                    .capture_microphone
+                    .as_ref()
+                    .and_then(|m| CString::new(m.as_str()).ok())
+                    .map_or(8, |m| unsafe {
+                        vorkspace_dictation_start(m.as_ptr(), epoch)
+                    });
                 if code != 0 {
                     self.fail_turn(native_error(code).into(), cx);
                     return;
@@ -1012,6 +1020,7 @@ impl Service {
         if self.finished.take().is_some() {
             self.turn = None;
             self.capture_model = None;
+            self.capture_microphone = None;
             self.attempt.complete(epoch);
             unsafe { vorkspace_dictation_cancel() };
             self.hide(cx);
@@ -1095,6 +1104,7 @@ mod model_tests {
                 s.model = Err("control-only fixture".into());
                 s.attempt.enabled = true;
                 s.capture_model = Some(s.selected);
+                s.capture_microphone = Some(s.microphone.clone());
                 let epoch = s.attempt.begin().unwrap();
                 assert!(s.attempt.recording(epoch));
                 epoch
@@ -1105,6 +1115,7 @@ mod model_tests {
                 assert_eq!(s.attempt.phase, Phase::Recording);
                 assert_eq!(s.attempt.epoch, epoch);
                 assert_eq!(s.capture_model, Some(ModelId::default()));
+                assert_eq!(s.capture_microphone.as_deref(), Some("builtin"));
             });
         });
     }
@@ -1237,6 +1248,7 @@ mod capture_tests {
             selected: ModelId::default(),
             microphone: "builtin".into(),
             capture_model: Some(ModelId::default()),
+            capture_microphone: Some("builtin".into()),
             download_model: None,
             model_notice: None,
             initializing: false,
