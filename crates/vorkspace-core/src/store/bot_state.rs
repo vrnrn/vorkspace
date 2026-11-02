@@ -229,3 +229,36 @@ pub fn root(store: &Store) -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join(format!("vorkspace-test-{}", new_id())))
         .join("bots")
 }
+
+impl Store {
+    /// Unarchived sessions working in `path`.
+    pub fn sessions_using(&self, path: &str) -> Result<Vec<i64>, String> {
+        let worktrees = self.session_worktrees()?;
+        Ok(self
+            .sessions()?
+            .into_iter()
+            .filter(|session| !session.archived)
+            .filter(|session| {
+                let execution = worktrees
+                    .get(&session.id)
+                    .and_then(Option::as_deref)
+                    .unwrap_or(&session.cwd);
+                crate::files::is_equal_or_inside(execution, path)
+            })
+            .map(|session| session.id)
+            .collect())
+    }
+}
+
+/// Git runs without the database lock, which is held per session lookup.
+pub fn describe_worktrees(
+    project: &std::path::Path,
+    store: &std::sync::Mutex<Store>,
+) -> Result<Value, String> {
+    crate::worktree_management::describe(project, |path| {
+        store
+            .lock()
+            .map_err(|_| "The session store is unavailable.".to_owned())?
+            .sessions_using(path)
+    })
+}

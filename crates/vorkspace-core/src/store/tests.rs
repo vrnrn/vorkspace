@@ -369,3 +369,29 @@ fn wal_restart_preserves_partial_output_and_provider_context() {
         Some("thread-1")
     );
 }
+
+#[test]
+fn a_worktree_is_only_removable_once_its_sessions_are_archived() {
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| crate::git::git(dir.path(), args).unwrap();
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "fixture@example.invalid"]);
+    git(&["config", "user.name", "Fixture"]);
+    git(&["commit", "--allow-empty", "-m", "Initial"]);
+    let tree = crate::git::create_named_worktree(dir.path(), "shared").unwrap();
+    let store = Store::open_vorkspace(&dir.path().join("sessions.db")).unwrap();
+    let session = store.create("codex", &tree.path).unwrap();
+    let store = std::sync::Mutex::new(store);
+    let rows = super::describe_worktrees(dir.path(), &store).unwrap();
+    assert_eq!(rows[1]["removable"], false);
+    assert_eq!(rows[1]["sessions"][0], session.id);
+    store
+        .lock()
+        .unwrap()
+        .set_archived(session.id, true)
+        .unwrap();
+    let rows = super::describe_worktrees(dir.path(), &store).unwrap();
+    assert_eq!(rows[1]["removable"], true);
+    crate::worktree_management::remove(dir.path(), std::path::Path::new(&tree.path)).unwrap();
+    let _ = std::fs::remove_dir_all(crate::worktree_management::default_root(dir.path()));
+}

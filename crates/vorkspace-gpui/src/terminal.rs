@@ -38,6 +38,14 @@ actions!(
     [SendTab, SendBackTab, SendEscape, Copy, Paste, SelectAll]
 );
 
+/// A worktree being removed can't host a new shell.
+pub(crate) fn usable_cwd(cwd: String) -> String {
+    if vorkspace_core::worktree_management::is_being_removed(&cwd) {
+        std::env::var("HOME").unwrap_or(cwd)
+    } else {
+        cwd
+    }
+}
 pub(crate) fn bind(cx: &mut App) {
     let m = "cmd";
     let c = Some("Terminal");

@@ -151,6 +151,7 @@ fn run_turn_using(
     // SessionReview's recorded turn: its project and id, once the baseline is taken.
     let mut checkpoint: Option<(String, String)> = None;
     let mut created_worktree = None;
+    let mut setup_warning = None;
     let mut context = locked(&store)
         .ok()
         .and_then(|s| s.context_usage(summary.id).ok().flatten())
@@ -296,6 +297,39 @@ fn run_turn_using(
                 },
             )?;
         }
+        let working = settings
+            .worktree_cwd
+            .clone()
+            .unwrap_or_else(|| summary.cwd.clone());
+        if vorkspace_core::worktree_management::is_being_removed(&working) {
+            return Err("This worktree is being removed.".into());
+        }
+        if vorkspace_core::worktree_setup::is_due(std::path::Path::new(&working)) {
+            publish(
+                &tx,
+                &cancel,
+                Update {
+                    activity: activity.label(),
+                    start: transcript.rows.len(),
+                    status: "Preparing worktree…".into(),
+                    ..Default::default()
+                },
+            )?;
+            setup_warning = vorkspace_core::worktree_setup::run_due(
+                std::path::Path::new(&summary.cwd),
+                std::path::Path::new(&working),
+                &cancel,
+            );
+            if let Some(warning) = &setup_warning {
+                vorkspace_core::worktree_setup::hold_notice(
+                    std::path::Path::new(&working),
+                    warning,
+                );
+            }
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Stopped".into());
+            }
+        }
         if let Some(source) = settings.pending_provider_switch.take() {
             let root = locked(&store)?.data_dir().map(std::path::Path::to_path_buf);
             let prepared = handoff::prepare(
@@ -359,6 +393,20 @@ fn run_turn_using(
                 &mut bot_fingerprint,
                 &store,
             )?
+        };
+        // A failed setup leaves a usable worktree, so the agent hears about it and
+        // can repair it instead of the turn stopping.
+        let prompt = match setup_warning.take() {
+            Some(_) if raw_native_command => prompt,
+            Some(warning) => {
+                vorkspace_core::worktree_setup::clear_notice(std::path::Path::new(
+                    settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd),
+                ));
+                format!(
+                    "<vorkspace_context>\nVorkspace adds this context, not the user. {warning}\n</vorkspace_context>\n\n{prompt}"
+                )
+            }
+            None => prompt,
         };
         let cwd = settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd);
         if settings.bot.is_none()

@@ -27,8 +27,9 @@ sessions.start {prompt,project?,harness?,model?,modelSettings?,runtimeMode?,titl
 sessions.send {sessionId,prompt,project?,notifyOnComplete?}
 sessions.draft {sessionId,prompt,project?}
 sessions.stop / sessions.archive / sessions.delete {sessionId,project?}
-worktrees.list {project?}
+worktrees.list {project?} reports dirty, merged, unpublishedCommits, sessions and removable for each worktree.
 worktrees.create {branch,base?,existing?,project?}
+worktrees.remove {path,project?} removes a worktree only if nothing would be lost: it refuses uncommitted or unique work, ignored files tools can't regenerate, open terminals and unarchived sessions. A merged branch goes with it.
 folders.list {project?}
 folders.move {sessionId,folderId?,newFolderName?,project?}
 notes.list {limit?,offset?}; notes.read {id}; notes.write {id?,title,body,tags?}

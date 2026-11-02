@@ -506,7 +506,7 @@ impl Shell {
                 self.app_background(call, move |store| { locked(&store)?.save_groups(&project, &groups)?; Ok((json!({"moved":true}), Effect::Groups(project, groups))) }, cx); return;
             }
             "worktrees.list" => {
-                self.app_background(call, move |_| { let snapshot = vorkspace_core::git::snapshot(std::path::Path::new(&project))?; Ok((json!(snapshot.worktrees.iter().map(|w| json!({"path":w.path,"branch":w.branch,"head":w.head,"main":w.main,"missing":w.missing})).collect::<Vec<_>>()), Effect::None)) }, cx); return;
+                self.app_background(call, move |store| { let value = vorkspace_core::store::describe_worktrees(std::path::Path::new(&project),&store)?; Ok((value, Effect::None)) }, cx); return;
             }
             "worktrees.create"=>{
                 self.app_background(call,move |_|{
@@ -515,7 +515,13 @@ impl Shell {
                     Ok((json!({"path":tree.path,"branch":tree.branch}),Effect::None))
                 },cx);return;
             }
-            _ => Err("Unknown Operator action. Supported: models.list, sessions.list/read/start/send/draft/stop/archive/delete, folders.list/move, notes.list/read/write, todos.list/add/update/remove, worktrees.list/create.".into()),
+            "worktrees.remove"=>{
+                let path=match text(&input,"path",4096){Ok(path)=>path,Err(error)=>{self.finish_app_call(call,Err(error));return;}};
+                self.remove_worktree(project,path,settings::Removal::Safe,Box::new(move|this,result,_|{
+                    this.finish_app_call(call,result.map(|()|json!({"removed":true})));
+                }),cx);return;
+            }
+            _ => Err("Unknown Operator action. Supported: models.list, sessions.list/read/start/send/draft/stop/archive/delete, folders.list/move, notes.list/read/write, todos.list/add/update/remove, worktrees.list/create/remove.".into()),
         };
         self.finish_app_call(call, result);
         let _ = window;

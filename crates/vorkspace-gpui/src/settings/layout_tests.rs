@@ -386,3 +386,32 @@ fn cost_monitoring_link_setting_appears_only_for_aws_bedrock(cx: &mut TestAppCon
     visual.run_until_parked();
     assert!(visual.debug_bounds("bedrock-cost-link").is_some());
 }
+
+#[gpui::test]
+fn a_project_setup_command_saves_edits_and_clears(cx: &mut TestAppContext) {
+    let window = window(Section::Worktrees, cx);
+    let submit = |text: &'static str, cx: &mut TestAppContext| {
+        window
+            .update(cx, |view, window, cx| {
+                view.selected_project = "/project".into();
+                view.open_management(management::Target::WorktreeSetup, window, cx);
+                let name = view.management.as_ref().unwrap().name.clone();
+                let existing = name.read(cx).content.clone();
+                name.update(cx, |input, cx| input.set_text(text.to_owned(), cx));
+                view.submit_management(cx);
+                assert!(view.management.is_none());
+                existing
+            })
+            .unwrap()
+    };
+    assert_eq!(submit("  npm ci  ", cx), "");
+    let saved = window
+        .read_with(cx, |view, _| view.prefs.worktree_setup.clone())
+        .unwrap();
+    assert_eq!(saved["/project"], "npm ci");
+    assert_eq!(submit("", cx), "npm ci");
+    let saved = window
+        .read_with(cx, |view, _| view.prefs.worktree_setup.clone())
+        .unwrap();
+    assert!(saved.is_empty());
+}

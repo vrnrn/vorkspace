@@ -3,6 +3,15 @@
 use super::*;
 use crate::settings::{ArchivedSession, Section, SettingsContext, SettingsEvent, SettingsView};
 use std::path::Path;
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Removal {
+    /// The user confirmed in Settings, so uncommitted work may go.
+    Discard { delete_sessions: bool },
+    /// An agent asked: refuse if anything would be lost.
+    Safe,
+}
+pub(crate) type RemovalDone = Box<dyn FnOnce(&mut Shell, Result<(), String>, &mut Context<Shell>)>;
+
 impl Shell {
     fn settings_context(&self, cx: &App) -> SettingsContext {
         let mut archived: Vec<_> = self
@@ -350,11 +359,13 @@ impl Shell {
                     cwd,
                     path,
                     delete_sessions,
-                } => this.remove_settings_worktree(
+                } => this.remove_worktree(
                     cwd.clone(),
                     path.clone(),
-                    *delete_sessions,
-                    window,
+                    Removal::Discard {
+                        delete_sessions: *delete_sessions,
+                    },
+                    Box::new(|this, result, cx| this.finish_worktree_action(result, cx)),
                     cx,
                 ),
                 SettingsEvent::ChooseBackground => this.choose_chat_background(cx),
@@ -441,6 +452,7 @@ impl Shell {
         self.configure_quick_composer(cx);
         crate::menu_bar::refresh(&self.workspace.preferences, cx);
         vorkspace_core::cli::initialize(&self.workspace.preferences.binary_paths);
+        vorkspace_core::worktree_setup::set_commands(&self.workspace.preferences.worktree_setup);
         self.keep_visible_idle_agents(cx);
         vorkspace_core::provider::configure_idle_agents(
             self.workspace.preferences.idle_agents as usize,
@@ -528,72 +540,145 @@ impl Shell {
         self.invalidate_chrome(cx);
         cx.notify();
     }
-    fn remove_settings_worktree(
+    /// Dock and title-tab shells have separate owners, and either can sit inside it.
+    pub(crate) fn terminals_using(&self, path: &str, cx: &App) -> bool {
+        self.terminals
+            .values()
+            .flatten()
+            .chain(self.terminal_tabs.values())
+            .any(|t| vorkspace_core::files::is_equal_or_inside(&t.read(cx).cwd, path))
+    }
+    /// The one way a worktree is removed. Everything after the first step uses the
+    /// path Git registered, so an alias can't slip past a check. The guard keeps new
+    /// turns and terminals out until the folder is gone.
+    pub(crate) fn remove_worktree(
         &mut self,
         cwd: String,
         path: String,
-        delete_sessions: bool,
-        window: &mut Window,
+        removal: Removal,
+        done: RemovalDone,
         cx: &mut Context<Self>,
     ) {
-        use vorkspace_core::files::is_equal_or_inside;
-        if self
-            .terminals
-            .values()
-            .flatten()
-            .any(|t| is_equal_or_inside(&t.read(cx).cwd, &path))
-        {
-            self.finish_worktree_action(
-                Err("Close the terminals using this worktree first.".into()),
-                cx,
-            );
-            return;
-        }
-        let ids = self
-            .session_summaries
-            .keys()
-            .filter(|id| is_equal_or_inside(self.session_working_copy(**id, cx), &path))
-            .copied()
-            .collect::<Vec<_>>();
-        if ids
-            .iter()
-            .any(|id| self.sessions.get(id).is_some_and(|v| v.read(cx).busy))
-        {
-            self.finish_worktree_action(
-                Err("Stop the running sessions using this worktree first.".into()),
-                cx,
-            );
-            return;
-        }
+        use vorkspace_core::{files::is_equal_or_inside, worktree_management as worktrees};
+        let safe = removal == Removal::Safe;
+        let delete_sessions = removal
+            == (Removal::Discard {
+                delete_sessions: true,
+            });
         let check_cwd = cwd.clone();
-        let check_path = path.clone();
         let work = cx.background_executor().spawn(async move {
-            vorkspace_core::worktree_management::check(
-                Path::new(&check_cwd),
-                Path::new(&check_path),
-            )
+            let project = Path::new(&check_cwd);
+            let tree = worktrees::check(project, Path::new(&path))?;
+            if safe && let Some(blocker) = worktrees::assess(project, &tree).blocker() {
+                return Err(format!(
+                    "This worktree was kept because {blocker}. Tell the user rather than removing it."
+                ));
+            }
+            Ok::<_, String>(tree.path)
         });
-        cx.spawn(async move|this,cx|{
-            let result=work.await;
-            if let Err(e)=result {let _=this.update(cx,|this,cx|this.finish_worktree_action(Err(e),cx));return;}
-            let pending=match this.update_in(cx,|this,window,cx| {
-                // Recheck before deleting any conversations after the preflight worker.
-                if this.terminals.values().flatten().any(|t|is_equal_or_inside(&t.read(cx).cwd,&path))||ids.iter().any(|id|this.sessions.get(id).is_some_and(|s|s.read(cx).busy)) {return Err("This worktree is now in use. Close its terminals and stop its sessions first.".to_owned());}
-                if delete_sessions {for id in &ids{this.delete_session(*id,window,cx);}}
-                Ok((this.group_writes.take(),this.store.clone()))
-            }) {Ok(Ok(v))=>v,Ok(Err(e))=>{let _=this.update(cx,|this,cx|this.finish_worktree_action(Err(e),cx));return;},Err(_)=>return};
-            if let Some(task)=pending.0 {task.await;}
-            let worker_cwd=cwd.clone();let worker_path=path.clone();let store=pending.1;
-            let work=cx.background_executor().spawn(async move{
-                if delete_sessions {let store=locked(&store)?;let paths=store.session_worktrees()?;if store.sessions()?.iter().any(|s|is_equal_or_inside(paths.get(&s.id).and_then(|p|p.as_deref()).unwrap_or(&s.cwd),&worker_path)){return Err("Some sessions could not be deleted, so the worktree was kept.".into());}}
-                let snapshot=vorkspace_core::git::snapshot(Path::new(&worker_cwd))?;
-                let main=snapshot.worktrees.first().ok_or("No main working copy found")?;
-                vorkspace_core::worktree_management::remove(Path::new(&main.path),Path::new(&worker_path))?;
-                locked(&store)?.detach_worktree(&worker_path,&main.path)
-            });let result=work.await;
-            let _=this.update(cx,|this,cx|{let result=result.map(|detached|{for(summary,settings)in detached{this.session_summaries.insert(summary.id, summary.clone());this.session_worktrees.insert(summary.id,settings.worktree_cwd.clone());if let Some(view)=this.sessions.get(&summary.id){view.update(cx,|v,cx|v.worktree_deleted(summary,settings,cx));}}this.worktree_focus.retain(|_,focus|!is_equal_or_inside(&focus.path,&path));});this.finish_worktree_action(result,cx);});
-        }).detach();
-        let _ = window;
+        cx.spawn(async move |this, cx| {
+            let path = match work.await {
+                Ok(path) => path,
+                Err(error) => {
+                    let _ = this.update(cx, |this, cx| done(this, Err(error), cx));
+                    return;
+                }
+            };
+            let admitted = this.update_in(cx, |this, window, cx| {
+                let guard = worktrees::RemovalGuard::claim(&path)?;
+                if this.terminals_using(&path, cx) {
+                    return Err("Close the terminals using this worktree first.".to_owned());
+                }
+                let ids = this
+                    .session_summaries
+                    .keys()
+                    .filter(|id| is_equal_or_inside(this.session_working_copy(**id, cx), &path))
+                    .copied()
+                    .collect::<Vec<_>>();
+                if ids
+                    .iter()
+                    .any(|id| this.sessions.get(id).is_some_and(|v| v.read(cx).busy))
+                {
+                    return Err("Stop the running sessions using this worktree first.".to_owned());
+                }
+                if safe {
+                    let sessions = locked(&this.store)?.sessions_using(&path)?;
+                    if !sessions.is_empty() {
+                        return Err(format!(
+                            "Archive the {} sessions using this worktree first.",
+                            sessions.len()
+                        ));
+                    }
+                }
+                if delete_sessions {
+                    for id in &ids {
+                        this.delete_session(*id, window, cx);
+                    }
+                }
+                Ok((guard, this.group_writes.take(), this.store.clone()))
+            });
+            let (guard, writes, store) = match admitted {
+                Ok(Ok(admitted)) => admitted,
+                Ok(Err(error)) => {
+                    let _ = this.update(cx, |this, cx| done(this, Err(error), cx));
+                    return;
+                }
+                Err(_) => return,
+            };
+            if let Some(task) = writes {
+                task.await;
+            }
+            let worker_cwd = cwd.clone();
+            let worker_path = path.clone();
+            let work = cx.background_executor().spawn(async move {
+                if delete_sessions {
+                    let store = locked(&store)?;
+                    let paths = store.session_worktrees()?;
+                    if store.sessions()?.iter().any(|s| {
+                        is_equal_or_inside(
+                            paths
+                                .get(&s.id)
+                                .and_then(|p| p.as_deref())
+                                .unwrap_or(&s.cwd),
+                            &worker_path,
+                        )
+                    }) {
+                        return Err(
+                            "Some sessions could not be deleted, so the worktree was kept.".into(),
+                        );
+                    }
+                }
+                let snapshot = vorkspace_core::git::snapshot(Path::new(&worker_cwd))?;
+                let main = snapshot
+                    .worktrees
+                    .first()
+                    .ok_or("No main working copy found")?;
+                if safe {
+                    worktrees::remove_if_safe(Path::new(&main.path), Path::new(&worker_path))?;
+                } else {
+                    worktrees::remove(Path::new(&main.path), Path::new(&worker_path))?;
+                }
+                locked(&store)?.detach_worktree(&worker_path, &main.path)
+            });
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                let result = result.map(|detached| {
+                    for (summary, settings) in detached {
+                        this.session_summaries.insert(summary.id, summary.clone());
+                        this.session_worktrees
+                            .insert(summary.id, settings.worktree_cwd.clone());
+                        if let Some(view) = this.sessions.get(&summary.id) {
+                            view.update(cx, |v, cx| v.worktree_deleted(summary, settings, cx));
+                        }
+                    }
+                    this.worktree_focus
+                        .retain(|_, focus| !is_equal_or_inside(&focus.path, &path));
+                });
+                done(this, result, cx);
+            });
+            drop(guard);
+        })
+        .detach();
     }
 }
 fn this_update(this: &mut Shell, cx: &mut Context<Shell>) {

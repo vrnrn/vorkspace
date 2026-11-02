@@ -222,6 +222,7 @@ pub fn create_worktree(cwd: &Path, base: &str, session: i64) -> Result<PathBuf, 
             commit.trim(),
         ],
     )?;
+    crate::worktree_setup::mark_due(&[main, cwd], &path);
     Ok(path)
 }
 
@@ -313,6 +314,7 @@ pub fn create_project_worktree(
             ],
         )?;
     }
+    crate::worktree_setup::mark_due(&[main, cwd], &path);
     snapshot(cwd)?
         .worktrees
         .into_iter()

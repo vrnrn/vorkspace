@@ -107,6 +107,26 @@ impl Shell {
 
 /// The shell's half of the contract `Bots` depends on.
 impl BotsHost for gpui::WeakEntity<Shell> {
+    fn remove_worktree(
+        &self,
+        project: String,
+        path: String,
+        done: crate::bots::host_api::WorktreeRemoved,
+        cx: &mut App,
+    ) {
+        let Some(shell) = self.upgrade() else {
+            return done(Err("The workspace is closed.".into()), cx);
+        };
+        shell.update(cx, |shell, cx| {
+            shell.remove_worktree(
+                project,
+                path,
+                settings::Removal::Safe,
+                Box::new(move |_, result, cx| done(result, cx)),
+                cx,
+            )
+        });
+    }
     fn session_views(&self, cx: &App) -> Vec<BotSession> {
         self.upgrade()
             .map(|shell| shell.read(cx).bot_session_views(cx))

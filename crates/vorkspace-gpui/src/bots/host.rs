@@ -403,6 +403,13 @@ impl Bots {
                     Ok((json!({"sessionId":summary.id,"accepted":true,"project":project}),Effect::Start(Box::new(super::host_api::AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
                 },cx);return;
             }
+            "worktrees.remove"=>{
+                let path=match text(&input,"path",4096){Ok(path)=>path,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
+                let bots=cx.weak_entity();
+                self.owner.remove_worktree(project,path,Box::new(move|result,cx|{
+                    let _=bots.update(cx,|bots,cx|bots.finish_call(call,result.map(|()|json!({"removed":true})),cx));
+                }),cx);return;
+            }
             "minions.list"=>{
                 Ok(json!(self.roster.team(&bot.id).filter(|b|b.is_minion()).map(|b|self.minion_value(b,cx)).collect::<Vec<_>>()))
             }
@@ -586,7 +593,7 @@ if let Some(instructions)=input.get("instructions").and_then(Value::as_str){if i
 if let Some(schedule)=input.get("schedule"){h.schedule=serde_json::from_value(schedule.clone()).map_err(|e|e.to_string())?;h.schedule.validate()?;h.next_run_at=h.schedule.next(now_ms())?;}
 if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=enabled;if enabled{h.next_run_at=h.schedule.next(now_ms())?;}}}Ok(json!(h))})?},
                         "notes.list"|"notes.read"|"notes.write"=>{let db=locked(&store)?;let notes=db.notes()?;let allowed=|n:&&vorkspace_core::response::Note|projects.iter().any(|p|vorkspace_core::files::path_key(p)==vorkspace_core::files::path_key(&n.source_cwd));match action.as_str(){"notes.list"=>json!(notes.iter().filter(allowed).skip(input.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize).take(input.get("limit").and_then(Value::as_u64).unwrap_or(50).min(200) as usize).collect::<Vec<_>>()),"notes.read"=>{let id=id(&input,"id")? as u64;json!(notes.iter().filter(allowed).find(|n|n.id==id).ok_or("Note not found in assigned projects")?)},_=>{let id=input.get("id").and_then(Value::as_u64).unwrap_or_else(now_ms);if notes.iter().any(|n|n.id==id&&!projects.iter().any(|p|p==&n.source_cwd)){return Err("Note is outside assigned projects".into());}let cwd=notes.iter().find(|n|n.id==id).map(|n|n.source_cwd.clone()).or_else(||projects.first().cloned()).ok_or("Assign a project before writing notes")?;let note=vorkspace_core::response::Note{id,title:text(&input,"title",512)?,body:text(&input,"body",256*1024)?,tags:input.get("tags").and_then(Value::as_array).map(|tags|tags.iter().filter_map(Value::as_str).map(str::to_owned).collect()).or_else(||notes.iter().find(|n|n.id==id).map(|n|n.tags.clone())).unwrap_or_default(),source_session:caller,source_cwd:cwd};db.save_note(&note)?;json!(note)}}},
-                        "worktrees.list"=>json!(vorkspace_core::git::snapshot(Path::new(&project))?.worktrees.iter().map(|w|json!({"path":w.path,"branch":w.branch,"head":w.head,"main":w.main})).collect::<Vec<_>>()),
+                        "worktrees.list"=>vorkspace_core::store::describe_worktrees(Path::new(&project),&store)?,
                         "worktrees.create"=>{let branch=text(&input,"branch",240)?;let tree=vorkspace_core::git::create_project_worktree(Path::new(&project),&branch,input.get("base").and_then(Value::as_str),flag(&input,"existing",false))?;json!({"path":tree.path,"branch":tree.branch})},
                         _=>unreachable!(),
                     };Ok((value,Effect::None))

@@ -741,6 +741,7 @@ impl Shell {
         let metadata: Vec<_> = summaries.iter().map(|s| (s.id, s.cwd.clone())).collect();
         let workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
         vorkspace_core::cli::initialize(&workspace.preferences.binary_paths);
+        vorkspace_core::worktree_setup::set_commands(&workspace.preferences.worktree_setup);
         let latest_state = Arc::new(Mutex::new(serde_json::to_string(&workspace).unwrap()));
         let quit_state = latest_state.clone();
         let quit_store = store.clone();

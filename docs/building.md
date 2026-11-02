@@ -75,7 +75,7 @@ The editor and formatter bundles are committed under `crates/vorkspace-gpui/asse
 
 The GPUI fork and a patched `block` crate live in `vendor/` and are edited directly. `cargo clippy` with `-D warnings` doesn't cover them, so check that a rebuild stays free of warnings after changing one. `npm run test:rust` runs the `block` tests separately because that crate sits outside the workspace.
 
-In a new linked worktree, run `npm run worktree:seed` before the first build. It clones the main checkout's Cargo target directory, honoring `CARGO_TARGET_DIR`, with APFS copy-on-write, so the clone is instant and takes no extra disk, and only workspace and vendored crates rebuild.
+In a new linked worktree, run `npm run worktree:seed` before the first build. To have Vorkspace do this for its own worktrees, set the project's setup command to `npm run worktree:seed` under **Settings → Worktrees**. It clones the main checkout's Cargo target directory, honoring `CARGO_TARGET_DIR`, with APFS copy-on-write, so the clone is instant and takes no extra disk, and only workspace and vendored crates rebuild.
 
 `npm run check` runs tooling, voice, host, formatting, Clippy, and workspace tests. `npm run check:fast` skips the host and GPUI suites. `npm run test:rust` runs every Rust test in parallel, one process per test. `npm run host:package` creates a self-contained remote host archive including Node.
 

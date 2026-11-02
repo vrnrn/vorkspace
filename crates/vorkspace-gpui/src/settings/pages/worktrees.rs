@@ -12,6 +12,30 @@ impl SettingsView {
             && self.discovery.worktrees.error.is_none()
             && !self.discovery.worktrees.main.is_empty();
         let mut page=vec![div().relative().child(self.reveal_probe("project-worktrees")).flex().items_center().gap_1().child(project).child(secondary_button("create-settings-worktree","Create worktree",false,!ready).child(icon("plus",12.)).child("Create worktree").on_click(cx.listener(move|this,_,window,cx|{if ready{this.open_management(Target::Worktree,window,cx);}}))).into_any_element(),div().mt_4().flex().items_center().justify_between().gap_3().child(div().min_w_0().flex_1().text_size(px(12.)).line_height(px(18.)).text_color(content(0.5)).child("Sessions can share a worktree. Deleting one keeps its sessions by default and discards uncommitted changes. Its branch and commits are kept.")).child(self.refresh_button("refresh-settings-worktrees","Refresh",cx)).into_any_element()];
+        self.load_worktree_sizes(cx);
+        if !self.selected_project.is_empty() && ready {
+            let command = self.prefs.worktree_setup.get(&self.selected_project);
+            page.push(
+                div()
+                    .mt_4()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(note(match command {
+                        Some(command) => format!("New worktrees run: {command}"),
+                        None => "New worktrees only contain tracked files. Add a setup command to install dependencies or restore local files.".into(),
+                    }))
+                    .child(
+                        secondary_button("worktree-setup", "Worktree setup command", false, false)
+                            .child("Setup command")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_management(Target::WorktreeSetup, window, cx)
+                            })),
+                    )
+                    .into_any_element(),
+            );
+        }
         if self.selected_project.is_empty() {
             page.push(note("Add a project to manage its worktrees."));
         } else if self.discovery_loading {
@@ -76,14 +100,15 @@ impl SettingsView {
                             .count();
                         let status = if t.missing {
                             "Missing folder"
-                        } else if tree.dirty == Some(true) {
+                        } else if tree.assessment.dirty == Some(true) {
                             "Uncommitted changes"
-                        } else if tree.dirty == Some(false) {
+                        } else if tree.assessment.dirty == Some(false) {
                             "Clean"
                         } else {
                             "Status unavailable"
                         };
-                        let blocked = tree.locked || t.branch.is_none();
+                        let blocked = tree.assessment.locked
+                            || (t.branch.is_none() && !tree.assessment.removable());
                         div()
                             .p_4()
                             .flex()
@@ -146,16 +171,22 @@ impl SettingsView {
                                             .child(format!(
                                                 "{count} {} in this worktree · {status}{}{}",
                                                 if count == 1 { "session" } else { "sessions" },
-                                                if tree.unpushed > 0 {
+                                                if tree.assessment.unpushed > 0 {
                                                     format!(
                                                         " · {} unpublished commits",
-                                                        tree.unpushed
+                                                        tree.assessment.unpushed
                                                     )
                                                 } else {
                                                     String::new()
                                                 },
-                                                if tree.locked { " · Locked" } else { "" }
-                                            )),
+                                                if tree.assessment.locked { " · Locked" } else { "" }
+                                            ))
+                                            .when_some(self.worktree_sizes.get(&t.path), |row, size| {
+                                                row.child(format!("{:.1} GB on disk", *size as f64 / 1e9))
+                                            })
+                                            .when(tree.assessment.removable() && count == 0, |row| {
+                                                row.child("Safe to remove: nothing here would be lost")
+                                            }),
                                     ),
                             )
                             .child(
