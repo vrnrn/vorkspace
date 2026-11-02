@@ -32,8 +32,11 @@ pub(crate) struct AppStart {
     pub cleanup: Option<vorkspace_core::bot::launch::CreatedWorktree>,
 }
 
+pub(crate) type WorktreeRemoved = Box<dyn FnOnce(Result<(), String>, &mut App)>;
+
 pub(crate) trait BotsHost {
-    fn terminals_using(&self, path: &str, cx: &App) -> bool;
+    /// Remove as an agent would: it refuses rather than discards.
+    fn remove_worktree(&self, project: String, path: String, done: WorktreeRemoved, cx: &mut App);
     fn session_views(&self, cx: &App) -> Vec<BotSession>;
     fn session_entity(&self, id: i64, cx: &App) -> Option<Entity<Conversation>>;
     fn ensure_session(&self, id: i64, cx: &mut App) -> Option<Entity<Conversation>>;

@@ -5,7 +5,7 @@ mod attachments;
 pub(crate) mod automations_schema;
 mod bot_desktop;
 pub(crate) mod bot_state;
-pub use bot_state::{describe_worktrees, remove_unused_worktree};
+pub use bot_state::describe_worktrees;
 mod bots;
 pub mod inbox_preferences;
 pub use bot_state::root as bot_root;

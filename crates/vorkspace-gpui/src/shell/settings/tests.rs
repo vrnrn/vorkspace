@@ -307,16 +307,90 @@ fn shortcut_recording_rebinds_native_settings_and_reset_restores_it(cx: &mut Tes
         .unwrap();
 }
 
-#[gpui::test]
-fn deleting_a_worktree_checks_title_tab_terminals(cx: &mut TestAppContext) {
-    let (window, _, _) = window(cx);
+fn repository() -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "fixture@example.invalid"]);
+    git(&["config", "user.name", "Fixture"]);
+    git(&["commit", "--allow-empty", "-m", "Initial"]);
+    let tree = vorkspace_core::git::create_named_worktree(dir.path(), "feature").unwrap();
+    (dir, tree.path)
+}
+
+fn remove(
+    window: gpui::WindowHandle<Shell>,
+    project: String,
+    path: String,
+    cx: &mut TestAppContext,
+) -> Result<(), String> {
+    let outcome = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let seen = outcome.clone();
     window
         .update(cx, |shell, _, cx| {
-            let terminal = cx.new(|cx| crate::terminal::Terminal::new("/tmp/tree/sub".into(), cx));
-            assert!(!shell.terminals_using("/tmp/tree", cx));
-            shell.terminal_tabs.insert(1, terminal);
-            assert!(shell.terminals_using("/tmp/tree", cx));
-            assert!(!shell.terminals_using("/tmp/other", cx));
+            shell.remove_worktree(
+                project,
+                path,
+                Removal::Safe,
+                Box::new(move |_, result, _| *seen.borrow_mut() = Some(result)),
+                cx,
+            );
         })
         .unwrap();
+    cx.executor().allow_parking();
+    let started = std::time::Instant::now();
+    while outcome.borrow().is_none() {
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    outcome.borrow_mut().take().unwrap()
+}
+
+#[gpui::test]
+fn an_alias_cannot_slip_past_a_title_tab_terminal(cx: &mut TestAppContext) {
+    let (dir, tree) = repository();
+    let (window, _, _) = window(cx);
+    let project = dir.path().to_string_lossy().into_owned();
+    window
+        .update(cx, |shell, _, cx| {
+            let terminal = cx.new(|cx| crate::terminal::Terminal::new(tree.clone(), cx));
+            shell.terminal_tabs.insert(1, terminal);
+        })
+        .unwrap();
+    let error = remove(window, project.clone(), format!("{tree}/."), cx).unwrap_err();
+    assert!(error.contains("Close the terminals"), "{error}");
+    assert!(std::path::Path::new(&tree).exists());
+    window
+        .update(cx, |shell, _, _| shell.terminal_tabs.clear())
+        .unwrap();
+    remove(window, project, format!("{tree}/."), cx).unwrap();
+    assert!(!std::path::Path::new(&tree).exists());
+    assert!(!vorkspace_core::worktree_management::is_being_removed(
+        &tree
+    ));
+    let _ = std::fs::remove_dir_all(vorkspace_core::worktree_management::default_root(
+        dir.path(),
+    ));
+}
+
+#[gpui::test]
+fn agents_are_refused_while_work_would_be_lost(cx: &mut TestAppContext) {
+    let (dir, tree) = repository();
+    let (window, _, _) = window(cx);
+    let project = dir.path().to_string_lossy().into_owned();
+    std::fs::write(std::path::Path::new(&tree).join("draft"), "unsaved").unwrap();
+    let error = remove(window, project, tree.clone(), cx).unwrap_err();
+    assert!(error.contains("uncommitted"), "{error}");
+    assert!(std::path::Path::new(&tree).join("draft").exists());
+    let _ = std::fs::remove_dir_all(vorkspace_core::worktree_management::default_root(
+        dir.path(),
+    ));
 }

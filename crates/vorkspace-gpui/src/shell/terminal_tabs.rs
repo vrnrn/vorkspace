@@ -162,7 +162,7 @@ impl Shell {
             .or_insert_with(|| {
                 // No Shell observation: grid output belongs to this entity, and
                 // the title tab has a stable label. Hidden output cannot wake chat.
-                cx.new(|cx| Terminal::new(cwd.clone(), cx))
+                cx.new(|cx| Terminal::new(crate::terminal::usable_cwd(cwd.clone()), cx))
             })
             .clone();
         terminal.update(cx, |terminal, _| terminal.visible = true);

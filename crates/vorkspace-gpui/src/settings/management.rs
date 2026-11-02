@@ -277,23 +277,13 @@ impl SettingsView {
                 Target::Skill => {
                     vorkspace_core::skills::create_blank(&cwd, &name, scope == "user").map(|_| ())
                 }
-                Target::Worktree => {
-                    let project = std::path::Path::new(&cwd);
-                    let tree = vorkspace_core::git::create_project_worktree(
-                        project,
-                        &name,
-                        Some(&base),
-                        existing,
-                    )?;
-                    match vorkspace_core::worktree_management::prepare(
-                        project,
-                        std::path::Path::new(&tree.path),
-                        &Default::default(),
-                    ) {
-                        Some(warning) => Err(warning),
-                        None => Ok(()),
-                    }
-                }
+                Target::Worktree => vorkspace_core::git::create_project_worktree(
+                    std::path::Path::new(&cwd),
+                    &name,
+                    Some(&base),
+                    existing,
+                )
+                .map(|_| ()),
                 _ => Ok(()),
             }
         });
@@ -519,7 +509,7 @@ impl SettingsView {
             Target::WorktreeSetup => {
                 rows.push(name.clone().into_any_element());
                 rows.push(note(
-                    "Runs in each new worktree before its agent starts, with VORKSPACE_PROJECT_PATH and VORKSPACE_WORKTREE_PATH set. Leave it empty for none. A failure is reported, and the worktree is kept.",
+                    "Runs once, before the first agent turn in each new worktree, with VORKSPACE_PROJECT_PATH and VORKSPACE_WORKTREE_PATH set. Leave it empty for none. If it fails, the agent is told and the worktree is kept.",
                 ));
             }
             Target::Worktree => {

@@ -276,24 +276,6 @@ fn run_turn_using(
             )?;
             let cwd = path.to_string_lossy().into_owned();
             created_worktree = Some(cwd.clone());
-            if vorkspace_core::worktree_management::has_setup(std::path::Path::new(&summary.cwd)) {
-                publish(
-                    &tx,
-                    &cancel,
-                    Update {
-                        activity: activity.label(),
-                        worktree_cwd: Some(cwd.clone()),
-                        start: transcript.rows.len(),
-                        status: "Preparing worktree…".into(),
-                        ..Default::default()
-                    },
-                )?;
-                setup_warning = vorkspace_core::worktree_management::prepare(
-                    std::path::Path::new(&summary.cwd),
-                    &path,
-                    &cancel,
-                );
-            }
             settings.worktree_cwd = Some(cwd.clone());
             settings.new_worktree = false;
             {
@@ -314,6 +296,33 @@ fn run_turn_using(
                     ..Default::default()
                 },
             )?;
+        }
+        let working = settings
+            .worktree_cwd
+            .clone()
+            .unwrap_or_else(|| summary.cwd.clone());
+        if vorkspace_core::worktree_management::is_being_removed(&working) {
+            return Err("This worktree is being removed.".into());
+        }
+        if vorkspace_core::worktree_setup::is_due(std::path::Path::new(&working)) {
+            publish(
+                &tx,
+                &cancel,
+                Update {
+                    activity: activity.label(),
+                    start: transcript.rows.len(),
+                    status: "Preparing worktree…".into(),
+                    ..Default::default()
+                },
+            )?;
+            setup_warning = vorkspace_core::worktree_setup::run_due(
+                std::path::Path::new(&summary.cwd),
+                std::path::Path::new(&working),
+                &cancel,
+            );
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Stopped".into());
+            }
         }
         if let Some(source) = settings.pending_provider_switch.take() {
             let root = locked(&store)?.data_dir().map(std::path::Path::to_path_buf);

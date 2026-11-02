@@ -268,3 +268,70 @@ fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_
     assert_eq!(rows[0].text, "Create the checkout");
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn the_first_turn_in_a_new_worktree_runs_its_setup() {
+    let root = std::env::temp_dir().join(format!(
+        "vorkspace-worktree-setup-{}",
+        vorkspace_core::bot::new_id()
+    ));
+    let repo = root.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "Initial",
+        ],
+    ] {
+        let result = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+    }
+    let repo = repo.canonicalize().unwrap();
+    vorkspace_core::worktree_setup::set_commands(&std::collections::HashMap::from([(
+        repo.to_string_lossy().into_owned(),
+        "touch prepared".to_owned(),
+    )]));
+    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
+    let store = Arc::new(Mutex::new(store));
+    let (tx, rx) = async_channel::bounded(8);
+    let (_control, controls) = std::sync::mpsc::channel();
+    run_turn_using(
+        TurnInput {
+            summary,
+            prompt: "Create the checkout".into(),
+            settings: Settings {
+                new_worktree: true,
+                ..Default::default()
+            },
+        },
+        controls,
+        store,
+        Arc::new(AtomicBool::new(false)),
+        tx,
+        |_| None,
+    );
+    let mut updates = Vec::new();
+    while let Ok(update) = rx.try_recv() {
+        updates.push(update);
+    }
+    assert!(updates.iter().any(|u| u.status == "Preparing worktree…"));
+    let cwd = updates.iter().find_map(|u| u.worktree_cwd.clone()).unwrap();
+    assert!(std::path::Path::new(&cwd).join("prepared").exists());
+    assert!(!vorkspace_core::worktree_setup::is_due(
+        std::path::Path::new(&cwd)
+    ));
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(vorkspace_core::worktree_management::default_root(&repo));
+}

@@ -481,6 +481,7 @@ impl SettingsView {
                 this.skill_documents.clear();
                 this.discovery = data;
                 this.discovery_loading = false;
+                this.worktree_sizes_project.clear();
                 if this.section == Section::Providers {
                     this.load_catalogs(true, cx);
                 }

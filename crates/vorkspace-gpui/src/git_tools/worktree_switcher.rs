@@ -253,30 +253,20 @@ impl WorktreeSwitcher {
         }
         let branch = self.query(cx);
         let cwd = self.focused.as_ref().map_or(&self.cwd, |f| &f.path).clone();
-        let project = self.cwd.clone();
         self.creating = true;
         self.error = None;
-        let work = cx.background_executor().spawn(async move {
-            let tree = git::create_named_worktree(Path::new(&cwd), &branch)?;
-            let setup = vorkspace_core::worktree_management::prepare(
-                Path::new(&project),
-                Path::new(&tree.path),
-                &Default::default(),
-            );
-            Ok::<_, String>((tree, setup))
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { git::create_named_worktree(Path::new(&cwd), &branch) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.creating = false;
                 match result {
-                    Ok((tree, setup)) => {
-                        this.error = setup;
-                        cx.emit(Event::Selected(Some(WorktreeFocus {
-                            path: tree.path,
-                            branch: tree.branch,
-                        })));
-                    }
+                    Ok(tree) => cx.emit(Event::Selected(Some(WorktreeFocus {
+                        path: tree.path,
+                        branch: tree.branch,
+                    }))),
                     Err(error) => this.error = Some(error),
                 }
                 cx.notify();

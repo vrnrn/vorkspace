@@ -678,6 +678,7 @@ impl Shell {
         cwd: String,
         cx: &mut Context<Self>,
     ) -> Entity<Terminal> {
+        let cwd = crate::terminal::usable_cwd(cwd);
         let terminal = cx.new(|cx| Terminal::new(cwd, cx));
         self.observations
             .push(cx.subscribe(&terminal, |_, _, _: &TerminalEvent, cx| cx.notify()));

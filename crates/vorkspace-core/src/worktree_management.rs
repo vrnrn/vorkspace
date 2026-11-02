@@ -1,16 +1,56 @@
 //! Worktree guards and setup, shared by Settings and the app actions. Removal keeps
 //! commits: a branch goes only if Git agrees it is fully merged.
 use std::{
-    collections::HashMap,
-    os::unix::process::CommandExt,
+    collections::HashSet,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Mutex,
-    },
-    time::{Duration, Instant},
+    process::Command,
+    sync::Mutex,
 };
+
+/// Ignored folders that tools regenerate. Any other ignored file, such as `.env`,
+/// may be the only copy, so it has to stop an agent from removing a worktree.
+const REGENERATED: [&str; 12] = [
+    ".cache",
+    ".next",
+    ".turbo",
+    ".venv",
+    "__pycache__",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules",
+    "target",
+    "venv",
+    ".pytest_cache",
+];
+static REMOVING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+/// Held while a worktree is being removed. Turns and terminals check it, so nothing
+/// starts inside a folder that is about to disappear.
+pub struct RemovalGuard(String);
+impl RemovalGuard {
+    pub fn claim(path: &str) -> Result<Self, String> {
+        let key = crate::files::path_key(path);
+        let mut removing = REMOVING.lock().unwrap_or_else(|e| e.into_inner());
+        if !removing.get_or_insert_default().insert(key.clone()) {
+            return Err("This worktree is already being removed.".into());
+        }
+        Ok(Self(key))
+    }
+}
+impl Drop for RemovalGuard {
+    fn drop(&mut self) {
+        let mut removing = REMOVING.lock().unwrap_or_else(|e| e.into_inner());
+        removing.get_or_insert_default().remove(&self.0);
+    }
+}
+pub fn is_being_removed(path: &str) -> bool {
+    let removing = REMOVING.lock().unwrap_or_else(|e| e.into_inner());
+    removing
+        .iter()
+        .flatten()
+        .any(|root| crate::files::is_equal_or_inside(path, root))
+}
 pub fn default_root(main: &Path) -> PathBuf {
     main.with_file_name(format!(
         "{}-worktrees",
@@ -19,12 +59,14 @@ pub fn default_root(main: &Path) -> PathBuf {
 }
 /// What removing a worktree would cost. Settings and the app actions share this,
 /// so a Bot can never remove something the UI would warn about.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Assessment {
     pub locked: bool,
     pub dirty: Option<bool>,
     pub unpushed: usize,
     pub merged: bool,
+    /// Ignored files that nothing would regenerate.
+    pub ignored: Vec<String>,
 }
 impl Assessment {
     /// Why removing this would lose work or override the user.
@@ -36,6 +78,10 @@ impl Assessment {
                 Some(_) => "it has uncommitted changes".into(),
                 None => "its status could not be read".into(),
             })
+        } else if let Some(file) = self.ignored.first() {
+            Some(format!(
+                "it has ignored files that may be irreplaceable, such as {file}"
+            ))
         } else if self.merged || self.unpushed == 0 {
             None
         } else {
@@ -81,11 +127,29 @@ pub fn assess(cwd: &Path, tree: &crate::git::Worktree) -> Assessment {
         .any(|target| {
             crate::git::git(cwd, &["merge-base", "--is-ancestor", &tree.head, &target]).is_ok()
         });
+    let ignored = crate::git::git(
+        Path::new(&tree.path),
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        ],
+    )
+    .unwrap_or_default()
+    .lines()
+    .map(|entry| entry.trim_end_matches('/'))
+    .filter(|entry| !entry.split('/').any(|part| REGENERATED.contains(&part)))
+    .take(5)
+    .map(str::to_owned)
+    .collect();
     Assessment {
         locked,
         dirty,
         unpushed,
         merged,
+        ignored,
     }
 }
 pub fn check(cwd: &Path, path: &Path) -> Result<crate::git::Worktree, String> {
@@ -118,21 +182,31 @@ pub fn remove(cwd: &Path, path: &Path) -> Result<(), String> {
     let assessment = assess(cwd, &tree);
     crate::provider::discard_worktree(Path::new(&tree.path));
     crate::git::git(cwd, &["worktree", "remove", "--force", "--", &tree.path])?;
-    // `-d` refuses anything Git doesn't consider merged, so this can only tidy.
+    remove_merged_branch(cwd, &tree, &assessment);
+    Ok(())
+}
+/// `-d` refuses anything Git doesn't consider merged, so this can only tidy.
+fn remove_merged_branch(cwd: &Path, tree: &crate::git::Worktree, assessment: &Assessment) {
     if let Some(branch) = tree.branch.as_deref().filter(|_| assessment.merged) {
         let _ = crate::git::git(cwd, &["branch", "-d", "--", branch]);
     }
-    Ok(())
 }
-/// The app actions' removal: it refuses rather than discards.
+/// The app actions' removal. It refuses rather than discards, and Git's own check
+/// without `--force` catches anything written after this assessment.
 pub fn remove_if_safe(cwd: &Path, path: &Path) -> Result<(), String> {
     let tree = check(cwd, path)?;
-    if let Some(blocker) = assess(cwd, &tree).blocker() {
+    let assessment = assess(cwd, &tree);
+    if let Some(blocker) = assessment.blocker() {
         return Err(format!(
             "This worktree was kept because {blocker}. Tell the user rather than removing it."
         ));
     }
-    remove(cwd, path)
+    crate::git::git(cwd, &["worktree", "remove", "--", &tree.path]).map_err(|error| {
+        format!("This worktree was kept because Git refused to remove it: {error}")
+    })?;
+    crate::provider::discard_worktree(Path::new(&tree.path));
+    remove_merged_branch(cwd, &tree, &assessment);
+    Ok(())
 }
 /// The rows that describe a project's worktrees; `sessions` answers who uses one.
 pub fn describe(
@@ -168,87 +242,6 @@ pub fn disk_size(path: &str) -> Option<u64> {
     let kilobytes = String::from_utf8_lossy(&output.stdout);
     Some(kilobytes.split_whitespace().next()?.parse::<u64>().ok()? * 1024)
 }
-const SETUP_TIMEOUT: Duration = Duration::from_secs(600);
-const SETUP_POLL: Duration = Duration::from_millis(50);
-const SETUP_OUTPUT: usize = 2000;
-static SETUP_COMMANDS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
-
-/// Per-project commands from the user's own preferences. They never come from the
-/// repository, so opening a project can't choose what runs on this Mac.
-pub fn set_setup_commands(commands: &HashMap<String, String>) {
-    let commands = commands
-        .iter()
-        .filter(|(_, command)| !command.trim().is_empty())
-        .map(|(project, command)| (crate::files::path_key(project), command.clone()))
-        .collect();
-    *SETUP_COMMANDS.lock().unwrap_or_else(|e| e.into_inner()) = Some(commands);
-}
-fn setup_command(project: &Path) -> Option<String> {
-    let commands = SETUP_COMMANDS.lock().unwrap_or_else(|e| e.into_inner());
-    commands
-        .as_ref()?
-        .get(&crate::files::path_key(&project.to_string_lossy()))
-        .cloned()
-}
-pub fn has_setup(project: &Path) -> bool {
-    !crate::files::remote::is_remote(project) && setup_command(project).is_some()
-}
-/// Run the project's setup command in a new worktree, off the UI thread. A failure
-/// is a warning: the worktree is still usable, and the caller reports it.
-pub fn prepare(project: &Path, worktree: &Path, cancel: &AtomicBool) -> Option<String> {
-    if crate::files::remote::is_remote(project) {
-        return None;
-    }
-    let command = setup_command(project)?;
-    run_setup(&command, project, worktree, cancel, SETUP_TIMEOUT).err()
-}
-fn run_setup(
-    command: &str,
-    project: &Path,
-    worktree: &Path,
-    cancel: &AtomicBool,
-    timeout: Duration,
-) -> Result<(), String> {
-    let failed = |reason: String| format!("Worktree setup {reason}");
-    let output = tempfile::NamedTempFile::new().map_err(|e| failed(e.to_string()))?;
-    let log = output.reopen().map_err(|e| failed(e.to_string()))?;
-    let errors = log.try_clone().map_err(|e| failed(e.to_string()))?;
-    let mut process = Command::new("/bin/sh");
-    crate::shell_env::apply_gui_env(&mut process);
-    let mut child = process
-        .args(["-c", command])
-        .current_dir(worktree)
-        .env("VORKSPACE_PROJECT_PATH", project)
-        .env("VORKSPACE_WORKTREE_PATH", worktree)
-        .stdin(Stdio::null())
-        .stdout(log)
-        .stderr(errors)
-        .process_group(0)
-        .spawn()
-        .map_err(|e| failed(format!("could not start: {e}")))?;
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| failed(e.to_string()))? {
-            break status;
-        }
-        let stopped = cancel.load(Ordering::Relaxed);
-        if stopped || started.elapsed() >= timeout {
-            crate::process::terminate(&mut child);
-            let _ = child.wait();
-            return Err(failed(
-                if stopped { "was stopped" } else { "timed out" }.into(),
-            ));
-        }
-        std::thread::sleep(SETUP_POLL);
-    };
-    if status.success() {
-        return Ok(());
-    }
-    let text = std::fs::read(output.path()).unwrap_or_default();
-    let text = String::from_utf8_lossy(&text[text.len().saturating_sub(SETUP_OUTPUT)..]);
-    Err(failed(format!("failed: {}", text.trim())))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +317,47 @@ mod tests {
         tidy(dir.path());
     }
     #[test]
+    fn ignored_files_stop_an_agent_unless_tools_regenerate_them() {
+        let dir = repo();
+        std::fs::write(dir.path().join(".gitignore"), ".env\ntarget/\n").unwrap();
+        crate::git::git(dir.path(), &["add", ".gitignore"]).unwrap();
+        crate::git::git(dir.path(), &["commit", "-m", "Ignore"]).unwrap();
+        let tree = crate::git::create_named_worktree(dir.path(), "local-files").unwrap();
+        let path = Path::new(&tree.path);
+        std::fs::create_dir(path.join("target")).unwrap();
+        std::fs::write(path.join("target/output"), "built").unwrap();
+        assert_eq!(assess(dir.path(), &tree).blocker(), None);
+        std::fs::write(path.join(".env"), "SECRET=1").unwrap();
+        let refused = remove_if_safe(dir.path(), path).unwrap_err();
+        assert!(refused.contains(".env"), "{refused}");
+        assert!(path.join(".env").exists());
+        std::fs::remove_file(path.join(".env")).unwrap();
+        remove_if_safe(dir.path(), path).unwrap();
+        assert!(!path.exists());
+        tidy(dir.path());
+    }
+    #[test]
+    fn an_alias_of_a_worktree_resolves_to_its_registered_path() {
+        let dir = repo();
+        let tree = crate::git::create_named_worktree(dir.path(), "aliased").unwrap();
+        let alias = format!("{}/.", tree.path);
+        assert_eq!(
+            check(dir.path(), Path::new(&alias)).unwrap().path,
+            tree.path
+        );
+        remove(dir.path(), Path::new(&tree.path)).unwrap();
+        tidy(dir.path());
+    }
+    #[test]
+    fn a_claimed_worktree_blocks_new_work_until_released() {
+        let guard = RemovalGuard::claim("/project-worktrees/feature").unwrap();
+        assert!(is_being_removed("/project-worktrees/feature/src"));
+        assert!(!is_being_removed("/project-worktrees/other"));
+        assert!(RemovalGuard::claim("/project-worktrees/feature").is_err());
+        drop(guard);
+        assert!(!is_being_removed("/project-worktrees/feature"));
+    }
+    #[test]
     fn a_detached_worktree_goes_only_when_nothing_in_it_is_unique() {
         let dir = repo();
         let path = dir.path().join("detached");
@@ -351,53 +385,5 @@ mod tests {
             &["worktree", "remove", "--force", path.to_str().unwrap()],
         )
         .unwrap();
-    }
-    #[test]
-    fn setup_runs_in_the_worktree_and_reports_failure_without_losing_it() {
-        let dir = repo();
-        let tree = crate::git::create_named_worktree(dir.path(), "setup").unwrap();
-        let path = Path::new(&tree.path);
-        let run = |command: &str, timeout| {
-            run_setup(command, dir.path(), path, &AtomicBool::new(false), timeout)
-        };
-        run(
-            "printf %s \"$VORKSPACE_PROJECT_PATH\" > marker",
-            SETUP_TIMEOUT,
-        )
-        .unwrap();
-        assert_eq!(
-            std::fs::read_to_string(path.join("marker")).unwrap(),
-            dir.path().to_string_lossy()
-        );
-        let failed = run("echo cannot install >&2; exit 3", SETUP_TIMEOUT).unwrap_err();
-        assert!(failed.contains("cannot install"), "{failed}");
-        let timed_out = run("sleep 30", Duration::from_millis(100)).unwrap_err();
-        assert!(timed_out.contains("timed out"), "{timed_out}");
-        let stopped = run_setup(
-            "sleep 30",
-            dir.path(),
-            path,
-            &AtomicBool::new(true),
-            SETUP_TIMEOUT,
-        )
-        .unwrap_err();
-        assert!(stopped.contains("stopped"), "{stopped}");
-        remove(dir.path(), path).unwrap();
-        tidy(dir.path());
-    }
-    #[test]
-    fn only_a_configured_project_runs_setup() {
-        let dir = repo();
-        let tree = crate::git::create_named_worktree(dir.path(), "unset").unwrap();
-        let path = Path::new(&tree.path);
-        let cancel = AtomicBool::new(false);
-        assert_eq!(prepare(dir.path(), path, &cancel), None);
-        set_setup_commands(&HashMap::from([(
-            dir.path().to_string_lossy().into_owned(),
-            "touch prepared".to_owned(),
-        )]));
-        assert_eq!(prepare(dir.path(), path, &cancel), None);
-        assert!(path.join("prepared").exists());
-        tidy(dir.path());
     }
 }
