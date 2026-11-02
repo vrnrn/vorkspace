@@ -5,20 +5,35 @@ import AudioToolbox
 import CoreAudio
 import Carbon
 
-// One attempt, never reset. Protected by the capture's PCM lock. Expected
-// setup has no observer; changes after beginArming are sticky, including changes
-// racing the baseline read or teardown. No delay or failed=false reset is used.
+// No PCM is accepted until actual converted input establishes readiness and a
+// fresh route snapshot commits arming. AVAudioEngine can deliver its own setup
+// notification after start() returns but before the first buffer. Starting is
+// bounded by the owner; notifications in arming/active remain sticky failures.
 struct CaptureLifecycle {
-    private enum Phase { case setup, arming, active }
+    private enum Phase { case setup, starting, arming, active }
     private var phase = Phase.setup
+    private var inputReady = false
     private(set) var failed = false
     var active: Bool { phase == .active && !failed }
+    var starting: Bool { phase == .starting && !failed }
+    var readyToArm: Bool { starting && inputReady }
     mutating func configurationChanged() {
-        if phase != .setup { failed = true }
+        if phase == .arming || phase == .active { failed = true }
     }
     mutating func fail() { failed = true }
-    mutating func beginArming() -> Bool {
+    mutating func checkInputDeadline(now: Double, deadline: Double) -> Bool {
+        guard starting, now >= deadline else { return false }
+        failed = true
+        return true
+    }
+    mutating func beginStarting() -> Bool {
         guard phase == .setup, !failed else { return false }
+        phase = .starting
+        return true
+    }
+    mutating func receivedInput() { if phase == .starting { inputReady = true } }
+    mutating func beginArming() -> Bool {
+        guard readyToArm else { return false }
         phase = .arming
         return true
     }
@@ -70,23 +85,30 @@ private final class DictationCapture {
     var format: AVAudioFormat?
     var tapped = false
     var observer: NSObjectProtocol?
-    func arm() -> Bool {
-        lock.lock(); let arming = lifecycle.beginArming(); lock.unlock()
-        guard arming else { return false }
-        // Route/format/tap setup and engine.start have completed. Register before
-        // validating the fresh baseline, so an interruption during validation
-        // cannot be erased by a successful readback. queue:nil delivers on the
-        // posting thread; no main-queue setup notification is carried into capture.
+    var inputDeadline = 0.0
+    func beginStarting() -> Bool {
+        lock.lock(); let starting = lifecycle.beginStarting(); lock.unlock()
+        guard starting else { return false }
+        // Observe before engine start. No audio is retained in this phase, so
+        // expected asynchronous setup cannot invalidate an accepted recording.
         observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
             guard let self else { return }
             self.lock.lock()
             #if DEBUG
             if self.diagnostic.notifications.count < 16 {
-                self.diagnostic.notifications.append(self.diagnostic.teardownStarted ? "controlled-teardown" : (self.lifecycle.active ? "active" : "arming-or-failed"))
+                self.diagnostic.notificationTimes.append(ProcessInfo.processInfo.systemUptime - self.diagnostic.began)
+                self.diagnostic.notifications.append(self.diagnostic.teardownStarted ? "controlled-teardown" : (self.lifecycle.starting ? "starting" : (self.lifecycle.active ? "active" : "arming-or-failed")))
             }
             #endif
             self.lifecycle.configurationChanged(); self.lock.unlock()
         }
+        return true
+    }
+    func arm() -> Bool {
+        lock.lock(); let arming = lifecycle.beginArming(); lock.unlock()
+        guard arming else { return false }
+        // The observer is already registered. An event during this fresh read
+        // cannot be erased by committing a healthy baseline.
         let healthy = routeIsHealthy()
         lock.lock(); defer { lock.unlock() }
         return lifecycle.arm(healthy: healthy)
@@ -208,6 +230,9 @@ private func startCapture(_ microphone: String, retainSamples: Bool = true) -> I
         state.lock.lock(); defer { state.lock.unlock() }
         _ = conversionStatus
         #if DEBUG
+        if state.diagnostic.callbacks == 0 {
+            state.diagnostic.firstCallbackSeconds = ProcessInfo.processInfo.systemUptime - state.diagnostic.began
+        }
         state.diagnostic.callbacks += 1
         state.diagnostic.inputFrames += Int(buffer.frameLength)
         state.diagnostic.outputFrames += Int(result.frameLength)
@@ -215,6 +240,11 @@ private func startCapture(_ microphone: String, retainSamples: Bool = true) -> I
         if let error { state.diagnostic.conversionError = "\(error.domain):\(error.code)" }
         #endif
         if error != nil { state.lifecycle.fail(); return }
+        if result.frameLength > 0 { state.lifecycle.receivedInput() }
+        guard state.lifecycle.active else { return }
+        #if DEBUG
+        state.diagnostic.acceptedFrames += Int(result.frameLength)
+        #endif
         guard state.retainSamples else { return }
         guard let pcm = result.floatChannelData?[0] else { return }
         let count = min(Int(result.frameLength), 16000 * 120 - state.samples.count)
@@ -222,6 +252,7 @@ private func startCapture(_ microphone: String, retainSamples: Bool = true) -> I
         state.full = state.samples.count == 16000 * 120
     }
     state.tapped = true
+    guard state.beginStarting() else { return 3 }
     do { try state.engine.start() } catch {
         #if DEBUG
         let error = error as NSError
@@ -229,18 +260,30 @@ private func startCapture(_ microphone: String, retainSamples: Bool = true) -> I
         #endif
         state.stop(); return 3
     }
-    guard state.arm() else { return 3 }
+    guard state.routeIsHealthy() else { return 3 }
+    state.inputDeadline = ProcessInfo.processInfo.systemUptime + 2
     capture = state; started = true
     return 0
 }
 @_cdecl("vorkspace_dictation_health")
 func dictationHealth() -> Int32 {
     guard let state = capture else { return 0 }
+    state.lock.lock()
+    let timedOut = state.lifecycle.checkInputDeadline(now: ProcessInfo.processInfo.systemUptime, deadline: state.inputDeadline)
+    let ready = state.lifecycle.readyToArm
+    #if DEBUG
+    if timedOut { state.diagnostic.healthFailure = "no-input-buffers" }
+    #else
+    _ = timedOut
+    #endif
+    state.lock.unlock()
+    if ready { _ = state.arm() }
     let failure = state.routeFailure()
     state.lock.lock(); defer { state.lock.unlock() }
-    if !state.lifecycle.active || failure != nil {
+    if state.lifecycle.failed || failure != nil {
+        state.lifecycle.fail()
         #if DEBUG
-        state.diagnostic.healthFailure = failure ?? (state.diagnostic.conversionError == nil
+        state.diagnostic.healthFailure = state.diagnostic.healthFailure ?? failure ?? (state.diagnostic.conversionError == nil
             ? "configuration-notification" : "conversion-error")
         #endif
         return 1
@@ -253,7 +296,7 @@ func dictationStop(_ callback: @convention(c) (UnsafePointer<Float>?, Int) -> Vo
     let health = dictationHealth()
     state.stop(); capture = nil
     state.lock.lock()
-    let failed = state.lifecycle.failed
+    let failed = !state.lifecycle.active
     let pcm = state.samples
     state.samples.removeAll()
     state.lock.unlock()
@@ -338,10 +381,14 @@ func dictationShutdown() { dictationCancel(); restoration.flush() }
 // Explicit opt-in metadata only. No PCM values, levels, transcript, clipboard,
 // destination or model access. Shares the production owner/converter/health/stop.
 private struct CaptureDiagnostics {
+    let began = ProcessInfo.processInfo.systemUptime
+    var firstCallbackSeconds: Double?
+    var notificationTimes = [Double]()
     var selectionStatus: OSStatus?
     var callbacks = 0
     var inputFrames = 0
     var outputFrames = 0
+    var acceptedFrames = 0
     var notifications = [String]()
     var conversionStatus: Int = 0
     var conversionError: String?
@@ -384,8 +431,12 @@ private func captureMetadata(_ state: DictationCapture) -> [String: Any] {
             "routeFailure": routeFailure as Any? ?? NSNull(),
             "healthFailure": d.healthFailure as Any? ?? NSNull(),
             "lifecycleFailed": lifecycle.failed, "lifecycleActive": lifecycle.active,
-            "notifications": d.notifications, "callbacks": d.callbacks,
+            "lifecycleStarting": lifecycle.starting,
+            "notifications": d.notifications, "notificationTimes": d.notificationTimes,
+            "firstCallbackSeconds": d.firstCallbackSeconds as Any? ?? NSNull(),
+            "elapsedSeconds": ProcessInfo.processInfo.systemUptime - d.began, "callbacks": d.callbacks,
             "inputFrames": d.inputFrames, "convertedFrames": d.outputFrames,
+            "acceptedFrames": d.acceptedFrames,
             "conversionStatus": d.conversionStatus,
             "conversionError": d.conversionError as Any? ?? NSNull(),
             "startError": d.startError as Any? ?? NSNull(), "retainedSamples": retainedSamples]
@@ -419,22 +470,29 @@ func dictationCaptureProbe(_ microphone: UnsafePointer<CChar>, _ requestPermissi
         var polls = [[String: Any]]()
         if code == 0 {
             let deadline = Date().addingTimeInterval(2.5)
+            var injected = false
             while Date() < deadline {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-                if interrupt && polls.count == 3, let state = diagnosticCapture {
-                    NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: state.engine)
+                if interrupt && !injected && polls.count >= 3, let state = diagnosticCapture {
+                    state.lock.lock(); let active = state.lifecycle.active; state.lock.unlock()
+                    if active {
+                        injected = true
+                        NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: state.engine)
+                    }
                 }
                 let health = dictationHealth()
                 if let state = diagnosticCapture {
                     polls.append(["health": health, "metadata": captureMetadata(state)])
                 }
-                if health != 0 { break }
+                // Continue observing a failed probe only until its fixed deadline.
+                // The failure stays sticky and stop still refuses the recording.
+                if health == 2 { break }
             }
             code = dictationStop { _, _ in } // Probe retains no PCM; no insertion.
             result["stopCode"] = code
             if let state = diagnosticCapture {
                 result["afterStop"] = captureMetadata(state)
-                if code == 0 && state.diagnostic.outputFrames == 0 { code = 12 }
+                if code == 0 && state.diagnostic.acceptedFrames == 0 { code = 12 }
             }
         }
         result["polls"] = polls

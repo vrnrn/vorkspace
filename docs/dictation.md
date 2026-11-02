@@ -60,13 +60,17 @@ choice once, selects it through `inputNode.auAudioUnit.setDeviceID`, verifies th
 underlying input audio unit's CurrentDevice, and then reads its format before installing a tap. Selection must go through the
 engine's AUAudioUnit owner: setting only the legacy AudioUnit property can leave
 default-device tracking active and let a default aggregate replace the selected
-microphone asynchronously during startup. Expected setup completes before
-configuration-change observation is armed. After engine start, the helper registers
-that observer and validates a fresh route, UID, format, permission and running-engine
-baseline before admitting the recording. A notification during that validation or
-active capture remains a failure even if a later read looks healthy. Configuration
-change during capture, device loss, permission loss or an unexpected route cancels
-recording and discards audio.
+microphone asynchronously during startup. Observation begins before engine start,
+but the owner remains in a bounded startup phase until converted input arrives.
+Startup buffers are discarded; a fresh route, UID, format, permission and running
+engine snapshot must then commit arming before audio can be accepted. This uses
+input readiness rather than a fixed sleep or a reset of a failed recording. No
+input within two seconds of engine start returning fails the attempt. A setup
+notification before this boundary cannot invalidate an accepted recording, because
+none exists yet. A notification during arming or active capture remains a sticky
+failure even if a later read looks healthy. Device, permission, unexpected route
+and conversion failures also discard recording; stopping before readiness refuses
+transcription.
 System default is resolved at admission; changing the system input during capture
 does not authorize switching the active recording to another microphone.
 
@@ -185,5 +189,8 @@ bundle; Accessibility is unnecessary. Without permission it reports a preflight
 block. The explicit `--request-microphone` flag can show the macOS consent prompt;
 only the user's Allow grants access. `--interrupt-fixture` injects an engine
 configuration notification during the bounded probe to verify failure routing;
-it must report a failed capture and interrupted stop. Use an isolated signed
+it must report a failed capture and interrupted stop. The diagnostic continues
+observing a failure only until its fixed 2.5-second deadline, without retaining
+audio or clearing the failure, so notification and first-buffer ordering can be
+compared. Use an isolated signed
 bundle and output directory; do not replace a running helper to diagnose capture.

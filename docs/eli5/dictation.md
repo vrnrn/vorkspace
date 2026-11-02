@@ -83,8 +83,11 @@ work. Old download messages cannot mark the new model ready or turn it on. TDT i
 available as an option; this does not claim Vorkspace has qualified its speed or
 transcription quality.
 
-The helper tells its audio engine which microphone to use, then checks that the
-same microphone stays selected. It discards a recording if the device changes,
+The helper tells its audio engine which microphone to use, then waits for the
+first input and checks that the same microphone stays selected. It discards the
+brief startup audio until this check finishes. If input never arrives, it stops
+within two seconds. macOS startup notices do not interrupt this preparation; a
+notice during the final check or recording still discards the attempt. It discards a recording if the device changes,
 permission is lost, or the engine is interrupted.
 
 Development builds also have a short microphone check. It runs for 2.5 seconds,

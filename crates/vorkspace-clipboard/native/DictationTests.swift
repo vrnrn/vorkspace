@@ -11,6 +11,7 @@ func verifyCaptureRouteEvidence() {
     route.actualDevice = 117
     assert(route.failure == "current-device-mismatch")
     var admission = CaptureLifecycle()
+    assert(admission.beginStarting()); admission.receivedInput()
     assert(admission.beginArming())
     assert(!admission.arm(healthy: route.failure == nil))
     route.actualDevice = 79
@@ -39,14 +40,21 @@ func verifyCaptureNotificationLifecycle() {
     selectedRoute.configurationChanged() // Expected CurrentDevice/format setup.
     selectedRoute.configurationChanged() // Expected engine initialization.
     assert(!selectedRoute.failed && !selectedRoute.active)
+    assert(selectedRoute.beginStarting())
+    assert(!selectedRoute.beginArming()) // start() alone is not input readiness.
+    selectedRoute.configurationChanged() // Measured delayed setup notice.
+    assert(!selectedRoute.failed && !selectedRoute.active)
+    selectedRoute.receivedInput()
     assert(selectedRoute.beginArming())
     assert(selectedRoute.arm(healthy: true))
     assert(selectedRoute.active)
+    assert(!selectedRoute.checkInputDeadline(now: 500, deadline: 2))
     selectedRoute.configurationChanged() // An actual change during capture.
     assert(selectedRoute.failed && !selectedRoute.active)
     assert(!selectedRoute.arm(healthy: true)) // Readback cannot clear interruption.
 
     var duringBaseline = CaptureLifecycle()
+    assert(duringBaseline.beginStarting()); duringBaseline.receivedInput()
     assert(duringBaseline.beginArming())
     let routeReadback = true
     duringBaseline.configurationChanged() // Between registration/read and commit.
@@ -55,6 +63,7 @@ func verifyCaptureNotificationLifecycle() {
 
     var lostBeforeObservation = CaptureLifecycle()
     lostBeforeObservation.configurationChanged() // No active observer yet.
+    assert(lostBeforeObservation.beginStarting()); lostBeforeObservation.receivedInput()
     assert(lostBeforeObservation.beginArming())
     assert(!lostBeforeObservation.arm(healthy: false)) // Fresh baseline catches loss.
     assert(!lostBeforeObservation.arm(healthy: true))
@@ -62,7 +71,13 @@ func verifyCaptureNotificationLifecycle() {
     var conversionFailure = CaptureLifecycle()
     conversionFailure.fail() // Tap conversion may fail while engine is starting.
     conversionFailure.configurationChanged()
-    assert(!conversionFailure.beginArming()) // Setup must not reset another failure.
+    assert(!conversionFailure.beginStarting()) // Setup must not reset another failure.
+    var noBuffers = CaptureLifecycle()
+    assert(noBuffers.beginStarting())
+    assert(!noBuffers.checkInputDeadline(now: 1.99, deadline: 2))
+    assert(noBuffers.checkInputDeadline(now: 2, deadline: 2))
+    noBuffers.receivedInput()
+    assert(!noBuffers.readyToArm && !noBuffers.beginArming())
     print("Capture setup, arming-race, active-interruption and fresh-baseline regressions passed")
 }
 func verifyFocusNotificationLifecycle() {
