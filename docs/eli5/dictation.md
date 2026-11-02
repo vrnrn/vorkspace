@@ -39,6 +39,9 @@ wait for red before speaking. Stable words appear in the
 field while you speak. It waits for words to settle instead of inserting guesses
 and deleting them later. Press **⌘,** again to finish the last words, without
 repeating what is already there. The notch shows a microphone, not your text.
+On screens without a notch, the microphone appears by itself at the top center.
+The model can miss punctuation at the end of a sentence; Vorkspace does not
+guess punctuation that the model did not supply.
 Quiet background noise need not hold the last settled word until you speak again.
 TDT checks overlapping pieces of speech, so words can arrive in small bursts.
 Flash is a fast English option that does not add punctuation or capital letters.
@@ -85,6 +88,10 @@ insertion finishes. It never brings an app forward or clicks a field for you.
 If an app secretly moves its own cursor without telling macOS, that change cannot
 always be detected. The app must also support Paste; dictation cannot confirm
 that it accepted the words.
+
+Developers can also run public or generated recordings through a debug fixture
+with a pretend text destination. It checks that live words and the final suffix
+arrive in order without opening a microphone or changing a real text field.
 
 Dictation and clipboard history can be switched on separately. Either keeps the
 helper alive when the main app quits. Switch both off, or use Quit in the helper's

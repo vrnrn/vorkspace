@@ -31,6 +31,8 @@ pub struct Panel {
     pub placement: Placement,
     _screens: Option<notch::ScreenChanges>,
     _screen_task: Option<Task<()>>,
+    #[cfg(test)]
+    geometry_override: Option<Geometry>,
 }
 pub fn open(status: &str, state: State, cx: &mut App) -> gpui::Result<WindowHandle<Panel>> {
     let geometry = Geometry::read();
@@ -51,32 +53,39 @@ pub fn open(status: &str, state: State, cx: &mut App) -> gpui::Result<WindowHand
                 placement,
                 _screens: Some(watch),
                 _screen_task: Some(task),
+                #[cfg(test)]
+                geometry_override: None,
             }
         })
     })
 }
 impl Render for Panel {
     fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        let geometry = self.geometry_override.unwrap_or_else(Geometry::read);
+        #[cfg(not(test))]
         let geometry = Geometry::read();
-        let width =
-            notch::WING_WIDTH.min((geometry.screen_width - geometry.notch_width).max(0.) / 2.);
         let height = geometry.notch_height;
-        notch::place_right(w, geometry, width, height, &self.placement, cx);
+        let layout = geometry.right_layout(notch::WING_WIDTH, height);
+        notch::place_right(w, layout, &self.placement, cx);
         div()
             .id("dictation-notch")
             .role(Role::Group)
             .aria_label(format!("Dictation: {}", self.status))
             .debug_selector(|| "dictation-notch".into())
             .relative()
-            .w(px(width))
+            .w(px(layout.frame.size.width as f32))
             .h(px(height))
             .overflow_hidden()
             .text_color(rgb(0xffffff))
             .font_family(vorkspace_ui::fonts::UI)
-            .child(right_body())
+            .when(layout.attached, |this| this.child(right_body()))
+            .when(!layout.attached, |this| this.child(notch::body()))
             .child(
                 div()
                     .relative()
+                    .ml(px(layout.overlap))
+                    .w(px(layout.wing_width))
                     .h(px(geometry.notch_height))
                     .flex()
                     .items_center()
@@ -85,7 +94,7 @@ impl Render for Panel {
                             .id("dictation-microphone")
                             .role(Role::Image)
                             .aria_label(self.state.label())
-                            .w(px(width))
+                            .w(px(layout.wing_width))
                             .h_full()
                             .overflow_hidden()
                             .flex()
@@ -189,16 +198,19 @@ mod tests {
         let selected = std::env::var("VORKSPACE_DICTATION_CAPTURE_STATE").ok();
         if selected.is_none() {
             for (name, _, _) in states {
-                let result = std::process::Command::new(std::env::current_exe().unwrap())
-                    .args([
-                        "--exact",
-                        "dictation_panel::tests::native_dictation_notch_captures",
-                        "--ignored",
-                    ])
-                    .env("VORKSPACE_DICTATION_CAPTURE_STATE", name)
-                    .status()
-                    .unwrap();
-                assert!(result.success());
+                for mode in ["notched", "fallback"] {
+                    let result = std::process::Command::new(std::env::current_exe().unwrap())
+                        .args([
+                            "--exact",
+                            "dictation_panel::tests::native_dictation_notch_captures",
+                            "--ignored",
+                        ])
+                        .env("VORKSPACE_DICTATION_CAPTURE_STATE", name)
+                        .env("VORKSPACE_DICTATION_CAPTURE_MODE", mode)
+                        .status()
+                        .unwrap();
+                    assert!(result.success());
+                }
             }
             return;
         }
@@ -206,6 +218,15 @@ mod tests {
             .into_iter()
             .find(|(name, _, _)| selected.as_deref() == Some(*name))
             .unwrap();
+        let mode = std::env::var("VORKSPACE_DICTATION_CAPTURE_MODE").unwrap();
+        let geometry = Geometry {
+            x: 0.,
+            top: 1169.,
+            screen_width: 1800.,
+            notch_height: 38.,
+            notch_edges: (mode == "notched").then_some((790., 1010.)),
+            ..Default::default()
+        };
         let mut cx = gpui::HeadlessAppContext::with_platform(
             Arc::new(gpui_apple::AppleTextSystem::new()),
             Arc::new(()),
@@ -224,6 +245,7 @@ mod tests {
                     placement: Placement::default(),
                     _screens: None,
                     _screen_task: None,
+                    geometry_override: Some(geometry),
                 });
                 cx.new(|_| IndicatorFixture { panel })
             })
@@ -232,7 +254,7 @@ mod tests {
         vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
         cx.capture_screenshot(window.into())
             .unwrap()
-            .save(output.join(format!("dictation-{name}.png")))
+            .save(output.join(format!("dictation-{mode}-{name}.png")))
             .unwrap();
     }
 }

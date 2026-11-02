@@ -35,13 +35,20 @@ startup; wait for the red microphone before speaking. Red and **Recording** appe
 only after the prepared session and native capture owner can accept audio.
 The models insert stable words directly into the focused field during capture.
 Tentative hypotheses never leave the helper. With no custom words, Unified's native windows advance every 560 ms
-with 560 ms right context and three agreeing prefixes; a trailing word waits for
+with 560 ms right context and the model's committed token boundary; a trailing word waits for
 a whitespace boundary, one second of quiet without a text change, or finalization.
 Quiet is measured against both an absolute floor and recent speech, so a steady
 low background level does not indefinitely hold the last stable word.
 Press **⌘,** again to drain
-and finalize; only the remaining committed suffix is inserted. The nonactivating
-notch shows only the right-hand microphone indicator; status and errors remain available to accessibility and in Settings.
+and finalize; only the remaining suffix of a final hypothesis that extends the
+source prefix already accepted by the correction pipeline is inserted. Trailing
+whitespace waits until its position is known, so punctuation can precede it
+without moving the cursor. The model may
+omit punctuation, including at the end of a sentence; the helper does not invent it.
+The nonactivating notch shows only the right-hand microphone indicator. On a
+notched screen its black body overlaps the obscured notch area; without a notch,
+the indicator is centered at the top of the screen. Status and errors remain
+available to accessibility and in Settings.
 TDT v3 uses repeated inference on overlapping audio windows with the same warm
 offline model. Preview windows are processed about every 600 ms; the helper waits
 for three agreeing word hypotheses and additional right context before insertion.
@@ -301,7 +308,17 @@ production persistent worker (twice by default), asserts committed text precedes
 prints fixture-only text and preparation/first-stable/stop-to-final timings. It
 opens no microphone or destination. It acquires the normal model lease; for an
 isolated fixture, `VORKSPACE_DICTATION_FIXTURE_LOCK` can name an absolute test
-lock path. The scripts in `crates/vorkspace-clipboard/tests/` check continuous
+lock path. Debug fixture options can select a second absolute WAV with
+`VORKSPACE_DICTATION_FIXTURE_ALTERNATE_WAV` or path-separated per-turn WAVs with
+`VORKSPACE_DICTATION_FIXTURE_WAVS`, feed comma-separated per-turn milliseconds of
+silence after Stop with `VORKSPACE_DICTATION_FIXTURE_TAIL_MS`, or print the Unified stream's raw,
+committed and held public-fixture text with `VORKSPACE_DICTATION_FIXTURE_TRACE`.
+These options are used only by the explicit fixture, never ordinary capture.
+Debug-only `--dictation-delivery-fixture /absolute/lock /absolute/model /absolute/question.wav /absolute/statement.wav [unified|tdt-v3|eou]`
+feeds two clips through the production Service and worker into a memory-only
+paste substitute. It checks live delivery, ordered suffixes and a simulated
+clipboard read window without accessing a real field or clipboard. The scripts
+in `crates/vorkspace-clipboard/tests/` check continuous
 public speech, noisy pauses on all engines and real multi-process model-owner
 transitions using explicitly supplied existing models and isolated paths. The debug-only
 `--tdt-window-fixture /absolute/model.gguf /absolute/public.wav` also prints TDT

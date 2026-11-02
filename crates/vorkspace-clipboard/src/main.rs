@@ -1,6 +1,7 @@
 //! The clipboard helper: a small menu bar process that keeps clipboard history
 //! after the app quits. History stays in memory and dies with this process.
 mod dictation;
+#[cfg(debug_assertions)]
 use vorkspace_clipboard::dictation_model;
 mod dictation_panel;
 mod history;
@@ -299,6 +300,21 @@ fn main() {
 #[cfg(debug_assertions)]
 fn fixture() -> bool {
     let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1).map(String::as_str) == Some("--dictation-delivery-fixture") {
+        dictation::delivery_fixture::run(
+            PathBuf::from(args.get(2).expect("isolated lock path")),
+            PathBuf::from(args.get(3).expect("model path")),
+            PathBuf::from(args.get(4).expect("question WAV path")),
+            PathBuf::from(args.get(5).expect("statement WAV path")),
+            match args.get(6).map(String::as_str) {
+                None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
+                Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
+                Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
+                _ => panic!("expected unified, tdt-v3 or eou"),
+            },
+        );
+        return true;
+    }
     if args.get(1).map(String::as_str) == Some("--dictation-engine-service-fixture") {
         let selected = match args.get(4).map(String::as_str) {
             None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,

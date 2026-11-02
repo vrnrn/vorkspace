@@ -21,12 +21,19 @@ static MODEL_LOADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
 static TDT_FIXTURE_METRICS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 #[cfg(debug_assertions)]
+static UNIFIED_FIXTURE_TRACE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(debug_assertions)]
 pub fn model_loads() -> usize {
     MODEL_LOADS.load(std::sync::atomic::Ordering::Relaxed)
 }
 #[cfg(debug_assertions)]
 pub fn enable_tdt_fixture_metrics() {
     TDT_FIXTURE_METRICS.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+#[cfg(debug_assertions)]
+pub fn enable_unified_fixture_trace() {
+    UNIFIED_FIXTURE_TRACE.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 pub const SAMPLE_RATE: usize = 16000;
 pub const MAX_SAMPLES: usize = SAMPLE_RATE * 120;
@@ -228,6 +235,8 @@ impl WarmModel {
         let mut raw_prefix = CommittedPrefix::default();
         if self.id == ModelId::UnifiedEnglish {
             let mut tail = StableTail::default();
+            #[cfg(debug_assertions)]
+            let mut previous_trace = String::new();
             let mut stream = session
                 .stream(&run, &stream_options())
                 .map_err(|e| format!("This model could not start native streaming: {e}"))?;
@@ -236,9 +245,21 @@ impl WarmModel {
                 match receive(turn, &mut count)? {
                     Input::Audio(pcm) => {
                         stream.feed(&pcm).map_err(|e| e.to_string())?;
-                        let text = stream.text().committed;
+                        let snapshot = stream.text();
+                        let text = snapshot.committed;
                         raw_prefix.advance(&text)?;
                         let stable = tail.observe(&text, &pcm, &publisher.source, false);
+                        #[cfg(debug_assertions)]
+                        if UNIFIED_FIXTURE_TRACE.load(std::sync::atomic::Ordering::Relaxed) {
+                            let line = format!(
+                                "full={:?} committed={text:?} tentative={:?} held={stable:?} published={:?}",
+                                snapshot.full, snapshot.tentative, publisher.sent.text
+                            );
+                            if line != previous_trace {
+                                eprintln!("fixture_stream {line}");
+                                previous_trace = line;
+                            }
+                        }
                         if tail.quiet_samples >= SAMPLE_RATE {
                             publisher.advance_stable(turn, stable, &mut emit)?;
                         } else {
@@ -247,10 +268,32 @@ impl WarmModel {
                     }
                     Input::Finish => {
                         stream.finalize().map_err(|e| e.to_string())?;
-                        let text = stream.text().committed;
-                        raw_prefix.advance(&text)?;
-                        let stable = tail.observe(&text, &[], &publisher.source, true);
-                        publisher.advance(turn, stable, true, &mut emit)?;
+                        let snapshot = stream.text();
+                        let text = snapshot.committed;
+                        #[cfg(debug_assertions)]
+                        if UNIFIED_FIXTURE_TRACE.load(std::sync::atomic::Ordering::Relaxed) {
+                            eprintln!(
+                                "fixture_final full={:?} committed={text:?} tentative={:?} source={:?} published={:?}",
+                                snapshot.full,
+                                snapshot.tentative,
+                                publisher.source.text,
+                                publisher.sent.text
+                            );
+                        }
+                        // The stream's committed projection can remain frozen if
+                        // final decoding revises its private suffix. The source
+                        // prefix already handed to the correction pipeline is a
+                        // conservative boundary, even if corrections still hold
+                        // some of it. Reject any final rewrite across that boundary.
+                        finish_unified(
+                            turn,
+                            &mut tail,
+                            &mut publisher,
+                            &mut raw_prefix,
+                            &text,
+                            &snapshot.full,
+                            &mut emit,
+                        )?;
                         return Ok(());
                     }
                 }
@@ -281,6 +324,20 @@ impl WarmModel {
             }
         }
     }
+}
+
+fn finish_unified(
+    turn: &Turn,
+    tail: &mut StableTail,
+    publisher: &mut Publisher,
+    raw_prefix: &mut CommittedPrefix,
+    committed: &str,
+    final_text: &str,
+    emit: &mut impl FnMut(Event) -> Result<(), String>,
+) -> Result<(), String> {
+    raw_prefix.advance(committed)?;
+    let stable = tail.observe(final_text, &[], &publisher.source, true);
+    publisher.advance(turn, stable, true, emit)
 }
 
 fn run_options(id: ModelId, rules: &[Rule]) -> RunOptions {
@@ -374,7 +431,14 @@ impl Publisher {
             self.corrector.push(&suffix, finished)
         };
         self.corrected.push_str(&corrected);
-        publish(turn, &mut self.sent, &self.corrected, emit)
+        // A future punctuation token belongs before trailing whitespace. Keep
+        // that whitespace private until more text or Finish fixes its position.
+        let visible = if finished {
+            self.corrected.as_str()
+        } else {
+            self.corrected.trim_end_matches(char::is_whitespace)
+        };
+        publish(turn, &mut self.sent, visible, emit)
     }
 }
 fn publish(
@@ -497,6 +561,11 @@ impl StableTail {
             self.quiet_samples = 0;
         }
         let candidate = stable_words(text, finished || self.quiet_samples >= SAMPLE_RATE);
+        let candidate = if finished {
+            candidate
+        } else {
+            candidate.trim_end_matches(char::is_whitespace)
+        };
         if candidate.len() < delivered.text.len() && text.starts_with(&delivered.text) {
             &text[..delivered.text.len()]
         } else {
@@ -600,7 +669,7 @@ mod tests {
                 result.push_str(&received.advance(&text).unwrap());
             }
         }
-        assert_eq!(result, "Say Vorkspace, ");
+        assert_eq!(result, "Say Vorkspace,");
         turn.cancel.cancel();
         assert!(
             publisher
@@ -655,6 +724,107 @@ mod tests {
         assert_eq!(p.advance(" Héllo 世界.").unwrap(), ".");
         assert_eq!(p.advance(" Héllo 世界.").unwrap(), "");
         assert!(p.advance(" Hello").is_err());
+    }
+    #[test]
+    fn final_model_hypothesis_extends_only_the_actually_published_prefix() {
+        let (_pipe, input) = Pipe::new();
+        let turn = Turn {
+            epoch: 11,
+            cancel: CancelToken::new(),
+            input,
+            words: Vec::new(),
+        };
+        let mut publisher = Publisher::new(Vec::new());
+        let mut tail = StableTail::default();
+        let mut raw_prefix = CommittedPrefix::default();
+        raw_prefix.advance("Héllo ").unwrap();
+        let mut values = Vec::new();
+        let quiet = vec![0.; SAMPLE_RATE / 10];
+        let source = CommittedPrefix::default();
+        let stable = tail.observe("Héllo ", &quiet, &source, false);
+        assert_eq!(stable, "Héllo");
+        publisher
+            .advance(&turn, stable, false, &mut |event| {
+                if let Event::Committed(_, text) = event {
+                    values.push(text);
+                }
+                Ok(())
+            })
+            .unwrap();
+        // Simulates the native stream retaining its old committed projection
+        // while its final full hypothesis supplies punctuation and spaces.
+        finish_unified(
+            &turn,
+            &mut tail,
+            &mut publisher,
+            &mut raw_prefix,
+            "Héllo ",
+            "Héllo?  ",
+            &mut |event| {
+                if let Event::Committed(_, text) = event {
+                    values.push(text);
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(values, ["Héllo", "Héllo?  "]);
+        let mut received = CommittedPrefix::default();
+        assert_eq!(received.advance(&values[0]).unwrap(), "Héllo");
+        assert_eq!(received.advance(&values[1]).unwrap(), "?  ");
+        assert!(
+            finish_unified(
+                &turn,
+                &mut tail,
+                &mut publisher,
+                &mut raw_prefix,
+                "Héllo ",
+                "Changed?",
+                &mut |_| panic!("rewrite")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn final_punctuation_closes_a_custom_alias_without_replay() {
+        let (_pipe, input) = Pipe::new();
+        let turn = Turn {
+            epoch: 12,
+            cancel: CancelToken::new(),
+            input,
+            words: Vec::new(),
+        };
+        let mut publisher = Publisher::new(
+            vorkspace_core::dictation_words::parse("work space => Vorkspace").unwrap(),
+        );
+        let mut tail = StableTail::default();
+        let mut raw_prefix = CommittedPrefix::default();
+        let mut values = Vec::new();
+        for (text, finished) in [("Open work", false), ("Open work space? ", true)] {
+            let mut emit = |event| {
+                if let Event::Committed(_, text) = event {
+                    values.push(text);
+                }
+                Ok(())
+            };
+            if finished {
+                finish_unified(
+                    &turn,
+                    &mut tail,
+                    &mut publisher,
+                    &mut raw_prefix,
+                    text,
+                    text,
+                    &mut emit,
+                )
+                .unwrap();
+            } else {
+                raw_prefix.advance(text).unwrap();
+                publisher.advance(&turn, text, false, &mut emit).unwrap();
+            }
+        }
+        assert_eq!(values, ["Open", "Open Vorkspace? "]);
     }
     #[test]
     fn cancellation_before_and_after_partial_publication_never_replays() {
@@ -735,7 +905,7 @@ mod tests {
         assert_eq!(tail.observe("helloing", &quiet, &delivered, false), "hello");
         assert_eq!(
             tail.observe("helloing world", &quiet, &delivered, false),
-            "helloing "
+            "helloing"
         );
         assert_eq!(
             tail.observe("helloing world", &[], &delivered, true),
@@ -757,7 +927,11 @@ mod tests {
         assert_eq!(tail.observe("hello", &noise, &delivered, false), "hello");
         assert_eq!(
             tail.observe("hello there", &speech, &delivered, false),
-            "hello "
+            "hello"
+        );
+        assert_eq!(
+            tail.observe("hello there  ", &[], &delivered, true),
+            "hello there  "
         );
     }
     #[test]

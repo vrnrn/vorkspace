@@ -101,22 +101,42 @@ pub fn run(
     if selected == crate::ModelId::ParakeetTdtV3 {
         worker::enable_tdt_fixture_metrics();
     }
-    let wav = hound::WavReader::open(wav).unwrap();
-    assert_eq!(wav.spec().sample_rate, 16000);
-    assert_eq!(wav.spec().channels, 1);
-    let original: Vec<_> = wav
-        .into_samples::<i16>()
-        .map(|v| v.unwrap() as f32 / 32768.)
-        .collect();
-    assert!((1..=4).contains(&repeats) && (1..=2).contains(&turns) && gap_seconds <= 30);
-    let mut pcm = Vec::new();
-    for index in 0..repeats {
-        if index != 0 {
-            pcm.resize(pcm.len() + worker::SAMPLE_RATE * gap_seconds, 0.0);
-        }
-        pcm.extend_from_slice(&original);
+    if selected == crate::ModelId::UnifiedEnglish
+        && std::env::var_os("VORKSPACE_DICTATION_FIXTURE_TRACE").is_some()
+    {
+        worker::enable_unified_fixture_trace();
     }
-    assert!(pcm.len() <= worker::MAX_SAMPLES);
+    assert!((1..=4).contains(&repeats) && (1..=8).contains(&turns) && gap_seconds <= 30);
+    let read = |path: &Path| {
+        assert!(path.is_absolute());
+        let wav = hound::WavReader::open(path).unwrap();
+        assert_eq!(wav.spec().sample_rate, 16000);
+        assert_eq!(wav.spec().channels, 1);
+        let original: Vec<_> = wav
+            .into_samples::<i16>()
+            .map(|v| v.unwrap() as f32 / 32768.)
+            .collect();
+        let mut pcm = Vec::new();
+        for index in 0..repeats {
+            if index != 0 {
+                pcm.resize(pcm.len() + worker::SAMPLE_RATE * gap_seconds, 0.0);
+            }
+            pcm.extend_from_slice(&original);
+        }
+        assert!(pcm.len() <= worker::MAX_SAMPLES);
+        pcm
+    };
+    let pcm = read(wav);
+    let alternate = std::env::var_os("VORKSPACE_DICTATION_FIXTURE_ALTERNATE_WAV")
+        .map(|path| read(Path::new(&path)));
+    let fixtures: Vec<_> = std::env::var_os("VORKSPACE_DICTATION_FIXTURE_WAVS")
+        .map(|paths| std::env::split_paths(&paths).map(|p| read(&p)).collect())
+        .unwrap_or_default();
+    let tails: Vec<usize> = std::env::var("VORKSPACE_DICTATION_FIXTURE_TAIL_MS")
+        .ok()
+        .map(|s| s.split(',').map(|v| v.parse().unwrap()).collect())
+        .unwrap_or_default();
+    assert!(tails.iter().all(|tail| *tail <= 3000));
     let (tx, rx) = mpsc::sync_channel(1);
     let (out, events) = async_channel::bounded(32);
     let cancel = CancelToken::new();
@@ -132,6 +152,13 @@ pub fn run(
         worker::model_loads()
     );
     for epoch in 1..=turns {
+        let pcm = fixtures.get((epoch - 1) as usize).unwrap_or_else(|| {
+            if epoch == 2 {
+                alternate.as_ref().unwrap_or(&pcm)
+            } else {
+                &pcm
+            }
+        });
         let (pipe, input) = Pipe::new();
         tx.send(Turn {
             epoch,
@@ -170,6 +197,11 @@ pub fn run(
             }
         }
         let stop = Instant::now();
+        let tail_ms = tails.get((epoch - 1) as usize).copied().unwrap_or(0);
+        println!("turn={epoch} stop tail_ms={tail_ms}");
+        for chunk in vec![0.; worker::SAMPLE_RATE * tail_ms / 1000].chunks(worker::SAMPLE_RATE) {
+            pipe.audio(chunk.to_vec()).unwrap();
+        }
         pipe.finish().unwrap();
         loop {
             match events.recv_blocking().unwrap() {

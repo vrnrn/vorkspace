@@ -80,6 +80,17 @@ pub struct Geometry {
     pub screen_width: f32,
     pub notch_width: f32,
     pub notch_height: f32,
+    /// Gap between the two AppKit auxiliary areas, in global screen points.
+    /// Vox's padded, centered width is deliberately kept separate.
+    pub notch_edges: Option<(f64, f64)>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RightLayout {
+    pub frame: NSRect,
+    pub overlap: f32,
+    pub wing_width: f32,
+    pub attached: bool,
 }
 
 impl Default for Geometry {
@@ -90,6 +101,7 @@ impl Default for Geometry {
             screen_width: 1440.,
             notch_width: 185.,
             notch_height: 32.,
+            notch_edges: None,
         }
     }
 }
@@ -109,12 +121,23 @@ impl Geometry {
         } else {
             0.
         };
-        let width = if height > 0. {
-            frame.size.width
-                - screen.auxiliaryTopLeftArea().size.width
-                - screen.auxiliaryTopRightArea().size.width
+        let (width, notch_edges) = if height > 0. {
+            let left = screen.auxiliaryTopLeftArea();
+            let right = screen.auxiliaryTopRightArea();
+            let start = left.origin.x + left.size.width;
+            let end = right.origin.x;
+            let screen_end = frame.origin.x + frame.size.width;
+            let edges = (left.size.width > 0.
+                && right.size.width > 0.
+                && start.is_finite()
+                && end.is_finite()
+                && start >= frame.origin.x
+                && end <= screen_end
+                && start < end)
+                .then_some((start, end));
+            (frame.size.width - left.size.width - right.size.width, edges)
         } else {
-            0.
+            (0., None)
         };
         Self {
             x: frame.origin.x,
@@ -122,6 +145,7 @@ impl Geometry {
             screen_width: frame.size.width as f32,
             notch_width: if width > 0. { width as f32 + 4. } else { 120. },
             notch_height: if height > 0. { height } else { 30. },
+            notch_edges,
         }
     }
 
@@ -139,16 +163,34 @@ impl Geometry {
         )
     }
 
-    /// A compact surface attached to the right edge of the physical notch.
-    pub fn right_frame(self, width: f32, height: f32) -> NSRect {
-        let width = width.min((self.screen_width - self.notch_width).max(0.) / 2.);
-        NSRect::new(
-            NSPoint::new(
-                self.x + (self.screen_width + self.notch_width) as f64 / 2.,
-                self.top - height as f64,
+    /// Cover the right half of the hardware notch as well as the visible wing.
+    /// AppKit exposes safe rectangles, not the shape of the housing's curved
+    /// edge. Overlapping the obscured region keeps paint joined even when the
+    /// reported safe edge and physical edge differ at a scaled resolution.
+    pub fn right_layout(self, width: f32, height: f32) -> RightLayout {
+        let screen_end = self.x + self.screen_width as f64;
+        let (x, overlap, wing_width, attached) = if let Some((left, right)) = self.notch_edges {
+            let x = (left + right) / 2.;
+            let wing_width = width.max(0.).min((screen_end - right).max(0.) as f32);
+            (x, (right - x) as f32, wing_width, true)
+        } else {
+            let wing_width = width.max(0.).min(self.screen_width.max(0.));
+            (
+                self.x + (self.screen_width - wing_width) as f64 / 2.,
+                0.,
+                wing_width,
+                false,
+            )
+        };
+        RightLayout {
+            frame: NSRect::new(
+                NSPoint::new(x, self.top - height as f64),
+                NSSize::new((overlap + wing_width) as f64, height as f64),
             ),
-            NSSize::new(width as f64, height as f64),
-        )
+            overlap,
+            wing_width,
+            attached,
+        }
     }
 }
 
@@ -164,15 +206,8 @@ pub fn place(
 }
 
 /// Place a dictation-only right wing without reserving a left wing.
-pub fn place_right(
-    window: &Window,
-    geometry: Geometry,
-    width: f32,
-    height: f32,
-    placement: &Placement,
-    cx: &gpui::App,
-) {
-    place_frame(window, geometry.right_frame(width, height), placement, cx);
+pub fn place_right(window: &Window, layout: RightLayout, placement: &Placement, cx: &gpui::App) {
+    place_frame(window, layout.frame, placement, cx);
 }
 
 fn place_frame(window: &Window, frame: NSRect, placement: &Placement, cx: &gpui::App) {
@@ -324,9 +359,60 @@ mod tests {
             assert_eq!(frame.origin.x + frame.size.width / 2., -960.);
             assert_eq!(frame.origin.y + frame.size.height, 1080.);
         }
-        let right = geometry.right_frame(54., 32.);
-        assert_eq!(right.origin.x, -960. + geometry.notch_width as f64 / 2.);
-        assert_eq!(right.size.width, 54.);
-        assert_eq!(right.origin.y + right.size.height, 1080.);
+        let right = geometry.right_layout(54., 32.);
+        assert_eq!(right.frame.origin.x, -960. - 27.);
+        assert_eq!(right.frame.size.width, 54.);
+        assert_eq!(right.frame.origin.y + right.frame.size.height, 1080.);
+        assert!(!right.attached);
+    }
+
+    #[test]
+    fn right_wing_overlaps_the_actual_notch_gap_on_offset_asymmetric_screens() {
+        let geometry = Geometry {
+            x: -1800.,
+            top: 1520.,
+            screen_width: 1800.,
+            notch_edges: Some((-1040., -810.)),
+            ..Default::default()
+        };
+        let layout = geometry.right_layout(54., 38.);
+        assert!(layout.attached);
+        assert_eq!(layout.frame.origin.x, -925.);
+        assert_eq!(layout.overlap, 115.);
+        assert_eq!(layout.wing_width, 54.);
+        assert_eq!(layout.frame.origin.x + layout.overlap as f64, -810.);
+        assert_eq!(layout.frame.origin.x + layout.frame.size.width, -756.);
+        assert_eq!(layout.frame.origin.y + layout.frame.size.height, 1520.);
+        // AppKit geometry stays in screen points; only capture pixels scale.
+        for scale in [1., 1.5, 2.] {
+            assert_eq!(
+                (layout.frame.origin.x + layout.overlap as f64) * scale,
+                -810. * scale
+            );
+        }
+    }
+
+    #[test]
+    fn right_wing_fits_the_remaining_display_and_fallback_is_centered() {
+        let geometry = Geometry {
+            x: 100.,
+            screen_width: 200.,
+            notch_edges: Some((270., 290.)),
+            ..Default::default()
+        };
+        let attached = geometry.right_layout(54., 30.);
+        assert_eq!(attached.wing_width, 10.);
+        assert_eq!(attached.frame.origin.x + attached.frame.size.width, 300.);
+        let fallback = Geometry {
+            notch_edges: None,
+            ..geometry
+        }
+        .right_layout(54., 30.);
+        assert!(!fallback.attached);
+        assert_eq!(fallback.overlap, 0.);
+        assert_eq!(
+            fallback.frame.origin.x + fallback.frame.size.width / 2.,
+            200.
+        );
     }
 }

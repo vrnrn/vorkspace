@@ -2,6 +2,9 @@
 //! status, never PCM or recognized transcript text.
 use crate::dictation_panel as panel;
 #[cfg(debug_assertions)]
+#[path = "dictation_delivery_fixture.rs"]
+pub(crate) mod delivery_fixture;
+#[cfg(debug_assertions)]
 #[path = "dictation_engine_fixture.rs"]
 pub(crate) mod engine_fixture;
 #[cfg(debug_assertions)]
@@ -66,6 +69,8 @@ pub struct Service {
     public_audio_fixture: bool,
     #[cfg(debug_assertions)]
     fixture_engine_lock: Option<PathBuf>,
+    #[cfg(debug_assertions)]
+    fixture_delivery: Option<std::rc::Rc<std::cell::RefCell<delivery_fixture::Sink>>>,
     warm: Option<mpsc::SyncSender<Turn>>,
     worker: WorkerSlot,
     retry_epoch: u64,
@@ -273,6 +278,8 @@ impl Service {
             public_audio_fixture: false,
             #[cfg(debug_assertions)]
             fixture_engine_lock: None,
+            #[cfg(debug_assertions)]
+            fixture_delivery: None,
             warm: None,
             worker: WorkerSlot::default(),
             retry_epoch: 0,
@@ -1131,7 +1138,12 @@ impl Service {
             self.attempt.phase = Phase::Idle;
             return;
         }
-        if unsafe { vorkspace_dictation_modifiers_down() } {
+        #[cfg(debug_assertions)]
+        let modifiers_down =
+            self.fixture_delivery.is_none() && unsafe { vorkspace_dictation_modifiers_down() };
+        #[cfg(not(debug_assertions))]
+        let modifiers_down = unsafe { vorkspace_dictation_modifiers_down() };
+        if modifiers_down {
             let deadline = *self
                 .modifier_deadline
                 .get_or_insert_with(|| Instant::now() + Duration::from_secs(2));
@@ -1152,6 +1164,15 @@ impl Service {
                 return;
             }
             Ok(text) if !text.is_empty() => {
+                #[cfg(debug_assertions)]
+                let code = if let Some(sink) = &self.fixture_delivery {
+                    sink.borrow_mut().paste(&text, epoch, self.delivery)
+                } else {
+                    CString::new(text).map_or(7, |t| unsafe {
+                        vorkspace_dictation_paste(t.as_ptr(), epoch, self.delivery)
+                    })
+                };
+                #[cfg(not(debug_assertions))]
                 let code = CString::new(text).map_or(7, |t| unsafe {
                     vorkspace_dictation_paste(t.as_ptr(), epoch, self.delivery)
                 });
@@ -1444,6 +1465,8 @@ mod capture_tests {
             public_audio_fixture: false,
             #[cfg(debug_assertions)]
             fixture_engine_lock: None,
+            #[cfg(debug_assertions)]
+            fixture_delivery: None,
             warm: None,
             worker: WorkerSlot::default(),
             retry_epoch: 0,
@@ -1591,6 +1614,67 @@ mod capture_tests {
                 assert!(s.turn.is_none());
                 assert_eq!(s.delivered.advance("synthetic prefix").unwrap(), "");
             });
+        });
+    }
+    #[gpui::test]
+    fn stop_suffix_waits_for_read_window_and_respects_destination_fences(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            for scenario in ["success", "cancel", "edit", "focus"] {
+                let (service, epoch) = pending(cx);
+                let sink =
+                    std::rc::Rc::new(std::cell::RefCell::new(delivery_fixture::Sink::new(epoch)));
+                service.update(cx, |s, cx| {
+                    s.public_audio_fixture = true;
+                    s.fixture_delivery = Some(sink.clone());
+                    s.worker.running = true;
+                    let (pipe, _input) = Pipe::new();
+                    s.turn = Some((epoch, pipe));
+                    assert!(s.attempt.recording(epoch));
+                    s.worker_event(0, s.selected, Event::Committed(epoch, "Héllo".into()), cx);
+                    assert_eq!(sink.borrow().text, "Existing: Héllo");
+                    assert_eq!(s.attempt.stop(), Some(epoch));
+                    sink.borrow_mut().forced_busy = true;
+                    s.worker_event(
+                        0,
+                        s.selected,
+                        Event::Committed(epoch, "Héllo?  ".into()),
+                        cx,
+                    );
+                    s.worker_event(0, s.selected, Event::Done(epoch, Ok(())), cx);
+                    assert_eq!(s.delivered.text(), "Héllo");
+                    assert_eq!(s.delivery, 1);
+                    assert!(sink.borrow().blocked > 0);
+                    assert_eq!(sink.borrow().text, "Existing: Héllo");
+                    if scenario == "cancel" {
+                        s.cancel(cx);
+                    }
+                    if scenario == "edit" {
+                        sink.borrow_mut().text.push_str(" user edit");
+                    }
+                    if scenario == "edit" || scenario == "focus" {
+                        sink.borrow_mut().valid = false;
+                    }
+                    sink.borrow_mut().forced_busy = false;
+                    sink.borrow_mut().busy_until = None;
+                    s.deliver(epoch, cx);
+                    if scenario == "success" {
+                        assert_eq!(sink.borrow().text, "Existing: Héllo?  ");
+                        assert_eq!(sink.borrow().deltas, ["Héllo", "?  "]);
+                        s.deliver(epoch, cx);
+                        assert_eq!(sink.borrow().deltas.len(), 2);
+                    } else {
+                        let expected = if scenario == "edit" {
+                            "Existing: Héllo user edit"
+                        } else {
+                            "Existing: Héllo"
+                        };
+                        assert_eq!(sink.borrow().text, expected);
+                        assert_eq!(sink.borrow().deltas, ["Héllo"]);
+                    }
+                });
+            }
         });
     }
     #[gpui::test]
