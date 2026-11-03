@@ -106,7 +106,65 @@ private final class FileSpeechInput: SpeechInput {
 
 @main
 struct DictationTests {
+    @MainActor private static func keyEvent(_ owner: DictationKey, _ type: CGEventType,
+                                            _ code: CGKeyCode, _ flags: CGEventFlags) -> Bool {
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: type == .keyDown)!
+        event.flags = flags
+        event.setIntegerValueField(.eventSourceUserData, value: 0)
+        return owner.receive(type, event)
+    }
+
+    @MainActor private static func shortcutReleaseOrders() {
+        let chordFlags: CGEventFlags = [.maskControl, .maskShift]
+        // Every ordering must produce exactly one tap, at Space's release,
+        // and swallow both Space edges without swallowing modifier events.
+        let releaseOrders: [[CGKeyCode]] = [[49, 59, 56], [49, 56, 59], [59, 49, 56],
+                                           [56, 49, 59], [59, 56, 49], [56, 59, 49]]
+        for order in releaseOrders {
+            let owner = DictationKey(key: 49, flags: chordFlags, isolated: false)
+            var actions = [Int32]()
+            owner.action = { actions.append($0) }
+            precondition(keyEvent(owner, .keyDown, 49, chordFlags))
+            var flags = chordFlags
+            var released = false
+            for code in order {
+                if code == 59 { flags.remove(.maskControl) }
+                if code == 56 { flags.remove(.maskShift) }
+                precondition(keyEvent(owner, code == 49 ? .keyUp : .flagsChanged, code, flags) == (code == 49))
+                released = released || code == 49
+                precondition(actions == (released ? [0] : []))
+            }
+            precondition(!keyEvent(owner, .keyUp, 49, []))
+            owner.stop()
+        }
+        // Real chords/typing still cancel pending taps, including after one
+        // of the original modifiers has been released.
+        let interruptions: [(CGEventType, CGKeyCode, CGEventFlags)] = [
+            (.flagsChanged, 55, [.maskShift, .maskCommand]), (.keyDown, 0, [.maskShift])
+        ]
+        for interruption in interruptions {
+            let owner = DictationKey(key: 49, flags: chordFlags, isolated: false)
+            var actions = [Int32]()
+            owner.action = { actions.append($0) }
+            precondition(keyEvent(owner, .keyDown, 49, chordFlags))
+            precondition(!keyEvent(owner, .flagsChanged, 59, [.maskShift]))
+            precondition(!keyEvent(owner, interruption.0, interruption.1, interruption.2))
+            precondition(!keyEvent(owner, .keyUp, 49, []))
+            precondition(actions.isEmpty)
+            owner.stop()
+        }
+        let option = DictationKey(key: 61, flags: .maskAlternate, isolated: true)
+        var actions = [Int32]()
+        option.action = { actions.append($0) }
+        precondition(keyEvent(option, .flagsChanged, 61, CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x40)))
+        precondition(!keyEvent(option, .flagsChanged, 56, [.maskAlternate, .maskShift]))
+        precondition(!keyEvent(option, .flagsChanged, 61, []))
+        precondition(actions.isEmpty)
+        option.stop()
+    }
+
     @MainActor static func main() async throws {
+        shortcutReleaseOrders()
         let chord = DictationModifierPolicy(key: 49, modifiers: 4608)
         precondition(chord.permits([59, 56], triggerHeld: true))
         precondition(chord.permits([62, 60], triggerHeld: true))
