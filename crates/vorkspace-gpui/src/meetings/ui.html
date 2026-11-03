@@ -717,11 +717,14 @@ main {
       // after the summary committed but before its response arrived.
       if (selected === id && doc?.meeting.id === id && result.meeting.revision > doc.meeting.revision) {
         doc = result;
-        if (dirty) { notice("Summary ready. Your unsaved edits are still here."); }
-        else if (loadEpoch === epoch) {
-          editingSummary = false;
-          view = "summary";
-          notice("");
+        if (dirty) {
+          notice("Summary ready. Your unsaved edits are still here.");
+        } else {
+          if (loadEpoch === epoch) {
+            editingSummary = false;
+            view = "summary";
+            notice("");
+          }
           renderDocument();
         }
       }

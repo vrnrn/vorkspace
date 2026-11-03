@@ -259,3 +259,20 @@ test("a poll started before Stop cannot regress Finishing to Recording", async (
   assert.equal(ui.get("record-mobile").textContent, "Finishing…");
   assert.equal(ui.get("record").disabled, true);
 });
+
+test("summary completion refreshes the view selected during generation", async () => {
+  for (const view of ["summary", "transcript"]) {
+    const ui = await harness();
+    await ui.open("A");
+    const response = deferred();
+    ui.pending.set("meetings.summarize:A", response);
+    const summary = ui.get("summarize").onclick();
+    await setImmediate();
+    await ui.get(`show-${view}`).onclick();
+    response.resolve();
+    await summary;
+    assert.equal(ui.get(`show-${view}`).attributes["aria-pressed"], "true");
+    if (view === "summary") assert.equal(ui.get("preview").innerHTML, "<p>Updated by AI</p>");
+    else assert.equal(ui.get("editor").value, "A transcript");
+  }
+});
