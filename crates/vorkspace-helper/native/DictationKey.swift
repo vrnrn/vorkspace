@@ -107,6 +107,11 @@ final class DictationKey {
             }
             return false
         }
+        // Repeats belong to an existing press, never a new gesture. In
+        // particular, a cancelled chord cannot rearm until a fresh key-down.
+        if !isolated && type == .keyDown && event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
+            return gesture.down
+        }
         // AppKit's aggregate Option bit remains set when the other Option key
         // is held; the device-side bit distinguishes a right-key release.
         let modifierDown = key == 61 ? (event.flags.rawValue & 0x40 != 0) : matches

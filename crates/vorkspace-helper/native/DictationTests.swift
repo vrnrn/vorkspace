@@ -107,10 +107,11 @@ private final class FileSpeechInput: SpeechInput {
 @main
 struct DictationTests {
     @MainActor private static func keyEvent(_ owner: DictationKey, _ type: CGEventType,
-                                            _ code: CGKeyCode, _ flags: CGEventFlags) -> Bool {
+                                            _ code: CGKeyCode, _ flags: CGEventFlags, repeatKey: Bool = false) -> Bool {
         let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: type == .keyDown)!
         event.flags = flags
         event.setIntegerValueField(.eventSourceUserData, value: 0)
+        event.setIntegerValueField(.keyboardEventAutorepeat, value: repeatKey ? 1 : 0)
         return owner.receive(type, event)
     }
 
@@ -163,8 +164,36 @@ struct DictationTests {
         option.stop()
     }
 
+    @MainActor private static func shortcutAutorepeat() {
+        let flags: CGEventFlags = [.maskControl, .maskShift]
+        let owner = DictationKey(key: 49, flags: flags, isolated: false)
+        var actions = [Int32]()
+        owner.action = { actions.append($0) }
+        // A repeat with no admitted physical press must not start dictation.
+        precondition(!keyEvent(owner, .keyDown, 49, flags, repeatKey: true))
+        precondition(!keyEvent(owner, .keyUp, 49, flags))
+        precondition(actions.isEmpty)
+        precondition(keyEvent(owner, .keyDown, 49, flags))
+        precondition(keyEvent(owner, .keyDown, 49, flags, repeatKey: true))
+        precondition(!keyEvent(owner, .flagsChanged, 55, flags.union(.maskCommand)))
+        precondition(!keyEvent(owner, .flagsChanged, 55, flags))
+        precondition(!keyEvent(owner, .keyDown, 49, flags, repeatKey: true))
+        precondition(!keyEvent(owner, .keyUp, 49, flags))
+        precondition(actions.isEmpty)
+        // A fresh press recovers. Its repeats stay swallowed even after the
+        // original modifiers release, without producing duplicate actions.
+        precondition(keyEvent(owner, .keyDown, 49, flags))
+        precondition(!keyEvent(owner, .flagsChanged, 59, [.maskShift]))
+        precondition(keyEvent(owner, .keyDown, 49, [.maskShift], repeatKey: true))
+        precondition(actions.isEmpty)
+        precondition(keyEvent(owner, .keyUp, 49, [.maskShift]))
+        precondition(actions == [0])
+        owner.stop()
+    }
+
     @MainActor static func main() async throws {
         shortcutReleaseOrders()
+        shortcutAutorepeat()
         let chord = DictationModifierPolicy(key: 49, modifiers: 4608)
         precondition(chord.permits([59, 56], triggerHeld: true))
         precondition(chord.permits([62, 60], triggerHeld: true))
