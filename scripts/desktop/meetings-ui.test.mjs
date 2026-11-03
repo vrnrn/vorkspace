@@ -180,3 +180,16 @@ test("record startup leaves a document opened during preparation selected", asyn
   assert.equal(ui.get("editor").value, "B transcript");
   assert.equal(ui.get("record-mobile").textContent, "Stop");
 });
+
+test("reselecting the current meeting supersedes a pending navigation", async () => {
+  const ui = await harness();
+  await ui.open("A");
+  const read = deferred();
+  ui.pending.set("meetings.read:B", read);
+  const navigation = ui.open("B");
+  await ui.open("A");
+  read.resolve();
+  await navigation;
+  assert.equal(ui.get("title").value, "A");
+  assert.equal(ui.get("editor").value, "A transcript");
+});

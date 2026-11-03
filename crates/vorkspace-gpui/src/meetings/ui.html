@@ -565,11 +565,11 @@ main {
     return selected === version.id && loadEpoch === version.load && editEpoch === version.edits && !dirty;
   }
   async function open(id) {
-    if (id === selected && doc) return;
-    if (dirty) await save();
-    if (dirty) return;
     loadEpoch++;
+    if (id === selected && doc) return;
     const version = documentVersion();
+    if (dirty) await save();
+    if (!currentDocument(version)) return;
     const value = await call("meetings.read", { id });
     if (!currentDocument(version)) return;
     selected = id;
