@@ -37,6 +37,12 @@ final class DictationKey {
     var action: ((Int32) -> Void)?
     var onFailure: (() -> Void)?
 
+    init(key: CGKeyCode = 63, flags: CGEventFlags = .maskSecondaryFn, isolated: Bool = true) {
+        self.key = key
+        self.flags = flags
+        self.isolated = isolated
+    }
+
     func bind(key: UInt16, modifiers: UInt32, isolated: Bool) -> Bool {
         stop()
         self.key = key
@@ -74,7 +80,7 @@ final class DictationKey {
         tap = nil; source = nil
     }
 
-    private func receive(_ type: CGEventType, _ event: CGEvent) -> Bool {
+    func receive(_ type: CGEventType, _ event: CGEvent) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             stop()
             onFailure?()
@@ -90,12 +96,21 @@ final class DictationKey {
         let relevant = isolated ? all : all.subtracting(.maskSecondaryFn)
         let matches = event.flags.intersection(relevant) == flags
         if code != key {
-            if gesture.down && (type == .keyDown || (type == .flagsChanged && !matches)) {
+            // Once a chord is admitted, its trigger owns the release edge.
+            // Releasing its modifiers first is valid; adding another modifier
+            // still cancels it, as does any mismatch for an isolated modifier.
+            let conflictingModifiers = isolated ? !matches : !event.flags.intersection(relevant).subtracting(flags).isEmpty
+            if gesture.down && (type == .keyDown || (type == .flagsChanged && conflictingModifiers)) {
                 let wasHolding = gesture.holding
                 deadline?.cancel(); epoch &+= 1; gesture.cancel()
                 if wasHolding { action?(2) }
             }
             return false
+        }
+        // Repeats belong to an existing press, never a new gesture. In
+        // particular, a cancelled chord cannot rearm until a fresh key-down.
+        if !isolated && type == .keyDown && event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
+            return gesture.down
         }
         // AppKit's aggregate Option bit remains set when the other Option key
         // is held; the device-side bit distinguishes a right-key release.

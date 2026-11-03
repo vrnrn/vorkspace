@@ -46,16 +46,38 @@ fn exits(helper: &mut Running) {
     until(|| helper.0.try_wait().unwrap().is_some());
 }
 
+fn read_hello(stream: &UnixStream) -> Option<Notice> {
+    // Preserve subsequent notices when this temporary reader is dropped.
+    receive(&mut BufReader::with_capacity(1, stream))
+}
+
 fn connect(socket: &Path) -> (UnixStream, Notice) {
     let mut found = None;
     until(|| {
         found = UnixStream::connect(socket).ok().and_then(|stream| {
-            let hello = receive(&mut BufReader::new(&stream))?;
+            let hello = read_hello(&stream)?;
             Some((stream, hello))
         });
         found.is_some()
     });
     found.unwrap()
+}
+
+#[test]
+fn reading_hello_preserves_an_immediately_following_notice() {
+    let (sender, receiver) = UnixStream::pair().unwrap();
+    let hello = Notice::Hello {
+        protocol: 1,
+        modified: 2,
+    };
+    let status = Notice::Error(Some("next notice".into()));
+    send(&sender, &hello).unwrap();
+    send(&sender, &status).unwrap();
+    assert_eq!(read_hello(&receiver), Some(hello));
+    assert_eq!(
+        receive::<Notice>(&mut BufReader::new(&receiver)),
+        Some(status)
+    );
 }
 
 fn relaunch() -> Command {

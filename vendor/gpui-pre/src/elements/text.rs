@@ -1,8 +1,8 @@
 use crate::{
     ActiveTooltip, AnyView, App, Bounds, DispatchPhase, Element, ElementId, GlobalElementId,
     HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size, TextOverflow,
-    TextRun, TextStyle, TooltipId, TruncateFrom, WhiteSpace, Window, WrappedLine,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size, TextAlign,
+    TextOverflow, TextRun, TextStyle, TooltipId, TruncateFrom, WhiteSpace, Window, WrappedLine,
     WrappedLineLayout, register_tooltip_mouse_handlers, set_tooltip_on_window,
 };
 use anyhow::Context as _;
@@ -281,10 +281,10 @@ impl Element for &'static str {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         text_layout: &mut Self::RequestLayoutState,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut App,
     ) {
-        text_layout.prepaint(bounds, self)
+        text_layout.prepaint(bounds, self, window.text_style().text_align)
     }
 
     fn paint(
@@ -355,10 +355,10 @@ impl Element for SharedString {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         text_layout: &mut Self::RequestLayoutState,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut App,
     ) {
-        text_layout.prepaint(bounds, self.as_ref())
+        text_layout.prepaint(bounds, self.as_ref(), window.text_style().text_align)
     }
 
     fn paint(
@@ -581,10 +581,11 @@ impl Element for StyledText {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut App,
     ) {
-        self.layout.prepaint(bounds, &self.text)
+        self.layout
+            .prepaint(bounds, &self.text, window.text_style().text_align)
     }
 
     fn paint(
@@ -628,6 +629,34 @@ struct TextLayoutInner {
     truncate_width: Option<Pixels>,
     size: Option<Size<Pixels>>,
     bounds: Option<Bounds<Pixels>>,
+    alignment: TextAlign,
+}
+
+// These are the same visual-line boundaries and advances that paint_line uses.
+// A wrap boundary is the first glyph on the following line.
+fn visual_line_metrics(line: &WrappedLine, row: usize) -> (usize, usize, Pixels, Pixels) {
+    let boundaries = line.wrap_boundaries();
+    let glyph =
+        |boundary: &crate::WrapBoundary| &line.runs()[boundary.run_ix].glyphs[boundary.glyph_ix];
+    let previous = row
+        .checked_sub(1)
+        .and_then(|index| boundaries.get(index))
+        .map(glyph);
+    let next = boundaries.get(row).map(glyph);
+    (
+        previous.map_or(0, |glyph| glyph.index),
+        next.map_or(line.len(), |glyph| glyph.index),
+        previous.map_or(Pixels::ZERO, |glyph| glyph.position.x),
+        next.map_or(line.unwrapped_layout.width, |glyph| glyph.position.x),
+    )
+}
+
+fn alignment_offset(align: TextAlign, width: Pixels, line_width: Pixels) -> Pixels {
+    match align {
+        TextAlign::Left => Pixels::ZERO,
+        TextAlign::Center => (width - line_width) / 2.,
+        TextAlign::Right => width - line_width,
+    }
 }
 
 impl TextLayout {
@@ -761,6 +790,7 @@ impl TextLayout {
                         truncate_width,
                         size: Some(Size::default()),
                         bounds: None,
+                        alignment: TextAlign::Left,
                     });
                     return Size::default();
                 };
@@ -780,6 +810,7 @@ impl TextLayout {
                     truncate_width,
                     size: Some(size),
                     bounds: None,
+                    alignment: TextAlign::Left,
                 });
 
                 size
@@ -787,13 +818,14 @@ impl TextLayout {
         })
     }
 
-    fn prepaint(&self, bounds: Bounds<Pixels>, text: &str) {
+    fn prepaint(&self, bounds: Bounds<Pixels>, text: &str, alignment: TextAlign) {
         let mut element_state = self.0.borrow_mut();
         let element_state = element_state
             .as_mut()
             .with_context(|| format!("measurement has not been performed on {text}"))
             .unwrap();
         element_state.bounds = Some(bounds);
+        element_state.alignment = alignment;
     }
 
     fn paint(&self, text: &str, window: &mut Window, cx: &mut App) {
@@ -882,7 +914,12 @@ impl TextLayout {
                 line_origin.y = line_bottom;
                 line_start_ix += line.len() + 1;
             } else {
-                let position_within_line = position - line_origin;
+                let mut position_within_line = position - line_origin;
+                let row = ((position_within_line.y / line_height).floor() as usize)
+                    .min(line.wrap_boundaries().len());
+                let (_, _, start_x, end_x) = visual_line_metrics(line, row);
+                position_within_line.x -=
+                    alignment_offset(element_state.alignment, bounds.size.width, end_x - start_x);
                 match line.index_for_position(position_within_line, line_height) {
                     Ok(index_within_line) => return Ok(line_start_ix + index_within_line),
                     Err(index_within_line) => return Err(line_start_ix + index_within_line),
@@ -917,11 +954,104 @@ impl TextLayout {
                 continue;
             } else {
                 let ix_within_line = index - line_start_ix;
-                return Some(line_origin + line.position_for_index(ix_within_line, line_height)?);
+                let mut position = line.position_for_index(ix_within_line, line_height)?;
+                let row =
+                    ((position.y / line_height).round() as usize).min(line.wrap_boundaries().len());
+                let (_, _, start_x, end_x) = visual_line_metrics(line, row);
+                position.x +=
+                    alignment_offset(element_state.alignment, bounds.size.width, end_x - start_x);
+                return Some(line_origin + position);
             }
         }
 
         None
+    }
+
+    /// Visit selection rectangles for a UTF-8 byte range in visual-line order.
+    /// Left-aligned selections that continue onto another line fill the remaining width.
+    /// Line indices, rather than repeated floating-point y comparisons, keep
+    /// the final wrapped line present at fractional display and UI scales.
+    pub fn for_each_bounds_for_range(
+        &self,
+        range: Range<usize>,
+        visit: impl FnMut(Bounds<Pixels>),
+    ) {
+        self.for_each_range_bounds(range, true, visit);
+    }
+
+    fn for_each_range_bounds(
+        &self,
+        range: Range<usize>,
+        extend_selection: bool,
+        mut visit: impl FnMut(Bounds<Pixels>),
+    ) {
+        let element_state = self.0.borrow();
+        let element_state = element_state
+            .as_ref()
+            .expect("measurement has not been performed");
+        let bounds = element_state
+            .bounds
+            .expect("prepaint has not been performed");
+        if range.start >= range.end || element_state.line_height <= Pixels::ZERO {
+            return;
+        }
+        let mut line_start = 0;
+        let mut y = bounds.top();
+        for line in &element_state.lines {
+            for row in 0..=line.wrap_boundaries().len() {
+                let (row_start, row_end, start_x, end_x) = visual_line_metrics(line, row);
+                let selected_start = range.start.max(line_start + row_start);
+                let selected_end = range.end.min(line_start + row_end);
+                // A logical newline is selectable even when its line has no
+                // glyphs, or the selection starts immediately after its text.
+                // Soft wraps and the final line have no newline of their own.
+                let newline = line_start + line.len();
+                let selected_newline = extend_selection
+                    && element_state.alignment == TextAlign::Left
+                    && row == line.wrap_boundaries().len()
+                    && newline < element_state.len
+                    && range.contains(&newline);
+                if selected_start >= selected_end && !selected_newline {
+                    continue;
+                }
+                let offset =
+                    alignment_offset(element_state.alignment, bounds.size.width, end_x - start_x);
+                // Wrap boundaries already have shaped advances. Only the
+                // first glyph and partial endpoints need an index lookup.
+                let start = selected_start - line_start;
+                let end = selected_end - line_start;
+                let left = bounds.left()
+                    + offset
+                    + if start == row_start && row_start != 0 {
+                        Pixels::ZERO
+                    } else {
+                        line.unwrapped_layout.x_for_index(start) - start_x
+                    };
+                let mut right = bounds.left()
+                    + offset
+                    + if end == row_end {
+                        end_x - start_x
+                    } else {
+                        line.unwrapped_layout.x_for_index(end) - start_x
+                    };
+                // Preserve the usual full-width continuation for left-aligned
+                // prose; aligned cells use their actual visual line width.
+                if extend_selection
+                    && element_state.alignment == TextAlign::Left
+                    && range.end > line_start + row_end
+                {
+                    right = bounds.right();
+                }
+                if right > left {
+                    visit(Bounds::new(
+                        crate::point(left, y + element_state.line_height * row),
+                        crate::size(right - left, element_state.line_height),
+                    ));
+                }
+            }
+            line_start += line.len() + 1;
+            y += line.size(element_state.line_height).height;
+        }
     }
 
     /// Retrieve the layout for the line containing the given byte index.
@@ -1153,37 +1283,16 @@ impl Element for InteractiveText {
                 let mut link_hitboxes = Vec::new();
                 if !self.clickable_ranges.is_empty() {
                     let layout = self.text.layout();
-                    let bounds = layout.bounds();
-                    let height = layout.line_height();
-                        for range in &self.clickable_ranges {
-                            let start = range.start.min(self.text.text.len());
-                            let end = range.end.min(self.text.text.len());
-                            if start >= end {
-                                continue;
-                            }
-                            if let (Some(a), Some(b)) = (
-                                layout.position_for_index(start),
-                                layout.position_for_index(end),
-                            ) {
-                                let mut y = a.y;
-                                while y <= b.y {
-                                    let left = if y == a.y { a.x } else { bounds.left() };
-                                    let right = if y == b.y { b.x } else { bounds.right() };
-                                    if right > left {
-                                        let rect = Bounds::new(
-                                            crate::point(left, y),
-                                            crate::size(right - left, height),
-                                        );
-                                        link_hitboxes.push(window.insert_hitbox(
-                                            rect,
-                                            HitboxBehavior::Normal,
-                                        ));
-                                    }
-                                    y += height;
-                                }
-                            }
-                        }
+                    for range in &self.clickable_ranges {
+                        let start = range.start.min(self.text.text.len());
+                        let end = range.end.min(self.text.text.len());
+                        // Link cursors follow the shaped text, not the full-width
+                        // continuation used when painting a selection.
+                        layout.for_each_range_bounds(start..end, false, |rect| {
+                            link_hitboxes.push(window.insert_hitbox(rect, HitboxBehavior::Normal));
+                        });
                     }
+                }
 
                 ((hitbox, link_hitboxes), interactive_state)
             },
@@ -1210,7 +1319,6 @@ impl Element for InteractiveText {
             |interactive_state, window| {
                 let mut interactive_state = interactive_state.unwrap_or_default();
                 if let Some(click_listener) = self.click_listener.take() {
-
                     let text_layout = text_layout.clone();
                     let mouse_down = interactive_state.mouse_down_index.clone();
                     if let Some(mouse_down_index) = mouse_down.get() {
@@ -1346,6 +1454,66 @@ impl IntoElement for InteractiveText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selection_includes_empty_lines_and_newline_only_ranges() {
+        use crate::{FontId, GlyphId, LineLayout, ShapedGlyph, ShapedRun, point, px, size};
+
+        let lines = ["a", "", "b"].into_iter().map(|text| WrappedLine {
+            layout: Arc::new(WrappedLineLayout {
+                unwrapped_layout: Arc::new(LineLayout {
+                    len: text.len(),
+                    width: px(10. * text.len() as f32),
+                    runs: if text.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![ShapedRun {
+                            font_id: FontId(0),
+                            glyphs: vec![ShapedGlyph {
+                                id: GlyphId(0),
+                                position: point(px(0.), px(0.)),
+                                index: 0,
+                                is_emoji: false,
+                            }],
+                        }]
+                    },
+                    ..Default::default()
+                }),
+                wrap_boundaries: SmallVec::new(),
+                wrap_width: None,
+            }),
+            text: text.into(),
+            decoration_runs: Vec::new(),
+        });
+        let layout = TextLayout(Rc::new(RefCell::new(Some(TextLayoutInner {
+            len: 4,
+            lines: lines.collect(),
+            line_height: px(20.),
+            wrap_width: None,
+            truncate_width: None,
+            size: None,
+            bounds: Some(Bounds::new(point(px(0.), px(0.)), size(px(100.), px(60.)))),
+            alignment: TextAlign::Left,
+        }))));
+        let rectangles = |range, extend_selection| {
+            let mut result = Vec::new();
+            layout.for_each_range_bounds(range, extend_selection, |bounds| result.push(bounds));
+            result
+        };
+        let blank = Bounds::new(point(px(0.), px(20.)), size(px(100.), px(20.)));
+        assert!(rectangles(0..4, true).contains(&blank));
+        assert_eq!(rectangles(2..3, true), vec![blank]);
+        assert_eq!(
+            rectangles(1..2, true),
+            vec![Bounds::new(point(px(10.), px(0.)), size(px(90.), px(20.)))]
+        );
+        assert!(!rectangles(0..2, true).contains(&blank));
+        assert!(!rectangles(3..4, true).contains(&blank));
+        assert!(rectangles(2..2, true).is_empty());
+        assert!(rectangles(2..3, false).is_empty());
+        assert!(!rectangles(0..4, false).contains(&blank));
+        assert!(rectangles(4..5, true).is_empty());
+    }
 
     #[test]
     fn test_into_element_for() {
