@@ -967,12 +967,22 @@ impl TextLayout {
         None
     }
 
-    /// Visit the painted rectangles for a UTF-8 byte range in visual-line order.
+    /// Visit selection rectangles for a UTF-8 byte range in visual-line order.
+    /// Left-aligned selections that continue onto another line fill the remaining width.
     /// Line indices, rather than repeated floating-point y comparisons, keep
     /// the final wrapped line present at fractional display and UI scales.
     pub fn for_each_bounds_for_range(
         &self,
         range: Range<usize>,
+        visit: impl FnMut(Bounds<Pixels>),
+    ) {
+        self.for_each_range_bounds(range, true, visit);
+    }
+
+    fn for_each_range_bounds(
+        &self,
+        range: Range<usize>,
+        extend_selection: bool,
         mut visit: impl FnMut(Bounds<Pixels>),
     ) {
         let element_state = self.0.borrow();
@@ -1017,7 +1027,10 @@ impl TextLayout {
                     };
                 // Preserve the usual full-width continuation for left-aligned
                 // prose; aligned cells use their actual visual line width.
-                if element_state.alignment == TextAlign::Left && range.end > line_start + row_end {
+                if extend_selection
+                    && element_state.alignment == TextAlign::Left
+                    && range.end > line_start + row_end
+                {
                     right = bounds.right();
                 }
                 if right > left {
@@ -1264,7 +1277,9 @@ impl Element for InteractiveText {
                     for range in &self.clickable_ranges {
                         let start = range.start.min(self.text.text.len());
                         let end = range.end.min(self.text.text.len());
-                        layout.for_each_bounds_for_range(start..end, |rect| {
+                        // Link cursors follow the shaped text, not the full-width
+                        // continuation used when painting a selection.
+                        layout.for_each_range_bounds(start..end, false, |rect| {
                             link_hitboxes.push(window.insert_hitbox(rect, HitboxBehavior::Normal));
                         });
                     }

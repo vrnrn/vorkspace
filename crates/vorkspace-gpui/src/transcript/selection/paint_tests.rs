@@ -530,7 +530,7 @@ fn selection_starting_at_a_wrap_does_not_highlight_the_previous_line() {
 }
 
 #[test]
-fn wrapped_link_keeps_its_pointer_cursor_on_every_visual_line() {
+fn wrapped_link_cursor_follows_text_without_filling_selection_continuations() {
     const LINK: &str = "A linked explanation that wraps across several lines and stays interactive from the beginning of the passage through the final visible line and the closing words. More linked words keep the final line meaningful when the window changes width and the user moves the pointer.";
     const LINK_MARKDOWN: &str = "[A linked explanation that wraps across several lines and stays interactive from the beginning of the passage through the final visible line and the closing words. More linked words keep the final line meaningful when the window changes width and the user moves the pointer.](https://example.invalid)";
     let mut fixture = Fixture::with_markdown(0.9, LINK_MARKDOWN);
@@ -541,7 +541,8 @@ fn wrapped_link_keeps_its_pointer_cursor_on_every_visual_line() {
     let starts = std::iter::once(0).chain(line.wrap_boundaries().iter().map(|boundary| {
         line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index
     }));
-    for start in starts {
+    let mut checked_continuations = 0;
+    for (row, start) in starts.enumerate() {
         let point = aligned_glyph_point(&fragment, start + 1, gpui::TextAlign::Left).unwrap();
         let position = fixture.platform_point(point);
         fixture.event(gpui::MouseMoveEvent {
@@ -553,5 +554,52 @@ fn wrapped_link_keeps_its_pointer_cursor_on_every_visual_line() {
             .update(&mut fixture.cx, |_, window, _| window.cursor_style())
             .unwrap();
         assert_eq!(cursor, Some(gpui::CursorStyle::PointingHand));
+
+        let start_x = line.unwrapped_layout.x_for_index(start);
+        let end_x = line.wrap_boundaries().get(row).map_or(
+            line.unwrapped_layout.width,
+            |boundary| {
+                line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix]
+                    .position
+                    .x
+            },
+        );
+        let text_right = fragment.layout.bounds().left() + end_x - start_x;
+        let gap = fragment.layout.bounds().right() - text_right;
+        if gap <= px(2.) {
+            continue;
+        }
+        let whitespace = gpui::point(text_right + gap / 2., point.y);
+        let position = fixture.platform_point(whitespace);
+        fixture.event(gpui::MouseMoveEvent {
+            position,
+            ..Default::default()
+        });
+        let cursor = fixture
+            .window
+            .update(&mut fixture.cx, |_, window, _| window.cursor_style())
+            .unwrap();
+        assert_ne!(
+            cursor,
+            Some(gpui::CursorStyle::PointingHand),
+            "blank space after visual line {row} is not part of the link"
+        );
+        if row < line.wrap_boundaries().len() {
+            let mut selection_fills_gap = false;
+            fragment
+                .layout
+                .for_each_bounds_for_range(0..LINK.len(), |bounds| {
+                    selection_fills_gap |= bounds.contains(&whitespace);
+                });
+            assert!(
+                selection_fills_gap,
+                "selection must still fill the continuation"
+            );
+            checked_continuations += 1;
+        }
     }
+    assert!(
+        checked_continuations > 0,
+        "fixture must exercise a wrapped-line gap"
+    );
 }
