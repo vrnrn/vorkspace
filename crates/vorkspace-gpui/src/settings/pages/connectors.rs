@@ -206,14 +206,14 @@ impl SettingsView {
             Some(160.),
             cx,
             |this, value, cx| {
-                if let Some(editor) = &mut this.meeting_editor {
-                    if editor.provider != value {
-                        editor.provider = value;
-                        editor
-                            .model
-                            .update(cx, |input, cx| input.set_text(String::new(), cx));
-                        editor.result = None;
-                    }
+                if let Some(editor) = &mut this.meeting_editor
+                    && editor.provider != value
+                {
+                    editor.provider = value;
+                    editor
+                        .model
+                        .update(cx, |input, cx| input.set_text(String::new(), cx));
+                    editor.result = None;
                 }
                 cx.notify();
             },

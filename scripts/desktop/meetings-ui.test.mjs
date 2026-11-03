@@ -398,3 +398,30 @@ test("a title save updates the focused list row in place", async () => {
   assert.equal(ui.get("list").children[0], row);
   assert.equal(row.children[0].textContent, "Renamed");
 });
+
+test("Stop settles while a live gap read is still waiting", async () => {
+  const ui = await harness();
+  const live = document("live");
+  live.state.phase = "recording";
+  live.segments = [segment(7)];
+  live.sequence = 7;
+  ui.records.set("live", live);
+  await ui.get("record").onclick();
+  ui.phase("recording"); await ui.tick();
+
+  const gap = deferred();
+  ui.readResponses.set("live", gap);
+  ui.feed({reload: true});
+  await ui.tick();
+  await setImmediate();
+
+  await ui.get("record").onclick();
+  ui.readResponses.delete("live");
+  live.state.phase = "stopped";
+  ui.phase("stopped"); await ui.tick(); await setImmediate();
+  assert.equal(ui.get("record").attributes["aria-pressed"], "false");
+  assert.equal(ui.get("editor").value, "live transcript");
+  gap.resolve(); await setImmediate();
+  assert.equal(ui.get("editor").value, "live transcript");
+  assert.equal(ui.get("finals").children.length, 0);
+});

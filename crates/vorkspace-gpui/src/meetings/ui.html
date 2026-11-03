@@ -451,10 +451,16 @@ main {
   const emptyList = document.createElement("div");
   emptyList.className = "list-empty";
   function renderList() {
-    const root = $("list"), query = $("search").value.toLowerCase(), displayed = new Set();
+    const root = $("list"), query = $("search").value.toLowerCase();
+    const displayed = rows.filter(row => row.meeting && row.state && row.meeting.title.toLowerCase().includes(query));
+    const ids = new Set(displayed.map(row => row.meeting.id));
+    for (const [id, button] of rowNodes) {
+      if (ids.has(id)) continue;
+      button.remove();
+      rowNodes.delete(id);
+    }
     let index = 0;
-    for (const row of rows) {
-      if (!row.meeting || !row.state || !row.meeting.title.toLowerCase().includes(query)) continue;
+    for (const row of displayed) {
       const {id} = row.meeting;
       let button = rowNodes.get(id);
       if (!button) {
@@ -465,18 +471,12 @@ main {
         button.append(title, detail);
         rowNodes.set(id, button);
       }
-      displayed.add(id);
       button.setAttribute("aria-current", String(id === selected));
       button.children[0].textContent = row.meeting.title;
       button.children[1].textContent = (row.error ? "Saved data needs attention" : date(row.state.started_at)) + (isActive(row.state) ? " · Recording" : "");
       button.onclick = () => row.error ? showError(new Error(row.error)) : open(id).catch(showError);
       const next = root.children[index++] || null;
       if (next !== button) root.insertBefore(button, next);
-    }
-    for (const [id, button] of rowNodes) {
-      if (displayed.has(id)) continue;
-      button.remove();
-      rowNodes.delete(id);
     }
     if (index) emptyList.remove();
     else {
@@ -569,6 +569,7 @@ main {
       $("save").style.display = "none";
     }
     if (fields.has("title")) {
+      listEpoch++;
       const row = rows.find((row) => row.meeting.id === id);
       if (row) row.meeting.title = meeting.title;
       renderList();

@@ -86,6 +86,7 @@ jobs:
           test "$(lipo -archs "$APP/Contents/MacOS/vorkspace-gpui")" = arm64
           test "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" = "$RELEASE_VERSION"
           test "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" = "$RELEASE_BUILD_NUMBER"
+          test "$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")" = "$MACOSX_DEPLOYMENT_TARGET"
           cmp crates/vorkspace-gpui/assets/icon.icns "$APP/Contents/Resources/vorkspace.icns"
           test -s build/release-notes.md
           test -s build/native-updates/appcast.xml

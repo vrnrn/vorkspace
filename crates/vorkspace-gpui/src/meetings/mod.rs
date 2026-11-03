@@ -8,6 +8,7 @@ use gpui::{
 };
 use serde_json::{Value, json};
 use std::{
+    path::PathBuf,
     rc::Rc,
     sync::{
         Arc,
