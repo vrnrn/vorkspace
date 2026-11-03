@@ -10,7 +10,7 @@ The desktop is Rust. Provider CLIs run as supervised child processes. A small Ja
 
 ## Run locally
 
-You need a current stable Rust toolchain, Node.js 24 or newer, and Xcode with macOS components. Install and sign in to at least one supported [provider CLI](docs/providers.md).
+You need macOS 26 or newer, a current stable Rust toolchain, Node.js 24 or newer, and Xcode with macOS 26 platform components. Install and sign in to at least one supported [provider CLI](docs/providers.md).
 
 ```sh
 npm run dev -- --cwd /path/to/project
@@ -35,9 +35,10 @@ npm run check
 - Persistent Bots, scheduled habits, Channels, notes, and agent-generated visuals.
 - SSH connections to a Node host that owns remote processes and durable sessions.
 - Optional Vox calls controlled by Rust with a private WebRTC audio page; microphone access starts only with a call.
+- Optional [dictation](docs/dictation.md) with Apple’s on-device speech engine, custom words and a native notch; its background helper survives application Quit.
 - macOS app packaging with optional Sparkle signing and update configuration.
 
-vorkspace is a macOS app. Remote hosts can run on macOS or Linux.
+vorkspace requires macOS 26 or newer. Remote hosts can run on macOS or Linux.
 
 See the [repository map](docs/repository.md) for source ownership and the [documentation index](docs/README.md) for all guides.
 

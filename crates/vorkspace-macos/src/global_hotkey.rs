@@ -147,7 +147,7 @@ impl Drop for Registration {
         let _ = &self.state;
     }
 }
-fn parse(shortcut: &str) -> Result<(u32, u32), String> {
+pub fn parse(shortcut: &str) -> Result<(u32, u32), String> {
     let mut modifiers = 0;
     let mut key = None;
     for part in shortcut.split('-') {

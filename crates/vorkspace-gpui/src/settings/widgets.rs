@@ -181,6 +181,7 @@ impl SettingsView {
                     | "notes"
                     | "quick-composer"
                     | "clipboard-history"
+                    | "dictation-enabled"
                     | "working-agents"
                     | "close-to-tray"
                     | "main-pane-glass"

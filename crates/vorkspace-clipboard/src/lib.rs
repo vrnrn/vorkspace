@@ -1,18 +1,10 @@
 //! The contract between the app and its clipboard helper, which outlives the app
 //! so that copies keep being recorded after Quit. Only control messages cross the
 //! socket: clipboard contents stay in the helper.
-#[cfg(target_os = "macos")]
-pub mod dictation_engine_lease;
-#[cfg(target_os = "macos")]
-mod dictation_eou;
-#[cfg(all(target_os = "macos", debug_assertions))]
-pub mod dictation_live_fixture;
-#[cfg(target_os = "macos")]
-pub mod dictation_model;
-pub mod dictation_path;
-pub mod dictation_state;
-#[cfg(target_os = "macos")]
-pub mod dictation_worker;
+mod dictation_config;
+pub use dictation_config::{
+    DictationConfig, DictationPhase, DictationStatus, WordRule, word_rules,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io::{self, BufRead, BufReader, Write},
@@ -22,9 +14,8 @@ use std::{
     sync::{Arc, Condvar, Mutex},
     time::{Duration, UNIX_EPOCH},
 };
-pub use vorkspace_core::dictation_model::ModelId;
 
-const PROTOCOL: u32 = 7;
+const PROTOCOL: u32 = 8;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 const CONNECT_ATTEMPTS: usize = 60;
 const CONNECT_DELAY: Duration = Duration::from_millis(50);
@@ -37,30 +28,14 @@ pub enum Command {
     Configure {
         recording: bool,
         icon: bool,
-        dictation: bool,
-        setup: bool,
-        model: ModelId,
-        microphone: String,
-        words: String,
+        dictation: DictationConfig,
     },
     /// How to reopen this exact app, including the data it was started with.
     Relaunch {
         program: String,
         arguments: Vec<String>,
     },
-    DownloadModel {
-        request: u64,
-        model: ModelId,
-    },
-    ModelStatus {
-        request: u64,
-        model: ModelId,
-    },
-    CancelModel {
-        request: u64,
-        model: ModelId,
-    },
-    DictationPermissions,
+    SetUpDictation,
     CancelDictation,
     Clear,
     Toggle,
@@ -77,41 +52,10 @@ pub enum Action {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Notice {
-    Hello {
-        protocol: u32,
-        modified: u128,
-    },
+    Hello { protocol: u32, modified: u128 },
     Error(Option<String>),
     Action(Action),
-    Dictation {
-        model: ModelId,
-        status: String,
-        ready: bool,
-    },
-    Model {
-        request: u64,
-        model: ModelId,
-        state: ModelState,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ModelState {
-    Checking,
-    Missing,
-    Downloading(u64),
-    Cancelling,
-    Cancelled,
-    Ready,
-    Error(String),
-}
-impl ModelState {
-    pub fn terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Missing | Self::Ready | Self::Cancelled | Self::Error(_)
-        )
-    }
+    Dictation(DictationStatus),
 }
 
 impl Notice {
@@ -199,17 +143,13 @@ pub fn relaunch_command(app: &Path, arguments: Vec<String>) -> Command {
 
 #[derive(Clone, Default, PartialEq)]
 struct Desired {
-    model: ModelId,
-    microphone: String,
-    words: String,
-    setup: bool,
-    dictation: bool,
+    dictation: DictationConfig,
     recording: bool,
     icon: bool,
 }
 impl Desired {
     fn active(&self) -> bool {
-        self.recording || self.dictation || self.setup
+        self.recording || self.dictation.enabled
     }
 }
 #[derive(Default)]
@@ -246,41 +186,24 @@ impl Supervisor {
         Self { shared, socket }
     }
 
-    #[allow(clippy::too_many_arguments)] // Mirrors the helper's Configure message.
-    pub fn configure(
-        &self,
-        recording: bool,
-        icon: bool,
-        dictation: bool,
-        setup: bool,
-        model: ModelId,
-        microphone: &str,
-        words: &str,
-    ) {
+    pub fn configure(&self, recording: bool, icon: bool, dictation: DictationConfig) {
         *self.shared.desired.lock().unwrap() = Desired {
             recording,
             icon,
-            dictation,
-            setup,
-            model,
-            microphone: microphone.into(),
-            words: words.into(),
+            dictation: dictation.clone(),
         };
         self.shared.wake.notify_all();
         if !recording {
             // Stopping recording drops the history a queued clear was aimed at.
             *self.shared.clear_pending.lock().unwrap() = false;
         }
+        let active = recording || dictation.enabled;
         let command = Command::Configure {
             recording,
             icon,
             dictation,
-            setup,
-            model,
-            microphone: microphone.into(),
-            words: words.into(),
         };
-        if !self.send(command.clone()) && !recording && !dictation && !setup {
+        if !self.send(command.clone()) && !active {
             let shared = self.shared.clone();
             let socket = self.socket.clone();
             std::thread::spawn(move || retire(&shared, &socket, command));
@@ -382,10 +305,6 @@ fn supervise(
                 recording,
                 icon,
                 dictation,
-                setup,
-                model,
-                microphone,
-                words,
             } = shared.desired.lock().unwrap().clone();
             if send(
                 &stream,
@@ -393,10 +312,6 @@ fn supervise(
                     recording,
                     icon,
                     dictation,
-                    setup,
-                    model,
-                    microphone,
-                    words,
                 },
             )
             .is_ok()
@@ -458,11 +373,8 @@ pub enum Step {
 
 impl Control {
     pub fn configure(&mut self, recording: bool) -> Option<Step> {
-        self.configure_setup(recording, false)
-    }
-    pub fn configure_setup(&mut self, active: bool, setup: bool) -> Option<Step> {
-        self.recording = active;
-        (!(active || setup)).then_some(Step::Exit)
+        self.recording = recording;
+        (!recording).then_some(Step::Exit)
     }
 
     pub fn connected(&mut self) -> Option<Step> {
@@ -606,14 +518,12 @@ mod tests {
     }
 }
 
-/// Native CoreAudio identities. Never pass Vox/WebKit device IDs here.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct InputDevice {
     pub uid: String,
     pub name: String,
     pub builtin: bool,
 }
-#[cfg(target_os = "macos")]
 pub fn input_devices() -> Vec<InputDevice> {
     use std::ffi::{CStr, c_char};
     unsafe extern "C" {

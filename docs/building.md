@@ -4,9 +4,10 @@ The root Cargo workspace owns the desktop, its clipboard helper, and the shared 
 
 ## Requirements
 
+- macOS 26 or newer. The native deployment target and both app bundles require 26.0.
 - Current stable Rust. The repository does not pin a toolchain.
 - Node.js 24 or newer.
-- Xcode with macOS platform components, for Metal and for `xcrun swiftc`, which compiles the clipboard panel.
+- Xcode with macOS 26 or newer platform components, for Metal and for `xcrun swiftc`, which compiles the clipboard panel and native speech bridge.
 - [`cargo-nextest`](https://nexte.st) to run Rust tests: `cargo install --locked cargo-nextest`.
 
 `npm ci` installs the build and test tools. The app itself needs no JavaScript dependencies to compile, so you can skip that step when you only want to run it.
@@ -34,11 +35,11 @@ The profile and data selection are independent. Everything after `--` goes to th
 
 ### The clipboard helper
 
-History, ⌘⇧C and the menu bar icon belong to `vorkspace-clipboard`, a separate process nested in the bundle at `Contents/Helpers/vorkspace Clipboard.app`. While **Keep recent copies** or **Local dictation** is on, it keeps running after the development app exits, by design:
+History, dictation, ⌘⇧C and the menu bar icon belong to `vorkspace-clipboard`, a separate process nested in the bundle at `Contents/Helpers/vorkspace Clipboard.app`. While **Keep recent copies** or **Dictation** is on, it keeps running after the development app exits, by design:
 
 - Rebuilding replaces it on the next launch, which clears its history.
 - Each bundle path gets its own helper, so a development build and the installed app can run side by side. You'll see two menu bar icons, and only the first gets ⌘⇧C. The other reports that in Settings.
-- To stop it, use Quit in the clipboard menu or turn off both **Keep recent copies** and **Local dictation**.
+- To stop it, use Quit in the clipboard menu or turn off both **Keep recent copies** and **Dictation**. See [dictation](dictation.md) for its permissions and custom words.
 
 `cargo run` builds only the app, and the app looks for the helper beside its own binary. To include it, build both in the same profile:
 
@@ -80,7 +81,3 @@ In a new linked worktree, run `npm run worktree:seed` before the first build. To
 `npm run check` runs tooling, voice, host, formatting, Clippy, and workspace tests. `npm run check:fast` skips the host and GPUI suites. `npm run test:rust` runs every Rust test in parallel, one process per test. `npm run host:package` creates a self-contained remote host archive including Node.
 
 See [verification](testing.md), [data selection](data-storage.md), and [signed update packaging](updates.md).
-
-Local dictation shares the clipboard background helper and can keep it alive
-with clipboard history off. Its model download, permissions and shortcuts are
-described in [local dictation](dictation.md).

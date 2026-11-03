@@ -20,7 +20,7 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
       NEXTEST_PROFILE: ci
-      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      MACOSX_DEPLOYMENT_TARGET: '26.0'
     steps:
       - uses: actions/checkout@v7
         with:

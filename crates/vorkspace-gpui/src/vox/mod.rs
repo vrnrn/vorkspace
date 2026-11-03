@@ -461,7 +461,6 @@ impl Vox {
                 }
                 if state == "idle" {
                     self.active.store(false, Ordering::Relaxed);
-                    self.voice_lease = None;
                     self.state = "idle".into();
                     self.face = "vox".into();
                 }

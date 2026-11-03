@@ -17,6 +17,7 @@ mod worktrees;
 pub(super) use appearance::parse_hex;
 pub(super) use connections::ConnectionsState;
 pub(super) use inbox::InboxState;
+pub(super) use keybindings::command_shortcut;
 
 use super::{Section, SettingsView};
 use gpui::{AnyElement, Context, Window};

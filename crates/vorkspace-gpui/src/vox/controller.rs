@@ -3,7 +3,7 @@ use super::*;
 use gpui::{App, Global, WindowHandle};
 
 pub(crate) const SHORTCUT_COMMAND: &str = "App: Vox";
-pub(crate) const DEFAULT_SHORTCUT: &str = "cmd-.";
+pub(crate) const DEFAULT_SHORTCUT: &str = "ctrl-alt-space";
 
 #[derive(Default)]
 struct Controller {
@@ -23,8 +23,6 @@ pub(crate) fn configure(prefs: &vorkspace_ui::preferences::Preferences, cx: &mut
         cx.set_global(Controller::default());
     }
     let shortcut = match prefs.keybindings.get(SHORTCUT_COMMAND) {
-        Some(Some(shortcut)) if shortcut == "ctrl-alt-space" => DEFAULT_SHORTCUT,
-        Some(Some(shortcut)) if shortcut == "cmd-," => "",
         Some(Some(shortcut)) => shortcut.as_str(),
         Some(None) => "",
         None => DEFAULT_SHORTCUT,

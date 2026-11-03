@@ -1,47 +1,23 @@
-//! Compact right-hand dictation indicator, independent of Vox's notch content.
+//! A quiet extension of the hardware notch; opening never takes keyboard focus.
 use gpui::{prelude::*, *};
+use vorkspace_clipboard::{DictationPhase, DictationStatus};
 use vorkspace_macos::notch::{self, Geometry, Placement};
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum State {
-    Starting,
-    Recording,
-    Transcribing,
-    Error,
-}
-impl State {
-    pub fn recording(self) -> bool {
-        self == Self::Recording
-    }
-    #[cfg(test)]
-    pub fn error(self) -> bool {
-        self == Self::Error
-    }
-    fn label(self) -> &'static str {
-        match self {
-            Self::Starting => "Microphone starting — wait for red before speaking",
-            Self::Recording => "Microphone active — recording",
-            Self::Transcribing => "Microphone — transcribing",
-            Self::Error => "Microphone — needs attention",
-        }
-    }
-}
+
 pub struct Panel {
-    pub status: String,
-    pub state: State,
+    pub status: DictationStatus,
+    pub level: f32,
     pub placement: Placement,
     _screens: Option<notch::ScreenChanges>,
     _screen_task: Option<Task<()>>,
     #[cfg(test)]
-    geometry_override: Option<Geometry>,
+    geometry: Option<Geometry>,
 }
-pub fn open(status: &str, state: State, cx: &mut App) -> gpui::Result<WindowHandle<Panel>> {
-    let geometry = Geometry::read();
-    let status = status.to_string();
-    cx.open_window(notch::window_options(geometry), move |_, cx| {
+pub fn open(status: DictationStatus, cx: &mut App) -> Result<WindowHandle<Panel>> {
+    cx.open_window(notch::window_options(Geometry::read()), |_, cx| {
         cx.new(|cx| {
-            let (watch, rx) = notch::ScreenChanges::new();
+            let (watch, receiver) = notch::ScreenChanges::new();
             let task = cx.spawn(async move |this, cx| {
-                while rx.recv().await.is_ok() {
+                while receiver.recv().await.is_ok() {
                     let _ = this.update(cx, |_, cx| cx.notify());
                 }
             });
@@ -49,184 +25,207 @@ pub fn open(status: &str, state: State, cx: &mut App) -> gpui::Result<WindowHand
             placement.open();
             Panel {
                 status,
-                state,
+                level: 0.,
                 placement,
                 _screens: Some(watch),
                 _screen_task: Some(task),
                 #[cfg(test)]
-                geometry_override: None,
+                geometry: None,
             }
         })
     })
 }
+
 impl Render for Panel {
-    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(test)]
-        let geometry = self.geometry_override.unwrap_or_else(Geometry::read);
+        let geometry = self.geometry.unwrap_or_else(Geometry::read);
         #[cfg(not(test))]
         let geometry = Geometry::read();
-        let height = geometry.notch_height;
-        let layout = geometry.right_layout(notch::WING_WIDTH, height);
-        notch::place_right(w, layout, &self.placement, cx);
+        let listening = self.status.phase == DictationPhase::Listening;
+        let error = !self.status.active;
+        let attached = geometry.notch_edges.is_some();
+        let width = if error {
+            420.
+        } else if attached {
+            geometry.compact_width()
+        } else {
+            184.
+        };
+        let height = geometry.notch_height + if error { 56. } else { 0. };
+        notch::place(window, geometry, width, height, &self.placement, cx);
+        let label = match self.status.phase {
+            DictationPhase::Listening => "Listening",
+            DictationPhase::Starting => "Starting…",
+            DictationPhase::Finishing => "Finishing…",
+            DictationPhase::Cancelling => "Cancelling…",
+            _ => "Dictation",
+        };
         div()
             .id("dictation-notch")
-            .role(Role::Group)
-            .aria_label(format!("Dictation: {}", self.status))
             .debug_selector(|| "dictation-notch".into())
+            .role(Role::Group)
+            .aria_label(format!("Dictation: {}", self.status.message))
             .relative()
-            .w(px(layout.frame.size.width as f32))
+            .w(px(width))
             .h(px(height))
             .overflow_hidden()
-            .text_color(rgb(0xffffff))
             .font_family(vorkspace_ui::fonts::UI)
-            .when(layout.attached, |this| this.child(right_body()))
-            .when(!layout.attached, |this| this.child(notch::body()))
+            .text_size(px(12.))
+            .text_color(white())
+            .child(notch::body())
             .child(
                 div()
                     .relative()
-                    .ml(px(layout.overlap))
-                    .w(px(layout.wing_width))
+                    .w_full()
                     .h(px(geometry.notch_height))
                     .flex()
                     .items_center()
+                    .justify_between()
+                    .px(px(10.))
+                    .child(
+                        action(
+                            "dictation-finish",
+                            if listening {
+                                "Finish dictation"
+                            } else {
+                                "Cancel dictation"
+                            },
+                        )
+                        .child(microphone(listening))
+                        .on_click(move |_, _, cx| {
+                            if listening {
+                                super::dictation::toggle(cx)
+                            } else {
+                                super::dictation::cancel(cx)
+                            }
+                        }),
+                    )
+                    .when(!attached, |d| d.child(div().child(label)))
+                    .when(attached, |d| d.child(div().flex_1()))
                     .child(
                         div()
-                            .id("dictation-microphone")
-                            .role(Role::Image)
-                            .aria_label(self.state.label())
-                            .w(px(layout.wing_width))
-                            .h_full()
-                            .overflow_hidden()
                             .flex()
                             .items_center()
-                            .justify_center()
-                            .child(microphone(self.state.recording())),
+                            .gap(px(4.))
+                            .when(listening, |d| d.child(waveform(self.level)))
+                            .child(
+                                action("dictation-cancel", "Cancel dictation (Escape)")
+                                    .child(close_icon())
+                                    .on_click(|_, _, cx| super::dictation::cancel(cx)),
+                            ),
                     ),
             )
+            .when(error, |d| {
+                d.child(
+                    div()
+                        .debug_selector(|| "dictation-error".into())
+                        .relative()
+                        .px(px(20.))
+                        .pt(px(4.))
+                        .w_full()
+                        .max_h(px(48.))
+                        .text_color(rgba(0xffffffdd))
+                        .child(self.status.message.clone()),
+                )
+            })
     }
 }
-fn right_body() -> impl IntoElement {
-    canvas(
-        |_, _, _| (),
-        |bounds, _, w, _| {
-            let x = bounds.left();
-            let y = bounds.top();
-            let width = bounds.size.width;
-            let height = bounds.size.height;
-            let shoulder = px(6.);
-            let bottom = px(14.).min(height / 2.);
-            let mut p = PathBuilder::fill();
-            p.move_to(point(x, y));
-            p.line_to(point(x + width, y));
-            p.curve_to(
-                point(x + width - shoulder, y + shoulder),
-                point(x + width - shoulder, y),
-            );
-            p.line_to(point(x + width - shoulder, y + height - bottom));
-            p.curve_to(
-                point(x + width - shoulder - bottom, y + height),
-                point(x + width - shoulder, y + height),
-            );
-            p.line_to(point(x, y + height));
-            p.close();
-            if let Ok(path) = p.build() {
-                w.paint_path(path, black());
-            }
-        },
-    )
-    .absolute()
-    .size_full()
+
+fn action(id: &'static str, label: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label)
+        .size(px(24.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .hover(|s| s.bg(rgba(0xffffff18)))
+        .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
 }
 fn microphone(active: bool) -> impl IntoElement {
     canvas(
         |_, _, _| (),
-        move |bounds, _, w, _| {
-            let origin = bounds.origin;
-            let mut p = PathBuilder::stroke(px(1.4));
-            let pt = |x, y| point(origin.x + px(x), origin.y + px(y));
-            p.move_to(pt(5., 3.));
-            p.curve_to(pt(9., 3.), pt(7., 0.));
-            p.line_to(pt(9., 8.));
-            p.curve_to(pt(5., 8.), pt(7., 11.));
-            p.close();
-            p.move_to(pt(2.5, 7.5));
-            p.curve_to(pt(11.5, 7.5), pt(7., 17.));
-            p.move_to(pt(7., 12.));
-            p.line_to(pt(7., 15.));
-            p.move_to(pt(4.5, 15.));
-            p.line_to(pt(9.5, 15.));
-            if let Ok(p) = p.build() {
-                w.paint_path(p, if active { rgb(0xf87171) } else { rgb(0xfbbf24) });
+        move |bounds, _, window, _| {
+            let p = |x, y| point(bounds.left() + px(x), bounds.top() + px(y));
+            let mut path = PathBuilder::stroke(px(1.5));
+            path.move_to(p(5., 3.));
+            path.curve_to(p(9., 3.), p(7., 0.));
+            path.line_to(p(9., 8.));
+            path.curve_to(p(5., 8.), p(7., 11.));
+            path.close();
+            path.move_to(p(2.5, 7.5));
+            path.curve_to(p(11.5, 7.5), p(7., 17.));
+            path.move_to(p(7., 12.));
+            path.line_to(p(7., 15.));
+            path.move_to(p(4.5, 15.));
+            path.line_to(p(9.5, 15.));
+            if let Ok(path) = path.build() {
+                window.paint_path(path, if active { rgb(0xf87171) } else { rgb(0xffffff) });
             }
         },
     )
     .w(px(14.))
     .h(px(18.))
 }
+fn close_icon() -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        |bounds, _, window, _| {
+            let mut path = PathBuilder::stroke(px(1.3));
+            path.move_to(bounds.origin + point(px(2.), px(2.)));
+            path.line_to(bounds.origin + point(px(10.), px(10.)));
+            path.move_to(bounds.origin + point(px(10.), px(2.)));
+            path.line_to(bounds.origin + point(px(2.), px(10.)));
+            if let Ok(path) = path.build() {
+                window.paint_path(path, rgba(0xffffffbb));
+            }
+        },
+    )
+    .size(px(12.))
+}
+fn waveform(level: f32) -> impl IntoElement {
+    div()
+        .id("dictation-level")
+        .role(Role::Image)
+        .aria_label("Microphone input level")
+        .h(px(20.))
+        .flex()
+        .items_center()
+        .gap(px(2.))
+        .children([0.45, 0.8, 1., 0.65].into_iter().map(move |scale| {
+            div()
+                .w(px(2.))
+                .h(px(2. + 16. * level * scale))
+                .rounded_full()
+                .bg(white())
+        }))
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    struct IndicatorFixture {
-        panel: Entity<Panel>,
-    }
-    impl Render for IndicatorFixture {
+    struct Fixture(Entity<Panel>);
+    impl Render for Fixture {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
                 .size_full()
-                .bg(rgb(0x777777))
-                .child(self.panel.clone())
+                .bg(rgb(0x30343b))
+                .flex()
+                .justify_center()
+                .child(self.0.clone())
         }
     }
     #[::core::prelude::v1::test]
-    #[ignore = "Requires Metal and VORKSPACE_DICTATION_CAPTURE_DIR; display-only fixture"]
-    fn native_dictation_notch_captures() {
+    #[ignore = "Requires Metal and VORKSPACE_DICTATION_CAPTURE_DIR; isolated display fixture"]
+    fn dictation_notch_captures() {
         use std::sync::Arc;
         let output =
             std::path::PathBuf::from(std::env::var_os("VORKSPACE_DICTATION_CAPTURE_DIR").unwrap());
         assert!(output.is_absolute() && output.is_dir());
-        let states = [
-            ("starting", "Starting microphone…", State::Starting),
-            ("recording", "Recording", State::Recording),
-            ("transcribing", "Transcribing…", State::Transcribing),
-            (
-                "error",
-                "Microphone access is required. Use Set up permissions in Settings → General → Dictation, then allow vorkspace Clipboard in Privacy & Security.",
-                State::Error,
-            ),
-        ];
-        let selected = std::env::var("VORKSPACE_DICTATION_CAPTURE_STATE").ok();
-        if selected.is_none() {
-            for (name, _, _) in states {
-                for mode in ["notched", "fallback"] {
-                    let result = std::process::Command::new(std::env::current_exe().unwrap())
-                        .args([
-                            "--exact",
-                            "dictation_panel::tests::native_dictation_notch_captures",
-                            "--ignored",
-                        ])
-                        .env("VORKSPACE_DICTATION_CAPTURE_STATE", name)
-                        .env("VORKSPACE_DICTATION_CAPTURE_MODE", mode)
-                        .status()
-                        .unwrap();
-                    assert!(result.success());
-                }
-            }
-            return;
-        }
-        let (name, status, state) = states
-            .into_iter()
-            .find(|(name, _, _)| selected.as_deref() == Some(*name))
-            .unwrap();
-        let mode = std::env::var("VORKSPACE_DICTATION_CAPTURE_MODE").unwrap();
-        let geometry = Geometry {
-            x: 0.,
-            top: 1169.,
-            screen_width: 1800.,
-            notch_height: 38.,
-            notch_edges: (mode == "notched").then_some((790., 1010.)),
-            ..Default::default()
-        };
         let mut cx = gpui::HeadlessAppContext::with_platform(
             Arc::new(gpui_apple::AppleTextSystem::new()),
             Arc::new(()),
@@ -237,24 +236,57 @@ mod tests {
             },
         );
         vorkspace_ui::clock::use_test_clock(&cx);
+        let panel = cx.new(|_| Panel {
+            status: DictationStatus::default(),
+            level: 0.65,
+            placement: Placement::default(),
+            _screens: None,
+            _screen_task: None,
+            geometry: Some(Geometry::default()),
+        });
         let window = cx
-            .open_window(size(px(480.), px(180.)), |_, cx| {
-                let panel = cx.new(|_| Panel {
-                    status: status.into(),
-                    state,
-                    placement: Placement::default(),
-                    _screens: None,
-                    _screen_task: None,
-                    geometry_override: Some(geometry),
-                });
-                cx.new(|_| IndicatorFixture { panel })
+            .open_window(size(px(480.), px(140.)), |_, cx| {
+                cx.new(|_| Fixture(panel.clone()))
             })
             .unwrap();
-        cx.run_until_parked();
-        vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
-        cx.capture_screenshot(window.into())
-            .unwrap()
-            .save(output.join(format!("dictation-{mode}-{name}.png")))
-            .unwrap();
+        for (mode, attached) in [("notched", true), ("fallback", false)] {
+            for (name, phase, message, active) in [
+                (
+                    "starting",
+                    DictationPhase::Starting,
+                    "Starting microphone…",
+                    true,
+                ),
+                ("listening", DictationPhase::Listening, "Listening", true),
+                ("finishing", DictationPhase::Finishing, "Finishing…", true),
+                (
+                    "error",
+                    DictationPhase::Error,
+                    "Allow Accessibility for vorkspace Clipboard to type into other apps.",
+                    false,
+                ),
+            ] {
+                panel.update(&mut cx, |p, cx| {
+                    p.status = DictationStatus {
+                        phase,
+                        message: message.into(),
+                        active,
+                    };
+                    p.geometry = Some(Geometry {
+                        notch_width: 185.,
+                        notch_height: 32.,
+                        notch_edges: attached.then_some((620., 820.)),
+                        ..Default::default()
+                    });
+                    cx.notify();
+                });
+                cx.run_until_parked();
+                vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
+                cx.capture_screenshot(window.into())
+                    .unwrap()
+                    .save(output.join(format!("notch-{mode}-{name}.png")))
+                    .unwrap();
+            }
+        }
     }
 }

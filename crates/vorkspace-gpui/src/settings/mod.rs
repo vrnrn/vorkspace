@@ -247,7 +247,6 @@ pub(crate) struct SettingsView {
     recording_preview: String,
     recorder_focus: FocusHandle,
     recording_error: Option<String>,
-    dictation_onboarding: Option<dictation::Onboarding>,
     dictation_words_input: Entity<Input>,
     dictation_words_error: Option<String>,
     management: Option<management::Editor>,
@@ -300,20 +299,13 @@ impl SettingsView {
         if let Some(center) = crate::accounts::get(cx) {
             center.update(cx, |center, _| center.hide_emails());
         }
-        {
-            let service = crate::clipboard::ensure(cx);
-            cx.observe(&service, |this, _, cx| {
-                this.dictation_notice(cx);
-                cx.notify();
-            })
-            .detach();
-        }
-        cx.on_release(|this, cx| {
-            if let Some(onboarding) = this.dictation_onboarding.take() {
-                crate::clipboard::cancel_model(onboarding.request, onboarding.model, cx);
-            }
-        })
-        .detach();
+        let clipboard = crate::clipboard::ensure(cx);
+        cx.observe(&clipboard, |_, _, cx| cx.notify()).detach();
+        let dictation_words_input = cx.new(|cx| {
+            let mut input = Input::memory_fact("Custom words", cx);
+            input.set_text(prefs.dictation_words.clone(), cx);
+            input
+        });
         let search = cx.new(|cx| {
             let mut input = Input::field("Search settings", "Search settings", content(0.35), cx);
             input.set_font_size(12.);
@@ -338,15 +330,6 @@ impl SettingsView {
             );
             input.set_font_size(12.);
             input.set_text(prefs.bedrock_cost_url.clone(), cx);
-            input
-        });
-        let dictation_words_input = cx.new(|cx| {
-            let mut input = Input::multiline_field(
-                "Custom word corrections",
-                "Vorkspace\nwork space => Vorkspace",
-                cx,
-            );
-            input.set_text(prefs.dictation_words.clone(), cx);
             input
         });
         let chat_background_preview = cx.new(|_| ProjectBackground::preview());
@@ -450,7 +433,6 @@ impl SettingsView {
             recording_preview: String::new(),
             recorder_focus: cx.focus_handle(),
             recording_error: None,
-            dictation_onboarding: None,
             dictation_words_input,
             dictation_words_error: None,
             management: None,
@@ -654,10 +636,6 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.dictation_onboarding.is_some() {
-            self.cancel_dictation_setup(cx);
-            return true;
-        }
         if self.dismiss_notification_transient(window, cx) {
             return true;
         }
@@ -1234,7 +1212,6 @@ impl Render for SettingsView {
             })
             .children(self.management_overlay(window, cx))
             .children(self.notification_overlay(cx))
-            .children(self.dictation_overlay(window, cx))
     }
 }
 

@@ -19,22 +19,14 @@ async-channel = "2"
 libc = "0.2"
 gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
 gpui_macos = { package = "gpui-pre-macos", version = "=0.3.9", default-features = false }
-vorkspace-core = { path = "../vorkspace-core" }
 vorkspace-macos = { path = "../vorkspace-macos" }
+vorkspace-ui = { path = "../vorkspace-ui" }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSScreen", "NSResponder", "NSView", "NSWindow", "objc2-core-foundation"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFData", "CFDictionary", "CFNumber", "CFString"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSGeometry", "NSString"] }
 objc2-image-io = { version = "0.3.2", default-features = false, features = ["std", "CGImageSource", "objc2-core-graphics"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-transcribe-cpp = { git = "https://github.com/anomalyco/transcribe.cpp", rev = "7045d1c0fe7cee37747b2792977421d435e75fca" }
-sha2 = "0.10"
-sha1 = "0.10"
-ureq = "2.12"
-hound = "3.5"
-vorkspace-ui = { path = "../vorkspace-ui" }
 
 [dev-dependencies]
 vorkspace-ui = { path = "../vorkspace-ui", features = ["test-support"] }

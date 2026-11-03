@@ -85,14 +85,6 @@ pub struct Geometry {
     pub notch_edges: Option<(f64, f64)>,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct RightLayout {
-    pub frame: NSRect,
-    pub overlap: f32,
-    pub wing_width: f32,
-    pub attached: bool,
-}
-
 impl Default for Geometry {
     fn default() -> Self {
         Self {
@@ -162,36 +154,6 @@ impl Geometry {
             NSSize::new(width as f64, height as f64),
         )
     }
-
-    /// Cover the right half of the hardware notch as well as the visible wing.
-    /// AppKit exposes safe rectangles, not the shape of the housing's curved
-    /// edge. Overlapping the obscured region keeps paint joined even when the
-    /// reported safe edge and physical edge differ at a scaled resolution.
-    pub fn right_layout(self, width: f32, height: f32) -> RightLayout {
-        let screen_end = self.x + self.screen_width as f64;
-        let (x, overlap, wing_width, attached) = if let Some((left, right)) = self.notch_edges {
-            let x = (left + right) / 2.;
-            let wing_width = width.max(0.).min((screen_end - right).max(0.) as f32);
-            (x, (right - x) as f32, wing_width, true)
-        } else {
-            let wing_width = width.max(0.).min(self.screen_width.max(0.));
-            (
-                self.x + (self.screen_width - wing_width) as f64 / 2.,
-                0.,
-                wing_width,
-                false,
-            )
-        };
-        RightLayout {
-            frame: NSRect::new(
-                NSPoint::new(x, self.top - height as f64),
-                NSSize::new((overlap + wing_width) as f64, height as f64),
-            ),
-            overlap,
-            wing_width,
-            attached,
-        }
-    }
 }
 
 pub fn place(
@@ -203,11 +165,6 @@ pub fn place(
     cx: &gpui::App,
 ) {
     place_frame(window, geometry.frame(width, height), placement, cx);
-}
-
-/// Place a dictation-only right wing without reserving a left wing.
-pub fn place_right(window: &Window, layout: RightLayout, placement: &Placement, cx: &gpui::App) {
-    place_frame(window, layout.frame, placement, cx);
 }
 
 fn place_frame(window: &Window, frame: NSRect, placement: &Placement, cx: &gpui::App) {
@@ -359,60 +316,5 @@ mod tests {
             assert_eq!(frame.origin.x + frame.size.width / 2., -960.);
             assert_eq!(frame.origin.y + frame.size.height, 1080.);
         }
-        let right = geometry.right_layout(54., 32.);
-        assert_eq!(right.frame.origin.x, -960. - 27.);
-        assert_eq!(right.frame.size.width, 54.);
-        assert_eq!(right.frame.origin.y + right.frame.size.height, 1080.);
-        assert!(!right.attached);
-    }
-
-    #[test]
-    fn right_wing_overlaps_the_actual_notch_gap_on_offset_asymmetric_screens() {
-        let geometry = Geometry {
-            x: -1800.,
-            top: 1520.,
-            screen_width: 1800.,
-            notch_edges: Some((-1040., -810.)),
-            ..Default::default()
-        };
-        let layout = geometry.right_layout(54., 38.);
-        assert!(layout.attached);
-        assert_eq!(layout.frame.origin.x, -925.);
-        assert_eq!(layout.overlap, 115.);
-        assert_eq!(layout.wing_width, 54.);
-        assert_eq!(layout.frame.origin.x + layout.overlap as f64, -810.);
-        assert_eq!(layout.frame.origin.x + layout.frame.size.width, -756.);
-        assert_eq!(layout.frame.origin.y + layout.frame.size.height, 1520.);
-        // AppKit geometry stays in screen points; only capture pixels scale.
-        for scale in [1., 1.5, 2.] {
-            assert_eq!(
-                (layout.frame.origin.x + layout.overlap as f64) * scale,
-                -810. * scale
-            );
-        }
-    }
-
-    #[test]
-    fn right_wing_fits_the_remaining_display_and_fallback_is_centered() {
-        let geometry = Geometry {
-            x: 100.,
-            screen_width: 200.,
-            notch_edges: Some((270., 290.)),
-            ..Default::default()
-        };
-        let attached = geometry.right_layout(54., 30.);
-        assert_eq!(attached.wing_width, 10.);
-        assert_eq!(attached.frame.origin.x + attached.frame.size.width, 300.);
-        let fallback = Geometry {
-            notch_edges: None,
-            ..geometry
-        }
-        .right_layout(54., 30.);
-        assert!(!fallback.attached);
-        assert_eq!(fallback.overlap, 0.);
-        assert_eq!(
-            fallback.frame.origin.x + fallback.frame.size.width / 2.,
-            200.
-        );
     }
 }

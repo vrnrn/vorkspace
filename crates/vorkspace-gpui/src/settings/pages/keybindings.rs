@@ -12,8 +12,8 @@ pub(crate) struct Binding {
 pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         command: "App: Settings",
-        keys: "",
-        when: "Application menu",
+        keys: "⌘,",
+        when: "Always",
         fixed: false,
     },
     Binding {
@@ -54,13 +54,13 @@ pub(crate) const BINDINGS: &[Binding] = &[
     },
     Binding {
         command: "App: Dictation",
-        keys: "⌘,",
+        keys: "⌃⇧Space",
         when: "Anywhere",
-        fixed: true,
+        fixed: false,
     },
     Binding {
         command: "App: Vox",
-        keys: "⌘.",
+        keys: "⌃⌥Space",
         when: "Anywhere",
         fixed: false,
     },
@@ -84,7 +84,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     },
     Binding {
         command: "App: Switch Model",
-        keys: "",
+        keys: "⌘.",
         when: "Always",
         fixed: false,
     },
@@ -322,14 +322,11 @@ pub(super) fn quick_composer_label(p: &Preferences) -> String {
 /// once they have disabled it.
 pub(crate) fn command_shortcut(p: &Preferences, command: &str) -> Option<String> {
     match p.keybindings.get(command) {
-        Some(Some(s)) if command == "App: Vox" && s == "ctrl-alt-space" => Some("⌘.".into()),
-        Some(Some(s)) if s == "cmd-," && command != "App: Dictation" => None,
-        Some(Some(s)) if s == "cmd-." && command != "App: Vox" => None,
         Some(Some(s)) => Some(shortcut_label(s)),
         Some(None) => None,
         None => {
             let keys = BINDINGS.iter().find(|r| r.command == command)?.keys;
-            (!keys.is_empty()).then(|| keys.into())
+            Some(keys.into())
         }
     }
 }
@@ -584,12 +581,6 @@ impl SettingsView {
         }
         let shortcut = key.unparse();
         self.recording_preview = shortcut_label(&shortcut);
-        if shortcut == "cmd-," || (shortcut == "cmd-." && command != "App: Vox") {
-            self.recording_error =
-                Some("⌘, is reserved for Dictation; ⌘. is reserved for Vox.".into());
-            cx.notify();
-            return;
-        }
         if bare || (!key.modifiers.platform && !key.modifiers.control && !key.modifiers.alt) {
             self.recording_error = Some("Use Command, Control, or Option with a key.".into());
             cx.notify();

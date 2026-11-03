@@ -1,6 +1,6 @@
 # Vox
 
-Vox is an optional voice conversation in a native macOS notch panel. Enable it in Settings → Vox; it starts disabled. Open or end a call with ⌘., or the microphone button immediately above Subscriptions in the project rail. The global shortcut can be changed or disabled in Keyboard Shortcuts under App: Vox.
+Vox is an optional voice conversation in a native macOS notch panel. Enable it in Settings → Vox; it starts disabled. Open or end a call with Control Option Space, or the microphone button immediately above Subscriptions in the project rail. The global shortcut can be changed or disabled in Keyboard Shortcuts under App: Vox.
 
 The face appears to the left of the display notch, with a small status dot on the right: green while listening, amber while thinking, blue while replying, white while connecting or saving, and red after an error. The dot pulses gently and faster while you speak. Hovering it replaces it with a stop control during a call, or a start control when no call is running. The black surface uses the display's safe area and auxiliary top regions rather than fixed MacBook dimensions. Displays without a notch use a top-center panel. Silent replies expand a bounded text area below it. The panel opens without activating the main window and stays available across Spaces and while the main window is hidden or minimized.
 
@@ -14,11 +14,13 @@ Vox can inspect and control supported local sessions and Bots through native han
 
 The saved conversation uses the provider's native thread identity. Reset increments its revision so a late reply cannot restore a cleared thread. Memory belongs to the reserved `bots/vox` folder and is opened with the native conflict-aware editor.
 
+Vox and [dictation](dictation.md) share exclusive microphone and notch ownership. Stop the current voice feature before starting the other.
+
 ## Runtime
 
 `crates/vorkspace-core/src/voice/runtime.rs` owns the Codex app-server child, bounded JSON-RPC channels, exclusive call lock, tool receipts, and shutdown. It saves the accepted native thread identity with a revision check before opening audio. Resume failure never starts a replacement conversation automatically. Tool calls must match that thread and the embedded action schema; repeated call IDs reuse the prior result without repeating effects.
 
-`crates/vorkspace-gpui/src/vox/` owns the Vox notch window, global shortcut registration, bounded idle timers, ephemeral WebKit surface, and microphone permissions. `crates/vorkspace-macos/src/notch.rs` shares native placement, display geometry and the black header body with dictation. A process lease prevents concurrent microphone/notch owners. Native frame changes run outside GPUI borrows and reject superseded frames or closed panels. Display configuration notifications reposition the surface without starting another call. `crates/vorkspace-gpui/src/shell/vox.rs` dispatches actions through existing conversation and Bot owners. `crates/vorkspace-core/src/voice.rs` owns durable identity and memory operations.
+`crates/vorkspace-gpui/src/vox/` owns the shared notch window, global shortcut registration, bounded idle timers, ephemeral WebKit surface, and microphone permissions. Shared display geometry and placement live in `crates/vorkspace-macos/src/notch.rs`. Native frame changes run outside GPUI borrows and reject superseded frames or closed panels. Display configuration notifications reposition the surface without starting another call. `crates/vorkspace-gpui/src/shell/vox.rs` dispatches actions through existing conversation and Bot owners. `crates/vorkspace-core/src/voice.rs` owns durable identity and memory operations.
 
 `embedded/vox/` builds the small WebRTC audio page embedded in the core. It exchanges SDP, microphone devices, and playback activity with a per-call capability-protected loopback endpoint. It cannot dispatch workspace tools or launch processes. WebRTC preserves the Codex subscription sign-in path and browser echo cancellation; the native PCM transport requires API-key authentication. No Node voice controller is started.
 

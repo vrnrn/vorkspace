@@ -93,33 +93,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-Local dictation uses the Parakeet artifact catalog and local
-transcription approach inspected in anomalyco/hex (MIT), commit
-1d4904c6bba9ab91f631c8c79108c3847b1b1c60. See licenses/LICENSE-HEX-MIT.
-The static inference engine is anomalyco/transcribe.cpp (MIT), commit
-7045d1c0fe7cee37747b2792977421d435e75fca; see licenses/LICENSE-TRANSCRIBE-MIT.
-Parakeet Flash uses an adapted EOU streaming engine from altic-dev/FluidAudio
-(Apache-2.0), commit 386f7195670b77f2954c7ee143ec63fcb50b6c3b; see
-licenses/LICENSE-FLUIDAUDIO-APACHE. The adaptation accepts preconverted audio,
-loads locally verified models, and keeps utterance hints from ending dictation.
-Git blob verification uses RustCrypto's sha1 crate (MIT); see licenses/LICENSE-SHA1-MIT.
-The separately downloaded Parakeet Flash model is a Core ML conversion of
-NVIDIA's Parakeet Realtime EOU 120M, governed by the NVIDIA Open Model License:
-https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1
-https://huggingface.co/FluidInference/parakeet-realtime-eou-120m-coreml/tree/40a23f4c0b333aa17ad8c0f2ea47ec2347f2f355/160ms
-The separately downloaded NVIDIA Parakeet Unified English model is governed by the NVIDIA Open Model License.
-The pinned GGUF conversion lists CC-BY-4.0 metadata; both upstream and
-conversion attribution are retained:
-https://huggingface.co/nvidia/parakeet-unified-en-0.6b
-https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf
-
-The optional NVIDIA Parakeet-TDT v3 model and its GGUF conversion list
-CC-BY-4.0. Conversion by handy-computer, pinned to
-85ac09ea12fc4b1112fa76810059364bc6adc9de, Q8_0. The GGUF is a quantized
-conversion of the original model; it is downloaded separately, on request:
-https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
-https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/tree/85ac09ea12fc4b1112fa76810059364bc6adc9de
-https://creativecommons.org/licenses/by/4.0/
-
-transcribe.cpp includes GGML (MIT); see licenses/LICENSE-GGML-MIT.

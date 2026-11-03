@@ -2,26 +2,16 @@ use std::{env, path::PathBuf, process::Command};
 
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let source = manifest.join("native/Clipboard.swift");
-    let dictation = manifest.join("native/Dictation.swift");
-    let target = manifest.join("native/DictationTarget.swift");
-    let microphones = manifest.join("native/Microphones.swift");
-    let eou = manifest.join("native/DictationEOU.swift");
-    let eou_availability = manifest.join("native/DictationEOUAvailability.swift");
-    let eou_sources = [
-        "Mel.swift",
-        "Decoder.swift",
-        "Tokenizer.swift",
-        "Engine.swift",
+    let sources = [
+        "Clipboard.swift",
+        "Dictation.swift",
+        "DictationWords.swift",
+        "DictationTarget.swift",
+        "SpeechCapture.swift",
+        "Microphones.swift",
     ]
-    .map(|name| manifest.join("native/FluidAudioEOU").join(name));
-    println!("cargo:rerun-if-changed={}", target.display());
-    println!("cargo:rerun-if-changed={}", microphones.display());
-    println!("cargo:rerun-if-changed={}", dictation.display());
-    println!("cargo:rerun-if-changed={}", source.display());
-    println!("cargo:rerun-if-changed={}", eou.display());
-    println!("cargo:rerun-if-changed={}", eou_availability.display());
-    for source in &eou_sources {
+    .map(|name| manifest.join("native").join(name));
+    for source in &sources {
         println!("cargo:rerun-if-changed={}", source.display());
     }
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
@@ -31,13 +21,9 @@ fn main() {
         Ok("x86_64") => "x86_64",
         _ => panic!("Unsupported macOS architecture"),
     };
-    let mut compiler = Command::new("xcrun");
-    compiler.arg("swiftc");
-    if env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some() {
-        compiler.args(["-D", "DEBUG"]);
-    }
-    let status = compiler
+    let status = Command::new("xcrun")
         .args([
+            "swiftc",
             "-parse-as-library",
             "-emit-library",
             "-static",
@@ -45,15 +31,11 @@ fn main() {
             "-module-name",
             "VorkspaceClipboard",
             "-target",
-            &format!("{arch}-apple-macos11.0"),
+            &format!("{arch}-apple-macos26.0"),
         ])
-        .arg(source)
-        .arg(dictation)
-        .arg(target)
-        .arg(microphones)
-        .arg(eou)
-        .arg(eou_availability)
-        .args(&eou_sources)
+        .arg("-module-cache-path")
+        .arg(output.join("swift-module-cache"))
+        .args(sources)
         .arg("-o")
         .arg(&library)
         .status()
@@ -76,10 +58,18 @@ fn main() {
     for path in paths.split('"').skip(1).step_by(2) {
         println!("cargo:rustc-link-search=native={path}");
     }
-    // The archive is lazy-linked: Settings uses only device enumeration;
-    // capture, permissions and insertion remain exclusively in the helper.
+    // The app links only device enumeration. The helper owns capture and text.
     println!("cargo:rustc-link-search=native={}", output.display());
     println!("cargo:rustc-link-lib=static=VorkspaceClipboard");
-    println!("cargo:rustc-link-lib=framework=CoreML");
-    println!("cargo:rustc-link-lib=framework=Accelerate");
+    for framework in [
+        "Speech",
+        "AVFoundation",
+        "CoreAudio",
+        "AudioToolbox",
+        "AppKit",
+        "ApplicationServices",
+        "Carbon",
+    ] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
 }
