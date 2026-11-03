@@ -608,8 +608,14 @@ main {
     renderState();
     try {
       if (activeId && isActive()) {
-        await call("audio.stop", { id: activeId });
-        phase = "finishing";
+        const id = activeId;
+        try {
+          await call("audio.stop", { id });
+        } catch (error) {
+          if (activeId === id && isActive()) throw error;
+          return;
+        }
+        if (activeId === id && isActive()) phase = "finishing";
         return;
       }
       if (dirty) await save();
@@ -638,7 +644,10 @@ main {
       const id = activeId, result = await call("audio.status", { id, after: sequence });
       if (activeId !== id) return;
       if (result.state) {
-        phase = result.state.phase;
+        // A poll sent before Stop can return an older active phase.
+        if (phase !== "finishing" || !["starting", "recording"].includes(result.state.phase)) {
+          phase = result.state.phase;
+        }
         const listNeedsRefresh = phase !== "starting" && !rows.some(row => row.meeting.id === id);
         if (selected === id) {
           if (doc) doc.state = result.state;

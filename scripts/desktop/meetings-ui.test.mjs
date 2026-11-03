@@ -36,7 +36,7 @@ function document(id) {
 async function harness() {
   const elements = new Map(), intervals = [], records = new Map([['A', document('A')], ['B', document('B')]]);
   const get = (id) => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  const pending = new Map(), summaryResponses = new Map(), writes = [], stops = [];
+  const pending = new Map(), summaryResponses = new Map(), statusResponses = new Map(), writes = [], stops = [];
   let phase = "starting";
   const call = async (method, params = {}) => {
     if (pending.has(method + ":" + (params.id ?? ""))) await pending.get(method + ":" + (params.id ?? "")).promise;
@@ -62,7 +62,11 @@ async function harness() {
       return structuredClone({ ...doc.meeting, summary_html: doc.summary_html });
     }
     if (method === "audio.stop") { stops.push(params.id); phase = "finishing"; return { accepted: true }; }
-    if (method === "audio.status") return { state: { id: "live", phase, started_at: 1000 }, segments: [], partials: {}, reload: false };
+    if (method === "audio.status") {
+      const snapshot = { state: { id: "live", phase, started_at: 1000 }, segments: [], partials: {}, reload: false };
+      await statusResponses.get(params.id)?.promise;
+      return snapshot;
+    }
     throw new Error(`Unexpected method ${method}`);
   };
   vm.runInNewContext(script, {
@@ -77,7 +81,7 @@ async function harness() {
     return button.onclick();
   };
   const input = (id, text) => { get(id).value = text; get(id).oninput(); };
-  return { get, open, input, pending, summaryResponses, writes, stops, records, tick: () => intervals[0](), phase: (value) => { phase = value; } };
+  return { get, open, input, pending, summaryResponses, statusResponses, writes, stops, records, tick: () => intervals[0](), phase: (value) => { phase = value; } };
 }
 
 test("delayed document reads preserve newer input", async () => {
@@ -219,4 +223,39 @@ test("a delayed summary response cannot roll back a reopened meeting's saved rev
   await ui.get("save").onclick();
   assert.equal(ui.writes.at(-1).revision, 2);
   assert.equal(ui.records.get("A").meeting.title, "Newer title");
+});
+
+test("a delayed Stop reply preserves an already observed terminal phase", async () => {
+  const ui = await harness();
+  await ui.get("record").onclick();
+  ui.phase("recording");
+  await ui.tick();
+  const reply = deferred();
+  ui.pending.set("audio.stop:live", reply);
+  const stopping = ui.get("record").onclick();
+  ui.records.set("live", document("live"));
+  ui.phase("stopped");
+  await ui.tick();
+  reply.resolve();
+  await stopping;
+  assert.equal(ui.get("record-mobile").textContent, "Record");
+  assert.equal(ui.get("record").disabled, false);
+  await ui.get("record").onclick();
+  assert.equal(ui.get("record-mobile").textContent, "Stop");
+});
+
+test("a poll started before Stop cannot regress Finishing to Recording", async () => {
+  const ui = await harness();
+  await ui.get("record").onclick();
+  ui.phase("recording");
+  await ui.tick();
+  const reply = deferred();
+  ui.statusResponses.set("live", reply);
+  const poll = ui.tick();
+  await setImmediate();
+  await ui.get("record").onclick();
+  reply.resolve();
+  await poll;
+  assert.equal(ui.get("record-mobile").textContent, "Finishing…");
+  assert.equal(ui.get("record").disabled, true);
 });
