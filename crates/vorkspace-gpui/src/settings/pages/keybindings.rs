@@ -54,7 +54,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     },
     Binding {
         command: "App: Dictation",
-        keys: "⌃⇧Space",
+        keys: "Fn",
         when: "Anywhere",
         fixed: false,
     },
@@ -331,6 +331,12 @@ pub(crate) fn command_shortcut(p: &Preferences, command: &str) -> Option<String>
     }
 }
 pub(crate) fn shortcut_label(shortcut: &str) -> String {
+    if shortcut == "fn" {
+        return "Fn / Globe".into();
+    }
+    if shortcut == "right-alt" {
+        return "Right Option".into();
+    }
     let parts: Vec<_> = shortcut.split('-').collect();
     let mut label = String::new();
     for part in parts {

@@ -6,26 +6,46 @@ use std::{
     sync::OnceLock,
     time::Duration,
 };
-use vorkspace_clipboard::{DictationConfig, DictationPhase, DictationStatus, Notice, word_rules};
-use vorkspace_macos::{
-    global_hotkey::{self, Registration},
-    voice_lease::Lease,
-};
+use vorkspace_helper::{DictationConfig, DictationPhase, DictationStatus, Notice, word_rules};
+use vorkspace_macos::{global_hotkey, voice_lease::Lease};
 
 unsafe extern "C" {
-    fn vorkspace_dictation_configure(json: *const c_char, callback: extern "C" fn(*const c_char));
-    fn vorkspace_dictation_toggle();
+    fn vorkspace_dictation_configure(
+        json: *const c_char,
+        callback: extern "C" fn(*const c_char),
+        event: extern "C" fn(i32, *const c_char),
+    );
+    fn vorkspace_dictation_key_action(action: i32);
     fn vorkspace_dictation_setup();
     fn vorkspace_dictation_cancel();
     fn vorkspace_dictation_level() -> f32;
 }
-static NOTICES: OnceLock<async_channel::Sender<DictationStatus>> = OnceLock::new();
+enum NativeEvent {
+    Status(DictationStatus),
+    Key(i32),
+    Completed(String),
+}
+static NOTICES: OnceLock<async_channel::Sender<NativeEvent>> = OnceLock::new();
+extern "C" fn event(action: i32, text: *const c_char) {
+    let event = if action == 3 && !text.is_null() {
+        NativeEvent::Completed(
+            unsafe { CStr::from_ptr(text) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    } else {
+        NativeEvent::Key(action)
+    };
+    if let Some(sender) = NOTICES.get() {
+        let _ = sender.try_send(event);
+    }
+}
 extern "C" fn notice(json: *const c_char) {
     let json = unsafe { CStr::from_ptr(json) }.to_bytes();
     if let Ok(status) = serde_json::from_slice(json)
         && let Some(sender) = NOTICES.get()
     {
-        let _ = sender.try_send(status);
+        let _ = sender.try_send(NativeEvent::Status(status));
     }
 }
 struct Dictation(Entity<Service>);
@@ -35,11 +55,11 @@ struct Service {
     config: DictationConfig,
     status: DictationStatus,
     shortcut_error: Option<String>,
-    hotkey: Option<(Registration, Task<()>)>,
     lease: Option<Lease>,
     panel: Option<WindowHandle<Panel>>,
     meter: Option<Task<()>>,
     presentation: u64,
+    history_epoch: Option<u64>,
 }
 
 pub fn init(cx: &mut App) {
@@ -49,8 +69,21 @@ pub fn init(cx: &mut App) {
     let _ = NOTICES.set(sender);
     service.update(cx, |_, cx| {
         cx.spawn(async move |this, cx| {
-            while let Ok(status) = receiver.recv().await {
-                let _ = this.update(cx, |service, cx| service.notice(status, cx));
+            while let Ok(event) = receiver.recv().await {
+                match event {
+                    NativeEvent::Status(status) => {
+                        let _ = this.update(cx, |s, cx| s.notice(status, cx));
+                    }
+                    NativeEvent::Key(action) => {
+                        let _ = this.update(cx, |s, cx| s.key_action(action, cx));
+                    }
+                    NativeEvent::Completed(text) => {
+                        let _ = this.update(cx, |s, cx| {
+                            let epoch = s.history_epoch.take();
+                            crate::service::record_dictation(text, epoch, cx);
+                        });
+                    }
+                }
             }
         })
         .detach();
@@ -69,37 +102,27 @@ pub fn configure(config: DictationConfig, cx: &mut App) {
             s.publish(cx);
             return;
         }
-        let shortcut_changed =
-            s.config.shortcut != config.shortcut || s.config.enabled != config.enabled;
         s.config = config;
         s.shortcut_error = None;
-        if shortcut_changed {
-            s.hotkey = None;
-            if s.config.enabled && !s.config.shortcut.is_empty() {
-                match Registration::new(&s.config.shortcut) {
-                    Ok((registration, receiver)) => {
-                        let task = cx.spawn(async move |this, cx| {
-                            while receiver.recv().await.is_ok() {
-                                let _ = this.update(cx, |s, cx| s.toggle(cx));
-                            }
-                        });
-                        s.hotkey = Some((registration, task));
-                    }
-                    Err(error) => s.shortcut_error = Some(error),
-                }
-            }
-        }
         let rules = word_rules(&s.config.words);
         if let Err(error) = &rules {
             s.shortcut_error = Some(error.clone());
         }
-        let (key, modifiers) = global_hotkey::parse(&s.config.shortcut).unwrap_or((0, 0));
+        let (key, modifiers, isolated) = match s.config.shortcut.as_str() {
+            "fn" => (63, 0, true),
+            "right-alt" => (61, 0, true),
+            "" => (0, 0, false),
+            shortcut => match global_hotkey::parse(shortcut) {
+                Ok((key, modifiers)) => (key, modifiers, false),
+                Err(error) => { s.shortcut_error = Some(error); (0, 0, false) }
+            },
+        };
         let configuration = serde_json::json!({
-            "enabled": s.config.enabled && rules.is_ok(), "microphone": s.config.microphone,
-            "keyCode": key, "modifiers": modifiers, "rules": rules.unwrap_or_default(),
+            "enabled": s.config.enabled && rules.is_ok() && s.shortcut_error.is_none(), "microphone": s.config.microphone,
+            "keyCode": key, "modifiers": modifiers, "isolatedKey": isolated, "rules": rules.unwrap_or_default(),
         });
         let json = CString::new(configuration.to_string()).unwrap();
-        unsafe { vorkspace_dictation_configure(json.as_ptr(), notice) };
+        unsafe { vorkspace_dictation_configure(json.as_ptr(), notice, event) };
         s.publish(cx);
     });
 }
@@ -135,10 +158,13 @@ impl Service {
         crate::notify(&Notice::Dictation(self.status.clone()), cx);
     }
     fn toggle(&mut self, cx: &mut Context<Self>) {
+        self.key_action(0, cx);
+    }
+    fn key_action(&mut self, action: i32, cx: &mut Context<Self>) {
         if !self.config.enabled {
             return;
         }
-        if self.lease.is_none() {
+        if action != 2 && self.lease.is_none() {
             match Lease::acquire() {
                 Ok(lease) => self.lease = Some(lease),
                 Err(message) => {
@@ -152,7 +178,10 @@ impl Service {
                 }
             }
         }
-        unsafe { vorkspace_dictation_toggle() };
+        if action != 2 && !self.status.active {
+            self.history_epoch = crate::service::history_epoch(cx);
+        }
+        unsafe { vorkspace_dictation_key_action(action) };
     }
     fn notice(&mut self, mut status: DictationStatus, cx: &mut Context<Self>) {
         if !status.active
@@ -162,6 +191,9 @@ impl Service {
             status.message = message.clone();
         }
         self.status = status;
+        if !self.status.active {
+            self.history_epoch = None;
+        }
         self.publish(cx);
         if self.status.active {
             self.show(cx);

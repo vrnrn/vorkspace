@@ -14,7 +14,7 @@ impl Default for DictationConfig {
         Self {
             enabled: false,
             microphone: "system".into(),
-            shortcut: "ctrl-shift-space".into(),
+            shortcut: "fn".into(),
             words: String::new(),
         }
     }
@@ -126,7 +126,7 @@ mod tests {
     fn old_preferences_cannot_enable_capture_and_shortcut_is_not_settings() {
         let config: DictationConfig = serde_json::from_str("{}").unwrap();
         assert!(!config.enabled);
-        assert_eq!(config.shortcut, "ctrl-shift-space");
+        assert_eq!(config.shortcut, "fn");
         assert_eq!(config.microphone, "system");
     }
     #[test]

@@ -5,8 +5,9 @@ import Speech
 private struct DictationConfiguration: Decodable, Equatable {
     var enabled = false
     var microphone = "system"
-    var keyCode: UInt16 = 49
-    var modifiers: UInt32 = 4608
+    var keyCode: UInt16 = 63
+    var modifiers: UInt32 = 0
+    var isolatedKey = true
     var rules = [DictationWord]()
 }
 
@@ -174,8 +175,15 @@ private final class DictationController {
     private var turn: SpeechTurn?
     private var locale: Locale?
     private var activation: NSObjectProtocol?
+    private let key = DictationKey()
+    var event: (@convention(c) (Int32, UnsafePointer<CChar>?) -> Void)?
 
     init() {
+        key.action = { [weak self] action in self?.event?(action, nil) }
+        key.onFailure = { [weak self] in
+            self?.cancel()
+            self?.set(.error, "The dictation shortcut stopped listening. Try again in Settings.")
+        }
         activation = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.phase == .microphone || self.phase == .accessibility else { return }
@@ -190,7 +198,7 @@ private final class DictationController {
         preparation?.cancel(); preparation = nil
         installation?.progress.cancel(); installation = nil
         configuration = value
-        if !value.enabled { cancel() }
+        if !value.enabled { key.stop(); cancel() }
         if turn == nil { check() }
     }
 
@@ -229,8 +237,14 @@ private final class DictationController {
                 self.checked(generation, .microphone, "Allow microphone access to start dictating."); return
             }
             guard AXIsProcessTrusted() else {
-                self.checked(generation, .accessibility, "Allow Accessibility for vorkspace Clipboard to type into other apps."); return
+                self.checked(generation, .accessibility, "Allow Accessibility for vorkspace helper to type into other apps."); return
             }
+            if self.configuration.isolatedKey || self.configuration.modifiers != 0 {
+                guard self.key.bind(key: self.configuration.keyCode, modifiers: self.configuration.modifiers,
+                                    isolated: self.configuration.isolatedKey) else {
+                    self.checked(generation, .accessibility, "Allow Accessibility for vorkspace helper to use the dictation key."); return
+                }
+            } else { self.key.stop() }
             let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
             // AssetInventory.status also reflects this app's reservation. An
             // already installed, shared language needs no download consent;
@@ -327,11 +341,26 @@ private final class DictationController {
                 do { try await turn.run() } catch { failure = error }
                 guard self.turn === turn else { return }
                 self.turn = nil
+                let text = turn.target.historyText
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    text.withCString { self.event?(3, $0) }
+                }
                 if let error = failure, !(error is CancellationError), self.configuration.enabled {
                     self.set(.error, error.localizedDescription)
                 } else { self.check() }
             }
         } catch { set(.error, error.localizedDescription) }
+    }
+
+    func keyAction(_ action: Int32) {
+        switch action {
+        case 0: toggle()
+        case 1: if turn == nil { toggle() }
+        case 2:
+            if phase == .listening { finish() }
+            else if phase == .starting { cancel() }
+        default: break
+        }
     }
 
     func finish() {
@@ -350,10 +379,11 @@ private final class DictationController {
 }
 
 @_cdecl("vorkspace_dictation_configure")
-func dictationConfigure(_ json: UnsafePointer<CChar>, _ callback: @escaping @convention(c) (UnsafePointer<CChar>) -> Void) {
+func dictationConfigure(_ json: UnsafePointer<CChar>, _ callback: @escaping @convention(c) (UnsafePointer<CChar>) -> Void, _ event: @escaping @convention(c) (Int32, UnsafePointer<CChar>?) -> Void) {
     MainActor.assumeIsolated {
         let controller = DictationController.shared
         controller.callback = callback
+        controller.event = event
         guard let configuration = try? JSONDecoder().decode(DictationConfiguration.self, from: Data(String(cString: json).utf8)) else { return }
         controller.configure(configuration)
     }
@@ -366,3 +396,6 @@ func dictationSetup() { MainActor.assumeIsolated { DictationController.shared.se
 func dictationCancel() { MainActor.assumeIsolated { DictationController.shared.cancel() } }
 @_cdecl("vorkspace_dictation_level")
 func dictationLevel() -> Float { MainActor.assumeIsolated { DictationController.shared.level } }
+
+@_cdecl("vorkspace_dictation_key_action")
+func dictationKeyAction(_ action: Int32) { MainActor.assumeIsolated { DictationController.shared.keyAction(action) } }

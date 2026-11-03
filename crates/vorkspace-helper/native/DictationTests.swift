@@ -107,6 +107,28 @@ private final class FileSpeechInput: SpeechInput {
 @main
 struct DictationTests {
     @MainActor static func main() async throws {
+        let chord = DictationModifierPolicy(key: 49, modifiers: 4608)
+        precondition(chord.permits([59, 56], triggerHeld: true))
+        precondition(chord.permits([62, 60], triggerHeld: true))
+        precondition(!chord.permits([59, 56, 55], triggerHeld: true))
+        precondition(!chord.permits([59, 56], triggerHeld: false))
+        precondition(chord.permits([], triggerHeld: false))
+        let option = DictationModifierPolicy(key: 61, modifiers: 0)
+        precondition(option.permits([61], triggerHeld: true))
+        precondition(!option.permits([58, 61], triggerHeld: true))
+        var gesture = DictationGesture()
+        precondition(gesture.press())
+        precondition(!gesture.press())
+        precondition(gesture.release() == 0)
+        precondition(gesture.release() == nil)
+        precondition(gesture.press())
+        precondition(gesture.hold())
+        precondition(!gesture.hold())
+        precondition(gesture.release() == 2)
+        precondition(gesture.press())
+        gesture.cancel()
+        precondition(!gesture.hold())
+        precondition(gesture.release() == nil)
         let words = try DictationWords([
             DictationWord(heard: "Vorkspace", preferred: "Vorkspace"),
             DictationWord(heard: "work space", preferred: "Vorkspace"),
@@ -163,8 +185,8 @@ struct DictationTests {
             }
             // The missing UID fails before a microphone is opened. Exercise the
             // production controller twice without changing its configuration.
-            let configuration = #"{"enabled":true,"microphone":"uid:missing-fixture-device","keyCode":49,"modifiers":4608,"rules":[]}"#
-            configuration.withCString { dictationConfigure($0, fixtureStatus) }
+            let configuration = #"{"enabled":true,"microphone":"uid:missing-fixture-device","keyCode":49,"modifiers":4608,"isolatedKey":false,"rules":[]}"#
+            configuration.withCString { dictationConfigure($0, fixtureStatus, { _, _ in }) }
             try await awaitFixturePhase("ready")
             for attempt in 1...2 {
                 dictationToggle()
