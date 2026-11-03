@@ -1002,7 +1002,16 @@ impl TextLayout {
                 let (row_start, row_end, start_x, end_x) = visual_line_metrics(line, row);
                 let selected_start = range.start.max(line_start + row_start);
                 let selected_end = range.end.min(line_start + row_end);
-                if selected_start >= selected_end {
+                // A logical newline is selectable even when its line has no
+                // glyphs, or the selection starts immediately after its text.
+                // Soft wraps and the final line have no newline of their own.
+                let newline = line_start + line.len();
+                let selected_newline = extend_selection
+                    && element_state.alignment == TextAlign::Left
+                    && row == line.wrap_boundaries().len()
+                    && newline < element_state.len
+                    && range.contains(&newline);
+                if selected_start >= selected_end && !selected_newline {
                     continue;
                 }
                 let offset =
@@ -1445,6 +1454,66 @@ impl IntoElement for InteractiveText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selection_includes_empty_lines_and_newline_only_ranges() {
+        use crate::{FontId, GlyphId, LineLayout, ShapedGlyph, ShapedRun, point, px, size};
+
+        let lines = ["a", "", "b"].into_iter().map(|text| WrappedLine {
+            layout: Arc::new(WrappedLineLayout {
+                unwrapped_layout: Arc::new(LineLayout {
+                    len: text.len(),
+                    width: px(10. * text.len() as f32),
+                    runs: if text.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![ShapedRun {
+                            font_id: FontId(0),
+                            glyphs: vec![ShapedGlyph {
+                                id: GlyphId(0),
+                                position: point(px(0.), px(0.)),
+                                index: 0,
+                                is_emoji: false,
+                            }],
+                        }]
+                    },
+                    ..Default::default()
+                }),
+                wrap_boundaries: SmallVec::new(),
+                wrap_width: None,
+            }),
+            text: text.into(),
+            decoration_runs: Vec::new(),
+        });
+        let layout = TextLayout(Rc::new(RefCell::new(Some(TextLayoutInner {
+            len: 4,
+            lines: lines.collect(),
+            line_height: px(20.),
+            wrap_width: None,
+            truncate_width: None,
+            size: None,
+            bounds: Some(Bounds::new(point(px(0.), px(0.)), size(px(100.), px(60.)))),
+            alignment: TextAlign::Left,
+        }))));
+        let rectangles = |range, extend_selection| {
+            let mut result = Vec::new();
+            layout.for_each_range_bounds(range, extend_selection, |bounds| result.push(bounds));
+            result
+        };
+        let blank = Bounds::new(point(px(0.), px(20.)), size(px(100.), px(20.)));
+        assert!(rectangles(0..4, true).contains(&blank));
+        assert_eq!(rectangles(2..3, true), vec![blank]);
+        assert_eq!(
+            rectangles(1..2, true),
+            vec![Bounds::new(point(px(10.), px(0.)), size(px(90.), px(20.)))]
+        );
+        assert!(!rectangles(0..2, true).contains(&blank));
+        assert!(!rectangles(3..4, true).contains(&blank));
+        assert!(rectangles(2..2, true).is_empty());
+        assert!(rectangles(2..3, false).is_empty());
+        assert!(!rectangles(0..4, false).contains(&blank));
+        assert!(rectangles(4..5, true).is_empty());
+    }
 
     #[test]
     fn test_into_element_for() {
