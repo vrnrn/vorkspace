@@ -3,6 +3,8 @@
 //! socket: clipboard contents stay in the helper.
 #[cfg(target_os = "macos")]
 pub mod dictation_engine_lease;
+#[cfg(target_os = "macos")]
+mod dictation_eou;
 #[cfg(all(target_os = "macos", debug_assertions))]
 pub mod dictation_live_fixture;
 #[cfg(target_os = "macos")]

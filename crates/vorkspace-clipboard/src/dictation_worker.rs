@@ -1,7 +1,7 @@
 //! One helper-owned thread retains immutable weights; turn scratch dies after each join.
 //! Uses transcribe.cpp's native committed-prefix stream (Hex's warm-session design
 //! informed this lifecycle; see the bundled Hex MIT notice).
-use crate::{ModelId, dictation_model};
+use crate::{ModelId, dictation_eou as eou, dictation_model};
 use std::{path::Path, sync::mpsc, time::Duration};
 use transcribe_cpp::{
     Backend, CancelToken, CommitPolicy, Model, ModelOptions, ParakeetVocabularyOptions,
@@ -9,7 +9,6 @@ use transcribe_cpp::{
 };
 use vorkspace_core::dictation_words::{Corrector, Rule};
 mod completion;
-pub(crate) mod eou;
 mod tdt_stream;
 
 pub fn realtime_supported() -> bool {

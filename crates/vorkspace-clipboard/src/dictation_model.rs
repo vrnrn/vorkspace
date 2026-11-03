@@ -118,7 +118,7 @@ pub fn download(
         return Err("Download cancelled".into());
     }
     if id == ModelId::ParakeetRealtimeEou {
-        if !crate::dictation_worker::realtime_supported() {
+        if !crate::dictation_eou::supported() {
             return Err("Parakeet Flash requires Apple silicon and macOS 14 or newer.".into());
         }
         return eou::download(&owner, cancel, progress);
@@ -241,7 +241,7 @@ fn transcribe_with_admission(
     })?;
     verify(id, path, cancel)?;
     if id == ModelId::ParakeetRealtimeEou {
-        let model = crate::dictation_worker::eou::Engine::load(path)?;
+        let model = crate::dictation_eou::Engine::load(path)?;
         model.reset()?;
         for chunk in pcm.chunks(16000) {
             if cancel.is_cancelled() {

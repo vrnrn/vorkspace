@@ -46,17 +46,12 @@ pub(crate) fn apply(prefs: &Preferences, cx: &mut App) {
         }
     }
     // These actions have menu-only defaults now, but retain custom user bindings.
-    for (command, action) in [
-        (
-            "App: Settings",
-            Box::new(crate::shell::OpenSettings) as Box<dyn gpui::Action>,
-        ),
-        (
-            "App: Switch Model",
-            Box::new(crate::shell::SwitchModel) as Box<dyn gpui::Action>,
-        ),
+    for (command, action_name) in [
+        ("App: Settings", "workspace::OpenSettings"),
+        ("App: Switch Model", "workspace::SwitchModel"),
     ] {
         if let Some(Some(shortcut)) = prefs.keybindings.get(command)
+            && let Ok(action) = cx.build_action(action_name, None)
             && let Ok(custom) = KeyBinding::load(
                 shortcut,
                 action,

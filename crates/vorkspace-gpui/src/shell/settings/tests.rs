@@ -265,6 +265,38 @@ fn global_dictation_and_vox_chords_never_dispatch_local_actions(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn menu_only_actions_keep_custom_shortcuts(cx: &mut TestAppContext) {
+    cx.update(super::super::bind_keys);
+    cx.update(|cx| {
+        let mut prefs = crate::settings::Preferences::default();
+        prefs
+            .keybindings
+            .insert("App: Settings".into(), Some("cmd-alt-y".into()));
+        prefs
+            .keybindings
+            .insert("App: Switch Model".into(), Some("cmd-alt-u".into()));
+        crate::settings::apply_keybindings(&prefs, cx);
+        let keymap = cx.key_bindings();
+        let bindings = keymap.borrow();
+        for (action, shortcut) in [
+            ("workspace::OpenSettings", "alt-cmd-y"),
+            ("workspace::SwitchModel", "alt-cmd-u"),
+        ] {
+            assert!(
+                bindings.bindings().any(|binding| {
+                    binding.action().name() == action
+                        && binding
+                            .keystrokes()
+                            .first()
+                            .is_some_and(|key| key.unparse() == shortcut)
+                }),
+                "{action} did not receive {shortcut}"
+            );
+        }
+    });
+}
+
+#[gpui::test]
 fn shortcut_recording_rebinds_settings_and_reset_leaves_global_chords_reserved(
     cx: &mut TestAppContext,
 ) {
