@@ -42,3 +42,5 @@ Vox and dictation take turns using the notch and microphone.
 Most text fields accept the result directly. Apps with their own input systems
 need checking in practice. Dictation stops when you take over the field and does
 not retry uncertain input.
+
+[Meetings](meetings.md) uses the same speech engine to record meeting text from your microphone and system audio. Dictation waits until the meeting stops. Quitting the main app stops the meeting, then background dictation is available again.

@@ -602,6 +602,9 @@ impl Bots {
     ) {
         let was = self.prefs.bots;
         self.prefs = prefs;
+        if !self.prefs.todos && self.overview_tab == OverviewTab::Todos {
+            self.select_overview(OverviewTab::Sessions, cx);
+        }
         bot::set_minions_enabled(self.prefs.bots && self.prefs.minions);
         self.sync_minions();
         if was && !self.prefs.bots {

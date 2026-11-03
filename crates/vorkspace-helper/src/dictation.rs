@@ -17,6 +17,7 @@ unsafe extern "C" {
     );
     fn vorkspace_dictation_key_action(action: i32);
     fn vorkspace_dictation_setup();
+    fn vorkspace_dictation_refresh();
     fn vorkspace_dictation_cancel();
     fn vorkspace_dictation_level() -> f32;
 }
@@ -60,6 +61,7 @@ struct Service {
     meter: Option<Task<()>>,
     presentation: u64,
     history_epoch: Option<u64>,
+    audio_active: bool,
 }
 
 pub fn init(cx: &mut App) {
@@ -126,6 +128,21 @@ pub fn configure(config: DictationConfig, cx: &mut App) {
         s.publish(cx);
     });
 }
+pub fn audio_changed(active: bool, cx: &mut App) {
+    get(cx).update(cx, |s, cx| {
+        s.audio_active = active;
+        if active {
+            s.status = DictationStatus {
+                phase: DictationPhase::Unavailable,
+                message: "Meetings is recording. Dictation is available after it stops.".into(),
+                active: false,
+            };
+            s.publish(cx);
+        } else {
+            unsafe { vorkspace_dictation_refresh() };
+        }
+    });
+}
 pub fn setup(_: &mut App) {
     unsafe { vorkspace_dictation_setup() }
 }
@@ -161,7 +178,7 @@ impl Service {
         self.key_action(0, cx);
     }
     fn key_action(&mut self, action: i32, cx: &mut Context<Self>) {
-        if !self.config.enabled {
+        if !self.config.enabled || self.audio_active {
             return;
         }
         if action != 2 && self.lease.is_none() {
@@ -189,6 +206,13 @@ impl Service {
         {
             status.phase = DictationPhase::Error;
             status.message = message.clone();
+        }
+        if self.audio_active {
+            status = DictationStatus {
+                phase: DictationPhase::Unavailable,
+                message: "Meetings is recording. Dictation is available after it stops.".into(),
+                active: false,
+            };
         }
         self.status = status;
         if !self.status.active {

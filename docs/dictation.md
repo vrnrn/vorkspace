@@ -92,3 +92,5 @@ Clearing history increments its epoch; a turn already in progress cannot add its
 text afterward. A new turn uses the new epoch.
 The helper retains its bundle identifier and legacy per-install socket identity
 through the rename so updates can replace the previous helper.
+
+Meetings reuses this helper and speech engine for microphone plus system-audio transcription. Stop a meeting before starting dictation. Meeting recording finishes on application Quit; enabled dictation remains available afterward. See [Meetings](meetings.md).

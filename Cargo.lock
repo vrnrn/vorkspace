@@ -4506,10 +4506,12 @@ dependencies = [
  "syntect",
  "tempfile",
  "unicode-segmentation",
+ "uuid",
  "vorkspace-core",
  "vorkspace-editor",
  "vorkspace-helper",
  "vorkspace-macos",
+ "vorkspace-meetings",
  "vorkspace-model",
  "vorkspace-runtime",
  "vorkspace-ui",
@@ -4535,6 +4537,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "vorkspace-macos",
+ "vorkspace-meetings",
  "vorkspace-ui",
 ]
 
@@ -4554,6 +4557,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "vorkspace-meetings"
+version = "1.1.0"
+dependencies = [
+ "libc",
+ "pulldown-cmark",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]

@@ -14,7 +14,7 @@ impl SettingsView {
             |this, on, cx| this.update(cx, |p| p.clipboard_history = on),
         )];
         let description = "Keep up to 50 text and image copies in memory, even after you quit, until you log out or use Quit in the clipboard menu. History is never saved to disk. Turning this off clears it. Very large copies are skipped.";
-        let description = if let Some(service) = crate::clipboard::get(cx)
+        let description = if let Some(service) = crate::background_helper::get(cx)
             && let Some(error) = &service.read(cx).error
         {
             format!("{description}\n{error}")
@@ -38,7 +38,7 @@ impl SettingsView {
                 Some("Clearing saved copies leaves the current system clipboard unchanged.".into()),
                 vec![secondary_button("clipboard-clear-button", "Clear history", false, false)
                     .child("Clear history")
-                    .on_click(|_, _, cx| crate::clipboard::clear(cx))
+                    .on_click(|_, _, cx| crate::background_helper::clear(cx))
                     .into_any_element()],
             ));
             rows

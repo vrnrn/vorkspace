@@ -2,6 +2,7 @@
 //! open conversations. Its breadcrumb/actions occupy the inset title bar.
 use super::*;
 use crate::settings::{ArchivedSession, Section, SettingsContext, SettingsEvent, SettingsView};
+use crate::workspace::AppView;
 use std::path::Path;
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Removal {
@@ -96,7 +97,7 @@ impl Shell {
                 .as_ref()
                 .map(|inbox| inbox.read(cx).connection_statuses())
                 .unwrap_or_default(),
-            inbox_data_dir: locked(&self.store)
+            data_dir: locked(&self.store)
                 .ok()
                 .and_then(|store| store.data_dir().map(std::path::PathBuf::from)),
             inbox_connection_revision: self
@@ -201,6 +202,9 @@ impl Shell {
             return;
         }
         self.navigation_revision += 1;
+        if let Some(page) = &self.meetings {
+            page.update(cx, |page, cx| page.set_active(false, cx));
+        }
         let context = self.settings_context(cx);
         let prefs = self.workspace.preferences.clone();
         let view = cx.new(|cx| SettingsView::new(section, prefs, context, cx));
@@ -331,6 +335,23 @@ impl Shell {
                 }
                 SettingsEvent::Changed(prefs) => {
                     window.set_ui_scale(prefs.interface_scale(), cx);
+                    for (enabled, view) in [
+                        (prefs.notes, AppView::Notes),
+                        (prefs.meetings, AppView::Meetings),
+                        (prefs.todos, AppView::Todos),
+                    ] {
+                        if !enabled {
+                            let tab = TitleTab::App(view);
+                            this.workspace.title_order.retain(|entry| *entry != tab);
+                            this.workspace.scope_focus.retain(|_, entry| *entry != tab);
+                            if this.active_app_view == Some(view) {
+                                this.leave_app_views(cx);
+                            }
+                        }
+                    }
+                    if let Some(page) = &this.meetings {
+                        page.update(cx, |page, cx| page.set_enabled(prefs.meetings, cx));
+                    }
                     this.workspace.preferences = *prefs.clone();
                     this.apply_preferences(cx);
                     this.persist(cx);
@@ -438,11 +459,12 @@ impl Shell {
             vorkspace_ui::preferences::Preferences::MIN_UI_SCALE_PERCENT,
             vorkspace_ui::preferences::Preferences::MAX_UI_SCALE_PERCENT,
         );
-        crate::clipboard::configure(
+        crate::meetings::capture::init(cx);
+        crate::background_helper::configure(
             self.workspace.preferences.clipboard_history,
             // Retain the saved preference key so existing users keep their choice.
             self.workspace.preferences.bot_menu_bar_icon,
-            crate::clipboard::dictation_configuration(&self.workspace.preferences),
+            crate::background_helper::dictation_configuration(&self.workspace.preferences),
             cx,
         );
         if let Some(vox) = &self.vox {

@@ -140,6 +140,7 @@ actions!(
         ShowGitLab,
         ShowJira,
         ShowNotes,
+        ShowMeetings,
         ShowAutomations,
         OpenAppearance,
         MinimizeWindow,
@@ -538,6 +539,7 @@ pub(crate) struct Shell {
     pending_folder: Option<(i64, AnchorSlot)>,
     _session_clock: gpui::Task<()>,
     notes: Option<Entity<Notes>>,
+    meetings: Option<Entity<crate::meetings::Page>>,
     todos_page: Option<Entity<crate::todos::TodosPage>>,
     /// The project sidebar's board; it follows the current project.
     project_todos: Option<Entity<crate::todos::TodoBoardView>>,
@@ -890,6 +892,7 @@ impl Shell {
             pending_folder: None,
             _session_clock: session_clock,
             notes: None,
+            meetings: None,
             todos_page: None,
             project_todos: None,
             minion_registry: Default::default(),
@@ -1594,7 +1597,7 @@ impl Shell {
                 if matches!(answer, Ok(0)) {
                     crate::quit(cx);
                 } else {
-                    crate::clipboard::quit_cancelled(cx);
+                    crate::background_helper::quit_cancelled(cx);
                 }
             });
         })
@@ -2426,7 +2429,7 @@ impl Render for Shell {
                     .update(cx, |shell, cx| {
                         #[cfg(not(test))]
                         if shell.workspace.preferences.close_to_tray
-                            && crate::clipboard::menu_bar_ready(cx)
+                            && crate::background_helper::menu_bar_ready(cx)
                             && !shell.unsaved_files(cx)
                         {
                             vorkspace_ui::traffic_lights::hide(window);
@@ -2640,6 +2643,9 @@ impl Render for Shell {
                 this.open_connector(Connector::Jira, window, cx)
             }))
             .on_action(cx.listener(|this, _: &ShowNotes, window, cx| this.open_notes(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowMeetings, window, cx| this.open_meetings(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &ShowAutomations, window, cx| {
                 this.open_automations(window, cx)
             }))
@@ -2667,7 +2673,9 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.open_settings(crate::settings::Section::General, window, cx)
             }))
-            .on_action(|_: &crate::clipboard::Toggle, _, cx| crate::clipboard::toggle(cx))
+            .on_action(|_: &crate::background_helper::Toggle, _, cx| {
+                crate::background_helper::toggle(cx)
+            })
             .on_action(
                 cx.listener(|this, _: &session_groups::RenameSidebarItem, window, cx| {
                     this.rename_sidebar_item(window, cx)

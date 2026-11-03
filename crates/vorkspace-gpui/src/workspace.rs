@@ -44,9 +44,11 @@ impl Connector {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum AppView {
     /// Deserialize old workspaces, then normalize against saved connector preferences.
+    #[serde(alias = "Plugins")]
     Inbox,
     Connector(Connector),
     Notes,
+    Meetings,
     Automations,
     Todos,
 }
@@ -56,6 +58,7 @@ impl AppView {
             Self::Inbox => "Connectors",
             Self::Connector(provider) => provider.label(),
             Self::Notes => "Notes",
+            Self::Meetings => "Meetings",
             Self::Automations => "Automations",
             Self::Todos => "To-dos",
         }
@@ -68,15 +71,17 @@ impl AppView {
 pub(crate) enum SidebarNavigation {
     Connector(Connector),
     Notes,
+    Meetings,
     Automations,
     Todos,
 }
 impl SidebarNavigation {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Connector(Connector::Github),
         Self::Connector(Connector::Gitlab),
         Self::Connector(Connector::Jira),
         Self::Notes,
+        Self::Meetings,
         Self::Automations,
         Self::Todos,
     ];
@@ -84,6 +89,7 @@ impl SidebarNavigation {
         match self {
             Self::Connector(provider) => provider.id(),
             Self::Notes => "notes",
+            Self::Meetings => "meetings",
             Self::Automations => "automations",
             Self::Todos => "todos",
         }
@@ -95,6 +101,7 @@ impl SidebarNavigation {
         match self {
             Self::Connector(provider) => provider.label(),
             Self::Notes => "Notes",
+            Self::Meetings => "Meetings",
             Self::Automations => "Automations",
             Self::Todos => "To-dos",
         }
@@ -103,6 +110,7 @@ impl SidebarNavigation {
         match self {
             Self::Connector(provider) => provider.icon(),
             Self::Notes => "note",
+            Self::Meetings => "mic",
             Self::Automations => "zap",
             Self::Todos => "check-circle",
         }
@@ -326,6 +334,7 @@ pub(crate) struct Workspace {
     /// Inert legacy density preference. Session cards use the current default.
     pub compact_session_cards: bool,
     pub sidebar_notes_visible: bool,
+    pub sidebar_meetings_visible: bool,
     pub sidebar_automations_visible: bool,
     pub sidebar_todos_visible: bool,
     pub sidebar_inbox_visible: bool,
@@ -515,6 +524,7 @@ impl Default for Workspace {
             sidebar_hidden_connectors: HashSet::new(),
             compact_session_cards: true,
             sidebar_notes_visible: true,
+            sidebar_meetings_visible: true,
             sidebar_automations_visible: true,
             sidebar_todos_visible: true,
             sidebar_inbox_visible: true,
@@ -809,10 +819,14 @@ impl Workspace {
                     .get(&vorkspace_core::files::path_key(&self.project))
             })
             .copied()
+            .filter(|tab| *tab != SidebarTab::Todos || self.preferences.todos)
             .unwrap_or_else(|| {
                 self.sidebar_tab_order
                     .iter()
-                    .find(|tab| **tab != SidebarTab::Graph)
+                    .find(|tab| {
+                        **tab != SidebarTab::Graph
+                            && (**tab != SidebarTab::Todos || self.preferences.todos)
+                    })
                     .copied()
                     .unwrap_or_default()
             })

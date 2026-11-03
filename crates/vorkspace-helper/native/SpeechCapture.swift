@@ -10,9 +10,32 @@ protocol SpeechInput: AnyObject {
     var onFailure: (@Sendable (Error) -> Void)? { get set }
     @MainActor func start() throws
     @MainActor func stop()
+    @MainActor func close() async
     @MainActor func check() throws
 }
-extension SpeechInput { @MainActor func check() throws {} }
+extension SpeechInput {
+    @MainActor func check() throws {}
+    @MainActor func close() async { stop() }
+}
+
+/// Converted buffers must not overlap. Preserve real clock gaps and tolerate
+/// only sub-sample rounding at the resampler's boundary.
+struct SpeechTimeline {
+    private var end: CMTime?
+    mutating func start(host: CMTime, origin: CMTime, buffer: AVAudioPCMBuffer) throws -> CMTime {
+        let actual = CMTimeSubtract(host, origin)
+        guard actual.isValid, actual.seconds.isFinite, actual.seconds >= 0 else {
+            throw DictationError("Audio lost its recording clock.")
+        }
+        var start = actual
+        if let end, CMTimeCompare(start, end) < 0 {
+            guard end.seconds - start.seconds <= 0.002 else { throw DictationError("Audio moved backwards on its recording clock.") }
+            start = end
+        }
+        end = CMTimeAdd(start, CMTime(value: Int64(buffer.frameLength), timescale: CMTimeScale(buffer.format.sampleRate)))
+        return start
+    }
+}
 
 /// Shared by microphone capture and the explicit, file-only speech fixture.
 final class SpeechBufferConverter {
@@ -58,6 +81,8 @@ final class SpeechCapture: SpeechInput, @unchecked Sendable {
     private let device: AudioDeviceID
     private let natural: AVAudioFormat
     private let converter: SpeechBufferConverter
+    private let clockOrigin: CMTime?
+    private var timeline = SpeechTimeline()
     private var observer: NSObjectProtocol?
     private var tapped = false
     private var stopped = false
@@ -67,7 +92,8 @@ final class SpeechCapture: SpeechInput, @unchecked Sendable {
     var onReady: (@Sendable () -> Void)?
     var onFailure: (@Sendable (Error) -> Void)?
 
-    init(microphone: String, format: AVAudioFormat) throws {
+    init(microphone: String, format: AVAudioFormat, clockOrigin: CMTime? = nil) throws {
+        self.clockOrigin = clockOrigin
         (stream, continuation) = AsyncThrowingStream.makeStream(bufferingPolicy: .bufferingOldest(32))
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             throw DictationError("Allow microphone access for vorkspace helper in Dictation settings.")
@@ -91,8 +117,8 @@ final class SpeechCapture: SpeechInput, @unchecked Sendable {
                 self.onFailure?(DictationError("The microphone disconnected or its audio route changed. Try again."))
             }
         }
-        engine.inputNode.installTap(onBus: 0, bufferSize: 2048, format: natural) { [weak self] buffer, _ in
-            self?.receive(buffer)
+        engine.inputNode.installTap(onBus: 0, bufferSize: 2048, format: natural) { [weak self] buffer, time in
+            self?.receive(buffer, time: time)
         }
         tapped = true
         engine.prepare()
@@ -125,7 +151,7 @@ final class SpeechCapture: SpeechInput, @unchecked Sendable {
     private var hasInput: Bool { lock.withLock { heardInput } }
     var level: Float { lock.withLock { amplitude } }
 
-    private func receive(_ buffer: AVAudioPCMBuffer) {
+    private func receive(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
         lock.lock()
         defer { lock.unlock() }
         guard !stopped else { return }
@@ -138,7 +164,14 @@ final class SpeechCapture: SpeechInput, @unchecked Sendable {
             for index in 0..<Int(output.frameLength) { sum += samples[index] * samples[index] }
             amplitude = min(1, sqrt(sum / Float(output.frameLength)) * 12)
         }
-        switch continuation.yield(AnalyzerInput(buffer: output)) {
+        let stamp: CMTime?
+        do {
+            if let origin = clockOrigin {
+                guard time.isHostTimeValid else { throw DictationError("The microphone lost its recording clock.") }
+                stamp = try timeline.start(host: CMClockMakeHostTimeFromSystemUnits(time.hostTime), origin: origin, buffer: output)
+            } else { stamp = nil }
+        } catch { continuation.finish(throwing: error); onFailure?(error); return }
+        switch continuation.yield(AnalyzerInput(buffer: output, bufferStartTime: stamp)) {
         case .dropped:
             let error = DictationError("Speech recognition could not keep up with this microphone. Try again.")
             continuation.finish(throwing: error)

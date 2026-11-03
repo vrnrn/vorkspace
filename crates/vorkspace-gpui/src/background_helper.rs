@@ -1,17 +1,26 @@
-//! Keeps the clipboard helper in step with preferences. History, ⌘⇧C and the menu
-//! bar icon live in the helper so that they outlive this app. With recording off
-//! there is no helper, so this app shows the icon that Close to Tray depends on.
-use gpui::{App, AppContext, Context, Entity, Global};
+//! Connection and process lifetime for the Vorkspace background helper.
+use gpui::{App, AppContext, Context, Entity, EventEmitter, Global};
 #[cfg(not(test))]
 use vorkspace_helper::Supervisor;
-use vorkspace_helper::{Action, Command, DictationConfig, DictationPhase, DictationStatus, Notice};
+use vorkspace_helper::{
+    Action, AudioNotice, Command, DictationConfig, DictationPhase, DictationStatus, Notice,
+};
+// Keep the existing action identifiers for keybindings.
 gpui::actions!(clipboard, [Toggle, Settings, Composer, Quit, Reopen]);
 
-struct Clipboard(Entity<Service>);
-impl Global for Clipboard {}
+struct BackgroundHelper(Entity<Service>);
+impl Global for BackgroundHelper {}
+
+pub(crate) enum CaptureEvent {
+    Connected,
+    Audio(AudioNotice),
+}
+
+impl EventEmitter<CaptureEvent> for Service {}
 #[derive(Default)]
 pub(crate) struct Service {
     pub error: Option<String>,
+    capture_active: bool,
     icon: bool,
     recording: bool,
     dictation: DictationConfig,
@@ -26,7 +35,7 @@ pub(crate) struct Service {
     _notices: Option<gpui::Task<()>>,
 }
 pub(crate) fn get(cx: &App) -> Option<Entity<Service>> {
-    cx.try_global::<Clipboard>().map(|c| c.0.clone())
+    cx.try_global::<BackgroundHelper>().map(|c| c.0.clone())
 }
 fn service(cx: &mut App) -> Entity<Service> {
     get(cx).unwrap_or_else(|| {
@@ -35,7 +44,7 @@ fn service(cx: &mut App) -> Entity<Service> {
             service.start(cx);
             service
         });
-        cx.set_global(Clipboard(service.clone()));
+        cx.set_global(BackgroundHelper(service.clone()));
         service
     })
 }
@@ -61,19 +70,19 @@ impl Service {
     #[cfg(not(test))]
     fn start(&mut self, cx: &mut Context<Self>) {
         let Ok(app) = std::env::current_exe() else {
-            self.error = Some("Could not find the clipboard helper.".into());
+            self.error = Some("Could not find the Vorkspace helper.".into());
             return;
         };
         let helper = vorkspace_helper::helper_executable(&app);
         let socket = vorkspace_helper::socket_path(&helper);
-        let (notices, received) = async_channel::unbounded();
+        let (notices, received) = async_channel::bounded(256);
         let arguments = std::env::args_os()
             .skip(1)
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect();
         let relaunch = vorkspace_helper::relaunch_command(&app, arguments);
         self.supervisor = Some(Supervisor::start(helper, socket, relaunch, move |notice| {
-            let _ = notices.try_send(notice);
+            let _ = notices.send_blocking(notice);
         }));
         self._notices = Some(cx.spawn(async move |this, cx| {
             while let Ok(notice) = received.recv().await {
@@ -86,7 +95,7 @@ impl Service {
 
     #[cfg(not(test))]
     fn sync_status(&mut self, cx: &mut Context<Self>) {
-        if !self.icon || self.recording || self.dictation.enabled {
+        if !self.icon || self.recording || self.dictation.enabled || self.capture_active {
             self.status = None;
         } else if self.status.is_none() {
             let app = std::cell::RefCell::new(cx.to_async());
@@ -103,7 +112,7 @@ impl Service {
         }
     }
 
-    fn send(&self, command: Command) -> bool {
+    pub(crate) fn send(&self, command: Command) -> bool {
         #[cfg(not(test))]
         if let Some(supervisor) = &self.supervisor {
             return supervisor.send(command);
@@ -112,9 +121,39 @@ impl Service {
         false
     }
 
+    pub(crate) fn connected(&self) -> bool {
+        #[cfg(not(test))]
+        return self.supervisor.as_ref().is_some_and(Supervisor::connected);
+        #[cfg(test)]
+        false
+    }
+
+    pub(crate) fn dictation_config(&self) -> &DictationConfig {
+        &self.dictation
+    }
+
+    /// The capture owner supplies the desired lifetime. The helper owns the process.
+    pub(crate) fn set_capture_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.capture_active == active {
+            return;
+        }
+        self.capture_active = active;
+        #[cfg(not(test))]
+        {
+            if let Some(supervisor) = &self.supervisor {
+                supervisor.keep_alive(active);
+            }
+            self.sync_status(cx);
+        }
+        cx.notify();
+    }
+
     fn notice(&mut self, notice: Notice, cx: &mut Context<Self>) {
         match notice {
             Notice::Error(error) => {
+                if error.is_none() {
+                    cx.emit(CaptureEvent::Connected);
+                }
                 self.error = error;
                 cx.notify();
             }
@@ -130,6 +169,7 @@ impl Service {
                     cx.notify();
                 }
             }
+            Notice::Audio(notice) => cx.emit(CaptureEvent::Audio(notice)),
             Notice::Hello { .. } => {}
         }
     }
@@ -150,7 +190,7 @@ pub(crate) fn menu_bar_ready(cx: &App) -> bool {
         let s = s.read(cx);
         #[cfg(not(test))]
         return s.icon
-            && if s.recording || s.dictation.enabled {
+            && if s.recording || s.dictation.enabled || s.capture_active {
                 s.supervisor.as_ref().is_some_and(Supervisor::connected)
             } else {
                 s.status.is_some()

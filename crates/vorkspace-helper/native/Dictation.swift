@@ -41,6 +41,9 @@ final class SpeechTurn {
     let words: DictationWords
     private(set) var capture: (any SpeechInput)?
     private let makeInput: (AVAudioFormat) throws -> any SpeechInput
+    private let durationLimit: Duration?
+    private let reservesLocale: Bool
+    var onResult: ((String, Bool, CMTimeRange) throws -> Void)?
     private var analyzer: SpeechAnalyzer?
     private var reader: Task<Void, Error>?
     private var limit: Task<Void, Never>?
@@ -54,7 +57,9 @@ final class SpeechTurn {
     var onLimit: (() -> Void)?
 
     init(target: any DictationDestination, locale: Locale, words: DictationWords,
+         durationLimit: Duration? = .seconds(120), reservesLocale: Bool = true,
          makeInput: @escaping (AVAudioFormat) throws -> any SpeechInput) {
+        self.durationLimit = durationLimit; self.reservesLocale = reservesLocale
         self.target = target; self.locale = locale; self.words = words
         self.makeInput = makeInput
         target.onInvalidated = { [weak self] in self?.cancel() }
@@ -94,8 +99,10 @@ final class SpeechTurn {
         var outcome: Error?
         do {
             let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
-            reserved = try await AssetInventory.reserve(locale: locale)
-            guard reserved else { throw DictationError("macOS could not prepare this speech language. Try again.") }
+            if reservesLocale {
+                reserved = try await AssetInventory.reserve(locale: locale)
+                guard reserved else { throw DictationError("macOS could not prepare this speech language. Try again.") }
+            }
             try check()
             guard await AssetInventory.status(forModules: [transcriber]) == .installed else {
                 throw DictationError("Download this language in Dictation settings first.")
@@ -126,18 +133,25 @@ final class SpeechTurn {
                 do {
                     for try await result in transcriber.results {
                         try self.check()
-                        let text = transcript.receive(String(result.text.characters), final: result.isFinal)
-                        try self.target.offer(self.words.apply(text))
+                        let raw = String(result.text.characters)
+                        if let onResult = self.onResult {
+                            try onResult(self.words.apply(raw), result.isFinal, result.range)
+                        } else {
+                            let text = transcript.receive(raw, final: result.isFinal)
+                            try self.target.offer(self.words.apply(text))
+                        }
                     }
                 } catch { self.cancel(error); throw error }
             }
             try await analyzer.start(inputSequence: capture.stream)
             try check()
             try capture.start()
-            limit = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(120))
-                guard !Task.isCancelled, let self, !self.cancelled, !self.finishing else { return }
-                self.onLimit?()
+            if let durationLimit {
+                limit = Task { [weak self] in
+                    try? await Task.sleep(for: durationLimit)
+                    guard !Task.isCancelled, let self, !self.cancelled, !self.finishing else { return }
+                    self.onLimit?()
+                }
             }
             for await _ in end.stream { break }
             try check()
@@ -148,6 +162,7 @@ final class SpeechTurn {
         } catch { outcome = cancelled ? (failure ?? CancellationError()) : error }
         // Retain the turn until actual native cleanup and locale release finish.
         capture?.stop()
+        await capture?.close()
         limit?.cancel(); finishTimeout?.cancel()
         target.onInvalidated = nil
         target.invalidate()
@@ -392,6 +407,9 @@ func dictationConfigure(_ json: UnsafePointer<CChar>, _ callback: @escaping @con
 func dictationToggle() { MainActor.assumeIsolated { DictationController.shared.toggle() } }
 @_cdecl("vorkspace_dictation_setup")
 func dictationSetup() { MainActor.assumeIsolated { DictationController.shared.setUp() } }
+// Meeting cleanup only republishes native state. Setup requires a user action.
+@_cdecl("vorkspace_dictation_refresh")
+func dictationRefresh() { MainActor.assumeIsolated { DictationController.shared.publish() } }
 @_cdecl("vorkspace_dictation_cancel")
 func dictationCancel() { MainActor.assumeIsolated { DictationController.shared.cancel() } }
 @_cdecl("vorkspace_dictation_level")

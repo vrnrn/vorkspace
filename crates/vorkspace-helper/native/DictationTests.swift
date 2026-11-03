@@ -69,8 +69,10 @@ private final class FileSpeechInput: SpeechInput {
     private let file: AVAudioFile
     private let converter: SpeechBufferConverter
     private var producer: Task<Void, Never>?
+    private let offset: Double?
     private(set) var reachedEnd = false
-    init(url: URL, format: AVAudioFormat) throws {
+    init(url: URL, format: AVAudioFormat, offset: Double? = nil) throws {
+        self.offset = offset
         (stream, continuation) = AsyncThrowingStream.makeStream(bufferingPolicy: .bufferingOldest(32))
         file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
         guard file.length > 0 else { throw DictationError("The generated speech fixture contains no audio.") }
@@ -81,11 +83,14 @@ private final class FileSpeechInput: SpeechInput {
             do {
                 let frames = AVAudioFrameCount(min(8192, file.processingFormat.sampleRate / 10))
                 var first = true
+                var delivered: Int64 = 0
                 while !Task.isCancelled, file.framePosition < file.length {
                     let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames)!
                     try file.read(into: buffer)
                     let output = try converter.convert(buffer)
-                    if case .dropped = continuation.yield(AnalyzerInput(buffer: output)) {
+                    let start = offset.map { CMTime(seconds: $0, preferredTimescale: 48_000) + CMTime(value: delivered, timescale: CMTimeScale(output.format.sampleRate)) }
+                    delivered += Int64(output.frameLength)
+                    if case .dropped = continuation.yield(AnalyzerInput(buffer: output, bufferStartTime: start)) {
                         throw DictationError("Fixture input overflowed.")
                     }
                     if first { first = false; onReady?() }
@@ -192,6 +197,19 @@ struct DictationTests {
     }
 
     @MainActor static func main() async throws {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600)!
+        buffer.frameLength = 1600
+        var timeline = SpeechTimeline()
+        let origin = CMTime(seconds: 10, preferredTimescale: 48_000)
+        let first = try timeline.start(host: origin + CMTime(seconds: 0.3, preferredTimescale: 48_000), origin: origin, buffer: buffer)
+        precondition(abs(first.seconds - 0.3) < 0.00001)
+        let rounded = try timeline.start(host: origin + CMTime(seconds: 0.399, preferredTimescale: 48_000), origin: origin, buffer: buffer)
+        precondition(abs(rounded.seconds - 0.4) < 0.00001)
+        let gap = try timeline.start(host: origin + CMTime(seconds: 0.8, preferredTimescale: 48_000), origin: origin, buffer: buffer)
+        precondition(abs(gap.seconds - 0.8) < 0.00001)
+        do { _ = try timeline.start(host: origin, origin: origin, buffer: buffer); preconditionFailure("Backwards audio must fail.") } catch {}
+        print("Meeting clock gaps, resampler rounding and backwards-clock refusal passed")
         shortcutReleaseOrders()
         shortcutAutorepeat()
         let chord = DictationModifierPolicy(key: 49, modifiers: 4608)
@@ -311,6 +329,40 @@ struct DictationTests {
             print("Native field ownership refusal passed: \(mode)")
         }
 
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--meeting-speech-fixture" {
+            let url = URL(fileURLWithPath: CommandLine.arguments[2])
+            guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current),
+                  await SpeechTranscriber.installedLocales.contains(locale),
+                  try await AssetInventory.reserve(locale: locale) else { throw DictationError("Meeting fixture requires an installed speech language.") }
+            var finalized = [String: String]()
+            var ranges = [String: Double]()
+            var turns = [SpeechTurn]()
+            for (source, offset) in [("microphone", 0.0), ("system", 0.5)] {
+                weak var owner: SpeechTurn?
+                let turn = SpeechTurn(target: MemoryDestination(), locale: locale, words: words, durationLimit: nil, reservesLocale: false) { format in
+                    let input = try FileSpeechInput(url: url, format: format, offset: offset)
+                    input.onEnd = { owner?.finish() }
+                    return input
+                }
+                owner = turn
+                turn.onResult = { text, final, range in
+                    if final { finalized[source, default: ""] += text; ranges[source] = min(ranges[source] ?? .infinity, range.start.seconds) }
+                }
+                turns.append(turn)
+            }
+            let microphoneTurn = turns[0], systemTurn = turns[1]
+            do {
+                async let microphone: Void = microphoneTurn.run()
+                async let system: Void = systemTurn.run()
+                _ = try await (microphone, system)
+            } catch { await AssetInventory.release(reservedLocale: locale); throw error }
+            await AssetInventory.release(reservedLocale: locale)
+            for source in ["microphone", "system"] {
+                precondition(finalized[source]?.contains("Vorkspace") == true, "Both real analyzers must transcribe and apply custom words.")
+            }
+            precondition((ranges["system"] ?? 0) >= 0.5, "System results must retain their own source clock.")
+            print("Two concurrent real speech analyzers, shared language reservation, source clocks and custom words passed")
+        }
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--speech-fixture" {
             let url = URL(fileURLWithPath: CommandLine.arguments[2])
             guard url.path.hasPrefix("/"),

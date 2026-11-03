@@ -13,3 +13,5 @@ pub(crate) fn invalidate_parent_cursor_rects(child: &NSView) {
         window.invalidateCursorRectsForView(&parent);
     }
 }
+
+pub(crate) mod html;

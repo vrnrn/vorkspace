@@ -114,7 +114,10 @@ fn settings_replace_native_rail_and_tabs_and_return_to_the_same_session(cx: &mut
     cx.update(super::super::bind_keys);
     let (window, _, active) = window(cx);
     window
-        .update(cx, |shell, w, cx| shell.focus_active(w, cx))
+        .update(cx, |shell, w, cx| {
+            w.resize(gpui::size(px(1280.), px(1080.)));
+            shell.focus_active(w, cx);
+        })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
     visual.simulate_keystrokes("cmd-,");
@@ -142,7 +145,7 @@ fn settings_replace_native_rail_and_tabs_and_return_to_the_same_session(cx: &mut
     );
     assert!(visual.debug_bounds("settings-toggle-sounds").is_some());
     assert!(visual.debug_bounds("sidebar-content").is_none());
-    for (section, selector) in Section::ALL.into_iter().zip([
+    let selectors = [
         "settings-nav-general",
         "settings-nav-connections",
         "settings-nav-appearance",
@@ -153,10 +156,18 @@ fn settings_replace_native_rail_and_tabs_and_return_to_the_same_session(cx: &mut
         "settings-nav-skills",
         "settings-nav-bots",
         "settings-nav-connectors",
+        "settings-nav-github",
+        "settings-nav-gitlab",
+        "settings-nav-jira",
+        "settings-nav-notes",
+        "settings-nav-meetings",
+        "settings-nav-todos",
         "settings-nav-archive",
         "settings-nav-worktrees",
         "settings-nav-vox",
-    ]) {
+    ];
+    assert_eq!(selectors.len(), Section::ALL.len());
+    for (section, selector) in Section::ALL.into_iter().zip(selectors) {
         let bounds = visual.debug_bounds(selector).unwrap();
         visual.simulate_click(bounds.center(), Default::default());
         visual.run_until_parked();
@@ -393,4 +404,41 @@ fn agents_are_refused_while_work_would_be_lost(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(vorkspace_core::worktree_management::default_root(
         dir.path(),
     ));
+}
+
+#[gpui::test]
+fn disabling_meetings_retains_its_document_view(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    let (page_id, settings, prefs) = window
+        .update(cx, |shell, w, cx| {
+            shell.open_meetings(w, cx);
+            let page_id = shell.meetings.as_ref().unwrap().entity_id();
+            shell.open_settings(Section::Meetings, w, cx);
+            (
+                page_id,
+                shell.settings.clone().unwrap(),
+                shell.workspace.preferences.clone(),
+            )
+        })
+        .unwrap();
+
+    for enabled in [false, true] {
+        let mut prefs = prefs.clone();
+        prefs.meetings = enabled;
+        settings.update(cx, |_, cx| cx.emit(SettingsEvent::Changed(Box::new(prefs))));
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.workspace.preferences.meetings, enabled);
+                assert_eq!(shell.meetings.as_ref().unwrap().entity_id(), page_id);
+            })
+            .unwrap();
+    }
+
+    window
+        .update(cx, |shell, w, cx| {
+            shell.open_meetings(w, cx);
+            assert_eq!(shell.active_app_view, Some(AppView::Meetings));
+            assert_eq!(shell.meetings.as_ref().unwrap().entity_id(), page_id);
+        })
+        .unwrap();
 }

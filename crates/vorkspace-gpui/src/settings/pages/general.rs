@@ -100,17 +100,6 @@ impl SettingsView {
                 )],
             ),
             self.row(
-                Some("notes"),
-                false,
-                "Notes",
-                Some("Show Notes in project navigation. Mention saved notes with @note.".into()),
-                vec![
-                    self.toggle("notes", "Notes", p.notes, false, cx, |this, on, cx| {
-                        this.update(cx, |p| p.notes = on)
-                    }),
-                ],
-            ),
-            self.row(
                 Some("working-agents"),
                 false,
                 "Working agents",

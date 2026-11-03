@@ -42,29 +42,25 @@ jobs:
       - run: npm run assets
       - run: npm run check
       - name: Prepare the pinned open-source updater tools
-        run: |
-          python3 scripts/release/prepare-native-updates.py
-          brew install minisign
-      - name: Materialize protected update signing files
+        run: python3 scripts/release/prepare-native-updates.py
+      - name: Materialize the protected update signing file
         env:
-          COMPAT_KEY: ${{ secrets.MACOS_UPDATER_SIGNING_KEY }}
           SPARKLE_KEY: ${{ secrets.MACOS_SPARKLE_SIGNING_KEY }}
         run: |
           python3 - <<'PY'
           import os, pathlib, tempfile
           directory = pathlib.Path(tempfile.mkdtemp(prefix="vorkspace-release-keys-", dir=os.environ["RUNNER_TEMP"]))
+          value = os.environ["SPARKLE_KEY"]
+          if not value:
+              raise RuntimeError("Missing Sparkle signing secret")
+          path = directory / "sparkle"
+          descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(descriptor, "w") as handle:
+              handle.write(value)
           with open(os.environ["GITHUB_ENV"], "a") as output:
-              for source, variable in (("COMPAT_KEY", "VORKSPACE_COMPAT_SIGNING_KEY"), ("SPARKLE_KEY", "VORKSPACE_SPARKLE_SIGNING_KEY")):
-                  value = os.environ[source]
-                  if not value:
-                      raise RuntimeError(f"Missing {source} signing secret")
-                  path = directory / source.lower()
-                  descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                  with os.fdopen(descriptor, "w") as handle:
-                      handle.write(value)
-                  output.write(f"{variable}={path}\n")
+              output.write(f"VORKSPACE_SPARKLE_SIGNING_KEY={path}\n")
           PY
-      - name: Build the native desktop and signed update formats
+      - name: Build the native desktop and signed Sparkle update
         env:
           VORKSPACE_SPARKLE_FRAMEWORK: ${{ github.workspace }}/target/sparkle/Sparkle.framework
           CARGO_BUILD_TARGET: aarch64-apple-darwin
@@ -72,9 +68,8 @@ jobs:
           npm run build
           python3 scripts/release/package-native-update.py target/aarch64-apple-darwin/release/vorkspace.app build/native-updates \
             --ed-key-file "$VORKSPACE_SPARKLE_SIGNING_KEY" \
-            --compat-signing-key "$VORKSPACE_COMPAT_SIGNING_KEY" \
-            --compat-public-key scripts/release/compat-public-key.txt \
             --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
+          cp scripts/release/legacy-macos-update.json build/native-updates/latest.json
           mkdir -p build/dmg-root
           ditto target/aarch64-apple-darwin/release/vorkspace.app build/dmg-root/vorkspace.app
           ln -s /Applications build/dmg-root/Applications
@@ -91,10 +86,11 @@ jobs:
           test "$(lipo -archs "$APP/Contents/MacOS/vorkspace-gpui")" = arm64
           test "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" = "$RELEASE_VERSION"
           test "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" = "$RELEASE_BUILD_NUMBER"
+          test "$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")" = "$MACOSX_DEPLOYMENT_TARGET"
           cmp crates/vorkspace-gpui/assets/icon.icns "$APP/Contents/Resources/vorkspace.icns"
           test -s build/release-notes.md
           test -s build/native-updates/appcast.xml
-          test -s build/native-updates/latest.json
+          cmp scripts/release/legacy-macos-update.json build/native-updates/latest.json
       - name: Create or resume this run's draft and upload verified artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -127,5 +123,4 @@ jobs:
       - name: Remove signing files
         if: always()
         run: |
-          if [ -n "${VORKSPACE_COMPAT_SIGNING_KEY:-}" ]; then rm -f "$VORKSPACE_COMPAT_SIGNING_KEY"; fi
           if [ -n "${VORKSPACE_SPARKLE_SIGNING_KEY:-}" ]; then rm -f "$VORKSPACE_SPARKLE_SIGNING_KEY"; fi

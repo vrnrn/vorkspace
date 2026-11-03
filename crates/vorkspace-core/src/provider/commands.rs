@@ -144,7 +144,7 @@ pub fn compact(
     }
     request.prompt = "/compact".into();
     request.settings.attachments.clear();
-    run_operation(request, cancel, None, false, true, false, emit).map(|_| ())
+    run_operation(request, cancel, None, Operation::Compact, emit).map(|_| ())
 }
 
 /// Pi-family command discovery is an isolated no-session RPC, matching
@@ -160,7 +160,7 @@ pub fn discover_commands(
     request.prompt.clear();
     request.settings.attachments.clear();
     let mut commands = Vec::new();
-    run_operation(request, cancel, None, false, false, true, |events| {
+    run_operation(request, cancel, None, Operation::Commands, |events| {
         for event in events {
             if let Event::Commands(discovered) = event {
                 commands = discovered;

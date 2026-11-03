@@ -25,7 +25,7 @@ fn archived_project_is_not_reopened_by_active_session_or_stale_metadata() {
 
 #[test]
 fn terminal_legacy_restore_preserves_other_tabs_and_upgrades_scope_identity() {
-    let raw = r#"{"tabs":[42],"active":42,"project":"/work","title_order":[{"Session":42},{"terminal":{"cwd":"/work"}},{"App":"Notes"},{"terminal":{"cwd":"/work"}},{"terminal":{"id":700,"cwd":"/work"}},{"terminal":{"cwd":"/other"}},"Search",{"Bot":{"id":"bot","project":"/work","worktree":"/work"}}],"scope_focus":{"first":{"terminal":{"cwd":"/work"}},"also-first":{"terminal":{"cwd":"/work"}},"other":{"terminal":{"cwd":"/other"}},"modern":{"terminal":{"id":700,"cwd":"/work"}}}}"#;
+    let raw = r#"{"tabs":[42],"active":42,"project":"/work","title_order":[{"Session":42},{"terminal":{"cwd":"/work"}},{"App":"Notes"},{"App":"Plugins"},{"terminal":{"cwd":"/work"}},{"terminal":{"id":700,"cwd":"/work"}},{"terminal":{"cwd":"/other"}},"Search",{"Bot":{"id":"bot","project":"/work","worktree":"/work"}}],"scope_focus":{"first":{"terminal":{"cwd":"/work"}},"also-first":{"terminal":{"cwd":"/work"}},"other":{"terminal":{"cwd":"/other"}},"modern":{"terminal":{"id":700,"cwd":"/work"}}}}"#;
     let workspace = Workspace::restore(Some(raw), &[(42, "/work".into())], "/work");
     // Search, app views and Bots are sidebar pages now, never tabs.
     assert_eq!(workspace.title_order.len(), 5);
@@ -100,7 +100,7 @@ fn original_layout_is_used_for_fresh_and_previously_experimental_workspaces() {
 #[test]
 fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_state() {
     let saved = serde_json::json!({
-        "sidebar_navigation_order": ["notes", "unknown", "github", "notes", "automations"],
+        "sidebar_navigation_order": ["notes", "unknown", "plugins", "github", "notes", "automations"],
         "sidebar_hidden_connectors": ["github"],
         "compact_session_cards": false,
         "sidebar_activity_visible": true,
@@ -108,7 +108,15 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     let mut state = Workspace::restore(Some(&saved.to_string()), &[], "/work");
     assert_eq!(
         state.sidebar_navigation_order,
-        ["notes", "github", "automations", "gitlab", "jira", "todos"]
+        [
+            "notes",
+            "github",
+            "automations",
+            "gitlab",
+            "jira",
+            "meetings",
+            "todos"
+        ]
     );
     use SidebarNavigation::{Automations, Connector as Provider, Notes};
     let available = [
@@ -120,7 +128,15 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     assert!(state.reorder_sidebar_navigation(Provider(Connector::Jira), Notes, false, &available));
     assert_eq!(
         state.sidebar_navigation_order,
-        ["jira", "notes", "github", "gitlab", "automations", "todos"]
+        [
+            "jira",
+            "notes",
+            "github",
+            "gitlab",
+            "automations",
+            "meetings",
+            "todos"
+        ]
     );
     // GitLab's slot survives its absence; hidden GitHub is still reorderable.
     assert!(state.reorder_sidebar_navigation(
@@ -131,7 +147,15 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     ));
     assert_eq!(
         state.sidebar_navigation_order,
-        ["jira", "notes", "automations", "gitlab", "github", "todos"]
+        [
+            "jira",
+            "notes",
+            "automations",
+            "gitlab",
+            "github",
+            "meetings",
+            "todos"
+        ]
     );
     assert!(!state.reorder_sidebar_navigation(
         Provider(Connector::Gitlab),
@@ -159,7 +183,15 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     ));
     assert_eq!(
         state.sidebar_navigation_order,
-        ["jira", "gitlab", "notes", "automations", "github", "todos"]
+        [
+            "jira",
+            "gitlab",
+            "notes",
+            "automations",
+            "github",
+            "meetings",
+            "todos"
+        ]
     );
 }
 

@@ -339,7 +339,10 @@ impl Protocol {
                     let access = self.request.settings.access;
                     let auto = access == AccessMode::FullAccess
                         || (access == AccessMode::AutoAcceptEdits && kind == Some("edit"));
-                    if self.acp.stage != Stage::Prompt || self.acp.cancelling {
+                    if self.request.settings.text_only
+                        || self.acp.stage != Stage::Prompt
+                        || self.acp.cancelling
+                    {
                         self.approvals.remove(&id);
                         write_json(
                             stdin,
@@ -718,3 +721,38 @@ pub(super) fn respond(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod text_only_tests {
+    use super::*;
+    #[test]
+    fn text_only_acp_declines_project_reads() {
+        let mut protocol = Protocol::new(Request {
+            kind: Kind::Antigravity,
+            binary: "/unused".into(),
+            cwd: "/fixture-project".into(),
+            prompt: "Summarize this transcript".into(),
+            provider_id: None,
+            model: None,
+            settings: Settings {
+                text_only: true,
+                access: AccessMode::ReadOnly,
+                ..Default::default()
+            },
+        });
+        protocol.acp.stage = Stage::Prompt;
+        let mut response = Vec::new();
+        protocol.acp_frame(json!({
+            "jsonrpc":"2.0","id":77,"method":"session/request_permission",
+            "params":{
+                "toolCall":{"toolCallId":"fixture-read","kind":"read","title":"Read fixture"},
+                "options":[{"optionId":"read-ok","kind":"allow_once"},{"optionId":"read-no","kind":"reject_once"}]
+            }
+        }), &mut response).unwrap();
+        let response: Value = serde_json::from_slice(&response).unwrap();
+        assert_eq!(
+            response["result"]["outcome"]["outcome"], "cancelled",
+            "{response}"
+        );
+    }
+}

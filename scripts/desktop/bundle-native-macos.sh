@@ -45,6 +45,10 @@ cp crates/vorkspace-gpui/assets/material/LICENSE "$native_licenses/material-icon
 # then refuses the menu bar item. The app reads VorkspaceDataMode from Info.plist.
 native_executable="vorkspace-gpui"
 rm -f "$native_bundle/Contents/MacOS/vorkspace-launcher"
+# Repackaging can reuse a development bundle made before Meetings was built in.
+for former_plugin in github gitlab jira meetings; do
+  rm -f "$native_bundle/Contents/PlugIns/vorkspace-$former_plugin-plugin"
+done
 cat > "$native_bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -81,7 +85,8 @@ cat > "$native_helper/Contents/Info.plist" <<PLIST
 <key>CFBundleShortVersionString</key><string>$native_version</string>
 <key>CFBundleVersion</key><string>$native_version</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
-<key>NSMicrophoneUsageDescription</key><string>Dictation uses your microphone only while you dictate. Speech stays on this Mac.</string>
+<key>NSMicrophoneUsageDescription</key><string>Dictation and Meetings use your selected microphone only while active. Speech stays on this Mac.</string>
+<key>NSAudioCaptureUsageDescription</key><string>Meetings transcribes system audio only while you record. No audio is saved.</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>LSUIElement</key><true/>
 </dict></plist>

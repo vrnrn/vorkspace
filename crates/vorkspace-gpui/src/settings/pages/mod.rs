@@ -5,6 +5,7 @@ mod bots;
 mod chat;
 mod clipboard;
 mod connections;
+pub(super) mod connectors;
 mod general;
 mod inbox;
 mod keybindings;
@@ -35,7 +36,13 @@ impl SettingsView {
             Section::Mcp => self.mcp_page(cx),
             Section::Skills => self.skills_page(cx),
             Section::Bots => self.bots_page(cx),
-            Section::Connectors => self.inbox_page(cx),
+            Section::Connectors => self.connectors_page(cx),
+            Section::Github => self.connector_page(crate::workspace::Connector::Github, cx),
+            Section::Gitlab => self.connector_page(crate::workspace::Connector::Gitlab, cx),
+            Section::Jira => self.connector_page(crate::workspace::Connector::Jira, cx),
+            Section::Notes => self.local_feature_page(Section::Notes, cx),
+            Section::Meetings => self.meetings_page(cx),
+            Section::Todos => self.local_feature_page(Section::Todos, cx),
             Section::Archive => self.archive_page(cx),
             Section::Worktrees => self.worktrees_page(cx),
         }

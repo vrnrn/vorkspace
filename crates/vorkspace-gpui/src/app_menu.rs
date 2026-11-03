@@ -51,6 +51,7 @@ actions!(
     [
         About,
         CheckUpdates,
+        StopMeetingRecording,
         Hide,
         HideOthers,
         ShowAll,
@@ -75,14 +76,14 @@ fn clipboard_route(action: shell::status_menu::Action, cx: &mut App) {
 
 pub(crate) fn init(cx: &mut App) {
     crate::menu_bar::install(build, cx);
-    cx.on_action(|_: &crate::clipboard::Reopen, cx| reopen_workspace(cx));
-    cx.on_action(|_: &crate::clipboard::Settings, cx| {
+    cx.on_action(|_: &crate::background_helper::Reopen, cx| reopen_workspace(cx));
+    cx.on_action(|_: &crate::background_helper::Settings, cx| {
         clipboard_route(shell::status_menu::Action::Settings, cx)
     });
-    cx.on_action(|_: &crate::clipboard::Quit, cx| {
+    cx.on_action(|_: &crate::background_helper::Quit, cx| {
         clipboard_route(shell::status_menu::Action::Quit, cx)
     });
-    cx.on_action(|_: &crate::clipboard::Composer, cx| {
+    cx.on_action(|_: &crate::background_helper::Composer, cx| {
         clipboard_route(shell::status_menu::Action::QuickComposer, cx)
     });
     macro_rules! workspace_commands {
@@ -141,6 +142,21 @@ pub(crate) fn init(cx: &mut App) {
         }
     });
     cx.on_action(|_: &CheckUpdates, cx| vorkspace_macos::updater::check(cx));
+    cx.on_action(|_: &StopMeetingRecording, cx| {
+        if let Err(error) = crate::meetings::stop_active(cx)
+            && let Some(window) = cx.active_window()
+        {
+            let _ = window.update(cx, |_, window, cx| {
+                drop(window.prompt(
+                    gpui::PromptLevel::Warning,
+                    "Could not stop recording",
+                    Some(&error),
+                    &["OK"],
+                    cx,
+                ));
+            });
+        }
+    });
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
@@ -175,6 +191,7 @@ pub(crate) fn build(prefs: &Preferences) -> Vec<Menu> {
             MenuItem::action("Settings…", shell::OpenSettings),
             MenuItem::action("Check for Updates…", CheckUpdates),
             MenuItem::separator(),
+            MenuItem::action("Stop Meeting Recording", StopMeetingRecording),
             MenuItem::action("Restart vorkspace", crate::Restart),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),

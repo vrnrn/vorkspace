@@ -61,7 +61,7 @@ impl SettingsView {
             cx.notify();
             return;
         }
-        let Some(directory) = self.ctx.inbox_data_dir.clone() else {
+        let Some(directory) = self.ctx.data_dir.clone() else {
             self.inbox.error = Some("Jira data directory is unavailable".into());
             cx.notify();
             return;
@@ -244,137 +244,101 @@ impl SettingsView {
         );
         self.row(Some(id),false,"Default Bot",Some("Preselected when you send items to chat. You can choose another destination before sending.".into()),vec![select])
     }
-    pub(super) fn inbox_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut page = vec![self.project_notification_settings(cx)];
-        for (id, title, description, label, hint) in [
-            (
-                "github",
-                "GitHub",
+    pub(super) fn connector_page(
+        &mut self,
+        connector: crate::workspace::Connector,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let id = connector.id();
+        let (description, hint) = match connector {
+            crate::workspace::Connector::Github => (
                 "Pull requests, reviews, and issues, read through the GitHub CLI.",
-                "Connection",
-                "Install GitHub CLI from cli.github.com, run gh auth login in a terminal, then check again.",
+                "Install GitHub CLI, run gh auth login in a terminal, then check again.",
             ),
-            (
-                "gitlab",
-                "GitLab",
+            crate::workspace::Connector::Gitlab => (
                 "Merge requests from GitLab.com or a self-managed instance.",
-                "Connection",
-                "Connect GitLab.com or a self-managed GitLab instance. Use a personal access token with API access; the token is stored locally and Disconnect deletes it.",
+                "Use a personal access token with API access. Disconnect removes the saved token.",
             ),
-            (
-                "jira",
-                "Jira",
+            crate::workspace::Connector::Jira => (
                 "Jira Cloud issues from the projects you pick.",
-                "Connection",
                 "Connect your Jira Cloud site with your email and an API token.",
             ),
-        ] {
-            let enabled = self.ctx.inbox_connectors.enabled(id);
-            let (connected, connection_label) = self
-                .ctx
-                .inbox_connections
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| (false, "Checking connection…".into()));
-            let status = div()
-                .text_size(px(12.))
-                .text_color(content(if connected { 0.7 } else { 0.5 }))
-                .child(connection_label)
-                .into_any_element();
-            let controls = if id == "github" {
-                vec![
-                    status,
-                    secondary_button(
-                        "github-installation-guide",
-                        "Installation guide",
-                        false,
-                        false,
-                    )
-                    .child("Installation guide")
-                    .on_click(|_, _, cx| cx.open_url("https://cli.github.com/"))
-                    .into_any_element(),
-                    secondary_button("github-check-again", "Check again", false, false)
-                        .child("Check again")
-                        .on_click(cx.listener(|_, _, _, cx| {
-                            cx.emit(SettingsEvent::ManageInboxProvider("github".into()))
-                        }))
-                        .into_any_element(),
-                ]
-            } else {
-                vec![
-                    status,
-                    secondary_button(
-                        SharedString::from(format!("connect-{id}")),
-                        if connected { "Manage" } else { "Connect" },
-                        false,
-                        false,
-                    )
-                    .child(if connected { "Manage" } else { "Connect" })
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.emit(SettingsEvent::ManageInboxProvider(id.into()))
+        };
+        let enabled = self.ctx.inbox_connectors.enabled(id);
+        let (connected, connection_label) = self
+            .ctx
+            .inbox_connections
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| (false, "Checking connection…".into()));
+        let status = div()
+            .text_size(px(12.))
+            .text_color(content(if connected { 0.7 } else { 0.5 }))
+            .child(connection_label)
+            .into_any_element();
+        let controls = if id == "github" {
+            vec![
+                status,
+                secondary_button(
+                    "github-installation-guide",
+                    "Installation guide",
+                    false,
+                    false,
+                )
+                .child("Installation guide")
+                .on_click(|_, _, cx| cx.open_url("https://cli.github.com/"))
+                .into_any_element(),
+                secondary_button("github-check-again", "Check again", false, false)
+                    .child("Check again")
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(SettingsEvent::ManageInboxProvider("github".into()))
                     }))
                     .into_any_element(),
-                ]
-            };
-            let row = if enabled {
-                self.row(None, false, label, Some(hint.into()), controls)
-            } else {
-                self.row(
-                    None,
+            ]
+        } else {
+            vec![
+                status,
+                secondary_button(
+                    SharedString::from(format!("connect-{id}")),
+                    if connected { "Manage" } else { "Connect" },
                     false,
-                    "Connector disabled",
-                    Some("Saved connection details are kept.".into()),
-                    vec![],
+                    false,
                 )
-            };
-            let toggle_id = match id {
-                "github" => "inbox-connector-github",
-                "gitlab" => "inbox-connector-gitlab",
-                _ => "inbox-connector-jira",
-            };
-            let enable = self.toggle(
-                toggle_id,
-                format!("Enable {title} connector"),
-                enabled,
+                .child(if connected { "Manage" } else { "Connect" })
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    cx.emit(SettingsEvent::ManageInboxProvider(id.into()))
+                }))
+                .into_any_element(),
+            ]
+        };
+        let row = if enabled {
+            self.row(None, false, "Connection", Some(hint.into()), controls)
+        } else {
+            self.row(
+                None,
                 false,
-                cx,
-                move |_, on, cx| {
-                    cx.emit(SettingsEvent::InboxConnectorEnabled(id.into(), on));
-                },
-            );
-            let mut rows = vec![row];
-            if enabled {
-                if matches!(id, "jira" | "gitlab") {
-                    rows.push(self.inbox_bot_row(id, cx));
-                }
-                if id == "jira" && connected {
-                    rows.extend(self.jira_filter_rows(cx));
-                }
+                "Connector disabled",
+                Some("Saved connection details are kept.".into()),
+                vec![],
+            )
+        };
+        let mut rows = vec![row];
+        if enabled {
+            if matches!(id, "jira" | "gitlab") {
+                rows.push(self.inbox_bot_row(id, cx));
             }
-            page.push(
-                self.group(
-                    Some(id),
-                    false,
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(icon(
-                            match id {
-                                "jira" => "inbox-jira",
-                                "gitlab" => "inbox-gitlab",
-                                _ => "inbox-github",
-                            },
-                            16.,
-                        ))
-                        .child(title),
-                    Some(description.into()),
-                    Some(enable),
-                    rows,
-                ),
-            );
+            if id == "jira" && connected {
+                rows.extend(self.jira_filter_rows(cx));
+            }
         }
-        page
+        vec![self.group(
+            Some(id),
+            true,
+            connector.label(),
+            Some(description.into()),
+            None,
+            rows,
+        )]
     }
 }
 

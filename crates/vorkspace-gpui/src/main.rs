@@ -4,9 +4,9 @@ mod app_menu;
 mod assets;
 mod automations;
 mod avatar;
+mod background_helper;
 mod bot_header;
 mod bots;
-mod clipboard;
 mod color_picker;
 mod composer;
 mod controls;
@@ -23,6 +23,7 @@ mod inbox;
 mod input;
 mod liquid;
 mod markdown;
+mod meetings;
 mod menu_bar;
 #[cfg(test)]
 mod metal_tests;
@@ -63,7 +64,7 @@ use std::{
 use vorkspace_core::{store::Store, transcript::Transcript};
 actions!(application, [Quit, Restart]);
 fn quit(cx: &mut App) {
-    clipboard::app_quitting(cx);
+    background_helper::app_quitting(cx);
     let voice = vox::shutdown(cx);
     cx.spawn(async move |cx| {
         voice.await;
