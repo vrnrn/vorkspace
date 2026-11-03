@@ -556,14 +556,14 @@ fn wrapped_link_cursor_follows_text_without_filling_selection_continuations() {
         assert_eq!(cursor, Some(gpui::CursorStyle::PointingHand));
 
         let start_x = line.unwrapped_layout.x_for_index(start);
-        let end_x = line.wrap_boundaries().get(row).map_or(
-            line.unwrapped_layout.width,
-            |boundary| {
-                line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix]
-                    .position
-                    .x
-            },
-        );
+        let end_x =
+            line.wrap_boundaries()
+                .get(row)
+                .map_or(line.unwrapped_layout.width, |boundary| {
+                    line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix]
+                        .position
+                        .x
+                });
         let text_right = fragment.layout.bounds().left() + end_x - start_x;
         let gap = fragment.layout.bounds().right() - text_right;
         if gap <= px(2.) {
