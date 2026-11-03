@@ -6,6 +6,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
+vorkspace-meetings = { path = "../vorkspace-meetings" }
+uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 serde.workspace = true
 serde_json.workspace = true
@@ -40,7 +42,7 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
 objc2-image-io = { version = "0.3.2", default-features = false, features = ["std", "CGImageSource", "objc2-core-graphics"] }
 raw-window-handle = "0.6"
-objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKPreferences", "WKWebsiteDataStore", "WKNavigation", "WKNavigationDelegate", "WKNavigationAction", "WKUIDelegate", "WKFrameInfo", "WKSecurityOrigin", "block2"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-app-kit", "objc2-core-foundation", "WKScriptMessage", "WKScriptMessageHandler", "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKPreferences", "WKWebsiteDataStore", "WKNavigation", "WKNavigationDelegate", "WKNavigationAction", "WKUIDelegate", "WKFrameInfo", "WKSecurityOrigin", "block2"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSNotification", "NSString", "NSGeometry", "NSData", "NSRange", "NSArray", "NSSet", "NSError", "NSBundle", "NSURL", "NSURLRequest"] }
 objc2-user-notifications = "0.3"
 

@@ -17,12 +17,18 @@ pub(crate) enum Section {
     Bots,
     #[serde(alias = "inbox")]
     Connectors,
+    Github,
+    Gitlab,
+    Jira,
+    Notes,
+    Meetings,
+    Todos,
     Archive,
     Worktrees,
     Vox,
 }
 
-pub(crate) const GROUPS: [(&str, &[Section]); 2] = [
+pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
     (
         "App",
         &[
@@ -30,9 +36,20 @@ pub(crate) const GROUPS: [(&str, &[Section]); 2] = [
             Section::Connections,
             Section::Appearance,
             Section::Keybindings,
-            Section::Connectors,
             Section::Archive,
             Section::Worktrees,
+        ],
+    ),
+    (
+        "Connectors",
+        &[
+            Section::Connectors,
+            Section::Github,
+            Section::Gitlab,
+            Section::Jira,
+            Section::Notes,
+            Section::Meetings,
+            Section::Todos,
         ],
     ),
     (
@@ -49,7 +66,7 @@ pub(crate) const GROUPS: [(&str, &[Section]); 2] = [
 ];
 
 impl Section {
-    pub(crate) const ALL: [Section; 13] = [
+    pub(crate) const ALL: [Section; 19] = [
         Section::General,
         Section::Connections,
         Section::Appearance,
@@ -60,6 +77,12 @@ impl Section {
         Section::Skills,
         Section::Bots,
         Section::Connectors,
+        Section::Github,
+        Section::Gitlab,
+        Section::Jira,
+        Section::Notes,
+        Section::Meetings,
+        Section::Todos,
         Section::Archive,
         Section::Worktrees,
         Section::Vox,
@@ -77,6 +100,12 @@ impl Section {
             Section::Skills => "skills",
             Section::Bots => "bots",
             Section::Connectors => "connectors",
+            Section::Github => "github",
+            Section::Gitlab => "gitlab",
+            Section::Jira => "jira",
+            Section::Notes => "notes",
+            Section::Meetings => "meetings",
+            Section::Todos => "todos",
             Section::Archive => "archive",
             Section::Worktrees => "worktrees",
         }
@@ -93,7 +122,13 @@ impl Section {
             Section::Mcp => "MCP",
             Section::Skills => "Skills",
             Section::Bots => "Bots",
-            Section::Connectors => "Connectors",
+            Section::Connectors => "Plugins",
+            Section::Github => "GitHub",
+            Section::Gitlab => "GitLab",
+            Section::Jira => "Jira",
+            Section::Notes => "Notes",
+            Section::Meetings => "Meetings",
+            Section::Todos => "To-dos",
             Section::Archive => "Archive",
             Section::Worktrees => "Worktrees",
         }
@@ -122,9 +157,13 @@ impl Section {
                 "Discover and manage file skills from project, personal, and harness folders."
             }
             Section::Bots => "The resident agent beside your tabs, and which projects have one.",
-            Section::Connectors => {
-                "Manage GitHub, GitLab and Jira connectors and notification preferences for each project."
-            }
+            Section::Connectors => "Enable built-in features and manage project notifications.",
+            Section::Github => "Pull requests, reviews, and issues from GitHub.",
+            Section::Gitlab => "Merge requests from GitLab.com or a self-managed instance.",
+            Section::Jira => "Jira Cloud issues, projects, and filters.",
+            Section::Notes => "Control access to saved notes in your workspace.",
+            Section::Meetings => "Set the provider, model, and prompt for meeting summaries.",
+            Section::Todos => "Control access to project and Bot to-do boards.",
             Section::Archive => "Projects and conversations you have archived.",
             Section::Worktrees => "Manage additional worktrees for each project.",
         }
@@ -151,7 +190,13 @@ impl Section {
             }
             Section::Skills => "skill instructions prompt",
             Section::Bots => "bot resident agent mascot claim project title bar",
-            Section::Connectors => "github gitlab jira atlassian connect token integration",
+            Section::Connectors => "connectors plugins enable disable built in features",
+            Section::Github => "gh cli connect pull request sign in",
+            Section::Gitlab => "token self-managed merge request connect",
+            Section::Jira => "atlassian cloud api token issues projects jql",
+            Section::Notes => "notebook markdown scratchpad",
+            Section::Meetings => "recording audio transcript summary prompt ai",
+            Section::Todos => "tasks todo checklists boards",
             Section::Archive => "archived restore delete hidden",
             Section::Worktrees => "git branch worktree working copy project create delete",
         }
@@ -170,6 +215,12 @@ impl Section {
             Section::Skills => "sparkles",
             Section::Bots => "ghost",
             Section::Connectors => "globe",
+            Section::Github => "inbox-github",
+            Section::Gitlab => "inbox-gitlab",
+            Section::Jira => "inbox-jira",
+            Section::Notes => "note",
+            Section::Meetings => "mic",
+            Section::Todos => "check-circle",
             Section::Archive => "archive",
             Section::Worktrees => "folder-tree",
         }
@@ -240,7 +291,7 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
     ),
     (
         "notes",
-        Section::General,
+        Section::Notes,
         "Notes",
         "notebook markdown rail scratchpad",
     ),
@@ -475,21 +526,33 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
     ),
     (
         "github",
-        Section::Connectors,
+        Section::Github,
         "GitHub",
         "gh cli connect pull request sign in",
     ),
     (
         "gitlab",
-        Section::Connectors,
+        Section::Gitlab,
         "GitLab",
         "token self-managed merge request connect",
     ),
     (
         "jira",
-        Section::Connectors,
+        Section::Jira,
         "Jira",
         "atlassian cloud site email api token issues projects connect",
+    ),
+    (
+        "meeting-provider",
+        Section::Meetings,
+        "Summary provider",
+        "meeting ai model",
+    ),
+    (
+        "meeting-prompt",
+        Section::Meetings,
+        "Summary prompt",
+        "meeting ai format",
     ),
     (
         "show-archived",
@@ -565,7 +628,7 @@ mod tests {
     fn settings_groups_place_workspace_pages_in_app_without_changing_identity() {
         assert_eq!(
             GROUPS.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
-            ["App", "Agents"]
+            ["App", "Connectors", "Agents"]
         );
         assert_eq!(
             GROUPS[0].1,
@@ -574,7 +637,6 @@ mod tests {
                 Section::Connections,
                 Section::Appearance,
                 Section::Keybindings,
-                Section::Connectors,
                 Section::Archive,
                 Section::Worktrees,
             ]

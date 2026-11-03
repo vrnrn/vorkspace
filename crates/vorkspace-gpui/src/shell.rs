@@ -140,6 +140,7 @@ actions!(
         ShowGitLab,
         ShowJira,
         ShowNotes,
+        ShowMeetings,
         ShowAutomations,
         OpenAppearance,
         MinimizeWindow,
@@ -538,6 +539,7 @@ pub(crate) struct Shell {
     pending_folder: Option<(i64, AnchorSlot)>,
     _session_clock: gpui::Task<()>,
     notes: Option<Entity<Notes>>,
+    meetings: Option<Entity<crate::meetings::Page>>,
     todos_page: Option<Entity<crate::todos::TodosPage>>,
     /// The project sidebar's board; it follows the current project.
     project_todos: Option<Entity<crate::todos::TodoBoardView>>,
@@ -890,6 +892,7 @@ impl Shell {
             pending_folder: None,
             _session_clock: session_clock,
             notes: None,
+            meetings: None,
             todos_page: None,
             project_todos: None,
             minion_registry: Default::default(),
@@ -2640,6 +2643,9 @@ impl Render for Shell {
                 this.open_connector(Connector::Jira, window, cx)
             }))
             .on_action(cx.listener(|this, _: &ShowNotes, window, cx| this.open_notes(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowMeetings, window, cx| this.open_meetings(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &ShowAutomations, window, cx| {
                 this.open_automations(window, cx)
             }))

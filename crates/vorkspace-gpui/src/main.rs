@@ -23,6 +23,7 @@ mod inbox;
 mod input;
 mod liquid;
 mod markdown;
+mod meetings;
 mod menu_bar;
 #[cfg(test)]
 mod metal_tests;

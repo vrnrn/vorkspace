@@ -6,7 +6,9 @@ mod history;
 #[cfg(not(test))]
 mod menu;
 mod native;
+mod peer;
 mod service;
+mod transcription;
 
 use gpui::{App, Global};
 use std::{
@@ -42,6 +44,9 @@ enum Event {
 
 #[derive(Default)]
 struct Helper {
+    exit_requested: bool,
+    media_requested: bool,
+    background_enabled: bool,
     control: Control,
     client: Option<UnixStream>,
     #[cfg(not(test))]
@@ -74,7 +79,7 @@ fn claim(socket: &Path) -> Option<(File, UnixListener)> {
 fn accept(listener: UnixListener, events: async_channel::Sender<Event>) {
     let occupied = Arc::new(AtomicBool::new(false));
     for stream in listener.incoming().flatten() {
-        if occupied.swap(true, Ordering::SeqCst) {
+        if !peer::trusted(&stream) || occupied.swap(true, Ordering::SeqCst) {
             continue;
         }
         let Ok(writer) = stream.try_clone() else {
@@ -104,7 +109,14 @@ fn run(step: Option<Step>, cx: &mut App) {
                 let _ = Process::new(program).args(arguments).spawn();
             }
         }
-        Some(Step::Exit) => dictation::shutdown(cx),
+        Some(Step::Exit) => {
+            if transcription::active(cx) {
+                cx.global_mut::<Helper>().exit_requested = true;
+                transcription::finish(cx);
+            } else {
+                dictation::shutdown(cx);
+            }
+        }
         None => {}
     }
 }
@@ -191,11 +203,19 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             let step = helper.control.connected();
             report_error(cx);
             dictation::status(cx);
+            transcription::status(cx);
             run(step, cx);
         }
         Event::Disconnected => {
+            transcription::finish(cx);
+            cx.global_mut::<Helper>().media_requested = false;
             let helper = cx.global_mut::<Helper>();
             helper.client = None;
+            // A media turn retains the helper until native finalization commits.
+            if transcription::active(cx) {
+                cx.global_mut::<Helper>().control.configure(true);
+            }
+            let helper = cx.global_mut::<Helper>();
             let step = helper.control.disconnected();
             run(step, cx);
         }
@@ -204,10 +224,12 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             icon,
             dictation,
         }) => {
-            let step = cx
-                .global_mut::<Helper>()
-                .control
-                .configure(recording || dictation.enabled);
+            cx.global_mut::<Helper>().background_enabled = recording || dictation.enabled;
+            let keep = recording
+                || dictation.enabled
+                || cx.global::<Helper>().media_requested
+                || transcription::active(cx);
+            let step = cx.global_mut::<Helper>().control.configure(keep);
             service::configure(recording, cx);
             dictation::configure(dictation, cx);
             sync_status(icon, cx);
@@ -217,12 +239,32 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
         Event::Command(Command::Relaunch { program, arguments }) => {
             cx.global_mut::<Helper>().relaunch = Some((program, arguments));
         }
+        Event::Command(Command::KeepAlive(wanted)) => {
+            cx.global_mut::<Helper>().media_requested = wanted;
+            audio_finished(cx);
+        }
+        Event::Command(Command::StartAudio(request)) => transcription::start(request, cx),
+        Event::Command(Command::FinishAudio { id, owner }) => {
+            transcription::finish_owned(&id, &owner, cx)
+        }
         Event::Command(Command::SetUpDictation) => dictation::setup(cx),
         Event::Command(Command::CancelDictation) => dictation::cancel(cx),
         Event::Command(Command::Clear) => service::clear(cx),
         Event::Command(Command::Toggle) => toggle(false, cx),
-        Event::Command(Command::Shutdown) => dictation::shutdown(cx),
+        Event::Command(Command::Shutdown) => run(Some(Step::Exit), cx),
     }
+}
+
+fn audio_finished(cx: &mut App) {
+    if cx.global::<Helper>().exit_requested && !transcription::active(cx) {
+        dictation::shutdown(cx);
+        return;
+    }
+    let keep = cx.global::<Helper>().background_enabled
+        || cx.global::<Helper>().media_requested
+        || transcription::active(cx);
+    let step = cx.global_mut::<Helper>().control.configure(keep);
+    run(step, cx);
 }
 
 fn socket_argument() -> Option<PathBuf> {
@@ -251,6 +293,7 @@ fn main() {
         .run(move |cx: &mut App| {
             cx.set_global(Helper::default());
             dictation::init(cx);
+            transcription::init(cx);
             service::configure(false, cx);
             if let Some(service) = service::get(cx) {
                 cx.observe(&service, |_, cx| report_error(cx)).detach();

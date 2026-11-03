@@ -1,13 +1,16 @@
 //! The contract between the app and its clipboard helper, which outlives the app
-//! so that copies keep being recorded after Quit. Only control messages cross the
-//! socket: clipboard contents stay in the helper.
+//! so clipboard history and dictation remain available after Quit. Recording
+//! control, text and metadata also cross the socket; clipboard contents and PCM
+//! stay in the helper.
+mod audio_protocol;
 mod dictation_config;
+pub use audio_protocol::{AudioNotice, AudioRequest};
 pub use dictation_config::{
     DictationConfig, DictationPhase, DictationStatus, WordRule, word_rules,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     os::unix::{net::UnixStream, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command as Process, Stdio},
@@ -15,7 +18,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-const PROTOCOL: u32 = 8;
+const PROTOCOL: u32 = 9;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 const CONNECT_ATTEMPTS: usize = 60;
 const CONNECT_DELAY: Duration = Duration::from_millis(50);
@@ -34,6 +37,12 @@ pub enum Command {
     Relaunch {
         program: String,
         arguments: Vec<String>,
+    },
+    KeepAlive(bool),
+    StartAudio(AudioRequest),
+    FinishAudio {
+        id: String,
+        owner: String,
     },
     SetUpDictation,
     CancelDictation,
@@ -56,6 +65,7 @@ pub enum Notice {
     Error(Option<String>),
     Action(Action),
     Dictation(DictationStatus),
+    Audio(AudioNotice),
 }
 
 impl Notice {
@@ -86,9 +96,12 @@ pub fn send(mut stream: &UnixStream, message: &impl Serialize) -> io::Result<()>
 /// protocol, which is treated the same way because nothing can follow it.
 pub fn receive<T: DeserializeOwned>(reader: &mut impl BufRead) -> Option<T> {
     let mut line = String::new();
-    match reader.read_line(&mut line) {
+    match reader.take(1024 * 1024 + 1).read_line(&mut line) {
         Ok(0) | Err(_) => None,
-        Ok(_) => serde_json::from_str(&line).ok(),
+        Ok(length) if length <= 1024 * 1024 && line.ends_with('\n') => {
+            serde_json::from_str(&line).ok()
+        }
+        Ok(_) => None,
     }
 }
 
@@ -152,13 +165,14 @@ pub fn relaunch_command(app: &Path, arguments: Vec<String>) -> Command {
 
 #[derive(Clone, Default, PartialEq)]
 struct Desired {
+    media: bool,
     dictation: DictationConfig,
     recording: bool,
     icon: bool,
 }
 impl Desired {
     fn active(&self) -> bool {
-        self.recording || self.dictation.enabled
+        self.recording || self.dictation.enabled || self.media
     }
 }
 #[derive(Default)]
@@ -196,17 +210,23 @@ impl Supervisor {
     }
 
     pub fn configure(&self, recording: bool, icon: bool, dictation: DictationConfig) {
-        *self.shared.desired.lock().unwrap() = Desired {
-            recording,
-            icon,
-            dictation: dictation.clone(),
+        let media = {
+            let mut desired = self.shared.desired.lock().unwrap();
+            let media = desired.media;
+            *desired = Desired {
+                recording,
+                icon,
+                dictation: dictation.clone(),
+                media,
+            };
+            media
         };
         self.shared.wake.notify_all();
         if !recording {
             // Stopping recording drops the history a queued clear was aimed at.
             *self.shared.clear_pending.lock().unwrap() = false;
         }
-        let active = recording || dictation.enabled;
+        let active = recording || dictation.enabled || media;
         let command = Command::Configure {
             recording,
             icon,
@@ -217,6 +237,12 @@ impl Supervisor {
             let socket = self.socket.clone();
             std::thread::spawn(move || retire(&shared, &socket, command));
         }
+    }
+
+    pub fn keep_alive(&self, wanted: bool) {
+        self.shared.desired.lock().unwrap().media = wanted;
+        self.shared.wake.notify_all();
+        self.send(Command::KeepAlive(wanted));
     }
 
     pub fn send(&self, command: Command) -> bool {
@@ -314,16 +340,18 @@ fn supervise(
                 recording,
                 icon,
                 dictation,
+                media,
             } = shared.desired.lock().unwrap().clone();
-            if send(
-                &stream,
-                &Command::Configure {
-                    recording,
-                    icon,
-                    dictation,
-                },
-            )
-            .is_ok()
+            if (!media || send(&stream, &Command::KeepAlive(true)).is_ok())
+                && send(
+                    &stream,
+                    &Command::Configure {
+                        recording,
+                        icon,
+                        dictation,
+                    },
+                )
+                .is_ok()
                 && send(&stream, relaunch).is_ok()
             {
                 *published = stream.try_clone().ok();
