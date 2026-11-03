@@ -672,6 +672,7 @@ main {
         }
         if (!isActive()) {
           activeId = null;
+          renderState();
           if (selected === id) {
             const version = documentVersion();
             try {

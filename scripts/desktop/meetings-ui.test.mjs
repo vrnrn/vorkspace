@@ -276,3 +276,19 @@ test("summary completion refreshes the view selected during generation", async (
     else assert.equal(ui.get("editor").value, "A transcript");
   }
 });
+
+test("Record is ready when an unselected recording finishes", async () => {
+  const ui = await harness();
+  await ui.get("record").onclick();
+  ui.phase("recording");
+  await ui.tick();
+  await ui.open("B");
+  await ui.get("record-mobile").onclick();
+  assert.equal(ui.get("record-mobile").textContent, "Finishing…");
+  assert.equal(ui.get("record-mobile").disabled, true);
+  ui.phase("stopped");
+  await ui.tick();
+  assert.equal(ui.get("title").value, "B");
+  assert.equal(ui.get("record-mobile").textContent, "Record");
+  assert.equal(ui.get("record-mobile").disabled, false);
+});
