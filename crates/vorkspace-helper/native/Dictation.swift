@@ -407,6 +407,9 @@ func dictationConfigure(_ json: UnsafePointer<CChar>, _ callback: @escaping @con
 func dictationToggle() { MainActor.assumeIsolated { DictationController.shared.toggle() } }
 @_cdecl("vorkspace_dictation_setup")
 func dictationSetup() { MainActor.assumeIsolated { DictationController.shared.setUp() } }
+// Meeting cleanup only republishes native state. Setup requires a user action.
+@_cdecl("vorkspace_dictation_refresh")
+func dictationRefresh() { MainActor.assumeIsolated { DictationController.shared.publish() } }
 @_cdecl("vorkspace_dictation_cancel")
 func dictationCancel() { MainActor.assumeIsolated { DictationController.shared.cancel() } }
 @_cdecl("vorkspace_dictation_level")

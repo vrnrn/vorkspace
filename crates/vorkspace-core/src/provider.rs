@@ -1140,12 +1140,27 @@ pub fn run_with_controls(
     controls: Option<mpsc::Receiver<Control>>,
     emit: impl FnMut(Vec<Event>) -> Result<(), String>,
 ) -> Result<(), String> {
-    run_process(request, cancel, controls, false, emit).map(|_| ())
+    run_operation(
+        request,
+        cancel,
+        controls,
+        Operation::Turn(DEFAULT_TEXT_TIMEOUT),
+        emit,
+    )
+    .map(|_| ())
 }
 
 /// A bounded, separate conversation for titles and other background text work.
 /// Never resume the user's conversation or inherit its app capabilities/tools.
-pub fn run_text(mut request: Request, cancel: Arc<AtomicBool>) -> Result<String, String> {
+pub fn run_text(request: Request, cancel: Arc<AtomicBool>) -> Result<String, String> {
+    run_text_with_timeout(request, cancel, DEFAULT_TEXT_TIMEOUT)
+}
+
+pub fn run_text_with_timeout(
+    mut request: Request,
+    cancel: Arc<AtomicBool>,
+    timeout: Duration,
+) -> Result<String, String> {
     request.provider_id = None;
     request.settings = Settings {
         account: request.settings.account.clone(),
@@ -1155,7 +1170,7 @@ pub fn run_text(mut request: Request, cancel: Arc<AtomicBool>) -> Result<String,
         ..Default::default()
     };
     let mut output = String::new();
-    run(request, cancel, |events| {
+    run_operation(request, cancel, None, Operation::Turn(timeout), |events| {
         for event in events {
             match event {
                 Event::Text(text) if output.len() + text.len() <= 64 * 1024 => {
@@ -1188,7 +1203,7 @@ pub(crate) fn catalog_for(kind: Kind, account: crate::accounts::Profile) -> Resu
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or(std::env::current_dir().map_err(|e| e.to_string())?);
-    run_process(
+    run_operation(
         Request {
             kind,
             binary,
@@ -1204,31 +1219,35 @@ pub(crate) fn catalog_for(kind: Kind, account: crate::accounts::Profile) -> Resu
         },
         Arc::new(AtomicBool::new(false)),
         None,
-        true,
+        Operation::Catalog,
         |_| Ok(()),
     )?
     .ok_or_else(|| format!("{} returned no model catalog", kind.label()))
 }
 
-fn run_process(
-    request: Request,
-    cancel: Arc<AtomicBool>,
-    controls: Option<mpsc::Receiver<Control>>,
-    probe: bool,
-    emit: impl FnMut(Vec<Event>) -> Result<(), String>,
-) -> Result<Option<Value>, String> {
-    run_operation(request, cancel, controls, probe, false, false, emit)
+const DEFAULT_TEXT_TIMEOUT: Duration = Duration::from_secs(45);
+
+enum Operation {
+    Turn(Duration),
+    Catalog,
+    Compact,
+    Commands,
 }
 
 fn run_operation(
     mut request: Request,
     cancel: Arc<AtomicBool>,
     controls: Option<mpsc::Receiver<Control>>,
-    probe: bool,
-    compact: bool,
-    command_probe: bool,
+    operation: Operation,
     mut emit: impl FnMut(Vec<Event>) -> Result<(), String>,
 ) -> Result<Option<Value>, String> {
+    let probe = matches!(operation, Operation::Catalog);
+    let compact = matches!(operation, Operation::Compact);
+    let command_probe = matches!(operation, Operation::Commands);
+    let text_timeout = match operation {
+        Operation::Turn(timeout) => timeout,
+        _ => DEFAULT_TEXT_TIMEOUT,
+    };
     if !request.kind.is_supported() {
         return Err("This historical provider is no longer supported. Choose a supported provider for a new conversation.".into());
     }
@@ -1520,7 +1539,7 @@ fn run_operation(
                 stop_confirmed = true;
                 return Err("Stopped".into());
             }
-            if protocol.request.settings.text_only && started.elapsed() >= Duration::from_secs(45) {
+            if protocol.request.settings.text_only && started.elapsed() >= text_timeout {
                 return Err("Background text request timed out".into());
             }
             match rx.recv_timeout(TICK) {

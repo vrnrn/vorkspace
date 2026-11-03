@@ -558,13 +558,20 @@ main {
     }
     await refresh();
   }
+  function documentVersion() {
+    return { id: selected, load: loadEpoch, edits: editEpoch };
+  }
+  function currentDocument(version) {
+    return selected === version.id && loadEpoch === version.load && editEpoch === version.edits && !dirty;
+  }
   async function open(id) {
     if (id === selected && doc) return;
     if (dirty) await save();
     if (dirty) return;
-    const epoch = ++loadEpoch, documentId = selected, edits = editEpoch;
+    loadEpoch++;
+    const version = documentVersion();
     const value = await call("meetings.read", { id });
-    if (epoch !== loadEpoch || documentId !== selected || edits !== editEpoch || dirty) return;
+    if (!currentDocument(version)) return;
     selected = id;
     doc = value;
     dirty = false;
@@ -607,17 +614,19 @@ main {
       }
       if (dirty) await save();
       if (dirty) return;
+      const version = documentVersion();
       const result = await call("meetings.start");
-      selected = result.id;
       activeId = result.id;
       phase = "starting";
       sequence = 0;
-      doc = null;
-      dirty = false;
-      dirtyFields.clear();
-      view = "transcript";
       $("finals").replaceChildren();
       $("partials").textContent = "";
+      if (!currentDocument(version)) return;
+      loadEpoch++;
+      selected = result.id;
+      doc = null;
+      view = "transcript";
+      editingSummary = false;
       notice("");
       renderDocument();
     } finally { recordBusy = false; renderState(); }
@@ -630,7 +639,7 @@ main {
       if (activeId !== id) return;
       if (result.state) {
         phase = result.state.phase;
-        if (phase !== "starting" && !rows.some(row => row.meeting.id === id)) await refresh();
+        const listNeedsRefresh = phase !== "starting" && !rows.some(row => row.meeting.id === id);
         if (selected === id) {
           if (doc) doc.state = result.state;
           else doc = { meeting: { id, title: "Untitled meeting", revision: 0, transcript_revision: 0, summary: null }, state: result.state, transcript: "", segments: [] };
@@ -642,8 +651,10 @@ main {
         }
         if (selected === id) $("partials").textContent = Object.entries(result.partials || {}).map(([source, text]) => (source === "microphone" ? "Microphone: " : "System audio: ") + text).join("\n");
         if (result.reload && phase !== "starting" && selected === id) {
+          const version = documentVersion();
           const full = await call("meetings.read", { id });
-          if (activeId === id && selected === id) {
+          if (activeId !== id) return;
+          if (currentDocument(version)) {
             doc = full;
             sequence = full.sequence;
             $("finals").replaceChildren();
@@ -653,14 +664,16 @@ main {
         if (!isActive()) {
           activeId = null;
           if (selected === id) {
+            const version = documentVersion();
             try {
               const full = await call("meetings.read", { id });
-              if (selected === id && !dirty) {
+              if (currentDocument(version)) {
                 doc = full;
                 view = "transcript";
                 renderDocument();
               }
             } catch (e) {
+              if (!currentDocument(version)) return;
               notice(result.state.error || "No transcript was recorded.", !!result.state.error);
               if (doc) doc.state = result.state;
               renderState();
@@ -668,7 +681,10 @@ main {
             }
           }
           await refresh();
-        } else renderState();
+        } else {
+          renderState();
+          if (listNeedsRefresh) await refresh();
+        }
         if (result.state.error && selected === id) notice(result.state.error, true);
       }
     } catch (error) {
@@ -679,8 +695,9 @@ main {
   }
   async function summarize() {
     if (!doc || analysis) return;
+    const version = documentVersion();
     await save();
-    if (dirty) return;
+    if (!currentDocument(version)) return;
     analysis = true;
     const id = selected, epoch = ++loadEpoch;
     renderState();
@@ -690,9 +707,9 @@ main {
       // Reconcile successful analysis even when navigation changed its epoch.
       if (selected === id) {
         doc = result;
-        editingSummary = false;
         if (dirty) { notice("Summary ready. Your unsaved edits are still here."); }
         else if (loadEpoch === epoch) {
+          editingSummary = false;
           view = "summary";
           notice("");
           renderDocument();
@@ -713,51 +730,25 @@ main {
   $("editor").oninput = () => setDirty(view === "summary" ? "summary" : "transcript");
   $("save").onclick = () => save().catch(showError);
   $("summarize").onclick = () => summarize().catch(showError);
-  $("show-transcript").onclick = async () => {
-    try {
-      await save();
-      if (dirty) return;
-      view = "transcript";
-      renderDocument();
-    } catch (e) {
-      showError(e);
-    }
-  };
-  $("show-summary").onclick = async () => {
-    try {
-      await save();
-      if (dirty) return;
-      view = "summary";
-      editingSummary = false;
-      renderDocument();
-    } catch (e) {
-      showError(e);
-    }
-  };
-  $("mode-edit").onclick = async () => {
-    try {
-      await save();
-      if (dirty) return;
-      if (editingSummary) {
-        doc = await call("meetings.read", { id: selected });
-      }
-      editingSummary = !editingSummary;
-      renderDocument();
-    } catch (e) {
-      showError(e);
-    }
-  };
-  $("back").onclick = async () => {
-    try {
-      await save();
-      if (dirty) return;
-      selected = null;
-      doc = null;
-      renderDocument();
-    } catch (e) {
-      showError(e);
-    }
-  };
+  async function changeDocument(change) {
+    loadEpoch++;
+    const version = documentVersion();
+    await save();
+    if (!currentDocument(version)) return;
+    change();
+    renderDocument();
+  }
+  $("show-transcript").onclick = () => changeDocument(() => { view = "transcript"; }).catch(showError);
+  $("show-summary").onclick = () => changeDocument(() => {
+    view = "summary";
+    editingSummary = false;
+  }).catch(showError);
+  // A successful save already returns the HTML for its saved revision.
+  $("mode-edit").onclick = () => changeDocument(() => { editingSummary = !editingSummary; }).catch(showError);
+  $("back").onclick = () => changeDocument(() => {
+    selected = null;
+    doc = null;
+  }).catch(showError);
   addEventListener("vorkspace-visibility", (event) => {
     visible = event.detail;
     if (visible) poll();

@@ -127,3 +127,56 @@ test("summary completion reconciles the saved revision before the next edit", as
   assert.equal(ui.records.get("A").meeting.title, "After summary");
   assert.equal(ui.records.get("A").meeting.summary.text, "Updated by AI");
 });
+
+test("summary preview cannot publish a stale read into another meeting", async () => {
+  const ui = await harness();
+  await ui.open("A");
+  await ui.get("show-summary").onclick();
+  await ui.get("mode-edit").onclick();
+  const read = deferred();
+  ui.pending.set("meetings.read:A", read);
+  const preview = ui.get("mode-edit").onclick();
+  await setImmediate();
+  await ui.open("B");
+  read.resolve();
+  await preview;
+  assert.equal(ui.get("title").value, "B");
+  assert.equal(ui.get("editor").value, "B transcript");
+  ui.input("editor", "B corrected");
+  await ui.get("save").onclick();
+  assert.deepEqual(ui.writes, [{id: "B", revision: 0, transcript: "B corrected"}]);
+});
+
+test("record startup keeps a newer draft and still exposes Stop", async () => {
+  const ui = await harness();
+  await ui.open("A");
+  const start = deferred();
+  ui.pending.set("meetings.start:", start);
+  const starting = ui.get("record").onclick();
+  ui.input("editor", "Words typed during setup");
+  ui.input("title", "New title");
+  start.resolve();
+  await starting;
+  assert.equal(ui.get("title").value, "New title");
+  assert.equal(ui.get("editor").value, "Words typed during setup");
+  assert.equal(ui.get("save").style.display, "inline-block");
+  assert.equal(ui.get("record-mobile").textContent, "Stop");
+  await ui.get("save").onclick();
+  assert.deepEqual(ui.writes, [{id: "A", revision: 0, title: "New title", transcript: "Words typed during setup"}]);
+  await ui.get("record").onclick();
+  assert.deepEqual(ui.stops, ["live"]);
+});
+
+test("record startup leaves a document opened during preparation selected", async () => {
+  const ui = await harness();
+  await ui.open("A");
+  const start = deferred();
+  ui.pending.set("meetings.start:", start);
+  const starting = ui.get("record").onclick();
+  await ui.open("B");
+  start.resolve();
+  await starting;
+  assert.equal(ui.get("title").value, "B");
+  assert.equal(ui.get("editor").value, "B transcript");
+  assert.equal(ui.get("record-mobile").textContent, "Stop");
+});

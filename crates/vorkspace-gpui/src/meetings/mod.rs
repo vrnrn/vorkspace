@@ -31,6 +31,7 @@ pub(crate) struct Page {
     focus: FocusHandle,
     jobs: Vec<Arc<AtomicBool>>,
     enabled: bool,
+    enable_epoch: u64,
 }
 
 impl Focusable for Page {
@@ -77,6 +78,7 @@ impl Page {
             focus: cx.focus_handle(),
             jobs: Vec::new(),
             enabled: true,
+            enable_epoch: 0,
         }
     }
 
@@ -92,11 +94,17 @@ impl Page {
         cx.notify();
     }
 
-    pub(crate) fn disable(&mut self, cx: &mut Context<Self>) {
-        self.enabled = false;
-        self.set_active(false, cx);
-        for cancel in &self.jobs {
-            cancel.store(true, Ordering::Release);
+    pub(crate) fn set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.enabled == enabled {
+            return;
+        }
+        self.enabled = enabled;
+        self.enable_epoch += 1;
+        if !enabled {
+            self.set_active(false, cx);
+            for cancel in &self.jobs {
+                cancel.store(true, Ordering::Release);
+            }
         }
     }
 
@@ -119,6 +127,7 @@ impl Page {
                 cx,
             )),
             Some("meetings.start") => {
+                let enable_epoch = self.enable_epoch;
                 let directory = meetings.directory.clone();
                 let prepare = cx
                     .background_executor()
@@ -127,8 +136,8 @@ impl Page {
                     let result = match prepare.await {
                         Ok(id) => this
                             .update(cx, |page, cx| {
-                                if !page.enabled {
-                                    return Err("Meetings is turned off.".into());
+                                if page.enable_epoch != enable_epoch {
+                                    return Err("Recording start was canceled because Meetings was turned off.".into());
                                 }
                                 capture::start(id, directory, cx)
                             })
@@ -192,7 +201,7 @@ impl Page {
                     .ok_or("This provider is unavailable in Vorkspace.")?;
                 let binary = provider::resolve(*kind)
                     .ok_or("Connect the selected AI provider in Settings first.")?;
-                provider::run_text(
+                provider::run_text_with_timeout(
                     provider::Request {
                         kind: *kind,
                         binary,
@@ -206,6 +215,7 @@ impl Page {
                         },
                     },
                     cancel.clone(),
+                    Duration::from_secs(180),
                 )
                 .and_then(|text| {
                     if cancel.load(Ordering::Acquire) {

@@ -349,10 +349,8 @@ impl Shell {
                             }
                         }
                     }
-                    if !prefs.meetings
-                        && let Some(page) = this.meetings.take()
-                    {
-                        page.update(cx, |page, cx| page.disable(cx));
+                    if let Some(page) = &this.meetings {
+                        page.update(cx, |page, cx| page.set_enabled(prefs.meetings, cx));
                     }
                     this.workspace.preferences = *prefs.clone();
                     this.apply_preferences(cx);

@@ -23,8 +23,10 @@ Metadata is atomically replaced after flushing; an exclusive owner lock distingu
 
 Open **Settings → Connectors → Meetings**, select an existing provider, choose or enter a model, edit the summary prompt, and press **Save**. Settings use the provider account already selected in Vorkspace. Audio stays on the Mac; clicking **Summarize** sends transcript text to the chosen provider, which may be a cloud service.
 
+Each generation pass has a three-minute deadline within a 15-minute budget for the whole summary. Intermediate passes preserve details relevant to the requested notes.
+
 The default prompt produces Summary, Discussion, Decisions, Action items and Open questions. It asks for factual notes, useful timestamps and explicit uncertainty, with owners or due dates only when stated. Long transcripts are processed in bounded sections and reduced before applying the final format. Analysis uses the existing text-only provider path without app tools or write access.
 
 **Transcript** keeps the source available. **Summary** displays polished Markdown, and **Edit Markdown** edits that summary. **Save changes** (⌘S) saves title and document edits. Updates validate the saved revision. A late summary cannot overwrite a meeting that changed while analysis ran; provider failures preserve the original transcript and any previous summary. Editing the transcript marks an older summary as stale until it is regenerated.
 
-Rendered summaries strip raw HTML, images and unsafe link destinations. The bundled Meetings page uses a dedicated message handler for recording and document actions. Other HTML surfaces have no access to it. **Settings → Connectors → Plugins** can hide Meetings while keeping saved documents. Finish an active recording before turning it off.
+Rendered summaries strip raw HTML, images and unsafe link destinations. The bundled Meetings page uses a dedicated message handler for recording and document actions. Other HTML surfaces have no access to it. **Settings → Connectors → Plugins** can hide Meetings while keeping saved documents. Finish an active recording before turning it off. Unsaved edits stay in the current window when Meetings is turned off and back on.

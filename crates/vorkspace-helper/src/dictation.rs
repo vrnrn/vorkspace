@@ -17,6 +17,7 @@ unsafe extern "C" {
     );
     fn vorkspace_dictation_key_action(action: i32);
     fn vorkspace_dictation_setup();
+    fn vorkspace_dictation_refresh();
     fn vorkspace_dictation_cancel();
     fn vorkspace_dictation_level() -> f32;
 }
@@ -138,7 +139,7 @@ pub fn audio_changed(active: bool, cx: &mut App) {
             };
             s.publish(cx);
         } else {
-            unsafe { vorkspace_dictation_setup() };
+            unsafe { vorkspace_dictation_refresh() };
         }
     });
 }

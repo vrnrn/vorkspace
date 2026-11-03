@@ -27,6 +27,10 @@ for line in sys.stdin:
         assert len(value['params']['input']) == 1
         if mode == 'cancel':
             time.sleep(10)
+        elif mode == 'slow':
+            time.sleep(0.25)
+            send({{'method':'item/agentMessage/delta','params':{{'itemId':'answer','delta':'Meeting summary'}}}})
+            send({{'method':'turn/completed','params':{{'turn':{{'status':'completed'}}}}}})
         elif mode == 'tool':
             send({{'method':'item/started','params':{{'item':{{'type':'commandExecution','id':'tool','command':'never execute'}}}}}})
         else:
@@ -76,4 +80,27 @@ fn background_titles_reject_tools_and_reap_on_cancellation() {
     thread::sleep(Duration::from_millis(150));
     cancel.store(true, Ordering::Relaxed);
     assert!(task.join().unwrap().unwrap_err().contains("Stopped"));
+}
+
+#[test]
+fn caller_controls_the_background_text_timeout() {
+    let (_dir, request) = fixture("slow");
+    let error = run_text_with_timeout(
+        request,
+        Arc::new(AtomicBool::new(false)),
+        Duration::from_millis(10),
+    )
+    .unwrap_err();
+    assert_eq!(error, "Background text request timed out");
+
+    let (_dir, request) = fixture("slow");
+    assert_eq!(
+        run_text_with_timeout(
+            request,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5)
+        )
+        .unwrap(),
+        "Meeting summary"
+    );
 }
