@@ -100,7 +100,7 @@ fn original_layout_is_used_for_fresh_and_previously_experimental_workspaces() {
 #[test]
 fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_state() {
     let saved = serde_json::json!({
-        "sidebar_navigation_order": ["notes", "unknown", "github", "notes", "automations"],
+        "sidebar_navigation_order": ["notes", "unknown", "plugins", "github", "notes", "automations"],
         "sidebar_hidden_connectors": ["github"],
         "compact_session_cards": false,
         "sidebar_activity_visible": true,
@@ -115,7 +115,6 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
             "gitlab",
             "jira",
             "meetings",
-            "plugins",
             "todos"
         ]
     );
@@ -136,7 +135,6 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
             "gitlab",
             "automations",
             "meetings",
-            "plugins",
             "todos"
         ]
     );
@@ -156,7 +154,6 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
             "gitlab",
             "github",
             "meetings",
-            "plugins",
             "todos"
         ]
     );
@@ -193,7 +190,6 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
             "automations",
             "github",
             "meetings",
-            "plugins",
             "todos"
         ]
     );

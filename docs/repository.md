@@ -1,6 +1,6 @@
 # Repository map
 
-The desktop is a Rust workspace that runs as the app plus a small clipboard helper process. The remote host is a separate Node application. Directory boundaries follow those runtime owners, and dependencies only point downward. That holds between crates and between the top-level modules inside each crate, and `scripts/checks/module-cycles.test.mjs` enforces it. A lower module that needs something from above receives it as a small trait, such as `BotsHost`, `VoxHost`, `AnnotationDraft`, or `SelectableText`. The one permitted cycle is `agent` and `bot_model`, because Bot records hold their settings and turn settings hold the Bot.
+The desktop is a Rust workspace that runs as the app plus a small helper process for clipboard history, dictation, and meeting audio. The remote host is a separate Node application. Directory boundaries follow those runtime owners, and dependencies only point downward. That holds between crates and between the top-level modules inside each crate, and `scripts/checks/module-cycles.test.mjs` enforces it. A lower module that needs something from above receives it as a small trait, such as `BotsHost`, `VoxHost`, `AnnotationDraft`, or `SelectableText`. The one permitted cycle is `agent` and `bot_model`, because Bot records hold their settings and turn settings hold the Bot.
 
 | Path | Responsibility |
 | --- | --- |
@@ -10,7 +10,8 @@ The desktop is a Rust workspace that runs as the app plus a small clipboard help
 | `crates/vorkspace-runtime/` | Session execution, remote session binding, and persistence coalescing |
 | `crates/vorkspace-editor/` | Editor analysis (bounded QuickJS) and native syntax (tree-sitter grammars) |
 | `crates/vorkspace-model/` | Plain data models: pane layout, Markdown elements, Git graph and checkout cache |
-| `crates/vorkspace-helper/` | The clipboard helper process, which keeps history after the app quits, and its protocol |
+| `crates/vorkspace-helper/` | Background clipboard and dictation, native meeting capture, and helper IPC |
+| `crates/vorkspace-meetings/` | Shared transcript storage, editable meeting documents, and summary generation |
 | `crates/vorkspace-macos/` | AppKit integrations, hotkeys, updater, relaunch, and hang diagnostics |
 | `host/` | Remote host service, authentication, SQLite store, session engine, SSH deployment package, and tests |
 | `embedded/editor/` | Editor parsing, diagnostics, completion, search, formatting, and syntax palettes for bounded QuickJS workers |
