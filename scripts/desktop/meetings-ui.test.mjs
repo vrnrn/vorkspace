@@ -292,3 +292,22 @@ test("Record is ready when an unselected recording finishes", async () => {
   assert.equal(ui.get("record-mobile").textContent, "Record");
   assert.equal(ui.get("record-mobile").disabled, false);
 });
+
+test("switching to Transcript while Stop loads it keeps the saved recording", async () => {
+  const ui = await harness();
+  await ui.get("record").onclick();
+  ui.phase("recording");
+  await ui.tick();
+  ui.records.set("live", { ...document("live"), transcript: "Captured words" });
+  const read = deferred();
+  ui.pending.set("meetings.read:live", read);
+  ui.phase("stopped");
+  const terminalPoll = ui.tick();
+  await setImmediate();
+  await ui.get("show-transcript").onclick();
+  assert.equal(ui.get("editor").readOnly, true);
+  read.resolve();
+  await terminalPoll;
+  assert.equal(ui.get("editor").value, "Captured words");
+  assert.equal(ui.get("editor").readOnly, false);
+});

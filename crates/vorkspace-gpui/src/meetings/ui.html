@@ -509,9 +509,9 @@ main {
     $("record-mobile").textContent = $("record").querySelector("span").textContent;
     $("record-mobile").disabled = $("record").disabled;
     $("record").setAttribute("aria-label", isActive() ? "Stop recording meeting" : "Record meeting");
-    $("title").readOnly = recording;
+    $("title").readOnly = recording || !!doc?.awaitingTranscript;
     $("show-summary").disabled = !doc?.meeting.summary;
-    $("summarize").disabled = recording || analysis || !doc?.transcript.trim();
+    $("summarize").disabled = recording || !!doc?.awaitingTranscript || analysis || !doc?.transcript.trim();
     $("summarize").textContent = analysis ? "Summarizing…" : doc?.meeting.summary ? "Summarize again" : "Summarize";
     $("mode-edit").hidden = view !== "summary";
     $("mode-edit").textContent = editingSummary ? "Preview" : "Edit Markdown";
@@ -524,7 +524,7 @@ main {
     if (doc?.meeting.summary && doc.meeting.summary.source_revision !== doc.meeting.transcript_revision) notice("The transcript has changed since this summary was generated. Summarize again to update it.");
   }
   function renderBody() {
-    const live = activeId === selected && isActive() && view === "transcript";
+    const live = (activeId === selected && isActive() || !!doc?.awaitingTranscript) && view === "transcript";
     $("live").style.display = live ? "block" : "none";
     const preview = view === "summary" && !editingSummary;
     $("preview").style.display = !live && preview ? "block" : "none";
@@ -566,7 +566,7 @@ main {
   }
   async function open(id) {
     loadEpoch++;
-    if (id === selected && doc) return;
+    if (id === selected && doc && !doc.awaitingTranscript) return;
     const version = documentVersion();
     if (dirty) await save();
     if (!currentDocument(version)) return;
@@ -659,7 +659,7 @@ main {
           if (selected === id) appendFinal(segment);
         }
         if (selected === id) $("partials").textContent = Object.entries(result.partials || {}).map(([source, text]) => (source === "microphone" ? "Microphone: " : "System audio: ") + text).join("\n");
-        if (result.reload && phase !== "starting" && selected === id) {
+        if (result.reload && isActive() && phase !== "starting" && selected === id) {
           const version = documentVersion();
           const full = await call("meetings.read", { id });
           if (activeId !== id) return;
@@ -672,22 +672,23 @@ main {
         }
         if (!isActive()) {
           activeId = null;
+          if (selected === id && doc) doc.awaitingTranscript = true;
           renderState();
           if (selected === id) {
-            const version = documentVersion();
+            const edits = editEpoch;
+            const needsTranscript = () => selected === id && doc?.awaitingTranscript && editEpoch === edits && !dirty;
             try {
               const full = await call("meetings.read", { id });
-              if (currentDocument(version)) {
+              // Switching tabs changes presentation only. A subsequent load
+              // of this document takes ownership by replacing the placeholder.
+              if (needsTranscript()) {
                 doc = full;
-                view = "transcript";
                 renderDocument();
               }
             } catch (e) {
-              if (!currentDocument(version)) return;
-              notice(result.state.error || "No transcript was recorded.", !!result.state.error);
-              if (doc) doc.state = result.state;
-              renderState();
-              renderBody();
+              if (needsTranscript()) {
+                notice(result.state.error || "Could not load the saved transcript. Select the meeting to try again.", true);
+              }
             }
           }
           await refresh();
