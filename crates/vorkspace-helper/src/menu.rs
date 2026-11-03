@@ -18,14 +18,14 @@ pub(super) struct Menu {
     sender: Box<async_channel::Sender<Event>>,
 }
 unsafe extern "C" {
-    fn vorkspace_clipboard_create(
+    fn vorkspace_helper_create(
         callback: extern "C" fn(*mut c_void, u32, u64, *const c_char),
         context: *mut c_void,
     ) -> *mut c_void;
-    fn vorkspace_clipboard_destroy(handle: *mut c_void);
-    fn vorkspace_clipboard_visible(handle: *mut c_void) -> bool;
-    fn vorkspace_clipboard_accept_toggle(handle: *mut c_void, status_click: bool) -> bool;
-    fn vorkspace_clipboard_toggle(
+    fn vorkspace_helper_destroy(handle: *mut c_void);
+    fn vorkspace_helper_visible(handle: *mut c_void) -> bool;
+    fn vorkspace_helper_accept_toggle(handle: *mut c_void, status_click: bool) -> bool;
+    fn vorkspace_helper_toggle(
         handle: *mut c_void,
         x: f64,
         y: f64,
@@ -33,9 +33,9 @@ unsafe extern "C" {
         height: f64,
         status_click: bool,
     );
-    fn vorkspace_clipboard_hide(handle: *mut c_void);
-    fn vorkspace_clipboard_begin(handle: *mut c_void);
-    fn vorkspace_clipboard_add(
+    fn vorkspace_helper_hide(handle: *mut c_void);
+    fn vorkspace_helper_begin(handle: *mut c_void);
+    fn vorkspace_helper_add(
         handle: *mut c_void,
         id: u64,
         title: *const c_char,
@@ -44,7 +44,7 @@ unsafe extern "C" {
         width: usize,
         height: usize,
     );
-    fn vorkspace_clipboard_end(handle: *mut c_void, message: *const c_char, enabled: bool);
+    fn vorkspace_helper_end(handle: *mut c_void, message: *const c_char, enabled: bool);
 }
 extern "C" fn receive(context: *mut c_void, action: u32, id: u64, text: *const c_char) {
     // Called synchronously on the main thread while Menu owns the sender.
@@ -70,7 +70,7 @@ impl Menu {
         let (tx, rx) = async_channel::unbounded();
         let mut sender = Box::new(tx);
         let handle = unsafe {
-            vorkspace_clipboard_create(
+            vorkspace_helper_create(
                 receive,
                 (&mut *sender as *mut async_channel::Sender<Event>).cast(),
             )
@@ -78,14 +78,14 @@ impl Menu {
         (Self { handle, sender }, rx)
     }
     pub(super) fn visible(&self) -> bool {
-        unsafe { vorkspace_clipboard_visible(self.handle) }
+        unsafe { vorkspace_helper_visible(self.handle) }
     }
     pub(super) fn accept_toggle(&self, status_click: bool) -> bool {
-        unsafe { vorkspace_clipboard_accept_toggle(self.handle, status_click) }
+        unsafe { vorkspace_helper_accept_toggle(self.handle, status_click) }
     }
     pub(super) fn toggle(&self, anchor: objc2_foundation::NSRect, status_click: bool) {
         unsafe {
-            vorkspace_clipboard_toggle(
+            vorkspace_helper_toggle(
                 self.handle,
                 anchor.origin.x,
                 anchor.origin.y,
@@ -96,10 +96,10 @@ impl Menu {
         }
     }
     pub(super) fn hide(&self) {
-        unsafe { vorkspace_clipboard_hide(self.handle) }
+        unsafe { vorkspace_helper_hide(self.handle) }
     }
     pub(super) fn sync(&self, history: &History, query: &str, enabled: bool) {
-        unsafe { vorkspace_clipboard_begin(self.handle) };
+        unsafe { vorkspace_helper_begin(self.handle) };
         for id in history.matching(query) {
             let item = history.get(id).unwrap();
             let title = CString::new(item.content.label()).unwrap();
@@ -109,7 +109,7 @@ impl Menu {
                 .map(|p| (p.pixels.as_ptr(), p.width, p.height))
                 .unwrap_or((std::ptr::null(), 0, 0));
             unsafe {
-                vorkspace_clipboard_add(
+                vorkspace_helper_add(
                     self.handle,
                     id,
                     title.as_ptr(),
@@ -128,12 +128,12 @@ impl Menu {
             "No matching text"
         })
         .unwrap();
-        unsafe { vorkspace_clipboard_end(self.handle, message.as_ptr(), enabled) };
+        unsafe { vorkspace_helper_end(self.handle, message.as_ptr(), enabled) };
     }
 }
 impl Drop for Menu {
     fn drop(&mut self) {
-        unsafe { vorkspace_clipboard_destroy(self.handle) };
+        unsafe { vorkspace_helper_destroy(self.handle) };
         self.sender.close();
     }
 }

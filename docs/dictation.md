@@ -4,7 +4,7 @@ Enable **Dictation** in **Settings → General**. It is off by default and uses
 macOS 26's on-device `SpeechTranscriber` through `SpeechAnalyzer`. A compatible
 Mac and supported system language are required; there is no cloud fallback.
 
-Press **Control Shift Space** to start or finish in the focused text field.
+Press **Fn / Globe** to start or finish in the focused text field.
 Change that global shortcut under **Keybindings → App: Dictation**. Command comma
 remains the Settings shortcut. Escape, typing, clicking, scrolling or changing
 focus cancels further insertion. Text already delivered stays in the field.
@@ -18,7 +18,7 @@ Vox and dictation from opening competing microphone and notch owners.
 
 ## Setup and custom words
 
-The bundled **vorkspace Clipboard** helper needs Microphone and Accessibility
+The bundled **vorkspace helper** app needs Microphone and Accessibility
 permission. Settings names the missing access and offers its repair action.
 If Apple's language files are missing, **Download language** explicitly requests
 installation. macOS owns, shares and updates those files. Startup and disabled
@@ -47,7 +47,7 @@ newer engine. Punctuation comes from Apple without a separate rewriting step.
 
 ## Ownership and delivery
 
-The persistent clipboard helper owns the shortcut, native session and notch.
+The persistent background helper owns the shortcut, native session and notch.
 Dictation keeps it alive independently of clipboard history, including after the
 main app quits. Disabling both features or choosing Quit in the clipboard menu
 stops the helper. Reconnection sends configuration and status; recognized text
@@ -71,7 +71,24 @@ Modifier keys briefly defer publication. Uncertain external effects are never
 retried. Custom responders may handle synthetic input differently, so actual app
 compatibility needs runtime verification.
 
-`crates/vorkspace-clipboard/native/` owns speech and insertion. The Rust helper
+`crates/vorkspace-helper/native/` owns speech and insertion. The Rust helper
 owns the shortcut, lease and presentation; `vorkspace-macos` owns shared notch
 placement. Native regressions run under `npm run test:tooling`; helper lifetime
 and reconnection tests run under `npm run test:rust`.
+
+## Dictation key and history
+
+The default is `fn`; `right-alt` is the right Option key. Settings → General →
+Dictation chooses either key, and Keybindings can supply a modifier chord. One
+binding handles both gestures: a release before 250 ms toggles; holding starts
+(or continues) a turn and release finishes it. Chording Fn or Option with another
+key cancels pending activation. A session event tap consumes the dictation key;
+macOS Keyboard’s Globe-key action should be Do Nothing to avoid system conflicts.
+
+The speech owner publishes its last confirmed delivered text once per turn, after
+cleanup. The helper adds it as one history entry when history is enabled. Text
+revisions never touch the pasteboard, so unrelated user copies are preserved.
+Clearing history increments its epoch; a turn already in progress cannot add its
+text afterward. A new turn uses the new epoch.
+The helper retains its bundle identifier and legacy per-install socket identity
+through the rename so updates can replace the previous helper.

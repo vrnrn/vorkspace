@@ -11,8 +11,8 @@ const run = promisify(execFile);
 test("native clipboard preview deadline, cancellation and cleanup", { skip: process.platform !== "darwin" }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "vorkspace-native-clipboard-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const source = await readFile(new URL("../../crates/vorkspace-clipboard/native/Clipboard.swift", import.meta.url), "utf8");
-  const tests = await readFile(new URL("../../crates/vorkspace-clipboard/native/ClipboardTests.swift", import.meta.url), "utf8");
+  const source = await readFile(new URL("../../crates/vorkspace-helper/native/Clipboard.swift", import.meta.url), "utf8");
+  const tests = await readFile(new URL("../../crates/vorkspace-helper/native/ClipboardTests.swift", import.meta.url), "utf8");
   const file = join(directory, "ClipboardTests.swift");
   const binary = join(directory, "ClipboardTests");
   await writeFile(file, `${source}\n${tests}`);
@@ -25,8 +25,8 @@ test("native dictation custom words, volatile phrases and Unicode edits", { skip
   const directory = await mkdtemp(join(tmpdir(), "vorkspace-native-dictation-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const binary = join(directory, "DictationTests");
-  const sources = ["Dictation.swift", "DictationWords.swift", "DictationTarget.swift", "SpeechCapture.swift", "Microphones.swift", "DictationTests.swift"]
-    .map(name => fileURLToPath(new URL(`../../crates/vorkspace-clipboard/native/${name}`, import.meta.url)));
+  const sources = ["Dictation.swift", "DictationKey.swift", "DictationWords.swift", "DictationTarget.swift", "SpeechCapture.swift", "Microphones.swift", "DictationTests.swift"]
+    .map(name => fileURLToPath(new URL(`../../crates/vorkspace-helper/native/${name}`, import.meta.url)));
   await run("xcrun", ["swiftc", "-warnings-as-errors", "-parse-as-library", "-module-cache-path", join(directory, "module-cache"),
     "-target", `${process.arch === "arm64" ? "arm64" : "x86_64"}-apple-macos26.0`, ...sources, "-o", binary]);
   const { stdout } = await run(binary, []);

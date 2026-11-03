@@ -1,6 +1,6 @@
 use super::{SettingsView, widgets::secondary_button};
 use gpui::{AnyElement, Context, div, prelude::*, px};
-use vorkspace_clipboard::{DictationPhase, word_rules};
+use vorkspace_helper::{DictationPhase, word_rules};
 use vorkspace_ui::theme::content;
 
 impl SettingsView {
@@ -9,10 +9,30 @@ impl SettingsView {
             .unwrap_or_else(|| "the shortcut in Keybindings".into());
         let mut rows = vec![self.row(
             Some("dictation-enabled"), true, "Enable dictation",
-            Some(format!("Press {shortcut} to start or finish in the focused field. Escape cancels. Works after Vorkspace quits.").into()),
+            Some(format!("Tap {shortcut} to toggle, or hold to dictate until release. Escape cancels. Works after Vorkspace quits.").into()),
             vec![self.toggle("dictation-enabled", "Enable dictation", self.prefs.dictation_enabled,
                 false, cx, |this, on, cx| this.update(cx, |p| p.dictation_enabled = on))],
         )];
+        let configured = match self.prefs.keybindings.get("App: Dictation") {
+            Some(value) => value.clone().unwrap_or_default(),
+            None => vorkspace_helper::DictationConfig::default().shortcut,
+        };
+        let mut keys = vec![
+            ("fn".into(), "Fn / Globe".into(), None),
+            ("right-alt".into(), "Right Option".into(), None),
+            (String::new(), "Disabled".into(), None),
+        ];
+        if !["fn", "right-alt", ""].contains(&configured.as_str()) {
+            keys.push((configured.clone(), shortcut.clone().into(), None));
+        }
+        rows.push(self.row(
+            Some("dictation-key"), false, "Dictation key",
+            Some("One key for tap to toggle and hold to talk. Fn combinations still work. Set macOS Keyboard’s Globe-key action to Do Nothing to avoid conflicting system actions.".into()),
+            vec![self.select("dictation-key", "Dictation key", &configured, keys, Some(240.), cx,
+                |this, key, cx| this.update(cx, |p| {
+                    p.keybindings.insert("App: Dictation".into(), (!key.is_empty()).then_some(key));
+                }))],
+        ));
         if self.prefs.dictation_enabled {
             let status = crate::clipboard::get(cx)
                 .map(|s| s.read(cx).dictation_status.clone())
@@ -52,7 +72,7 @@ impl SettingsView {
         ];
         #[cfg(not(test))]
         options.extend(
-            vorkspace_clipboard::input_devices()
+            vorkspace_helper::input_devices()
                 .into_iter()
                 .map(|device| (format!("uid:{}", device.uid), device.name.into(), None)),
         );
@@ -220,7 +240,7 @@ mod tests {
                 let window = cx
                     .open_window(gpui::size(px(width), px(620.)), |_, cx| {
                         crate::clipboard::ensure(cx).update(cx, |service, _| {
-                            service.dictation_status = vorkspace_clipboard::DictationStatus {
+                            service.dictation_status = vorkspace_helper::DictationStatus {
                                 phase: DictationPhase::Ready,
                                 message: "Ready. Speech stays on this Mac.".into(),
                                 active: false,

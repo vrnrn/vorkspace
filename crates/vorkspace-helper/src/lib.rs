@@ -98,16 +98,25 @@ pub fn helper_executable(app: &Path) -> PathBuf {
     let directory = app.parent().unwrap_or(Path::new("."));
     // Canonical, because the helper finds the app by walking up this exact path.
     directory
-        .join("../Helpers/vorkspace Clipboard.app/Contents/MacOS/vorkspace-clipboard")
+        .join("../Helpers/vorkspace helper.app/Contents/MacOS/vorkspace-helper")
         .canonicalize()
-        .unwrap_or_else(|_| directory.join("vorkspace-clipboard"))
+        .unwrap_or_else(|_| directory.join("vorkspace-helper"))
 }
 
 /// Each install gets its own helper, so a development build running beside the
 /// installed app never replaces the other's helper.
 pub fn socket_path(helper: &Path) -> PathBuf {
-    let hash = helper
-        .to_string_lossy()
+    // Preserve install identity across the rename, so an update can find and
+    // replace its old helper instead of leaving an orphaned background process.
+    let identity = helper.to_string_lossy().replace(
+        "vorkspace helper.app/Contents/MacOS/vorkspace-helper",
+        "vorkspace Clipboard.app/Contents/MacOS/vorkspace-clipboard",
+    );
+    let identity = identity
+        .strip_suffix("/vorkspace-helper")
+        .map(|prefix| format!("{prefix}/vorkspace-clipboard"))
+        .unwrap_or(identity);
+    let hash = identity
         .bytes()
         .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
@@ -407,6 +416,21 @@ impl Control {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn helper_rename_preserves_the_installs_socket_identity() {
+        let before = std::path::Path::new(
+            "/Applications/vorkspace.app/Contents/Helpers/vorkspace Clipboard.app/Contents/MacOS/vorkspace-clipboard",
+        );
+        let after = std::path::Path::new(
+            "/Applications/vorkspace.app/Contents/Helpers/vorkspace helper.app/Contents/MacOS/vorkspace-helper",
+        );
+        assert_eq!(super::socket_path(before), super::socket_path(after));
+        assert_ne!(
+            super::socket_path(after),
+            super::socket_path(std::path::Path::new("/tmp/other/vorkspace-helper"))
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -462,17 +486,17 @@ mod tests {
         let app = directory.path().join("MacOS/vorkspace-gpui");
         assert_eq!(
             helper_executable(&app),
-            directory.path().join("MacOS/vorkspace-clipboard")
+            directory.path().join("MacOS/vorkspace-helper")
         );
         let nested = directory
             .path()
-            .join("MacOS/../Helpers/vorkspace Clipboard.app/Contents/MacOS");
+            .join("MacOS/../Helpers/vorkspace helper.app/Contents/MacOS");
         std::fs::create_dir_all(directory.path().join("MacOS")).unwrap();
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("vorkspace-clipboard"), "").unwrap();
+        std::fs::write(nested.join("vorkspace-helper"), "").unwrap();
         assert_eq!(
             helper_executable(&app),
-            nested.join("vorkspace-clipboard").canonicalize().unwrap()
+            nested.join("vorkspace-helper").canonicalize().unwrap()
         );
     }
 

@@ -13,3 +13,5 @@ Published builds carry their own release notes. Local builds can fetch the match
 See [release preparation](../updates.md).
 
 Updating also replaces the small clipboard helper, so clipboard history starts empty after an update.
+
+The background app is named **vorkspace helper**. It owns clipboard history and dictation.

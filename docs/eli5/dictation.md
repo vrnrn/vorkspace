@@ -4,13 +4,20 @@ Turn on **Dictation** in **Settings → General**. It uses speech recognition
 provided by macOS 26 or newer. Your Mac must support that engine and your system
 language. Speech stays on your Mac.
 
-Click a text field, press **Control Shift Space**, and speak when the notch's
+Click a text field, press **Fn / Globe**, and speak when the notch's
 microphone turns red. Words appear as you speak. Press the shortcut again, or
 click the microphone, to finish. Escape or the cross cancels. Typing, clicking
 elsewhere or switching apps also stops it. Words already entered remain.
-You can change the shortcut in Keybindings.
+A quick tap toggles recording. Hold for a quarter second, then release to finish.
+Choose Fn / Globe or Right Option in Dictation settings, or record a chord in
+Keybindings. The same binding supports both gestures. Set macOS Keyboard’s
+Globe-key action to Do Nothing if its system action conflicts.
 
-Settings helps you allow Microphone and Accessibility for **vorkspace Clipboard**.
+When clipboard history is on, each completed dictation adds one whole utterance
+to history. Live revisions never create separate clipboard items. Clearing history
+also prevents the current dictation from adding that old text back when it ends.
+
+Settings helps you allow Microphone and Accessibility for **vorkspace helper**.
 If your language needs speech files, choose **Download language**. macOS handles
 the files and keeps them up to date.
 

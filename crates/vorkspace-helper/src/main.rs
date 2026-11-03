@@ -28,8 +28,8 @@ use std::{
     time::Duration,
 };
 #[cfg(not(test))]
-use vorkspace_clipboard::Action;
-use vorkspace_clipboard::{Command, Control, Notice, Step, receive, send};
+use vorkspace_helper::Action;
+use vorkspace_helper::{Command, Control, Notice, Step, receive, send};
 
 /// How long a helper waits for the app that started it.
 const FIRST_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -235,7 +235,7 @@ fn socket_argument() -> Option<PathBuf> {
 
 fn main() {
     let Some(socket) = socket_argument() else {
-        eprintln!("vorkspace-clipboard is started by vorkspace: --socket PATH");
+        eprintln!("vorkspace-helper is started by vorkspace: --socket PATH");
         std::process::exit(2);
     };
     let Some((_lock, listener)) = claim(&socket) else {

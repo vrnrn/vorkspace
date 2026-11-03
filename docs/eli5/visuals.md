@@ -18,3 +18,5 @@ Agents can also draw diagrams. When a reply, note or Bot document contains a Mer
 
 Agents also get a short set of drawing rules, borrowed from the diagram-design project: keep diagrams small, highlight only one or two things, use straight right-angle lines, and leave out anything that doesn't help.
 
+
+The background app is named **vorkspace helper**. It owns clipboard history and dictation.

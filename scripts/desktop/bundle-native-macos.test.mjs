@@ -34,7 +34,7 @@ test("Finder launches use normal desktop data by default and honor explicit isol
       const executable = join(output, "vorkspace-gpui");
       await writeFile(executable, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
       await chmod(executable, 0o755);
-      await writeFile(join(output, "vorkspace-clipboard"), "#!/bin/sh\n");
+      await writeFile(join(output, "vorkspace-helper"), "#!/bin/sh\n");
       const args = ["scripts/desktop/bundle-native-macos.sh", profile, target, "0.16.0"];
       if (override) args.push(override);
       const packaged = spawnSync("bash", args, {
@@ -49,7 +49,7 @@ test("Finder launches use normal desktop data by default and honor explicit isol
       assert.ok(plist.includes(`<key>VorkspaceDataMode</key><string>${mode}</string>`));
       // macOS rejects menu bar items from a process that exec'd after launch.
       assert.ok(plist.includes("<key>CFBundleExecutable</key><string>vorkspace-gpui</string>"));
-      const helper = await readFile(join(bundle, "Helpers/vorkspace Clipboard.app/Contents/Info.plist"), "utf8");
+      const helper = await readFile(join(bundle, "Helpers/vorkspace helper.app/Contents/Info.plist"), "utf8");
       // The helper must not share an identity with the app, or the Dock can't launch it.
       assert.ok(helper.includes("<key>CFBundleIdentifier</key><string>com.vorkspace.gpui.clipboard</string>"));
       assert.ok(helper.includes("<key>LSUIElement</key><true/>"));

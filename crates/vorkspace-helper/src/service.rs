@@ -7,7 +7,7 @@ use gpui::Task;
 use gpui::{App, AppContext, Context, Entity, Global};
 use std::sync::Arc;
 #[cfg(not(test))]
-use vorkspace_clipboard::Action;
+use vorkspace_helper::Action;
 
 struct Clipboard(Entity<Service>);
 impl Global for Clipboard {}
@@ -115,6 +115,29 @@ pub(crate) fn configure(enabled: bool, cx: &mut App) {
 pub(crate) fn clear(cx: &mut App) {
     if let Some(s) = get(cx) {
         s.update(cx, |s, cx| s.clear(cx));
+    }
+}
+/// Native speech publishes exactly one complete, confirmed utterance per turn.
+/// This bypasses pasteboard polling without overwriting an unrelated user copy.
+pub(crate) fn history_epoch(cx: &App) -> Option<u64> {
+    get(cx).and_then(|s| {
+        let s = s.read(cx);
+        s.enabled.then_some(s.epoch)
+    })
+}
+pub(crate) fn record_dictation(text: String, expected: Option<u64>, cx: &mut App) {
+    if let Some(service) = get(cx) {
+        service.update(cx, |s, cx| {
+            if !s.enabled || expected != Some(s.epoch) {
+                return;
+            }
+            if let Some(content) = Content::text(text) {
+                let hash = content.fingerprint();
+                s.history.insert_hashed(content, hash);
+                s.sync_menu();
+                cx.notify();
+            }
+        });
     }
 }
 impl Service {
@@ -241,6 +264,43 @@ impl Service {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+    #[gpui::test]
+    fn a_completed_dictation_is_one_history_item_and_keeps_an_unrelated_copy(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| configure(true, cx));
+        cx.update(|cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                "copied during speech".into(),
+            ))
+        });
+        cx.update(|cx| {
+            record_dictation(
+                "First phrase. Second phrase, with Unicode 🦊.".into(),
+                history_epoch(cx),
+                cx,
+            )
+        });
+        cx.update(|cx| {
+            let service = get(cx).unwrap().read(cx);
+            assert_eq!(service.history.items.len(), 1);
+            assert_eq!(
+                service.history.items[0].content.label(),
+                "First phrase. Second phrase, with Unicode 🦊."
+            );
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "copied during speech"
+            );
+        });
+        let stale = cx.update(|cx| history_epoch(cx));
+        cx.update(clear);
+        cx.update(|cx| record_dictation("completed after Clear".into(), stale, cx));
+        cx.update(|cx| assert!(get(cx).unwrap().read(cx).history.items.is_empty()));
+        cx.update(|cx| configure(false, cx));
+        cx.update(|cx| record_dictation("not retained".into(), None, cx));
+        cx.update(|cx| assert!(get(cx).unwrap().read(cx).history.items.is_empty()));
+    }
     #[gpui::test]
     fn search_and_copy_restore_the_original_without_modifying_history(cx: &mut TestAppContext) {
         cx.update(|cx| configure(true, cx));

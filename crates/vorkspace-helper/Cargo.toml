@@ -1,5 +1,5 @@
 [package]
-name = "vorkspace-clipboard"
+name = "vorkspace-helper"
 version.workspace = true
 edition = "2024"
 license.workspace = true
@@ -9,7 +9,7 @@ publish = false
 path = "src/lib.rs"
 
 [[bin]]
-name = "vorkspace-clipboard"
+name = "vorkspace-helper"
 path = "src/main.rs"
 
 [dependencies]

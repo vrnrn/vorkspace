@@ -3,10 +3,8 @@
 //! there is no helper, so this app shows the icon that Close to Tray depends on.
 use gpui::{App, AppContext, Context, Entity, Global};
 #[cfg(not(test))]
-use vorkspace_clipboard::Supervisor;
-use vorkspace_clipboard::{
-    Action, Command, DictationConfig, DictationPhase, DictationStatus, Notice,
-};
+use vorkspace_helper::Supervisor;
+use vorkspace_helper::{Action, Command, DictationConfig, DictationPhase, DictationStatus, Notice};
 gpui::actions!(clipboard, [Toggle, Settings, Composer, Quit, Reopen]);
 
 struct Clipboard(Entity<Service>);
@@ -66,14 +64,14 @@ impl Service {
             self.error = Some("Could not find the clipboard helper.".into());
             return;
         };
-        let helper = vorkspace_clipboard::helper_executable(&app);
-        let socket = vorkspace_clipboard::socket_path(&helper);
+        let helper = vorkspace_helper::helper_executable(&app);
+        let socket = vorkspace_helper::socket_path(&helper);
         let (notices, received) = async_channel::unbounded();
         let arguments = std::env::args_os()
             .skip(1)
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect();
-        let relaunch = vorkspace_clipboard::relaunch_command(&app, arguments);
+        let relaunch = vorkspace_helper::relaunch_command(&app, arguments);
         self.supervisor = Some(Supervisor::start(helper, socket, relaunch, move |notice| {
             let _ = notices.try_send(notice);
         }));

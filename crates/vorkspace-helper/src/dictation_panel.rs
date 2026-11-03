@@ -1,6 +1,6 @@
 //! A quiet extension of the hardware notch; opening never takes keyboard focus.
 use gpui::{prelude::*, *};
-use vorkspace_clipboard::{DictationPhase, DictationStatus};
+use vorkspace_helper::{DictationPhase, DictationStatus};
 use vorkspace_macos::notch::{self, Geometry, Placement};
 
 pub struct Panel {
@@ -262,7 +262,7 @@ mod tests {
                 (
                     "error",
                     DictationPhase::Error,
-                    "Allow Accessibility for vorkspace Clipboard to type into other apps.",
+                    "Allow Accessibility for vorkspace helper to type into other apps.",
                     false,
                 ),
             ] {
