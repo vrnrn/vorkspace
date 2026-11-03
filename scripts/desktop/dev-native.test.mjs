@@ -125,7 +125,7 @@ test("file saves never rebuild, including edits during a requested build", { tim
 test("manual restart keeps the app on a failed build and shuts it down after a successful retry", { timeout: 20_000 }, async (t) => {
   const f = await fixture(t);
   await f.until((events) => f.starts(events) === 1);
-  assert.deepEqual(f.calls.find((call) => call.args[0] === "build").args, ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", "vorkspace-gpui", "-p", "vorkspace-helper", "--bin", "vorkspace-gpui", "--bin", "vorkspace-helper", "--release"]);
+  assert.deepEqual(f.calls.find((call) => call.args[0] === "build").args, ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", "vorkspace-gpui", "-p", "vorkspace-helper", "-p", "vorkspace-connector-plugins", "-p", "vorkspace-meetings-plugin", "--bin", "vorkspace-gpui", "--bin", "vorkspace-helper", "--bin", "vorkspace-github-plugin", "--bin", "vorkspace-gitlab-plugin", "--bin", "vorkspace-jira-plugin", "--bin", "vorkspace-meetings-plugin", "--release"]);
   const launch = f.calls.find((call) => !["cargo", "bash"].includes(call.command));
   assert.ok(launch.command.startsWith(join(f.root, "custom-target")));
   assert.equal(launch.options.env.VORKSPACE_DEV_RELOAD, "1");

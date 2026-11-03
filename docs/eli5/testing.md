@@ -17,3 +17,5 @@ The startup benchmark under `scripts/benchmarks/` makes pretend history in a tem
 `npm run check` also tests the clipboard helper by starting the real program with its own private connection, so it can't disturb an app you have open. Another check fails if a guide mentions an `npm run` command that doesn't exist, or if a guide loses its plain-English partner.
 
 The background app is named **vorkspace helper**. It owns clipboard history and dictation.
+
+Plugin checks use disposable data and fake services. Meeting speech tests can use a generated audio file, so they do not need to listen to your microphone or a meeting. Testing real microphone and system audio, and checking a real AI summary, are separate checks on a Mac.

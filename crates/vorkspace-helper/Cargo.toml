@@ -13,6 +13,7 @@ name = "vorkspace-helper"
 path = "src/main.rs"
 
 [dependencies]
+vorkspace-plugin = { path = "../vorkspace-plugin" }
 serde.workspace = true
 serde_json.workspace = true
 async-channel = "2"

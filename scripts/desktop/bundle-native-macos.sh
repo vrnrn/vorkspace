@@ -62,6 +62,17 @@ cat > "$native_bundle/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+# Bundled plugins are independent executables, signed before the enclosing app.
+mkdir -p "$native_bundle/Contents/PlugIns"
+for native_plugin in github gitlab jira meetings; do
+  native_plugin_name="vorkspace-$native_plugin-plugin"
+  if [ ! -f "$native_target/$native_plugin_name" ]; then
+    echo "Missing bundled plugin: $native_target/$native_plugin_name" >&2
+    exit 1
+  fi
+  cp "$native_target/$native_plugin_name" "$native_bundle/Contents/PlugIns/$native_plugin_name.next"
+  mv -f "$native_bundle/Contents/PlugIns/$native_plugin_name.next" "$native_bundle/Contents/PlugIns/$native_plugin_name"
+done
 # A nested app with its own identity: sharing the main bundle's would make macOS
 # treat vorkspace as running after Quit, so the Dock could no longer launch it.
 # Remove only the generated legacy bundle when repackaging an older build.
@@ -81,7 +92,8 @@ cat > "$native_helper/Contents/Info.plist" <<PLIST
 <key>CFBundleShortVersionString</key><string>$native_version</string>
 <key>CFBundleVersion</key><string>$native_version</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
-<key>NSMicrophoneUsageDescription</key><string>Dictation uses your microphone only while you dictate. Speech stays on this Mac.</string>
+<key>NSMicrophoneUsageDescription</key><string>Dictation and Meetings use your selected microphone only while active. Speech stays on this Mac.</string>
+<key>NSAudioCaptureUsageDescription</key><string>Meetings transcribes system audio only while you record. No audio is saved.</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>LSUIElement</key><true/>
 </dict></plist>
@@ -100,6 +112,9 @@ else
 fi
 native_identity="${VORKSPACE_SIGNING_IDENTITY:--}"
 if [ "$native_identity" = - ]; then
+  for native_plugin in "$native_bundle"/Contents/PlugIns/*; do
+    codesign --force --sign - "$native_plugin"
+  done
   codesign --force --sign - --entitlements scripts/desktop/native-entitlements.plist "$native_helper"
   codesign --force --sign - "$native_bundle"
 else

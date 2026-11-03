@@ -1,0 +1,893 @@
+<style>
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font:
+    13px -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  color: var(--foreground);
+  background: var(--background);
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: default;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 6px 10px;
+  min-height: 28px;
+}
+button:hover:enabled {
+  filter: brightness(1.12);
+}
+button:disabled {
+  opacity: .45;
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button.primary {
+  background: var(--surface);
+  color: var(--foreground);
+  border-color: var(--accent);
+}
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+input,
+textarea,
+select {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  caret-color: var(--accent);
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+}
+input,
+textarea {
+  min-width: 0;
+}
+textarea {
+  resize: none;
+  line-height: 1.65;
+}
+#app {
+  display: flex;
+  height: 100%;
+}
+aside {
+  width: 264px;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 35%, var(--background));
+}
+.toolbar {
+  height: 52px;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+}
+.toolbar h1 {
+  font-size: 14px;
+  margin: 0;
+  flex: 1;
+  font-weight: 600;
+}
+.toolbar button {
+  white-space: nowrap;
+}
+.record {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.record svg {
+  width: 12px;
+  height: 12px;
+  fill: #e75a63;
+}
+.record[aria-pressed=true] svg {
+  fill: #e75a63;
+}
+.settings-button {
+  padding: 5px 8px;
+  background: transparent;
+  border-color: transparent;
+}
+.search {
+  margin: 0 14px 10px;
+}
+.search input {
+  width: 100%;
+  background: var(--background);
+}
+#list {
+  overflow: auto;
+  flex: 1;
+  padding: 0 6px 12px;
+}
+#list button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border-color: transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 11px 10px;
+  margin: 2px 0;
+  line-height: 1.4;
+}
+#list button[aria-current=true] {
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+.list-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.list-date {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.list-empty {
+  padding: 14px 10px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.source-hint {
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding: 12px 14px;
+  line-height: 1.55;
+}
+main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+#empty {
+  margin: auto;
+  max-width: 350px;
+  text-align: center;
+  padding: 32px;
+  color: var(--muted);
+  line-height: 1.65;
+}
+#empty h2 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--foreground);
+  margin: 0 0 8px;
+}
+#document {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.document-header {
+  padding: 18px 26px 12px;
+  border-bottom: 1px solid var(--border);
+}
+#title {
+  display: block;
+  font-size: 21px;
+  font-weight: 600;
+  border: 0;
+  padding: 0;
+  margin: 0 0 7px;
+  background: transparent;
+  width: 100%;
+}
+.metadata {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+}
+.document-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 26px;
+  min-height: 46px;
+}
+.spacer {
+  flex: 1;
+}
+.segmented {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+  background: var(--surface);
+}
+.segmented button {
+  border: 0;
+  min-height: 23px;
+  padding: 3px 9px;
+  background: transparent;
+  font-size: 12px;
+}
+.segmented button[aria-pressed=true] {
+  background: var(--background);
+  box-shadow: 0 1px 2px #0002;
+}
+#mode-edit {
+  background: transparent;
+}
+#save {
+  display: none;
+}
+.editor-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 0 26px 22px;
+}
+#editor {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 5px 0;
+  border-radius: 0;
+  font-size: 14px;
+  outline-offset: 4px;
+}
+#preview {
+  display: none;
+  overflow: auto;
+  width: 100%;
+  font-size: 14px;
+  line-height: 1.7;
+  padding: 0 0 24px;
+}
+#preview > * {
+  max-width: 72ch;
+}
+#preview h1,
+#preview h2,
+#preview h3 {
+  font-size: 17px;
+  line-height: 1.4;
+  margin: 24px 0 8px;
+  font-weight: 600;
+}
+#preview h1:first-child,
+#preview h2:first-child {
+  margin-top: 4px;
+}
+#preview p {
+  margin: 8px 0 14px;
+}
+#preview li {
+  margin: 5px 0;
+}
+#preview a {
+  color: var(--link);
+  text-underline-offset: 3px;
+}
+#preview pre {
+  overflow: auto;
+  padding: 12px;
+  background: var(--surface);
+  border-radius: 6px;
+}
+#preview table {
+  border-collapse: collapse;
+}
+#preview td,
+#preview th {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+#live {
+  display: none;
+  overflow: auto;
+  width: 100%;
+  font-size: 14px;
+  line-height: 1.65;
+  padding: 0 0 24px;
+}
+#live p {
+  margin: 0 0 17px;
+  max-width: 72ch;
+  white-space: pre-wrap;
+}
+.live-label {
+  color: var(--muted);
+  font-size: 11px;
+  display: block;
+  margin-bottom: 3px;
+  font-variant-numeric: tabular-nums;
+}
+#partials {
+  color: var(--muted);
+  white-space: pre-wrap;
+  max-width: 72ch;
+}
+.notice {
+  display: none;
+  margin: 0 26px 10px;
+  padding: 9px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  line-height: 1.5;
+  font-size: 12px;
+}
+.notice.error {
+  color: light-dark(#b42338, #f08a95);
+}
+.back {
+  display: none;
+}
+.recording-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e75a63;
+  margin-right: 5px;
+}
+#settings {
+  display: none;
+  overflow: auto;
+  padding: 24px 28px;
+  max-width: 760px;
+  width: 100%;
+  height: 100%;
+}
+#settings h2 {
+  font-size: 20px;
+  margin: 18px 0 8px;
+}
+#settings p {
+  color: var(--muted);
+  line-height: 1.6;
+}
+#settings label {
+  display: block;
+  margin: 20px 0 7px;
+  font-weight: 500;
+}
+#settings select,
+#settings input,
+#settings textarea {
+  display: block;
+  width: 100%;
+  background: var(--surface);
+}
+#summary-prompt {
+  min-height: 210px;
+  font-size: 13px;
+}
+#settings .buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+.small {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+#analysis-state {
+  font-size: 11px;
+  color: var(--muted);
+}
+@media (max-width: 800px) {
+  aside {
+    width: 224px;
+  }
+  .toolbar {
+    padding: 10px;
+  }
+  .document-header {
+    padding: 18px;
+  }
+  .document-actions {
+    padding: 10px 18px;
+  }
+  .editor-area {
+    padding: 0 18px 18px;
+  }
+  .notice {
+    margin: 0 18px 10px;
+  }
+}
+@media (max-width: 620px) {
+  aside {
+    width: 100%;
+  }
+  body.has-document aside {
+    display: none;
+  }
+  body:not(.has-document) main {
+    display: none;
+  }
+  .back {
+    display: inline-block;
+    margin: 0 0 12px;
+  }
+  #title {
+    font-size: 20px;
+  }
+  .document-actions {
+    flex-wrap: wrap;
+  }
+  .document-header {
+    padding-top: 14px;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  button {
+    transition: background-color 120ms ease-out, opacity 120ms ease-out;
+  }
+}
+#record-mobile { margin: 0; }
+.settings-toolbar { display: flex; gap: 8px; align-items: center; }
+#settings-stop { display: none; }
+@media(max-width:620px) { #settings-stop:not([hidden]) { display: inline-block; } }
+</style>
+<div id="app">
+<aside aria-label="Meetings">
+ <div class="toolbar"><button id="record" class="record" title="Record or stop meeting (⌘⇧R)" aria-label="Record meeting" aria-pressed="false"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5"/></svg><span>Record</span></button><h1>Meetings</h1><button id="open-settings" class="settings-button" aria-label="Meeting settings">Settings</button></div>
+ <div class="search"><input id="search" type="search" placeholder="Search meetings" aria-label="Search meetings"></div>
+ <nav id="list" aria-label="Recorded meetings"></nav>
+ <div class="source-hint">Microphone + system audio<br>Only transcripts and meeting details are saved.</div>
+</aside>
+<main>
+ <div id="notice" class="notice" role="status"></div>
+ <div id="empty"><h2>Record a meeting</h2><p>Record a meeting to capture its transcript. When it ends, turn the discussion into clear notes and action items.</p><p class="small">Recording reserves the microphone.<br>Dictation and Vox are available again when it stops.</p></div>
+ <section id="document" aria-label="Meeting document">
+  <header class="document-header"><button id="back" class="back">Meetings</button><input id="title" placeholder="Untitled meeting" aria-label="Meeting title"><div id="metadata" class="metadata"></div></header>
+  <div class="document-actions"><div class="segmented" aria-label="Meeting view"><button id="show-transcript" aria-pressed="true">Transcript</button><button id="show-summary" aria-pressed="false" disabled>Summary</button></div><span class="spacer"></span><button id="record-mobile" class="back" title="Record or stop meeting (⌘⇧R)">Record</button><span id="analysis-state" role="status"></span><button id="save">Save changes</button><button id="mode-edit" hidden>Edit Markdown</button><button id="summarize">Summarize</button></div>
+   <div class="editor-area"><textarea id="editor" spellcheck="true" aria-label="Meeting transcript"></textarea><article id="preview" aria-label="Meeting summary"></article><div id="live" aria-label="Live transcript" aria-live="polite"><div id="finals"></div><div id="partials"></div></div></div>
+ </section>
+ <section id="settings" aria-label="Meeting settings"><div class="settings-toolbar"><button id="settings-back">Back to meetings</button><span class="spacer"></span><button id="settings-stop" hidden>Stop</button></div><h2>Meeting settings</h2><p>Choose the provider, model and format used when you click Summarize. Audio stays on this Mac. The selected provider receives the transcript text for analysis.</p><label for="provider">Provider</label><select id="provider"><option value="">Loading available providers…</option></select><label for="model">Model</label><input id="model" list="models" placeholder="Choose or enter a model id" autocomplete="off"><datalist id="models"></datalist><p id="model-help" class="small"></p><label for="summary-prompt">Summary prompt</label><textarea id="summary-prompt" spellcheck="true"></textarea><p class="small">Your format is applied to the final notes. Long transcripts are analyzed in bounded sections first. The original transcript remains available.</p><div class="buttons"><button id="settings-save" class="primary">Save settings</button><span id="settings-status" role="status"></span></div></section>
+</main>
+</div>
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id), call = (method, params = {}) => vorkspace.call(method, params), host = (method, params = {}) => vorkspace.host(method, params);
+  let rows = [], selected = null, doc = null, view = "transcript", editingSummary = false, dirty = false, dirtyFields = new Set(), editEpoch = 0, activeId = null, phase = null, sequence = 0, visible = true, polling = false, analysis = false, settingsOpen = false, settings = null, providers = [], loadEpoch = 0, listEpoch = 0, saving = null, recordBusy = false;
+  const isActive = () => ["starting", "recording", "finishing"].includes(phase), date = (ms) => new Date(ms).toLocaleString(void 0, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }), time = (ms) => {
+    const s = Math.floor(ms / 1e3);
+    return [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60].map((v) => String(v).padStart(2, "0")).join(":");
+  };
+  function notice(text, error = false) {
+    $("notice").textContent = text || "";
+    $("notice").className = "notice" + (error ? " error" : "");
+    $("notice").style.display = text ? "block" : "none";
+  }
+  function renderList() {
+    const root = $("list"), query = $("search").value.toLowerCase();
+    root.replaceChildren();
+    let count = 0;
+    for (const row of rows) {
+      if (!row.meeting || !row.state) continue;
+      if (!row.meeting.title.toLowerCase().includes(query)) continue;
+      count++;
+      const button = document.createElement("button");
+      button.setAttribute("aria-current", String(row.meeting.id === selected));
+      const title = document.createElement("div");
+      title.className = "list-title";
+      title.textContent = row.meeting.title;
+      const detail = document.createElement("div");
+      detail.className = "list-date";
+      detail.textContent = (row.error ? "Saved data needs attention" : date(row.state.started_at)) + (row.state.phase === "recording" ? " · Recording" : "");
+      button.append(title, detail);
+      button.onclick = () => row.error ? showError(new Error(row.error)) : open(row.meeting.id).catch(showError);
+      root.append(button);
+    }
+    if (!count) {
+      const empty = document.createElement("div");
+      empty.className = "list-empty";
+      empty.textContent = query ? "No matching meetings." : "Your recorded meetings will appear here.";
+      root.append(empty);
+    }
+  }
+  async function refresh() {
+    const epoch = ++listEpoch, result = await call("meetings.list");
+    if (epoch !== listEpoch) return;
+    rows = result;
+    renderList();
+  }
+  function showError(error) {
+    notice(error.message || String(error), true);
+    $("analysis-state").textContent = "";
+  }
+  function setDirty(field) {
+    dirty = true;
+    dirtyFields.add(field);
+    editEpoch++;
+    $("save").style.display = "inline-block";
+  }
+  function renderDocument() {
+    settingsOpen = false;
+    document.body.classList.toggle("has-document", !!selected);
+    $("settings").style.display = "none";
+    $("empty").style.display = selected ? "none" : "block";
+    $("document").style.display = selected ? "flex" : "none";
+    if (!selected) return;
+    $("title").value = doc?.meeting.title || "Untitled meeting";
+    renderState();
+    renderBody();
+    renderList();
+  }
+  function renderState() {
+    const state = doc?.state;
+    const recording = activeId === selected && isActive();
+    $("record").setAttribute("aria-pressed", String(!!activeId && isActive()));
+    $("record").querySelector("span").textContent = activeId && isActive() ? phase === "finishing" ? "Finishing…" : "Stop" : "Record";
+    $("record").disabled = phase === "finishing" || recordBusy;
+    $("record-mobile").textContent = $("record").querySelector("span").textContent;
+    $("record-mobile").disabled = $("record").disabled;
+    $("settings-stop").hidden = !isActive();
+    $("settings-stop").disabled = $("record").disabled;
+    $("settings-stop").textContent = phase === "finishing" ? "Finishing…" : "Stop";
+    $("record").setAttribute("aria-label", isActive() ? "Stop recording meeting" : "Record meeting");
+    $("title").readOnly = recording;
+    $("show-summary").disabled = !doc?.meeting.summary;
+    $("summarize").disabled = recording || analysis || !doc?.transcript.trim();
+    $("summarize").textContent = analysis ? "Summarizing…" : doc?.meeting.summary ? "Summarize again" : "Summarize";
+    $("mode-edit").hidden = view !== "summary";
+    $("mode-edit").textContent = editingSummary ? "Preview" : "Edit Markdown";
+    $("save").style.display = dirty ? "inline-block" : "none";
+    if (state) {
+      const ended = state.ended_at || Date.now(), duration = Math.max(0, ended - state.started_at);
+      $("metadata").textContent = (recording ? ({starting:"Preparing",recording:"Recording",finishing:"Finishing"}[phase] + " · ") : "") + date(state.started_at) + " · " + time(duration) + " · Microphone + system audio";
+      if (state.error) notice(state.error, true);
+    }
+    if (doc?.meeting.summary && doc.meeting.summary.source_revision !== doc.meeting.transcript_revision) notice("The transcript has changed since this summary was generated. Summarize again to update it.");
+  }
+  function renderBody() {
+    const live = activeId === selected && isActive() && view === "transcript";
+    $("live").style.display = live ? "block" : "none";
+    const preview = view === "summary" && !editingSummary;
+    $("preview").style.display = !live && preview ? "block" : "none";
+    $("editor").style.display = !live && !preview ? "block" : "none";
+    $("editor").readOnly = live;
+    $("editor").setAttribute("aria-label", view === "summary" ? "Summary Markdown" : "Meeting transcript");
+    if (preview) $("preview").innerHTML = doc?.summary_html || "";
+    else if (!live) $("editor").value = view === "summary" ? doc?.meeting.summary?.text || "" : doc?.transcript || "";
+    $("show-transcript").setAttribute("aria-pressed", String(view === "transcript"));
+    $("show-summary").setAttribute("aria-pressed", String(view === "summary"));
+  }
+  async function save() {
+    if (saving) { await saving; return; }
+    if (!dirty || !doc) return;
+    const id = selected, epoch = editEpoch, fields = new Set(dirtyFields), body = $("editor").value, params = { id, revision: doc.meeting.revision };
+    if (fields.has("title")) params.title = $("title").value;
+    if (fields.has("transcript")) params.transcript = body;
+    if (fields.has("summary")) params.summary = body;
+    saving = call("meetings.update", params);
+    let result;
+    try { result = await saving; } finally { saving = null; }
+    if (selected !== id) return;
+    const {summary_html, ...meeting} = result;
+    doc.meeting = meeting;
+    if (fields.has("summary")) doc.summary_html = summary_html;
+    if (fields.has("transcript")) doc.transcript = body;
+    if (epoch === editEpoch) {
+      dirty = false;
+      dirtyFields.clear();
+      $("save").style.display = "none";
+    }
+    await refresh();
+  }
+  async function open(id) {
+    if (id === selected && doc) return;
+    if (dirty) await save();
+    if (dirty) return;
+    const epoch = ++loadEpoch, documentId = selected, edits = editEpoch;
+    const value = await call("meetings.read", { id });
+    if (epoch !== loadEpoch || documentId !== selected || edits !== editEpoch || dirty) return;
+    selected = id;
+    doc = value;
+    dirty = false;
+    dirtyFields.clear();
+    view = "transcript";
+    editingSummary = false;
+    if (["starting", "recording", "finishing"].includes(value.state.phase)) {
+      phase = value.state.phase;
+      activeId = id;
+      sequence = value.sequence;
+    }
+    $("finals").replaceChildren();
+    for (const segment of value.segments.slice(-400)) appendFinal(segment);
+    notice("");
+    renderDocument();
+  }
+  function appendFinal(segment) {
+    const live = $("live"), follow = live.scrollHeight - live.scrollTop - live.clientHeight < 180;
+    const root = $("finals"), line = document.createElement("p"), label = document.createElement("span");
+    label.className = "live-label";
+    label.textContent = time(segment.start_ms) + " · " + (segment.source === "microphone" ? "Microphone" : "System audio");
+    line.append(label, document.createTextNode(segment.text.trim()));
+    root.append(line);
+    while (root.children.length > 400) {
+      const first = root.firstElementChild, selection = getSelection();
+      if (selection && first.contains(selection.anchorNode)) break;
+      first.remove();
+    }
+    if (follow) live.scrollTop = live.scrollHeight;
+  }
+  async function toggleRecord() {
+    if (recordBusy || phase === "finishing") return;
+    recordBusy = true;
+    renderState();
+    try {
+      if (activeId && isActive()) {
+        await host("audio.stop", { id: activeId });
+        phase = "finishing";
+        return;
+      }
+      if (dirty) await save();
+      if (dirty) return;
+      const result = await call("meetings.start");
+      selected = result.id;
+      activeId = result.id;
+      phase = "starting";
+      sequence = 0;
+      doc = null;
+      dirty = false;
+      dirtyFields.clear();
+      view = "transcript";
+      $("finals").replaceChildren();
+      $("partials").textContent = "";
+      notice("");
+      renderDocument();
+    } finally { recordBusy = false; renderState(); }
+  }
+  async function poll() {
+    if (polling || !visible || !activeId) return;
+    polling = true;
+    try {
+      const id = activeId, result = await host("audio.status", { id, after: sequence });
+      if (activeId !== id) return;
+      if (result.state) {
+        phase = result.state.phase;
+        if (phase !== "starting" && !rows.some(row => row.meeting.id === id)) await refresh();
+        if (selected === id) {
+          if (doc) doc.state = result.state;
+          else doc = { meeting: { id, title: "Untitled meeting", revision: 0, transcript_revision: 0, summary: null }, state: result.state, transcript: "", segments: [] };
+        }
+        for (const segment of result.segments || []) {
+          if (segment.sequence <= sequence) continue;
+          sequence = segment.sequence;
+          if (selected === id) appendFinal(segment);
+        }
+        if (selected === id) $("partials").textContent = Object.entries(result.partials || {}).map(([source, text]) => (source === "microphone" ? "Microphone: " : "System audio: ") + text).join("\n");
+        if (result.reload && phase !== "starting" && selected === id) {
+          const full = await call("meetings.read", { id });
+          if (activeId === id && selected === id) {
+            doc = full;
+            sequence = full.sequence;
+            $("finals").replaceChildren();
+            for (const segment of full.segments.slice(-400)) appendFinal(segment);
+          }
+        }
+        if (!isActive()) {
+          activeId = null;
+          if (selected === id) {
+            try {
+              const full = await call("meetings.read", { id });
+              if (selected === id && !dirty) {
+                doc = full;
+                if (!settingsOpen) {
+                  view = "transcript";
+                  renderDocument();
+                }
+              }
+            } catch (e) {
+              if (!settingsOpen) {
+                notice(result.state.error || "No transcript was recorded.", !!result.state.error);
+                if (doc) doc.state = result.state;
+                renderState();
+                renderBody();
+              }
+            }
+          }
+          await refresh();
+        } else renderState();
+        if (result.state.error && selected === id && !settingsOpen) notice(result.state.error, true);
+      }
+    } catch (error) {
+      if (!settingsOpen) showError(error);
+    } finally {
+      polling = false;
+    }
+  }
+  async function summarize() {
+    if (!doc || analysis) return;
+    await save();
+    if (dirty) return;
+    analysis = true;
+    const id = selected, epoch = ++loadEpoch;
+    renderState();
+    $("analysis-state").textContent = "Analyzing transcript";
+    try {
+      const result = await call("meetings.summarize", { id });
+      // Settings owns presentation, not the selected document's saved revision.
+      // Reconcile successful analysis even when navigation changed its epoch.
+      if (selected === id) {
+        doc = result;
+        editingSummary = false;
+        if (dirty) { notice("Summary ready. Your unsaved edits are still here."); }
+        else if (!settingsOpen && loadEpoch === epoch) {
+          view = "summary";
+          notice("");
+          renderDocument();
+        }
+      }
+      await refresh();
+    } catch (error) {
+      showError(error);
+    } finally {
+      analysis = false;
+      $("analysis-state").textContent = "";
+      renderState();
+    }
+  }
+  async function showSettings() {
+    if (dirty) await save();
+    if (dirty) return;
+    const epoch = ++loadEpoch, documentId = selected, edits = editEpoch;
+    const result = await call("settings.read");
+    if (epoch !== loadEpoch || documentId !== selected || edits !== editEpoch || dirty) return;
+    settings = result;
+    settingsOpen = true;
+    $("document").style.display = "none";
+    $("empty").style.display = "none";
+    $("settings").style.display = "block";
+    document.body.classList.add("has-document");
+    $("summary-prompt").value = settings.prompt;
+    $("model").value = settings.model;
+    const available = await host("ai.models");
+    if (!settingsOpen || epoch !== loadEpoch) return;
+    providers = available;
+    const select = $("provider");
+    select.replaceChildren();
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "Choose a provider";
+    select.append(empty);
+    for (const provider of providers) {
+      const option = document.createElement("option");
+      option.value = provider.id;
+      option.textContent = provider.name;
+      select.append(option);
+    }
+    select.value = settings.provider;
+    updateModels();
+    $("model-help").textContent = providers.length ? "Uses the account already selected in Vorkspace. You can enter a model id if it is absent from the catalog." : "Connect a provider in Vorkspace Settings, then reopen Meeting settings.";
+  }
+  function updateModels() {
+    const list = $("models");
+    list.replaceChildren();
+    for (const model of providers.find((p) => p.id === $("provider").value)?.models || []) {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.label = model.name;
+      list.append(option);
+    }
+  }
+  $("record").onclick = $("record-mobile").onclick = $("settings-stop").onclick = () => toggleRecord().catch(showError);
+  $("open-settings").onclick = () => showSettings().catch(showError);
+  $("settings-back").onclick = () => renderDocument();
+  $("settings-save").onclick = async () => {
+    try {
+      settings = await call("settings.save", { provider: $("provider").value, model: $("model").value.trim(), prompt: $("summary-prompt").value });
+      $("settings-status").textContent = "Saved";
+    } catch (error) {
+      $("settings-status").textContent = error.message;
+    }
+  };
+  $("provider").onchange = updateModels;
+  $("search").oninput = renderList;
+  $("title").oninput = () => setDirty("title");
+  $("editor").oninput = () => setDirty(view === "summary" ? "summary" : "transcript");
+  $("save").onclick = () => save().catch(showError);
+  $("summarize").onclick = () => summarize().catch(showError);
+  $("show-transcript").onclick = async () => {
+    try {
+      await save();
+      if (dirty) return;
+      view = "transcript";
+      renderDocument();
+    } catch (e) {
+      showError(e);
+    }
+  };
+  $("show-summary").onclick = async () => {
+    try {
+      await save();
+      if (dirty) return;
+      view = "summary";
+      editingSummary = false;
+      renderDocument();
+    } catch (e) {
+      showError(e);
+    }
+  };
+  $("mode-edit").onclick = async () => {
+    try {
+      await save();
+      if (dirty) return;
+      if (editingSummary) {
+        doc = await call("meetings.read", { id: selected });
+      }
+      editingSummary = !editingSummary;
+      renderDocument();
+    } catch (e) {
+      showError(e);
+    }
+  };
+  $("back").onclick = async () => {
+    try {
+      await save();
+      if (dirty) return;
+      selected = null;
+      doc = null;
+      renderDocument();
+    } catch (e) {
+      showError(e);
+    }
+  };
+  addEventListener("vorkspace-visibility", (event) => {
+    visible = event.detail;
+    if (visible) poll();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.metaKey && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      save().catch(showError);
+    }
+    if (event.metaKey && event.shiftKey && event.key.toLowerCase() === "r") {
+      event.preventDefault();
+      toggleRecord().catch(showError);
+    }
+  });
+  setInterval(poll, 1e3);
+  setInterval(() => {
+    if (activeId && visible) renderState();
+  }, 1e3);
+  refresh().then(async () => {
+    const ongoing = rows.find((row) => ["starting", "recording", "finishing"].includes(row.state?.phase));
+    if (ongoing) await open(ongoing.meeting.id);
+  }).catch(showError);
+})();
+</script>

@@ -1223,3 +1223,5 @@ impl FiniteAnd for f32 {
         self.is_finite() && f(self)
     }
 }
+
+gpui::actions!(settings, [OpenPlugins]);

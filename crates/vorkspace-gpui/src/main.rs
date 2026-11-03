@@ -31,6 +31,7 @@ mod notes;
 mod notifications;
 mod panel_kit;
 mod pickers;
+mod plugins;
 mod popover;
 mod project_background;
 mod project_settings;

@@ -971,6 +971,8 @@ impl Shell {
                                     "GitLab" => this.open_connector(Connector::Gitlab, window, cx),
                                     "Jira" => this.open_connector(Connector::Jira, window, cx),
                                     "Notes" => this.open_notes(window, cx),
+                                    "Meetings" => this.open_plugin_page(true, window, cx),
+                                    "Plugins" => this.open_plugin_page(false, window, cx),
                                     "Automations" => this.open_automations(window, cx),
                                     "To-dos" => this.open_todos(window, cx),
                                     _ => (),

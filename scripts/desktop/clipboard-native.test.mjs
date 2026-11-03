@@ -25,7 +25,7 @@ test("native dictation custom words, volatile phrases and Unicode edits", { skip
   const directory = await mkdtemp(join(tmpdir(), "vorkspace-native-dictation-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const binary = join(directory, "DictationTests");
-  const sources = ["Dictation.swift", "DictationKey.swift", "DictationWords.swift", "DictationTarget.swift", "SpeechCapture.swift", "Microphones.swift", "DictationTests.swift"]
+  const sources = ["Dictation.swift", "DictationKey.swift", "Meeting.swift", "SystemSpeechCapture.swift", "DictationWords.swift", "DictationTarget.swift", "SpeechCapture.swift", "Microphones.swift", "DictationTests.swift"]
     .map(name => fileURLToPath(new URL(`../../crates/vorkspace-helper/native/${name}`, import.meta.url)));
   await run("xcrun", ["swiftc", "-warnings-as-errors", "-parse-as-library", "-module-cache-path", join(directory, "module-cache"),
     "-target", `${process.arch === "arm64" ? "arm64" : "x86_64"}-apple-macos26.0`, ...sources, "-o", binary]);

@@ -35,6 +35,7 @@ test("Finder launches use normal desktop data by default and honor explicit isol
       await writeFile(executable, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
       await chmod(executable, 0o755);
       await writeFile(join(output, "vorkspace-helper"), "#!/bin/sh\n");
+      for (const plugin of ["github", "gitlab", "jira", "meetings"]) await writeFile(join(output, `vorkspace-${plugin}-plugin`), "#!/bin/sh\n");
       const args = ["scripts/desktop/bundle-native-macos.sh", profile, target, "0.16.0"];
       if (override) args.push(override);
       const packaged = spawnSync("bash", args, {

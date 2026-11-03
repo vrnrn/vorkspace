@@ -140,6 +140,8 @@ actions!(
         ShowGitLab,
         ShowJira,
         ShowNotes,
+        ShowMeetings,
+        ShowPlugins,
         ShowAutomations,
         OpenAppearance,
         MinimizeWindow,
@@ -538,6 +540,8 @@ pub(crate) struct Shell {
     pending_folder: Option<(i64, AnchorSlot)>,
     _session_clock: gpui::Task<()>,
     notes: Option<Entity<Notes>>,
+    meetings: Option<Entity<crate::plugins::Page>>,
+    plugins_page: Option<Entity<crate::plugins::Page>>,
     todos_page: Option<Entity<crate::todos::TodosPage>>,
     /// The project sidebar's board; it follows the current project.
     project_todos: Option<Entity<crate::todos::TodoBoardView>>,
@@ -890,6 +894,8 @@ impl Shell {
             pending_folder: None,
             _session_clock: session_clock,
             notes: None,
+            meetings: None,
+            plugins_page: None,
             todos_page: None,
             project_todos: None,
             minion_registry: Default::default(),
@@ -2639,7 +2645,18 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &ShowJira, window, cx| {
                 this.open_connector(Connector::Jira, window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::settings::OpenPlugins, window, cx| {
+                    this.open_plugin_page(false, window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &ShowNotes, window, cx| this.open_notes(window, cx)))
+            .on_action(cx.listener(|this, _: &ShowMeetings, window, cx| {
+                this.open_plugin_page(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowPlugins, window, cx| {
+                this.open_plugin_page(false, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ShowAutomations, window, cx| {
                 this.open_automations(window, cx)
             }))

@@ -8,6 +8,7 @@ Start with [building](building.md), [architecture](architecture.md), and the [re
 - [Remote access](remote-access.md)
 - [Vox](vox.md), [Bot Channels](channels.md) and [Minions](minions.md)
 - [Agent app access](agent-access.md) and [visuals](visuals.md)
+- [Executable plugins](plugins.md) and [Meetings](meetings.md)
 - [Inbox](inbox.md), [Jira](jira.md) and [ticket context](ticket-context.md)
 - [Testing](testing.md), [hang diagnostics](hang-diagnostics.md) and [macOS updates](updates.md)
 

@@ -22,7 +22,7 @@ impl Lease {
             .open(path)
             .map_err(|e| e.to_string())?;
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err("Vox or dictation is already using the microphone. Stop it first.".into());
+            return Err("Another voice feature is using the microphone. Stop it first.".into());
         }
         Ok(Self(file))
     }

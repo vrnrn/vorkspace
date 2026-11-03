@@ -74,15 +74,11 @@ impl SettingsView {
         self.inbox.error = None;
         let candidate = query.clone();
         let task = cx.background_executor().spawn(async move {
-            vorkspace_core::inbox::jira::jira_list_issues(
-                directory,
-                false,
-                "all".into(),
-                vec![],
-                Some(1),
-                Some(candidate),
-            )
-            .map(|_| ())
+            vorkspace_core::inbox::Service {
+                data_dir: directory,
+                cwd: std::env::temp_dir(),
+            }
+            .validate_jql(&candidate)
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;

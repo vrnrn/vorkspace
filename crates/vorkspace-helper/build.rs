@@ -6,6 +6,8 @@ fn main() {
         "Clipboard.swift",
         "Dictation.swift",
         "DictationKey.swift",
+        "Meeting.swift",
+        "SystemSpeechCapture.swift",
         "DictationWords.swift",
         "DictationTarget.swift",
         "SpeechCapture.swift",
@@ -64,6 +66,8 @@ fn main() {
     println!("cargo:rustc-link-lib=static=VorkspaceHelper");
     for framework in [
         "Speech",
+        "ScreenCaptureKit",
+        "CoreMedia",
         "AVFoundation",
         "CoreAudio",
         "AudioToolbox",

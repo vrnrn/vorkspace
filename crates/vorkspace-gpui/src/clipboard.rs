@@ -1,6 +1,7 @@
 //! Keeps the clipboard helper in step with preferences. History, ⌘⇧C and the menu
 //! bar icon live in the helper so that they outlive this app. With recording off
 //! there is no helper, so this app shows the icon that Close to Tray depends on.
+pub(crate) mod audio;
 use gpui::{App, AppContext, Context, Entity, Global};
 #[cfg(not(test))]
 use vorkspace_helper::Supervisor;
@@ -12,6 +13,7 @@ impl Global for Clipboard {}
 #[derive(Default)]
 pub(crate) struct Service {
     pub error: Option<String>,
+    audio: audio::Audio,
     icon: bool,
     recording: bool,
     dictation: DictationConfig,
@@ -66,14 +68,14 @@ impl Service {
         };
         let helper = vorkspace_helper::helper_executable(&app);
         let socket = vorkspace_helper::socket_path(&helper);
-        let (notices, received) = async_channel::unbounded();
+        let (notices, received) = async_channel::bounded(256);
         let arguments = std::env::args_os()
             .skip(1)
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect();
         let relaunch = vorkspace_helper::relaunch_command(&app, arguments);
         self.supervisor = Some(Supervisor::start(helper, socket, relaunch, move |notice| {
-            let _ = notices.try_send(notice);
+            let _ = notices.send_blocking(notice);
         }));
         self._notices = Some(cx.spawn(async move |this, cx| {
             while let Ok(notice) = received.recv().await {
@@ -86,7 +88,7 @@ impl Service {
 
     #[cfg(not(test))]
     fn sync_status(&mut self, cx: &mut Context<Self>) {
-        if !self.icon || self.recording || self.dictation.enabled {
+        if !self.icon || self.recording || self.dictation.enabled || self.audio.wanted {
             self.status = None;
         } else if self.status.is_none() {
             let app = std::cell::RefCell::new(cx.to_async());
@@ -113,6 +115,9 @@ impl Service {
     }
 
     fn notice(&mut self, notice: Notice, cx: &mut Context<Self>) {
+        if matches!(notice, Notice::Error(None)) {
+            self.flush_audio();
+        }
         match notice {
             Notice::Error(error) => {
                 self.error = error;
@@ -130,6 +135,7 @@ impl Service {
                     cx.notify();
                 }
             }
+            Notice::Audio(notice) => self.audio_notice(notice, cx),
             Notice::Hello { .. } => {}
         }
     }
@@ -150,7 +156,7 @@ pub(crate) fn menu_bar_ready(cx: &App) -> bool {
         let s = s.read(cx);
         #[cfg(not(test))]
         return s.icon
-            && if s.recording || s.dictation.enabled {
+            && if s.recording || s.dictation.enabled || s.audio.wanted {
                 s.supervisor.as_ref().is_some_and(Supervisor::connected)
             } else {
                 s.status.is_some()

@@ -269,6 +269,12 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "local speech microphone apple transcription permissions language model",
     ),
     (
+        "plugins",
+        Section::General,
+        "Plugins and Meetings",
+        "plugins extensions meetings summary model prompt connectors jira github gitlab",
+    ),
+    (
         "dictation-key",
         Section::General,
         "Dictation key",

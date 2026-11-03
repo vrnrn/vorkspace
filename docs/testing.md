@@ -6,7 +6,7 @@ Run checks from the repository root with current stable Rust and Node.js 24+:
 npm ci
 npm run check
 npm run assets
-cargo build --locked -p vorkspace-gpui -p vorkspace-helper --profile native-dev
+cargo build --locked -p vorkspace-gpui -p vorkspace-helper -p vorkspace-connector-plugins -p vorkspace-meetings-plugin --profile native-dev
 bash scripts/desktop/bundle-native-macos.sh native-dev target "$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')" dev-data
 ```
 
@@ -46,3 +46,5 @@ Release-helper tests run with `npm run test:tooling`. Set `VORKSPACE_TEST_SPARKL
 ## Synthetic measurements
 
 `node scripts/benchmarks/benchmark-host-startup.mjs --sessions 200 --chars 262144 --runs 7` measures startup against generated history in temporary data. Add `--baseline <commit>` to compare a historical JavaScript host: the benchmark exports that commit's complete host source before bundling it. Each sample starts a fresh Node process, and baseline/current order alternates. Component results do not establish end-to-end UI latency or GPU frame rate.
+
+Plugin tests exercise real connector binaries against local CLI fixtures, installation identity and digest checks, capability rejection, bounded IO, recording recovery, incomplete writes and revision-checked summaries. Native dictation regressions also cover meeting clock ordering; the explicit `--meeting-speech-fixture FILE` mode feeds generated audio through two real speech analyzers without opening capture devices. These fixtures do not prove physical microphone/system-audio permissions, echo behavior or a real provider’s summary quality.
