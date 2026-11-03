@@ -301,8 +301,8 @@ impl SettingsView {
         if let Some(center) = crate::accounts::get(cx) {
             center.update(cx, |center, _| center.hide_emails());
         }
-        let clipboard = crate::clipboard::ensure(cx);
-        cx.observe(&clipboard, |_, _, cx| cx.notify()).detach();
+        let helper = crate::background_helper::ensure(cx);
+        cx.observe(&helper, |_, _, cx| cx.notify()).detach();
         let dictation_words_input = cx.new(|cx| {
             let mut input = Input::memory_fact("Custom words", cx);
             input.set_text(prefs.dictation_words.clone(), cx);

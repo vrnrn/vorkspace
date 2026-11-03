@@ -75,14 +75,14 @@ fn clipboard_route(action: shell::status_menu::Action, cx: &mut App) {
 
 pub(crate) fn init(cx: &mut App) {
     crate::menu_bar::install(build, cx);
-    cx.on_action(|_: &crate::clipboard::Reopen, cx| reopen_workspace(cx));
-    cx.on_action(|_: &crate::clipboard::Settings, cx| {
+    cx.on_action(|_: &crate::background_helper::Reopen, cx| reopen_workspace(cx));
+    cx.on_action(|_: &crate::background_helper::Settings, cx| {
         clipboard_route(shell::status_menu::Action::Settings, cx)
     });
-    cx.on_action(|_: &crate::clipboard::Quit, cx| {
+    cx.on_action(|_: &crate::background_helper::Quit, cx| {
         clipboard_route(shell::status_menu::Action::Quit, cx)
     });
-    cx.on_action(|_: &crate::clipboard::Composer, cx| {
+    cx.on_action(|_: &crate::background_helper::Composer, cx| {
         clipboard_route(shell::status_menu::Action::QuickComposer, cx)
     });
     macro_rules! workspace_commands {

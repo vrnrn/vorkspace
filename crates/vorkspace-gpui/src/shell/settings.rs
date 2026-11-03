@@ -461,11 +461,12 @@ impl Shell {
             vorkspace_ui::preferences::Preferences::MIN_UI_SCALE_PERCENT,
             vorkspace_ui::preferences::Preferences::MAX_UI_SCALE_PERCENT,
         );
-        crate::clipboard::configure(
+        crate::meetings::capture::init(cx);
+        crate::background_helper::configure(
             self.workspace.preferences.clipboard_history,
             // Retain the saved preference key so existing users keep their choice.
             self.workspace.preferences.bot_menu_bar_icon,
-            crate::clipboard::dictation_configuration(&self.workspace.preferences),
+            crate::background_helper::dictation_configuration(&self.workspace.preferences),
             cx,
         );
         if let Some(vox) = &self.vox {

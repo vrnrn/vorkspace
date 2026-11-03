@@ -6,7 +6,7 @@ Meetings requires macOS 26+, a supported installed Apple speech language, Microp
 
 ## Recording lifetime
 
-The native helper owns recording admission, one shared microphone lease, a language reservation, and both speech analyzers. Dictation and Vox cannot start while Meetings owns the lease. Recording becomes ready after both sources are ready. Stop remains available while preparing; finalization keeps the lease until both native captures and analyzers have actually closed. Leaving the page keeps recording; application Quit or a lost desktop connection finishes it. The helper can remain running for clipboard history or dictation afterward.
+In the desktop app, `background_helper.rs` owns the helper connection and process lifetime. `meetings/capture.rs` consumes its recording events and owns the app-side recording state. The native helper owns capture admission, one shared microphone lease, a language reservation, and both speech analyzers. Dictation and Vox cannot start while Meetings owns the lease. Recording becomes ready after both sources are ready. Stop remains available while preparing; finalization keeps the lease until both native captures and analyzers have actually closed. Leaving the page keeps recording; application Quit or a lost desktop connection finishes it. The helper can remain running for clipboard history or dictation afterward.
 
 Each finalized phrase is appended with a sequence, source and recording-relative start/end time, then flushed before publication. Microphone host time and system-audio timestamps share one clock origin. Real clock gaps are preserved; backwards timestamps fail rather than corrupting ordering. Live UI updates are bounded, and a sequence gap reloads durable text. No audio file is produced.
 

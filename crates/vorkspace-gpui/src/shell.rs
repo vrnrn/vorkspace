@@ -1597,7 +1597,7 @@ impl Shell {
                 if matches!(answer, Ok(0)) {
                     crate::quit(cx);
                 } else {
-                    crate::clipboard::quit_cancelled(cx);
+                    crate::background_helper::quit_cancelled(cx);
                 }
             });
         })
@@ -2429,7 +2429,7 @@ impl Render for Shell {
                     .update(cx, |shell, cx| {
                         #[cfg(not(test))]
                         if shell.workspace.preferences.close_to_tray
-                            && crate::clipboard::menu_bar_ready(cx)
+                            && crate::background_helper::menu_bar_ready(cx)
                             && !shell.unsaved_files(cx)
                         {
                             vorkspace_ui::traffic_lights::hide(window);
@@ -2673,7 +2673,9 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.open_settings(crate::settings::Section::General, window, cx)
             }))
-            .on_action(|_: &crate::clipboard::Toggle, _, cx| crate::clipboard::toggle(cx))
+            .on_action(|_: &crate::background_helper::Toggle, _, cx| {
+                crate::background_helper::toggle(cx)
+            })
             .on_action(
                 cx.listener(|this, _: &session_groups::RenameSidebarItem, window, cx| {
                     this.rename_sidebar_item(window, cx)

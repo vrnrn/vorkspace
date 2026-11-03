@@ -1,4 +1,6 @@
 //! The built-in Meetings document view. Only this bundled page can call its commands.
+pub(crate) mod capture;
+
 use crate::native_view::html::{Html, Reply};
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, Render, Window, div, prelude::*,
@@ -20,8 +22,6 @@ use vorkspace_core::{
 use vorkspace_meetings::Meetings;
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
-
-pub(crate) const OWNER: &str = "meetings";
 
 pub(crate) struct Page {
     meetings: Result<Meetings, String>,
@@ -111,9 +111,8 @@ impl Page {
         let params = value.get_mut("params").map(Value::take).unwrap_or_default();
         let id = params["id"].as_str().unwrap_or_default();
         match value["method"].as_str() {
-            Some("audio.stop") => reply(crate::clipboard::audio::stop(OWNER, id, cx)),
-            Some("audio.status") => reply(crate::clipboard::audio::status(
-                OWNER,
+            Some("audio.stop") => reply(capture::stop(id, cx)),
+            Some("audio.status") => reply(capture::status(
                 id,
                 params["after"].as_u64().unwrap_or(0),
                 meetings.directory,
@@ -131,7 +130,7 @@ impl Page {
                                 if !page.enabled {
                                     return Err("Meetings is turned off.".into());
                                 }
-                                crate::clipboard::audio::start(OWNER.into(), id, directory, cx)
+                                capture::start(id, directory, cx)
                             })
                             .unwrap_or_else(|_| Err("The Meetings view was closed.".into())),
                         Err(error) => Err(error),

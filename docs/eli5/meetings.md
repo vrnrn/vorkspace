@@ -4,7 +4,7 @@ Choose **Meetings**, then **Record**, to transcribe your microphone and the soun
 
 Your Mac needs macOS 26 or newer, a downloaded speech language, and permission for microphone and system audio. Use headphones to help keep other people's voices out of your microphone track. The transcript labels the two audio sources; it does not guess who each person is.
 
-Dictation and Vox wait while a meeting uses the microphone. You can visit another page while recording. Quitting Vorkspace stops the meeting and keeps the transcript collected so far. If recording is interrupted, complete saved text remains available when you reopen the app.
+Meetings uses the same background helper as dictation. The Meetings page tracks recording progress and saved text. Dictation and Vox wait while a meeting uses the microphone. You can visit another page while recording. Quitting Vorkspace stops the meeting and keeps the transcript collected so far. If recording is interrupted, complete saved text remains available when you reopen the app.
 
 In **Settings → Connectors → Meetings**, choose the AI provider, model and instructions for your notes, then press **Save**. Clicking **Summarize** sends the written transcript to that provider. A cloud provider receives the text; your audio stays on your Mac.
 

@@ -97,9 +97,7 @@ impl SettingsView {
             false,
             cx,
             move |this, enabled, cx| {
-                if section == Section::Meetings
-                    && !enabled
-                    && crate::clipboard::audio::owned(crate::meetings::OWNER, cx).is_some()
+                if section == Section::Meetings && !enabled && crate::meetings::capture::active(cx)
                 {
                     this.meeting_toggle_error =
                         Some("Stop the current recording before turning off Meetings.".into());

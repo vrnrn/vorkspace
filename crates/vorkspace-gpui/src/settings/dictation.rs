@@ -34,7 +34,7 @@ impl SettingsView {
                 }))],
         ));
         if self.prefs.dictation_enabled {
-            let status = crate::clipboard::get(cx)
+            let status = crate::background_helper::get(cx)
                 .map(|s| s.read(cx).dictation_status.clone())
                 .unwrap_or_default();
             let action = match status.phase {
@@ -59,7 +59,7 @@ impl SettingsView {
                         .map(|label| {
                             secondary_button("dictation-setup", label, false, false)
                                 .child(label)
-                                .on_click(|_, _, cx| crate::clipboard::dictation_setup(cx))
+                                .on_click(|_, _, cx| crate::background_helper::dictation_setup(cx))
                                 .into_any_element()
                         })
                         .collect(),
@@ -239,7 +239,7 @@ mod tests {
                 vorkspace_ui::clock::use_test_clock(&cx);
                 let window = cx
                     .open_window(gpui::size(px(width), px(620.)), |_, cx| {
-                        crate::clipboard::ensure(cx).update(cx, |service, _| {
+                        crate::background_helper::ensure(cx).update(cx, |service, _| {
                             service.dictation_status = vorkspace_helper::DictationStatus {
                                 phase: DictationPhase::Ready,
                                 message: "Ready. Speech stays on this Mac.".into(),
