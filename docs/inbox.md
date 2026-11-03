@@ -1,11 +1,14 @@
 # Connectors
 
-Vorkspace connectors support GitHub, GitLab, and Jira Cloud. Open **Settings → Connectors** to
-enable the sources you use and manage their connections. GitHub uses the
+Vorkspace connectors support GitHub, GitLab, and Jira Cloud. Open **Settings → Connectors → Plugins** to
+enable the sources you use. GitHub, GitLab, and Jira each have a separate
+settings page in the Connectors group. GitHub uses the
 GitHub CLI's active authentication. GitLab and Jira store connection details
 locally; see [Jira Cloud connector](jira.md) for Jira setup and filtering.
 
-Each source has an independent **Enable … connector** switch. Turning
+Each source has its own switch. Notes, Meetings and To-dos have switches in the
+same list and dedicated settings pages. Turning one off preserves its saved
+data. Turning
 one off removes its sidebar button and page, connection actions, unread counts, polling,
 and automation trigger choices. Saved connection details, filters, read
 state, and default Bot choices remain available when it is enabled again.
@@ -17,9 +20,8 @@ Automations and Bots, connector pages are sidebar pages: they hide the title str
 and are not saved as tabs. Authentication does not determine availability.
 Each page remains pinned to its provider, including setup and failure states.
 
-Connectors, Archive and Worktrees are grouped under App in Settings. The sidebar
-options menu lists enabled connectors, Notes and Automations with visibility
-switches and drag grips. Hiding a shortcut leaves its page state, connection and
+The sidebar options menu has separate visibility switches and drag grips for
+workspace shortcuts. Hiding a shortcut leaves its page state, connection and
 background work available. Shortcut order is saved independently of title-tab
 order and applies to both expanded and collapsed sidebars. Disabled connectors
 retain their saved position. Search stays first; the Activity section and the

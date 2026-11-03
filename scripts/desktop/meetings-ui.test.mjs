@@ -4,7 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
 import vm from "node:vm";
 
-const source = await readFile(new URL("../../crates/vorkspace-meetings-plugin/src/ui.html", import.meta.url), "utf8");
+const source = await readFile(new URL("../../crates/vorkspace-gpui/src/meetings/ui.html", import.meta.url), "utf8");
 const script = source.match(/<script>([\s\S]*?)<\/script>/)[1];
 // A small event/element adapter keeps scheduling deterministic. Real layout,
 // opaque-origin isolation and native controls are exercised separately in WebKit.
@@ -42,7 +42,6 @@ async function harness() {
     if (pending.has(method + ":" + (params.id ?? ""))) await pending.get(method + ":" + (params.id ?? "")).promise;
     if (method === "meetings.list") return [...records.values()].map(({ meeting, state }) => structuredClone({ meeting, state }));
     if (method === "meetings.read") return structuredClone(records.get(params.id));
-    if (method === "settings.read") return { provider: "fixture", model: "test", prompt: "Meeting notes" };
     if (method === "meetings.start") return { id: "live" };
     if (method === "meetings.summarize") {
       const doc = records.get(params.id);
@@ -60,16 +59,12 @@ async function harness() {
       doc.meeting.revision++;
       return structuredClone({ ...doc.meeting, summary_html: doc.summary_html });
     }
-    throw new Error(`Unexpected method ${method}`);
-  };
-  const host = async (method, params) => {
-    if (method === "ai.models") return [];
     if (method === "audio.stop") { stops.push(params.id); phase = "finishing"; return { accepted: true }; }
     if (method === "audio.status") return { state: { id: "live", phase, started_at: 1000 }, segments: [], partials: {}, reload: false };
-    throw new Error(`Unexpected host method ${method}`);
+    throw new Error(`Unexpected method ${method}`);
   };
   vm.runInNewContext(script, {
-    vorkspace: { call, host },
+    meetingsRequest: call,
     document: { getElementById: get, createElement: () => new Element(), createTextNode: (text) => text, body: new Element(), addEventListener() {} },
     addEventListener() {}, getSelection: () => null, setInterval: (fn) => intervals.push(fn),
   });
@@ -83,7 +78,7 @@ async function harness() {
   return { get, open, input, pending, writes, stops, records, tick: () => intervals[0](), phase: (value) => { phase = value; } };
 }
 
-test("delayed document and settings reads preserve newer input", async () => {
+test("delayed document reads preserve newer input", async () => {
   const ui = await harness();
   await ui.open("A");
   const read = deferred(); ui.pending.set("meetings.read:B", read);
@@ -94,12 +89,7 @@ test("delayed document and settings reads preserve newer input", async () => {
   assert.equal(ui.get("editor").value, "My new unsaved words");
   assert.equal(ui.get("save").style.display, "inline-block");
   await ui.get("save").onclick();
-  const settings = deferred(); ui.pending.set("settings.read:", settings);
-  const opening = ui.get("open-settings").onclick();
-  ui.input("editor", "Typed while settings were loading");
-  settings.resolve(); await opening;
-  assert.equal(ui.get("settings").style.display, "none");
-  assert.equal(ui.get("editor").value, "Typed while settings were loading");
+
 });
 
 test("saving summary Markdown refreshes the exact saved preview", async () => {
@@ -113,31 +103,24 @@ test("saving summary Markdown refreshes the exact saved preview", async () => {
   assert.equal(ui.records.get("A").transcript, "A transcript");
 });
 
-test("settings retains the recording owner and separates preparing, recording and finishing", async () => {
+test("record controls distinguish preparing, recording and finishing", async () => {
   const ui = await harness();
   await ui.get("record").onclick(); await ui.tick();
   assert.match(ui.get("metadata").textContent, /^Preparing ·/);
-  await ui.get("open-settings").onclick();
-  assert.equal(ui.get("settings-stop").hidden, false);
-  assert.equal(ui.get("settings-stop").disabled, false);
   ui.phase("recording"); await ui.tick();
   assert.match(ui.get("metadata").textContent, /^Recording ·/);
-  await ui.get("settings-stop").onclick();
+  await ui.get("record").onclick();
   assert.deepEqual(ui.stops, ["live"]);
-  assert.equal(ui.get("settings-stop").textContent, "Finishing…");
-  assert.equal(ui.get("settings-stop").disabled, true);
+  assert.equal(ui.get("record").disabled, true);
   assert.match(ui.get("metadata").textContent, /^Finishing ·/);
 });
 
-test("summary completion reconciles the saved revision while Settings owns presentation", async () => {
+test("summary completion reconciles the saved revision before the next edit", async () => {
   const ui = await harness(); await ui.open("A");
   const response = deferred(); ui.pending.set("meetings.summarize:A", response);
   const summarizing = ui.get("summarize").onclick();
   await setImmediate();
-  await ui.get("open-settings").onclick();
   response.resolve(); await summarizing;
-  assert.equal(ui.get("settings").style.display, "block");
-  await ui.get("settings-back").onclick();
   ui.input("title", "After summary");
   await ui.get("save").onclick();
   assert.equal(ui.writes[0].revision, 1);

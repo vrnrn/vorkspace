@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-vorkspace-plugin = { path = "../vorkspace-plugin" }
+vorkspace-meetings = { path = "../vorkspace-meetings" }
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 serde.workspace = true

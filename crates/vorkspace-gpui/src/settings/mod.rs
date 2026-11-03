@@ -61,7 +61,7 @@ pub(crate) struct SettingsContext {
     pub inbox_connections: HashMap<String, (bool, String)>,
     pub inbox_connection_revision: u64,
     pub inbox_connectors: vorkspace_core::inbox::Connectors,
-    pub inbox_data_dir: Option<std::path::PathBuf>,
+    pub data_dir: Option<std::path::PathBuf>,
     pub jira_filter: vorkspace_core::inbox::JiraFilter,
     pub jira_projects: Vec<(String, String)>,
     pub hidden_jira_projects: Vec<String>,
@@ -88,7 +88,7 @@ impl PartialEq for SettingsContext {
             && self.inbox_connections == other.inbox_connections
             && self.inbox_connection_revision == other.inbox_connection_revision
             && self.inbox_connectors == other.inbox_connectors
-            && self.inbox_data_dir == other.inbox_data_dir
+            && self.data_dir == other.data_dir
             && self.jira_filter == other.jira_filter
             && self.jira_projects == other.jira_projects
             && self.hidden_jira_projects == other.hidden_jira_projects
@@ -266,6 +266,8 @@ pub(crate) struct SettingsView {
     mcp_filter: String,
     fields: HashMap<&'static str, Entity<Input>>,
     inbox: pages::InboxState,
+    meeting_editor: Option<pages::connectors::MeetingEditor>,
+    meeting_toggle_error: Option<String>,
     connections: pages::ConnectionsState,
     skill_preview: Option<std::path::PathBuf>,
     skill_preview_text: Option<Result<std::sync::Arc<skill_document::DocumentData>, String>>,
@@ -383,7 +385,7 @@ impl SettingsView {
         ];
         if let Some(center) = crate::accounts::get(cx) {
             subscriptions.push(cx.observe(&center, |this, _, cx| {
-                if this.section == Section::Providers {
+                if matches!(this.section, Section::Providers | Section::Meetings) {
                     this.load_catalogs(false, cx);
                 }
                 cx.notify();
@@ -452,6 +454,8 @@ impl SettingsView {
             mcp_filter: "all".into(),
             fields: HashMap::new(),
             inbox: pages::InboxState::default(),
+            meeting_editor: None,
+            meeting_toggle_error: None,
             connections: pages::ConnectionsState::default(),
             skill_preview: None,
             skill_preview_text: None,
@@ -477,7 +481,7 @@ impl SettingsView {
         this
     }
     pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.section == Section::Providers
+        if matches!(self.section, Section::Providers | Section::Meetings)
             && let Some(center) = crate::accounts::get(cx)
         {
             center.update(cx, |center, cx| {
@@ -498,7 +502,7 @@ impl SettingsView {
                 this.discovery = data;
                 this.discovery_loading = false;
                 this.worktree_sizes_project.clear();
-                if this.section == Section::Providers {
+                if matches!(this.section, Section::Providers | Section::Meetings) {
                     this.load_catalogs(true, cx);
                 }
                 if this.section == Section::Mcp {
@@ -617,7 +621,7 @@ impl SettingsView {
             self.leave_connections(cx);
             self.section = section;
             self.watch_connections(cx);
-            if section == Section::Providers {
+            if matches!(section, Section::Providers | Section::Meetings) {
                 self.load_catalogs(false, cx);
             }
             if section == Section::Mcp {
@@ -1223,5 +1227,3 @@ impl FiniteAnd for f32 {
         self.is_finite() && f(self)
     }
 }
-
-gpui::actions!(settings, [OpenPlugins]);

@@ -1,4 +1,4 @@
-//! Durable transcript ownership shared by the native audio host and plugins.
+//! Durable transcript ownership shared by the audio helper and Meetings.
 //! Audio is never stored. The owner lock covers preparation through final commit.
 use crate::valid_id;
 use serde::{Deserialize, Serialize};

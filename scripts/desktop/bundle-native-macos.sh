@@ -45,6 +45,10 @@ cp crates/vorkspace-gpui/assets/material/LICENSE "$native_licenses/material-icon
 # then refuses the menu bar item. The app reads VorkspaceDataMode from Info.plist.
 native_executable="vorkspace-gpui"
 rm -f "$native_bundle/Contents/MacOS/vorkspace-launcher"
+# Repackaging can reuse a development bundle made before Meetings was built in.
+for former_plugin in github gitlab jira meetings; do
+  rm -f "$native_bundle/Contents/PlugIns/vorkspace-$former_plugin-plugin"
+done
 cat > "$native_bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -62,17 +66,6 @@ cat > "$native_bundle/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-# Bundled plugins are independent executables, signed before the enclosing app.
-mkdir -p "$native_bundle/Contents/PlugIns"
-for native_plugin in github gitlab jira meetings; do
-  native_plugin_name="vorkspace-$native_plugin-plugin"
-  if [ ! -f "$native_target/$native_plugin_name" ]; then
-    echo "Missing bundled plugin: $native_target/$native_plugin_name" >&2
-    exit 1
-  fi
-  cp "$native_target/$native_plugin_name" "$native_bundle/Contents/PlugIns/$native_plugin_name.next"
-  mv -f "$native_bundle/Contents/PlugIns/$native_plugin_name.next" "$native_bundle/Contents/PlugIns/$native_plugin_name"
-done
 # A nested app with its own identity: sharing the main bundle's would make macOS
 # treat vorkspace as running after Quit, so the Dock could no longer launch it.
 # Remove only the generated legacy bundle when repackaging an older build.
@@ -112,9 +105,6 @@ else
 fi
 native_identity="${VORKSPACE_SIGNING_IDENTITY:--}"
 if [ "$native_identity" = - ]; then
-  for native_plugin in "$native_bundle"/Contents/PlugIns/*; do
-    codesign --force --sign - "$native_plugin"
-  done
   codesign --force --sign - --entitlements scripts/desktop/native-entitlements.plist "$native_helper"
   codesign --force --sign - "$native_bundle"
 else

@@ -35,7 +35,10 @@ test("Finder launches use normal desktop data by default and honor explicit isol
       await writeFile(executable, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
       await chmod(executable, 0o755);
       await writeFile(join(output, "vorkspace-helper"), "#!/bin/sh\n");
-      for (const plugin of ["github", "gitlab", "jira", "meetings"]) await writeFile(join(output, `vorkspace-${plugin}-plugin`), "#!/bin/sh\n");
+      const bundle = join(output, "vorkspace.app/Contents");
+      const formerPlugin = join(bundle, "PlugIns/vorkspace-meetings-plugin");
+      await mkdir(join(bundle, "PlugIns"), { recursive: true });
+      await writeFile(formerPlugin, "previous bundle");
       const args = ["scripts/desktop/bundle-native-macos.sh", profile, target, "0.16.0"];
       if (override) args.push(override);
       const packaged = spawnSync("bash", args, {
@@ -45,7 +48,7 @@ test("Finder launches use normal desktop data by default and honor explicit isol
       });
       assert.ifError(packaged.error);
       assert.equal(packaged.status, 0, packaged.stdout + packaged.stderr);
-      const bundle = join(output, "vorkspace.app/Contents");
+      await assert.rejects(access(formerPlugin));
       const plist = await readFile(join(bundle, "Info.plist"), "utf8");
       assert.ok(plist.includes(`<key>VorkspaceDataMode</key><string>${mode}</string>`));
       // macOS rejects menu bar items from a process that exec'd after launch.

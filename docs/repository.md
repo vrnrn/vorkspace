@@ -1,6 +1,6 @@
 # Repository map
 
-The desktop is a Rust workspace that runs as the app, a background helper and executable plugin processes. The remote host is a separate Node application. Directory boundaries follow those runtime owners, and dependencies only point downward. That holds between crates and between the top-level modules inside each crate, and `scripts/checks/module-cycles.test.mjs` enforces it. A lower module that needs something from above receives it as a small trait, such as `BotsHost`, `VoxHost`, `AnnotationDraft`, or `SelectableText`. The one permitted cycle is `agent` and `bot_model`, because Bot records hold their settings and turn settings hold the Bot.
+The desktop is a Rust workspace that runs as the app plus a small clipboard helper process. The remote host is a separate Node application. Directory boundaries follow those runtime owners, and dependencies only point downward. That holds between crates and between the top-level modules inside each crate, and `scripts/checks/module-cycles.test.mjs` enforces it. A lower module that needs something from above receives it as a small trait, such as `BotsHost`, `VoxHost`, `AnnotationDraft`, or `SelectableText`. The one permitted cycle is `agent` and `bot_model`, because Bot records hold their settings and turn settings hold the Bot.
 
 | Path | Responsibility |
 | --- | --- |
@@ -10,10 +10,7 @@ The desktop is a Rust workspace that runs as the app, a background helper and ex
 | `crates/vorkspace-runtime/` | Session execution, remote session binding, and persistence coalescing |
 | `crates/vorkspace-editor/` | Editor analysis (bounded QuickJS) and native syntax (tree-sitter grammars) |
 | `crates/vorkspace-model/` | Plain data models: pane layout, Markdown elements, Git graph and checkout cache |
-| `crates/vorkspace-helper/` | Background clipboard/dictation owner, native meeting audio capture and helper protocol |
-| `crates/vorkspace-plugin/` | Versioned plugin SDK, bounded stdio process calls and durable text-recorder format |
-| `crates/vorkspace-connector-plugins/` | GitHub, GitLab and Jira executables using shared connector adapters |
-| `crates/vorkspace-meetings-plugin/` | Custom Meetings interface, documents, settings and AI summaries |
+| `crates/vorkspace-helper/` | The clipboard helper process, which keeps history after the app quits, and its protocol |
 | `crates/vorkspace-macos/` | AppKit integrations, hotkeys, updater, relaunch, and hang diagnostics |
 | `host/` | Remote host service, authentication, SQLite store, session engine, SSH deployment package, and tests |
 | `embedded/editor/` | Editor parsing, diagnostics, completion, search, formatting, and syntax palettes for bounded QuickJS workers |
@@ -32,7 +29,7 @@ The desktop is a Rust workspace that runs as the app, a background helper and ex
 
 In the core, `store` owns SQLite and sidecar persistence; `provider` owns CLI transports and process lifetime; `transcript` projects bounded display data. `bot` owns Bot and Channel state, `voice` owns Vox, and `remote` owns authenticated remote transport. Keep durable writes at those boundaries.
 
-In GPUI, `conversation` connects the session runtime to input and transcript views. `shell` owns window navigation and workspace surfaces, with its topics in `shell/`. `git_tools/` holds source control surfaces, `file_tools/` the explorer and editor pane, and `composer/` prompt entry. `terminal`, `settings`, and `bots` contain their native views. `plugins/` hosts executable plugin interfaces and native capability routing; `clipboard/audio.rs` holds bounded live recording receipts. Rendering consumes core state; it does not create a second persistence authority.
+In GPUI, `conversation` connects the session runtime to input and transcript views. `shell` owns window navigation and workspace surfaces, with its topics in `shell/`. `git_tools/` holds source control surfaces, `file_tools/` the explorer and editor pane, and `composer/` prompt entry. `terminal`, `settings`, and `bots` contain their native views. Rendering consumes core state; it does not create a second persistence authority.
 
 The host's top-level modules own server, service, store, engine, and sync lifecycles. `host/runtime/models/` contains domain records and validation; `providers/` contains provider-specific adapters; `protocol/` contains their shared stream and RPC machinery; `platform/` owns Node filesystem/platform helpers; `lib/` contains small pure utilities. These modules run on the remote machine.
 

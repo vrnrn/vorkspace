@@ -10,7 +10,7 @@ The native helper owns recording admission, one shared microphone lease, a langu
 
 Each finalized phrase is appended with a sequence, source and recording-relative start/end time, then flushed before publication. Microphone host time and system-audio timestamps share one clock origin. Real clock gaps are preserved; backwards timestamps fail rather than corrupting ordering. Live UI updates are bounded, and a sequence gap reloads durable text. No audio file is produced.
 
-Private plugin data lives below the selected desktop data directory at `plugins/meetings/data/`:
+Meeting data lives below the desktop data directory at `meetings/`. Existing records in the earlier `plugins/meetings/data/` location are reopened in place. The layout inside either directory is:
 
 - `recordings/<id>/state.json`, `owner.lock` and `transcript.jsonl` hold recorder metadata and immutable source text.
 - `meetings/<id>.json` holds the title, editable transcript override, revision and optional summary.
@@ -21,10 +21,10 @@ Metadata is atomically replaced after flushing; an exclusive owner lock distingu
 
 ## Summaries
 
-Open **Meeting settings**, select an existing provider, choose or enter a model, and edit the summary prompt. Settings use the provider account already selected in Vorkspace. Audio stays on the Mac; clicking **Summarize** sends transcript text to the chosen provider, which may be a cloud service.
+Open **Settings → Connectors → Meetings**, select an existing provider, choose or enter a model, edit the summary prompt, and press **Save**. Settings use the provider account already selected in Vorkspace. Audio stays on the Mac; clicking **Summarize** sends transcript text to the chosen provider, which may be a cloud service.
 
 The default prompt produces Summary, Discussion, Decisions, Action items and Open questions. It asks for factual notes, useful timestamps and explicit uncertainty, with owners or due dates only when stated. Long transcripts are processed in bounded sections and reduced before applying the final format. Analysis uses the existing text-only provider path without app tools or write access.
 
 **Transcript** keeps the source available. **Summary** displays polished Markdown, and **Edit Markdown** edits that summary. **Save changes** (⌘S) saves title and document edits. Updates validate the saved revision. A late summary cannot overwrite a meeting that changed while analysis ran; provider failures preserve the original transcript and any previous summary. Editing the transcript marks an older summary as stale until it is regenerated.
 
-Rendered summaries strip raw HTML, images and unsafe link destinations. Model output is derived text, never executable plugin interface code. See [plugins](plugins.md) for the native capability and custom-interface boundaries.
+Rendered summaries strip raw HTML, images and unsafe link destinations. The bundled Meetings page uses a dedicated message handler for recording and document actions. Other HTML surfaces have no access to it. **Settings → Connectors → Plugins** can hide Meetings while keeping saved documents. Finish an active recording before turning it off.

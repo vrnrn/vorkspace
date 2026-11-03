@@ -31,7 +31,7 @@ impl Shell {
         {
             terminal.update(cx, |terminal, _| terminal.visible = false);
         }
-        for page in [&self.meetings, &self.plugins_page].into_iter().flatten() {
+        if let Some(page) = &self.meetings {
             page.update(cx, |page, cx| page.set_active(false, cx));
         }
         self.active_app_view = None;
@@ -95,7 +95,6 @@ impl Shell {
         match self.active_app_view? {
             AppView::Notes => self.notes.clone().map(IntoElement::into_any_element),
             AppView::Meetings => self.meetings.clone().map(IntoElement::into_any_element),
-            AppView::Plugins => self.plugins_page.clone().map(IntoElement::into_any_element),
             AppView::Inbox => None,
             AppView::Connector(provider) => self
                 .connector_pages
@@ -116,7 +115,6 @@ impl Shell {
         let focus = match self.active_app_view {
             Some(AppView::Notes) => self.notes.as_ref().map(|view| view.focus_handle(cx)),
             Some(AppView::Meetings) => self.meetings.as_ref().map(|view| view.focus_handle(cx)),
-            Some(AppView::Plugins) => self.plugins_page.as_ref().map(|view| view.focus_handle(cx)),
             Some(AppView::Inbox) => None,
             Some(AppView::Connector(provider)) => self
                 .connector_pages
@@ -133,70 +131,31 @@ impl Shell {
         }
         true
     }
-    pub(super) fn open_plugin_page(
-        &mut self,
-        meeting: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn open_meetings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.workspace.preferences.meetings {
+            self.open_settings(crate::settings::Section::Meetings, window, cx);
+            return;
+        }
         self.prepare_app_view(window, cx);
-        let page = if meeting {
-            self.meetings.clone()
-        } else {
-            self.plugins_page.clone()
-        };
-        let page = page.unwrap_or_else(|| {
-            let page = cx.new(|cx| {
-                crate::plugins::Page::new(
-                    self.store.clone(),
-                    self.workspace.project.clone(),
-                    meeting.then_some("meetings"),
-                    &self.workspace.preferences.hidden_providers,
-                    cx,
-                )
-            });
-            self.app_view_events.push(cx.subscribe_in(
-                &page,
-                window,
-                |this, _, event: &crate::plugins::Event, window, cx| match event {
-                    crate::plugins::Event::Disabled(id) => {
-                        for page in [&this.meetings, &this.plugins_page].into_iter().flatten() {
-                            page.update(cx, |page, cx| page.disabled(id, cx));
-                        }
-                    }
-                    crate::plugins::Event::OpenConnector(id) => {
-                        if let Some(connector) = Connector::from_id(id) {
-                            this.open_connector(connector, window, cx)
-                        }
-                    }
-                },
-            ));
-            if meeting {
-                self.meetings = Some(page.clone());
-            } else {
-                self.plugins_page = Some(page.clone());
-            }
-            page
-        });
+        let page = self
+            .meetings
+            .get_or_insert_with(|| cx.new(|cx| crate::meetings::Page::new(self.store.clone(), cx)))
+            .clone();
         page.update(cx, |page, _| {
             page.configure_context(
                 &self.workspace.project,
                 &self.workspace.preferences.hidden_providers,
             );
         });
-        self.show_app_view(
-            if meeting {
-                AppView::Meetings
-            } else {
-                AppView::Plugins
-            },
-            window,
-            cx,
-        );
+        self.show_app_view(AppView::Meetings, window, cx);
         page.update(cx, |page, cx| page.set_active(true, cx));
     }
 
     pub(super) fn open_notes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.workspace.preferences.notes {
+            self.open_settings(crate::settings::Section::Notes, window, cx);
+            return;
+        }
         self.prepare_app_view(window, cx);
         if self.notes.is_none() {
             let view = cx.new(|cx| notes::Notes::new(self.store.clone(), cx));
@@ -224,6 +183,10 @@ impl Shell {
     }
 
     pub(super) fn open_todos(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.workspace.preferences.todos {
+            self.open_settings(crate::settings::Section::Todos, window, cx);
+            return;
+        }
         self.prepare_app_view(window, cx);
         if self.todos_page.is_none() {
             let view = cx.new(|cx| crate::todos::TodosPage::new(self.store.clone(), cx));

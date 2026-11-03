@@ -20,6 +20,6 @@ Starting a new worktree? Run `npm run worktree:seed` first. It borrows the finis
 
 Add `--dev-data` to `npm run dev` to use a separate set of practice data. The sample conversations from `--fixture` only work with that option.
 
-Clipboard history, [dictation](dictation.md) and meeting audio capture run in a small helper app, so they keep going after you close a development build. That's normal. Rebuilding replaces the helper and clears its history. To stop it, choose Quit in the clipboard menu or turn off both **Keep recent copies** and **Dictation**. The normal runner builds the helper and all bundled plugins. With `cargo run`, first build `vorkspace-helper`, `vorkspace-connector-plugins` and `vorkspace-meetings-plugin` with the same profile, so the app can find them beside itself. Meeting recording stops when the main app quits; clipboard history and dictation can keep running.
+Clipboard history and [dictation](dictation.md) run in a small helper app, so they keep going after you close a development build. That's normal. Rebuilding replaces the helper and clears its history. To stop it, choose Quit in the clipboard menu or turn off both **Keep recent copies** and **Dictation**. Using `cargo run` directly skips the helper unless you first build `vorkspace-helper` with the same `--profile`, because the app looks for it right next to itself.
 
 To make the app do that for you, set `npm run worktree:seed` as the project's setup command under **Settings → Worktrees**.

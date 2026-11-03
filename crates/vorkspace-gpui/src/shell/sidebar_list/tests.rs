@@ -281,7 +281,6 @@ fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
                     "jira",
                     "notes",
                     "meetings",
-                    "plugins",
                     "todos"
                 ]
             );
@@ -394,7 +393,6 @@ fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
                         "jira",
                         "notes",
                         "meetings",
-                        "plugins",
                         "todos"
                     ]
                 );

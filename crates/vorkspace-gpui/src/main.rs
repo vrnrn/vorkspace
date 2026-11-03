@@ -23,6 +23,7 @@ mod inbox;
 mod input;
 mod liquid;
 mod markdown;
+mod meetings;
 mod menu_bar;
 #[cfg(test)]
 mod metal_tests;
@@ -31,7 +32,6 @@ mod notes;
 mod notifications;
 mod panel_kit;
 mod pickers;
-mod plugins;
 mod popover;
 mod project_background;
 mod project_settings;

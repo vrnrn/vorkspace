@@ -86,7 +86,23 @@ fn inbox_settings_offer_only_supported_sources_and_emit_independent_enable_choic
     assert!(
         visual
             .debug_bounds("settings-select-gitlab-default-bot")
+            .is_none()
+    );
+    window
+        .update(visual, |view, _, cx| {
+            view.select_section(Section::Gitlab, cx)
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(
+        visual
+            .debug_bounds("settings-select-gitlab-default-bot")
             .is_some()
+    );
+    assert!(
+        visual
+            .debug_bounds("settings-toggle-inbox-connector-github")
+            .is_none()
     );
 }
 

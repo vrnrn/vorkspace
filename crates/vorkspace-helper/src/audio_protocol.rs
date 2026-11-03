@@ -1,7 +1,7 @@
 //! Text-only recording control. PCM never crosses the helper socket.
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use vorkspace_plugin::recording::{Segment, State};
+use vorkspace_meetings::recording::{Segment, State};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AudioRequest {
     pub id: String,

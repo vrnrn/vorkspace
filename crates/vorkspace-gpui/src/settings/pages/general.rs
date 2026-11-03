@@ -100,17 +100,6 @@ impl SettingsView {
                 )],
             ),
             self.row(
-                Some("notes"),
-                false,
-                "Notes",
-                Some("Show Notes in project navigation. Mention saved notes with @note.".into()),
-                vec![
-                    self.toggle("notes", "Notes", p.notes, false, cx, |this, on, cx| {
-                        this.update(cx, |p| p.notes = on)
-                    }),
-                ],
-            ),
-            self.row(
                 Some("working-agents"),
                 false,
                 "Working agents",
@@ -219,25 +208,6 @@ impl SettingsView {
             groups.push(self.clipboard_group(cx));
             groups.push(self.dictation_group(cx));
         }
-        groups.push(self.group(
-            Some("plugins"),
-            false,
-            "Plugins",
-            None,
-            None,
-            vec![self.row(
-                Some("plugins"),
-                false,
-                "Plugins and Meetings",
-                Some("Manage installed extensions and Meeting summary settings.".into()),
-                vec![
-                            secondary_button("manage-plugins", "Manage plugins", false, false)
-                                .child("Manage plugins")
-                                .on_click(|_, _, cx| cx.dispatch_action(&super::super::OpenPlugins))
-                                .into_any_element(),
-                        ],
-            )],
-        ));
         groups.push(self.group(None, false, "About", None, None, about));
         groups
     }

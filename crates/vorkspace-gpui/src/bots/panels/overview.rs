@@ -3,6 +3,9 @@ use super::*;
 
 impl Bots {
     pub(crate) fn select_overview(&mut self, tab: OverviewTab, cx: &mut Context<Self>) {
+        if tab == OverviewTab::Todos && !self.prefs.todos {
+            return;
+        }
         if tab != OverviewTab::Changes {
             self.pause_changes(cx);
         }
@@ -55,7 +58,11 @@ impl Bots {
                 OverviewTab::Todos,
                 "To-dos",
                 "check-circle",
-                self.open_todos(&bot.id, cx),
+                if self.prefs.todos {
+                    self.open_todos(&bot.id, cx)
+                } else {
+                    0
+                },
             ),
         ];
         div()
@@ -70,32 +77,36 @@ impl Bots {
             .flex()
             .items_center()
             .gap(px(2.))
-            .children(tabs.into_iter().map(|(tab, label, glyph, count)| {
-                let selected = self.overview_tab == tab;
-                let unfolded = match progress {
-                    Some((_, p)) if selected => p,
-                    Some((closing, p)) if tab == closing => 1. - p,
-                    _ if selected => 1.,
-                    _ => 0.,
-                };
-                let id = match tab {
-                    OverviewTab::Sessions => "bot-overview-Sessions",
-                    OverviewTab::Documents => "bot-overview-Documents",
-                    OverviewTab::Habits => "bot-overview-Habits",
-                    OverviewTab::Changes => "bot-overview-Changes",
-                    OverviewTab::Todos => "bot-overview-Todos",
-                };
-                crate::project_tabs::tab_button(
-                    id,
-                    (label, count),
-                    glyph,
-                    selected,
-                    tab == OverviewTab::Changes && count > 0 && !selected,
-                    if expand_label { unfolded } else { 0. },
-                    window,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| this.select_overview(tab, cx)))
-            }))
+            .children(
+                tabs.into_iter()
+                    .filter(|(tab, _, _, _)| *tab != OverviewTab::Todos || self.prefs.todos)
+                    .map(|(tab, label, glyph, count)| {
+                        let selected = self.overview_tab == tab;
+                        let unfolded = match progress {
+                            Some((_, p)) if selected => p,
+                            Some((closing, p)) if tab == closing => 1. - p,
+                            _ if selected => 1.,
+                            _ => 0.,
+                        };
+                        let id = match tab {
+                            OverviewTab::Sessions => "bot-overview-Sessions",
+                            OverviewTab::Documents => "bot-overview-Documents",
+                            OverviewTab::Habits => "bot-overview-Habits",
+                            OverviewTab::Changes => "bot-overview-Changes",
+                            OverviewTab::Todos => "bot-overview-Todos",
+                        };
+                        crate::project_tabs::tab_button(
+                            id,
+                            (label, count),
+                            glyph,
+                            selected,
+                            tab == OverviewTab::Changes && count > 0 && !selected,
+                            if expand_label { unfolded } else { 0. },
+                            window,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| this.select_overview(tab, cx)))
+                    }),
+            )
             .child(crate::popover::titlebar_drag_area().flex_1().min_w_0())
             .when(self.overview_tab == OverviewTab::Habits, |d| {
                 d.child(

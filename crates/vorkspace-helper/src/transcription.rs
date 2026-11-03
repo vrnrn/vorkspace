@@ -10,7 +10,7 @@ use std::{
 };
 use vorkspace_helper::{AudioNotice, AudioRequest, Notice, word_rules};
 use vorkspace_macos::voice_lease::Lease;
-use vorkspace_plugin::recording::{Owner, Phase};
+use vorkspace_meetings::recording::{Owner, Phase};
 unsafe extern "C" {
     fn vorkspace_transcription_start(json: *const c_char, callback: extern "C" fn(*const c_char));
     fn vorkspace_transcription_finish();
@@ -82,7 +82,7 @@ struct Recording {
     error: Option<String>,
 }
 impl Recording {
-    fn status(&self, ended: bool) -> vorkspace_plugin::recording::State {
+    fn status(&self, ended: bool) -> vorkspace_meetings::recording::State {
         let mut state = self.owner.state.clone();
         // A failed disk commit cannot be advertised as a successful Stop. Keep
         // the live receipt honest even when durable recovery can only report interruption.
@@ -94,7 +94,7 @@ impl Recording {
                 Phase::Finishing
             };
             if ended {
-                state.ended_at = Some(vorkspace_plugin::recording::now_ms());
+                state.ended_at = Some(vorkspace_meetings::recording::now_ms());
             }
         }
         state
@@ -172,10 +172,10 @@ impl Service {
     }
     fn start(&mut self, request: AudioRequest, cx: &mut Context<Self>) {
         if self.recording.is_some() {
-            let state = vorkspace_plugin::recording::State {
+            let state = vorkspace_meetings::recording::State {
                 id: request.id,
-                started_at: vorkspace_plugin::recording::now_ms(),
-                ended_at: Some(vorkspace_plugin::recording::now_ms()),
+                started_at: vorkspace_meetings::recording::now_ms(),
+                ended_at: Some(vorkspace_meetings::recording::now_ms()),
                 phase: Phase::Failed,
                 error: Some(
                     "Another recording is still stopping. Try again after it finishes.".into(),
@@ -191,8 +191,8 @@ impl Service {
             return;
         }
         let result = (|| {
-            if !vorkspace_plugin::valid_id(&request.id)
-                || !vorkspace_plugin::valid_id(&request.owner)
+            if !vorkspace_meetings::valid_id(&request.id)
+                || !vorkspace_meetings::valid_id(&request.owner)
             {
                 return Err("Invalid recording identity".into());
             }
@@ -204,10 +204,10 @@ impl Service {
         let (lease, owner, rules) = match result {
             Ok(v) => v,
             Err(error) => {
-                let state = vorkspace_plugin::recording::State {
+                let state = vorkspace_meetings::recording::State {
                     id: request.id,
-                    started_at: vorkspace_plugin::recording::now_ms(),
-                    ended_at: Some(vorkspace_plugin::recording::now_ms()),
+                    started_at: vorkspace_meetings::recording::now_ms(),
+                    ended_at: Some(vorkspace_meetings::recording::now_ms()),
                     phase: Phase::Failed,
                     error: Some(error),
                 };

@@ -113,11 +113,6 @@ aside {
 .record[aria-pressed=true] svg {
   fill: #e75a63;
 }
-.settings-button {
-  padding: 5px 8px;
-  background: transparent;
-  border-color: transparent;
-}
 .search {
   margin: 0 14px 10px;
 }
@@ -360,43 +355,7 @@ main {
   background: #e75a63;
   margin-right: 5px;
 }
-#settings {
-  display: none;
-  overflow: auto;
-  padding: 24px 28px;
-  max-width: 760px;
-  width: 100%;
-  height: 100%;
-}
-#settings h2 {
-  font-size: 20px;
-  margin: 18px 0 8px;
-}
-#settings p {
-  color: var(--muted);
-  line-height: 1.6;
-}
-#settings label {
-  display: block;
-  margin: 20px 0 7px;
-  font-weight: 500;
-}
-#settings select,
-#settings input,
-#settings textarea {
-  display: block;
-  width: 100%;
-  background: var(--surface);
-}
-#summary-prompt {
-  min-height: 210px;
-  font-size: 13px;
-}
-#settings .buttons {
-  display: flex;
-  gap: 8px;
-  margin-top: 18px;
-}
+
 .small {
   font-size: 11px;
   color: var(--muted);
@@ -456,13 +415,10 @@ main {
   }
 }
 #record-mobile { margin: 0; }
-.settings-toolbar { display: flex; gap: 8px; align-items: center; }
-#settings-stop { display: none; }
-@media(max-width:620px) { #settings-stop:not([hidden]) { display: inline-block; } }
 </style>
 <div id="app">
 <aside aria-label="Meetings">
- <div class="toolbar"><button id="record" class="record" title="Record or stop meeting (⌘⇧R)" aria-label="Record meeting" aria-pressed="false"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5"/></svg><span>Record</span></button><h1>Meetings</h1><button id="open-settings" class="settings-button" aria-label="Meeting settings">Settings</button></div>
+ <div class="toolbar"><button id="record" class="record" title="Record or stop meeting (⌘⇧R)" aria-label="Record meeting" aria-pressed="false"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5"/></svg><span>Record</span></button><h1>Meetings</h1></div>
  <div class="search"><input id="search" type="search" placeholder="Search meetings" aria-label="Search meetings"></div>
  <nav id="list" aria-label="Recorded meetings"></nav>
  <div class="source-hint">Microphone + system audio<br>Only transcripts and meeting details are saved.</div>
@@ -475,14 +431,13 @@ main {
   <div class="document-actions"><div class="segmented" aria-label="Meeting view"><button id="show-transcript" aria-pressed="true">Transcript</button><button id="show-summary" aria-pressed="false" disabled>Summary</button></div><span class="spacer"></span><button id="record-mobile" class="back" title="Record or stop meeting (⌘⇧R)">Record</button><span id="analysis-state" role="status"></span><button id="save">Save changes</button><button id="mode-edit" hidden>Edit Markdown</button><button id="summarize">Summarize</button></div>
    <div class="editor-area"><textarea id="editor" spellcheck="true" aria-label="Meeting transcript"></textarea><article id="preview" aria-label="Meeting summary"></article><div id="live" aria-label="Live transcript" aria-live="polite"><div id="finals"></div><div id="partials"></div></div></div>
  </section>
- <section id="settings" aria-label="Meeting settings"><div class="settings-toolbar"><button id="settings-back">Back to meetings</button><span class="spacer"></span><button id="settings-stop" hidden>Stop</button></div><h2>Meeting settings</h2><p>Choose the provider, model and format used when you click Summarize. Audio stays on this Mac. The selected provider receives the transcript text for analysis.</p><label for="provider">Provider</label><select id="provider"><option value="">Loading available providers…</option></select><label for="model">Model</label><input id="model" list="models" placeholder="Choose or enter a model id" autocomplete="off"><datalist id="models"></datalist><p id="model-help" class="small"></p><label for="summary-prompt">Summary prompt</label><textarea id="summary-prompt" spellcheck="true"></textarea><p class="small">Your format is applied to the final notes. Long transcripts are analyzed in bounded sections first. The original transcript remains available.</p><div class="buttons"><button id="settings-save" class="primary">Save settings</button><span id="settings-status" role="status"></span></div></section>
 </main>
 </div>
 <script>
 (() => {
   "use strict";
-  const $ = (id) => document.getElementById(id), call = (method, params = {}) => vorkspace.call(method, params), host = (method, params = {}) => vorkspace.host(method, params);
-  let rows = [], selected = null, doc = null, view = "transcript", editingSummary = false, dirty = false, dirtyFields = new Set(), editEpoch = 0, activeId = null, phase = null, sequence = 0, visible = true, polling = false, analysis = false, settingsOpen = false, settings = null, providers = [], loadEpoch = 0, listEpoch = 0, saving = null, recordBusy = false;
+  const $ = (id) => document.getElementById(id), call = (method, params = {}) => meetingsRequest(method, params);
+  let rows = [], selected = null, doc = null, view = "transcript", editingSummary = false, dirty = false, dirtyFields = new Set(), editEpoch = 0, activeId = null, phase = null, sequence = 0, visible = true, polling = false, analysis = false, loadEpoch = 0, listEpoch = 0, saving = null, recordBusy = false;
   const isActive = () => ["starting", "recording", "finishing"].includes(phase), date = (ms) => new Date(ms).toLocaleString(void 0, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }), time = (ms) => {
     const s = Math.floor(ms / 1e3);
     return [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60].map((v) => String(v).padStart(2, "0")).join(":");
@@ -536,9 +491,7 @@ main {
     $("save").style.display = "inline-block";
   }
   function renderDocument() {
-    settingsOpen = false;
     document.body.classList.toggle("has-document", !!selected);
-    $("settings").style.display = "none";
     $("empty").style.display = selected ? "none" : "block";
     $("document").style.display = selected ? "flex" : "none";
     if (!selected) return;
@@ -555,9 +508,6 @@ main {
     $("record").disabled = phase === "finishing" || recordBusy;
     $("record-mobile").textContent = $("record").querySelector("span").textContent;
     $("record-mobile").disabled = $("record").disabled;
-    $("settings-stop").hidden = !isActive();
-    $("settings-stop").disabled = $("record").disabled;
-    $("settings-stop").textContent = phase === "finishing" ? "Finishing…" : "Stop";
     $("record").setAttribute("aria-label", isActive() ? "Stop recording meeting" : "Record meeting");
     $("title").readOnly = recording;
     $("show-summary").disabled = !doc?.meeting.summary;
@@ -651,7 +601,7 @@ main {
     renderState();
     try {
       if (activeId && isActive()) {
-        await host("audio.stop", { id: activeId });
+        await call("audio.stop", { id: activeId });
         phase = "finishing";
         return;
       }
@@ -676,7 +626,7 @@ main {
     if (polling || !visible || !activeId) return;
     polling = true;
     try {
-      const id = activeId, result = await host("audio.status", { id, after: sequence });
+      const id = activeId, result = await call("audio.status", { id, after: sequence });
       if (activeId !== id) return;
       if (result.state) {
         phase = result.state.phase;
@@ -707,26 +657,22 @@ main {
               const full = await call("meetings.read", { id });
               if (selected === id && !dirty) {
                 doc = full;
-                if (!settingsOpen) {
-                  view = "transcript";
-                  renderDocument();
-                }
+                view = "transcript";
+                renderDocument();
               }
             } catch (e) {
-              if (!settingsOpen) {
-                notice(result.state.error || "No transcript was recorded.", !!result.state.error);
-                if (doc) doc.state = result.state;
-                renderState();
-                renderBody();
-              }
+              notice(result.state.error || "No transcript was recorded.", !!result.state.error);
+              if (doc) doc.state = result.state;
+              renderState();
+              renderBody();
             }
           }
           await refresh();
         } else renderState();
-        if (result.state.error && selected === id && !settingsOpen) notice(result.state.error, true);
+        if (result.state.error && selected === id) notice(result.state.error, true);
       }
     } catch (error) {
-      if (!settingsOpen) showError(error);
+      showError(error);
     } finally {
       polling = false;
     }
@@ -741,13 +687,12 @@ main {
     $("analysis-state").textContent = "Analyzing transcript";
     try {
       const result = await call("meetings.summarize", { id });
-      // Settings owns presentation, not the selected document's saved revision.
       // Reconcile successful analysis even when navigation changed its epoch.
       if (selected === id) {
         doc = result;
         editingSummary = false;
         if (dirty) { notice("Summary ready. Your unsaved edits are still here."); }
-        else if (!settingsOpen && loadEpoch === epoch) {
+        else if (loadEpoch === epoch) {
           view = "summary";
           notice("");
           renderDocument();
@@ -762,61 +707,7 @@ main {
       renderState();
     }
   }
-  async function showSettings() {
-    if (dirty) await save();
-    if (dirty) return;
-    const epoch = ++loadEpoch, documentId = selected, edits = editEpoch;
-    const result = await call("settings.read");
-    if (epoch !== loadEpoch || documentId !== selected || edits !== editEpoch || dirty) return;
-    settings = result;
-    settingsOpen = true;
-    $("document").style.display = "none";
-    $("empty").style.display = "none";
-    $("settings").style.display = "block";
-    document.body.classList.add("has-document");
-    $("summary-prompt").value = settings.prompt;
-    $("model").value = settings.model;
-    const available = await host("ai.models");
-    if (!settingsOpen || epoch !== loadEpoch) return;
-    providers = available;
-    const select = $("provider");
-    select.replaceChildren();
-    const empty = document.createElement("option");
-    empty.value = "";
-    empty.textContent = "Choose a provider";
-    select.append(empty);
-    for (const provider of providers) {
-      const option = document.createElement("option");
-      option.value = provider.id;
-      option.textContent = provider.name;
-      select.append(option);
-    }
-    select.value = settings.provider;
-    updateModels();
-    $("model-help").textContent = providers.length ? "Uses the account already selected in Vorkspace. You can enter a model id if it is absent from the catalog." : "Connect a provider in Vorkspace Settings, then reopen Meeting settings.";
-  }
-  function updateModels() {
-    const list = $("models");
-    list.replaceChildren();
-    for (const model of providers.find((p) => p.id === $("provider").value)?.models || []) {
-      const option = document.createElement("option");
-      option.value = model.id;
-      option.label = model.name;
-      list.append(option);
-    }
-  }
-  $("record").onclick = $("record-mobile").onclick = $("settings-stop").onclick = () => toggleRecord().catch(showError);
-  $("open-settings").onclick = () => showSettings().catch(showError);
-  $("settings-back").onclick = () => renderDocument();
-  $("settings-save").onclick = async () => {
-    try {
-      settings = await call("settings.save", { provider: $("provider").value, model: $("model").value.trim(), prompt: $("summary-prompt").value });
-      $("settings-status").textContent = "Saved";
-    } catch (error) {
-      $("settings-status").textContent = error.message;
-    }
-  };
-  $("provider").onchange = updateModels;
+  $("record").onclick = $("record-mobile").onclick = () => toggleRecord().catch(showError);
   $("search").oninput = renderList;
   $("title").oninput = () => setDirty("title");
   $("editor").oninput = () => setDirty(view === "summary" ? "summary" : "transcript");

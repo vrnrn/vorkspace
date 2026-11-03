@@ -27,6 +27,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if tab == SidebarTab::Todos && !self.workspace.preferences.todos {
+            return;
+        }
         self.leave_app_views(cx);
         self.leave_app_search(cx);
         self.close_preview(cx);
@@ -123,6 +126,7 @@ impl Shell {
         self.refresh_sidebar_structure(cx);
         let tab = self.workspace.sidebar_tab();
         let tabs = SidebarTab::normalize(&self.workspace.sidebar_tab_order);
+        let todos_enabled = self.workspace.preferences.todos;
         let mut body = div()
             .id("classic-workspace-sidebar")
             .debug_selector(|| "sidebar-content".into())
@@ -158,44 +162,48 @@ impl Shell {
                     .gap_px()
                     .px_2()
                     .child(self.sidebar_tab_liquid.surface(None, false))
-                    .children(tabs.into_iter().map(|item| {
-                        let selected = tab == item
-                            || (tab == SidebarTab::Graph && item == SidebarTab::Changes);
-                        let id: SharedString =
-                            format!("classic-tab-{}", item.label().to_lowercase()).into();
-                        div()
-                            .id(id.clone())
-                            .debug_selector(move || id.to_string())
-                            .role(Role::Tab)
-                            .aria_label(item.label())
-                            .aria_selected(selected)
-                            .focusable()
-                            .tab_stop(true)
-                            .h(px(30.))
-                            .flex_1()
-                            .min_w_0()
-                            .relative()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_t_md()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(content(if selected { 0.9 } else { 0.5 }))
-                            .hover(|s| s.text_color(content(1.)))
-                            .focus(|s| s.text_color(content(1.)))
-                            .child(
-                                self.sidebar_tab_liquid
-                                    .row(format!("sidebar-tab:{}", item.label()), selected),
-                            )
-                            .child(item.label())
-                            .on_hover(cx.listener(|this, _, _, cx| {
-                                this.sidebar_frame.update(cx, |_, cx| cx.notify())
-                            }))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select_classic_sidebar(item, window, cx)
-                            }))
-                    })),
+                    .children(
+                        tabs.into_iter()
+                            .filter(|item| *item != SidebarTab::Todos || todos_enabled)
+                            .map(|item| {
+                                let selected = tab == item
+                                    || (tab == SidebarTab::Graph && item == SidebarTab::Changes);
+                                let id: SharedString =
+                                    format!("classic-tab-{}", item.label().to_lowercase()).into();
+                                div()
+                                    .id(id.clone())
+                                    .debug_selector(move || id.to_string())
+                                    .role(Role::Tab)
+                                    .aria_label(item.label())
+                                    .aria_selected(selected)
+                                    .focusable()
+                                    .tab_stop(true)
+                                    .h(px(30.))
+                                    .flex_1()
+                                    .min_w_0()
+                                    .relative()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_t_md()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(content(if selected { 0.9 } else { 0.5 }))
+                                    .hover(|s| s.text_color(content(1.)))
+                                    .focus(|s| s.text_color(content(1.)))
+                                    .child(
+                                        self.sidebar_tab_liquid
+                                            .row(format!("sidebar-tab:{}", item.label()), selected),
+                                    )
+                                    .child(item.label())
+                                    .on_hover(cx.listener(|this, _, _, cx| {
+                                        this.sidebar_frame.update(cx, |_, cx| cx.notify())
+                                    }))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.select_classic_sidebar(item, window, cx)
+                                    }))
+                            }),
+                    ),
             );
         if tab == SidebarTab::Sessions {
             body = body

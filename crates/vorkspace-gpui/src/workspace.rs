@@ -44,11 +44,11 @@ impl Connector {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum AppView {
     /// Deserialize old workspaces, then normalize against saved connector preferences.
+    #[serde(alias = "Plugins")]
     Inbox,
     Connector(Connector),
     Notes,
     Meetings,
-    Plugins,
     Automations,
     Todos,
 }
@@ -59,7 +59,6 @@ impl AppView {
             Self::Connector(provider) => provider.label(),
             Self::Notes => "Notes",
             Self::Meetings => "Meetings",
-            Self::Plugins => "Plugins",
             Self::Automations => "Automations",
             Self::Todos => "To-dos",
         }
@@ -73,18 +72,16 @@ pub(crate) enum SidebarNavigation {
     Connector(Connector),
     Notes,
     Meetings,
-    Plugins,
     Automations,
     Todos,
 }
 impl SidebarNavigation {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 7] = [
         Self::Connector(Connector::Github),
         Self::Connector(Connector::Gitlab),
         Self::Connector(Connector::Jira),
         Self::Notes,
         Self::Meetings,
-        Self::Plugins,
         Self::Automations,
         Self::Todos,
     ];
@@ -93,7 +90,6 @@ impl SidebarNavigation {
             Self::Connector(provider) => provider.id(),
             Self::Notes => "notes",
             Self::Meetings => "meetings",
-            Self::Plugins => "plugins",
             Self::Automations => "automations",
             Self::Todos => "todos",
         }
@@ -106,7 +102,6 @@ impl SidebarNavigation {
             Self::Connector(provider) => provider.label(),
             Self::Notes => "Notes",
             Self::Meetings => "Meetings",
-            Self::Plugins => "Plugins",
             Self::Automations => "Automations",
             Self::Todos => "To-dos",
         }
@@ -116,7 +111,6 @@ impl SidebarNavigation {
             Self::Connector(provider) => provider.icon(),
             Self::Notes => "note",
             Self::Meetings => "mic",
-            Self::Plugins => "app-window",
             Self::Automations => "zap",
             Self::Todos => "check-circle",
         }
@@ -341,7 +335,6 @@ pub(crate) struct Workspace {
     pub compact_session_cards: bool,
     pub sidebar_notes_visible: bool,
     pub sidebar_meetings_visible: bool,
-    pub sidebar_plugins_visible: bool,
     pub sidebar_automations_visible: bool,
     pub sidebar_todos_visible: bool,
     pub sidebar_inbox_visible: bool,
@@ -532,7 +525,6 @@ impl Default for Workspace {
             compact_session_cards: true,
             sidebar_notes_visible: true,
             sidebar_meetings_visible: true,
-            sidebar_plugins_visible: true,
             sidebar_automations_visible: true,
             sidebar_todos_visible: true,
             sidebar_inbox_visible: true,
@@ -827,10 +819,14 @@ impl Workspace {
                     .get(&vorkspace_core::files::path_key(&self.project))
             })
             .copied()
+            .filter(|tab| *tab != SidebarTab::Todos || self.preferences.todos)
             .unwrap_or_else(|| {
                 self.sidebar_tab_order
                     .iter()
-                    .find(|tab| **tab != SidebarTab::Graph)
+                    .find(|tab| {
+                        **tab != SidebarTab::Graph
+                            && (**tab != SidebarTab::Todos || self.preferences.todos)
+                    })
                     .copied()
                     .unwrap_or_default()
             })

@@ -4416,17 +4416,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "vorkspace-connector-plugins"
-version = "1.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
- "vorkspace-core",
- "vorkspace-plugin",
-]
-
-[[package]]
 name = "vorkspace-core"
 version = "1.1.0"
 dependencies = [
@@ -4452,7 +4441,6 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
- "vorkspace-plugin",
  "zstd",
 ]
 
@@ -4523,8 +4511,8 @@ dependencies = [
  "vorkspace-editor",
  "vorkspace-helper",
  "vorkspace-macos",
+ "vorkspace-meetings",
  "vorkspace-model",
- "vorkspace-plugin",
  "vorkspace-runtime",
  "vorkspace-ui",
 ]
@@ -4549,7 +4537,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "vorkspace-macos",
- "vorkspace-plugin",
+ "vorkspace-meetings",
  "vorkspace-ui",
 ]
 
@@ -4572,7 +4560,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "vorkspace-meetings-plugin"
+name = "vorkspace-meetings"
 version = "1.1.0"
 dependencies = [
  "libc",
@@ -4581,7 +4569,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uuid",
- "vorkspace-plugin",
 ]
 
 [[package]]
@@ -4593,16 +4580,6 @@ dependencies = [
  "serde",
  "serde_json",
  "vorkspace-core",
-]
-
-[[package]]
-name = "vorkspace-plugin"
-version = "1.1.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]

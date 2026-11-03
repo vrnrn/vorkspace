@@ -1,8 +1,9 @@
 # Connectors
 
 Connectors bring GitHub, GitLab, and Jira Cloud work into Vorkspace. In
-**Settings → Connectors**, turn on the services you use and turn off the others.
-Connectors, Archive and Worktrees are all in the App group in Settings.
+**Settings → Connectors → Plugins**, turn on the services and features you use.
+GitHub, GitLab, Jira, Notes, Meetings, and To-dos each have their own page in
+that Settings group. Turning one off keeps its saved data.
 
 Open the sidebar's options menu to hide shortcuts or drag their handles into a
 different order. This includes enabled connectors, Notes and Automations.

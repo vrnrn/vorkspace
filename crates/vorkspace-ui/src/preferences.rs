@@ -22,6 +22,8 @@ pub struct Preferences {
     /// between the project rail and the conversation.
     pub sidebar_right: bool,
     pub notes: bool,
+    pub meetings: bool,
+    pub todos: bool,
     pub quick_composer: bool,
     pub clipboard_history: bool,
     pub dictation_enabled: bool,
@@ -140,6 +142,8 @@ impl Default for Preferences {
             tab_animations: false,
             sidebar_right: false,
             notes: true,
+            meetings: true,
+            todos: true,
             quick_composer: false,
             clipboard_history: true,
             dictation_enabled: false,

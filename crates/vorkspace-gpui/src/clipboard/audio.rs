@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
 };
 use vorkspace_helper::{AudioNotice, AudioRequest};
-use vorkspace_plugin::recording::{self, Phase, Segment, State};
+use vorkspace_meetings::recording::{self, Phase, Segment, State};
 #[derive(Default)]
 pub(super) struct Audio {
     pub wanted: bool,
@@ -118,7 +118,7 @@ pub(crate) fn start(
     directory: PathBuf,
     cx: &mut App,
 ) -> Result<Value, String> {
-    if !vorkspace_plugin::valid_id(&owner) || !vorkspace_plugin::valid_id(&id) {
+    if !vorkspace_meetings::valid_id(&owner) || !vorkspace_meetings::valid_id(&id) {
         return Err("Invalid recording identity".into());
     }
     service(cx).update(cx, |s, cx| {
@@ -185,7 +185,7 @@ pub(crate) fn start(
     })
 }
 pub(crate) fn stop(owner: &str, id: &str, cx: &mut App) -> Result<Value, String> {
-    if !vorkspace_plugin::valid_id(id) {
+    if !vorkspace_meetings::valid_id(id) {
         return Err("Invalid recording id".into());
     }
     service(cx).update(cx, |s, cx| {
@@ -222,7 +222,7 @@ pub(crate) fn status(
     directory: PathBuf,
     cx: &mut App,
 ) -> Result<Value, String> {
-    if !vorkspace_plugin::valid_id(id) {
+    if !vorkspace_meetings::valid_id(id) {
         return Err("Invalid recording id".into());
     }
     service(cx).update(cx, |s, cx| {

@@ -6,6 +6,6 @@ Your Mac needs macOS 26 or newer, a downloaded speech language, and permission f
 
 Dictation and Vox wait while a meeting uses the microphone. You can visit another page while recording. Quitting Vorkspace stops the meeting and keeps the transcript collected so far. If recording is interrupted, complete saved text remains available when you reopen the app.
 
-In **Meeting settings**, choose the AI provider, model and instructions for your notes. Clicking **Summarize** sends the written transcript to that provider. A cloud provider receives the text; your audio stays on your Mac.
+In **Settings → Connectors → Meetings**, choose the AI provider, model and instructions for your notes, then press **Save**. Clicking **Summarize** sends the written transcript to that provider. A cloud provider receives the text; your audio stays on your Mac.
 
-Switch between **Transcript** and **Summary** to see the source or the polished notes. You can change the title, correct the transcript, or edit the summary as Markdown. Press **Save changes** or ⌘S. A failed summary leaves your transcript and earlier notes intact.
+Switch between **Transcript** and **Summary** to see the source or the polished notes. You can change the title, correct the transcript, or edit the summary as Markdown. Press **Save changes** or ⌘S. A failed summary leaves your transcript and earlier notes intact. You can turn Meetings off in **Settings → Connectors → Plugins** after stopping any recording. Your documents stay saved.

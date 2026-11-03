@@ -104,7 +104,7 @@ export async function startDev({
           ? join(metadata.target_directory, buildEnv.CARGO_BUILD_TARGET)
           : metadata.target_directory;
         const cargoProfile = profile === "release" ? ["--release"] : ["--profile", profile];
-        const result = await run("cargo", ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", pkg.name, "-p", "vorkspace-helper", "-p", "vorkspace-connector-plugins", "-p", "vorkspace-meetings-plugin", "--bin", pkg.name, "--bin", "vorkspace-helper", "--bin", "vorkspace-github-plugin", "--bin", "vorkspace-gitlab-plugin", "--bin", "vorkspace-jira-plugin", "--bin", "vorkspace-meetings-plugin", ...cargoProfile]);
+        const result = await run("cargo", ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", pkg.name, "-p", "vorkspace-helper", "--bin", pkg.name, "--bin", "vorkspace-helper", ...cargoProfile]);
         if (closing) return;
         if (result.code !== 0) {
           log("Build failed. Keeping the current app; type r to retry after fixing the error.");

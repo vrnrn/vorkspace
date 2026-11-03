@@ -1,4 +1,4 @@
-//! Opaque HTML surfaces. Only explicit plugin surfaces receive a scoped bridge.
+//! Opaque HTML surfaces. The built-in Meetings view has its own scoped message handler.
 use crate::native_view::invalidate_parent_cursor_rects;
 use gpui::{Context, Window, canvas, prelude::*};
 use objc2::{
@@ -73,6 +73,8 @@ define_class!(
         }
     }
 );
+const MAX_MESSAGE_BYTES: usize = vorkspace_meetings::recording::MAX_TRANSCRIPT + 4096;
+
 pub(crate) type Reply = Rc<dyn Fn(Result<serde_json::Value, String>)>;
 pub(crate) type RequestHandler = Rc<dyn Fn(serde_json::Value, Reply)>;
 struct Bridge {
@@ -81,7 +83,7 @@ struct Bridge {
 }
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name="VorkspacePluginMessageGuard"]
+    #[name="VorkspaceMeetingsMessageGuard"]
     #[thread_kind=MainThreadOnly]
     #[ivars=Rc<Bridge>]
     struct MessageGuard;
@@ -92,7 +94,7 @@ define_class!(
             if !unsafe{message.frameInfo().isMainFrame()}{return}
             let Ok(body)=unsafe{message.body()}.downcast::<NSString>()else{return};
             let body=body.to_string();
-            if body.len()>vorkspace_plugin::MAX_FRAME{return}
+            if body.len()>MAX_MESSAGE_BYTES{return}
             let Ok(mut value)=serde_json::from_str::<serde_json::Value>(&body)else{return};
             if value["nonce"].as_str()!=Some(&self.ivars().nonce){return}
             let Some(id)=value["id"].as_u64()else{return};
@@ -165,26 +167,26 @@ fn sandbox(body: &str) -> String {
     )
 }
 
-fn plugin_sandbox(body: &str, nonce: &str) -> String {
-    let sdk = r#"<script>
+fn meetings_sandbox(body: &str, nonce: &str) -> String {
+    let client = r#"<script>
 (()=>{let next=0;const pending=new Map();
-const request=(route,method,params={})=>new Promise((resolve,reject)=>{const id=++next;pending.set(id,{resolve,reject});parent.postMessage({kind:'vorkspace.request',id,route,method,params},'*')});
-window.vorkspace={call:(method,params)=>request('plugin',method,params),host:(method,params)=>request('host',method,params)};
+const request=(method,params={})=>new Promise((resolve,reject)=>{const id=++next;pending.set(id,{resolve,reject});parent.postMessage({kind:'vorkspace.request',id,method,params},'*')});
+window.meetingsRequest=request;
 addEventListener('message',event=>{if(event.source!==parent)return;const data=event.data;
 if(data?.kind==='vorkspace.reply'){const item=pending.get(data.id);if(!item)return;pending.delete(data.id);if(data.error)item.reject(new Error(data.error));else item.resolve(data.result)}
 if(data?.kind==='vorkspace.visibility'){dispatchEvent(new CustomEvent('vorkspace-visibility',{detail:data.visible}))}
 if(data?.kind==='vorkspace.theme'){const style=document.documentElement.style;style.setProperty('--foreground',data.foreground);style.setProperty('--accent',data.accent);style.setProperty('--link',data.accent);style.setProperty('--background',data.light?'#fafafa':'#141414');style.setProperty('--surface',data.light?'#eee':'#222');style.setProperty('--muted',data.light?'#737373':'#969696');style.setProperty('--border',data.light?'#d4d4d4':'#383838');style.colorScheme=data.light?'light':'dark'}
 });})();
 </script>"#;
-    let mut html = sandbox(&format!("{sdk}{body}"));
+    let mut html = sandbox(&format!("{client}{body}"));
     let nonce = serde_json::to_string(nonce).unwrap();
     html.push_str(&format!(r#"<script>
 addEventListener('message',event=>{{const frame=document.querySelector('iframe');if(event.source!==frame.contentWindow||event.origin!=='null'||event.data?.kind!=='vorkspace.request')return;
-const data=event.data;if(!Number.isSafeInteger(data.id)||!['host','plugin'].includes(data.route)||typeof data.method!=='string')return;
-const encoded=JSON.stringify({{nonce:{nonce},id:data.id,route:data.route,method:data.method,params:data.params}});if(encoded.length>{limit})return;
-window.webkit.messageHandlers.vorkspacePlugin.postMessage(encoded);
+const data=event.data;if(!Number.isSafeInteger(data.id)||typeof data.method!=='string')return;
+const encoded=JSON.stringify({{nonce:{nonce},id:data.id,method:data.method,params:data.params}});if(new TextEncoder().encode(encoded).length>{limit}){{frame.contentWindow.postMessage({{kind:'vorkspace.reply',id:data.id,error:'Meeting edit exceeds its size limit.'}},'*');return;}}
+window.webkit.messageHandlers.vorkspaceMeetings.postMessage(encoded);
 }});
-</script>"#,limit=vorkspace_plugin::MAX_FRAME));
+</script>"#,limit=MAX_MESSAGE_BYTES));
     html
 }
 
@@ -242,7 +244,8 @@ impl Html {
             view: Rc::new(RefCell::new(None)),
         }
     }
-    pub(crate) fn plugin(body: String, handler: RequestHandler) -> Self {
+    pub(crate) fn meetings(handler: RequestHandler) -> Self {
+        let body = include_str!("../meetings/ui.html").to_owned();
         let mut html = Self::new(body);
         html.bridge = Some(Rc::new(Bridge {
             nonce: uuid::Uuid::new_v4().simple().to_string(),
@@ -278,7 +281,7 @@ impl Html {
                     .as_ref()
                     .map_or_else(
                         || sandbox(&self.body),
-                        |bridge| plugin_sandbox(&self.body, &bridge.nonce),
+                        |bridge| meetings_sandbox(&self.body, &bridge.nonce),
                     )
                     .into(),
             });
@@ -364,7 +367,7 @@ impl gpui::Render for Html {
                         let Some(mtm) = MainThreadMarker::new() else {
                             return;
                         };
-                        // Generated artifacts get no handlers. Explicit plugins
+                        // Generated artifacts get no handlers. Meetings
                         // receive only their validated request bridge, never app IPC.
                         let hosted = unsafe {
                             let clip = ArtifactClip::alloc(mtm)
@@ -384,7 +387,7 @@ impl gpui::Render for Html {
                             let messages=bridge.as_ref().map(|bridge|{
                                 let messages=MessageGuard::alloc(mtm).set_ivars(bridge.clone());
                                 let messages:Retained<MessageGuard>=msg_send![super(messages),init];
-                                config.userContentController().addScriptMessageHandler_name(ProtocolObject::from_ref(&*messages),&NSString::from_str("vorkspacePlugin"));
+                                config.userContentController().addScriptMessageHandler_name(ProtocolObject::from_ref(&*messages),&NSString::from_str("vorkspaceMeetings"));
                                 messages
                             });
                             let web = WKWebView::initWithFrame_configuration(
@@ -479,59 +482,13 @@ impl Drop for Html {
 mod tests {
     use super::*;
     #[test]
-    fn plugin_bridge_requires_an_explicit_surface_and_an_opaque_child() {
+    fn generated_artifacts_have_no_meetings_message_handler() {
         let plain = sandbox("<p>Artifact</p>");
-        let plugin = plugin_sandbox("<p>Plugin</p>", "private-fixture-nonce");
-        assert!(!plain.contains("vorkspacePlugin"));
-        assert!(!plain.contains("window.vorkspace="));
-        assert!(plugin.contains("sandbox=\"allow-scripts\""));
-        assert!(!plugin.contains("allow-same-origin"));
-        assert!(plugin.contains("event.source!==frame.contentWindow"));
-        assert!(plugin.contains("event.origin!=='null'"));
-        assert!(plugin.contains("nonce:\"private-fixture-nonce\""));
-        // Optional output feeds the real WebKit fixture without maintaining a
-        // second implementation of the opaque wrapper or JavaScript SDK.
-        if let Some(output) = std::env::var_os("VORKSPACE_PLUGIN_DOCUMENTS") {
-            let output = std::path::PathBuf::from(output);
-            assert!(output.is_absolute() && output.is_dir());
-            let body = format!(
-                "{}{}",
-                include_str!("../../../vorkspace-meetings-plugin/src/ui.html"),
-                r#"<script>
-addEventListener('message', async event => {
- if(event.source!==parent || event.data?.kind!=='fixture.run')return;
- const command=event.data;let value;
- try {
- if(command.action==='first'){document.querySelector('#list button').click();value=true;}
- if(command.action==='click'){document.getElementById(command.element).click();value=true;}
- if(command.action==='field'){const input=document.getElementById(command.element);input.value=command.value;input.dispatchEvent(new Event('input'));input.dispatchEvent(new Event('change'));value=true;}
- if(command.action==='inspect'){value={metadata:document.getElementById('metadata').innerText,settingsStop:{text:document.getElementById('settings-stop').innerText,width:document.getElementById('settings-stop').getBoundingClientRect().width,disabled:document.getElementById('settings-stop').disabled},text:document.body.innerText,title:document.getElementById('title').value,editor:document.getElementById('editor').value,preview:document.getElementById('preview').innerHTML,record:document.getElementById('record').innerText,summaryDisabled:document.getElementById('summarize').disabled,overflow:document.documentElement.scrollWidth>innerWidth,finals:document.getElementById('finals').innerText,notice:document.getElementById('notice').innerText};}
- if(command.action==='isolation'){let isolated=false;try{void parent.document.body}catch{isolated=true};value={isolated};}
- await vorkspace.host('fixture.report',{id:command.id,value});
- }catch(error){await vorkspace.host('fixture.report',{id:command.id,error:String(error)});}
-});</script>"#
-            );
-            for light in [false, true] {
-                vorkspace_ui::theme::configure(
-                    &vorkspace_ui::preferences::Preferences {
-                        theme: if light { "light" } else { "dark" }.into(),
-                        ..Default::default()
-                    },
-                    light,
-                    true,
-                );
-                std::fs::write(
-                    output.join(format!(
-                        "meetings-{}.html",
-                        if light { "light" } else { "dark" }
-                    )),
-                    plugin_sandbox(&body, "private-fixture-nonce"),
-                )
-                .unwrap();
-            }
-            std::fs::write(output.join("artifact.html"), plain).unwrap();
-            vorkspace_ui::theme::configure(&Default::default(), false, true);
-        }
+        let meetings = meetings_sandbox("<p>Meetings</p>", "test-nonce");
+        assert!(!plain.contains("vorkspaceMeetings"));
+        assert!(!plain.contains("window.meetingsRequest"));
+        assert!(meetings.contains("event.source!==frame.contentWindow"));
+        assert!(meetings.contains("event.origin!=='null'"));
     }
     #[test]
     fn generated_markup_cannot_escape_the_opaque_iframe() {
