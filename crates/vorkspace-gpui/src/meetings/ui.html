@@ -704,8 +704,9 @@ main {
     $("analysis-state").textContent = "Analyzing transcript";
     try {
       const result = await call("meetings.summarize", { id });
-      // Reconcile successful analysis even when navigation changed its epoch.
-      if (selected === id) {
+      // Reconcile only forward. A reopened document may have saved edits
+      // after the summary committed but before its response arrived.
+      if (selected === id && doc?.meeting.id === id && result.meeting.revision > doc.meeting.revision) {
         doc = result;
         if (dirty) { notice("Summary ready. Your unsaved edits are still here."); }
         else if (loadEpoch === epoch) {

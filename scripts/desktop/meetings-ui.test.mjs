@@ -36,7 +36,7 @@ function document(id) {
 async function harness() {
   const elements = new Map(), intervals = [], records = new Map([['A', document('A')], ['B', document('B')]]);
   const get = (id) => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  const pending = new Map(), writes = [], stops = [];
+  const pending = new Map(), summaryResponses = new Map(), writes = [], stops = [];
   let phase = "starting";
   const call = async (method, params = {}) => {
     if (pending.has(method + ":" + (params.id ?? ""))) await pending.get(method + ":" + (params.id ?? "")).promise;
@@ -47,7 +47,9 @@ async function harness() {
       const doc = records.get(params.id);
       doc.meeting.summary.text = "Updated by AI"; doc.meeting.revision++;
       doc.summary_html = "<p>Updated by AI</p>";
-      return structuredClone(doc);
+      const snapshot = structuredClone(doc);
+      await summaryResponses.get(params.id)?.promise;
+      return snapshot;
     }
     if (method === "meetings.update") {
       writes.push(structuredClone(params));
@@ -75,7 +77,7 @@ async function harness() {
     return button.onclick();
   };
   const input = (id, text) => { get(id).value = text; get(id).oninput(); };
-  return { get, open, input, pending, writes, stops, records, tick: () => intervals[0](), phase: (value) => { phase = value; } };
+  return { get, open, input, pending, summaryResponses, writes, stops, records, tick: () => intervals[0](), phase: (value) => { phase = value; } };
 }
 
 test("delayed document reads preserve newer input", async () => {
@@ -192,4 +194,29 @@ test("reselecting the current meeting supersedes a pending navigation", async ()
   await navigation;
   assert.equal(ui.get("title").value, "A");
   assert.equal(ui.get("editor").value, "A transcript");
+});
+
+test("a delayed summary response cannot roll back a reopened meeting's saved revision", async () => {
+  const ui = await harness();
+  await ui.open("A");
+  const response = deferred();
+  ui.summaryResponses.set("A", response);
+  const summary = ui.get("summarize").onclick();
+  await setImmediate();
+  assert.equal(ui.records.get("A").meeting.revision, 1);
+  await ui.open("B");
+  await ui.open("A");
+  ui.input("editor", "Newly saved transcript");
+  await ui.get("save").onclick();
+  assert.equal(ui.records.get("A").meeting.revision, 2);
+
+  response.resolve();
+  await summary;
+  await ui.get("show-summary").onclick();
+  await ui.get("show-transcript").onclick();
+  assert.equal(ui.get("editor").value, "Newly saved transcript");
+  ui.input("title", "Newer title");
+  await ui.get("save").onclick();
+  assert.equal(ui.writes.at(-1).revision, 2);
+  assert.equal(ui.records.get("A").meeting.title, "Newer title");
 });
