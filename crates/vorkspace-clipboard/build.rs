@@ -2,8 +2,18 @@ use std::{env, path::PathBuf, process::Command};
 
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let source = manifest.join("native/Clipboard.swift");
-    println!("cargo:rerun-if-changed={}", source.display());
+    let sources = [
+        "Clipboard.swift",
+        "Dictation.swift",
+        "DictationWords.swift",
+        "DictationTarget.swift",
+        "SpeechCapture.swift",
+        "Microphones.swift",
+    ]
+    .map(|name| manifest.join("native").join(name));
+    for source in &sources {
+        println!("cargo:rerun-if-changed={}", source.display());
+    }
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let library = output.join("libVorkspaceClipboard.a");
     let arch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
@@ -21,9 +31,11 @@ fn main() {
             "-module-name",
             "VorkspaceClipboard",
             "-target",
-            &format!("{arch}-apple-macos11.0"),
+            &format!("{arch}-apple-macos26.0"),
         ])
-        .arg(source)
+        .arg("-module-cache-path")
+        .arg(output.join("swift-module-cache"))
+        .args(sources)
         .arg("-o")
         .arg(&library)
         .status()
@@ -44,9 +56,20 @@ fn main() {
         .next()
         .unwrap();
     for path in paths.split('"').skip(1).step_by(2) {
-        println!("cargo:rustc-link-arg-bins=-L{path}");
+        println!("cargo:rustc-link-search=native={path}");
     }
-    // Only the helper links the panel; the app shares this crate's protocol.
-    println!("cargo:rustc-link-arg-bins=-L{}", output.display());
-    println!("cargo:rustc-link-arg-bins=-lVorkspaceClipboard");
+    // The app links only device enumeration. The helper owns capture and text.
+    println!("cargo:rustc-link-search=native={}", output.display());
+    println!("cargo:rustc-link-lib=static=VorkspaceClipboard");
+    for framework in [
+        "Speech",
+        "AVFoundation",
+        "CoreAudio",
+        "AudioToolbox",
+        "AppKit",
+        "ApplicationServices",
+        "Carbon",
+    ] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
 }

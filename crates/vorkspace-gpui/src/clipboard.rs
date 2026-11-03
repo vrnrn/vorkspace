@@ -4,7 +4,9 @@
 use gpui::{App, AppContext, Context, Entity, Global};
 #[cfg(not(test))]
 use vorkspace_clipboard::Supervisor;
-use vorkspace_clipboard::{Action, Command, Notice};
+use vorkspace_clipboard::{
+    Action, Command, DictationConfig, DictationPhase, DictationStatus, Notice,
+};
 gpui::actions!(clipboard, [Toggle, Settings, Composer, Quit, Reopen]);
 
 struct Clipboard(Entity<Service>);
@@ -14,6 +16,8 @@ pub(crate) struct Service {
     pub error: Option<String>,
     icon: bool,
     recording: bool,
+    dictation: DictationConfig,
+    pub dictation_status: DictationStatus,
     /// The panel's Quit also stops the helper, once the app really does quit.
     stop_helper_on_quit: bool,
     #[cfg(not(test))]
@@ -37,14 +41,18 @@ fn service(cx: &mut App) -> Entity<Service> {
         service
     })
 }
-pub(crate) fn configure(recording: bool, icon: bool, cx: &mut App) {
+pub(crate) fn configure(recording: bool, icon: bool, dictation: DictationConfig, cx: &mut App) {
     service(cx).update(cx, |s, cx| {
         s.icon = icon;
         s.recording = recording;
+        s.dictation = dictation.clone();
+        if !dictation.enabled {
+            s.dictation_status = DictationStatus::default();
+        }
         #[cfg(not(test))]
         {
             if let Some(supervisor) = &s.supervisor {
-                supervisor.configure(recording, icon);
+                supervisor.configure(recording, icon, dictation.clone());
             }
             s.sync_status(cx);
         }
@@ -80,7 +88,7 @@ impl Service {
 
     #[cfg(not(test))]
     fn sync_status(&mut self, cx: &mut Context<Self>) {
-        if !self.icon || self.recording {
+        if !self.icon || self.recording || self.dictation.enabled {
             self.status = None;
         } else if self.status.is_none() {
             let app = std::cell::RefCell::new(cx.to_async());
@@ -97,12 +105,13 @@ impl Service {
         }
     }
 
-    fn send(&self, command: Command) {
+    fn send(&self, command: Command) -> bool {
         #[cfg(not(test))]
         if let Some(supervisor) = &self.supervisor {
-            supervisor.send(command);
+            return supervisor.send(command);
         }
         let _ = command;
+        false
     }
 
     fn notice(&mut self, notice: Notice, cx: &mut Context<Self>) {
@@ -116,6 +125,12 @@ impl Service {
             Notice::Action(Action::Quit) => {
                 self.stop_helper_on_quit = true;
                 cx.dispatch_action(&Quit);
+            }
+            Notice::Dictation(status) => {
+                if self.dictation.enabled || status.phase == DictationPhase::Off {
+                    self.dictation_status = status;
+                    cx.notify();
+                }
             }
             Notice::Hello { .. } => {}
         }
@@ -137,7 +152,7 @@ pub(crate) fn menu_bar_ready(cx: &App) -> bool {
         let s = s.read(cx);
         #[cfg(not(test))]
         return s.icon
-            && if s.recording {
+            && if s.recording || s.dictation.enabled {
                 s.supervisor.as_ref().is_some_and(Supervisor::connected)
             } else {
                 s.status.is_some()
@@ -161,10 +176,40 @@ pub(crate) fn app_quitting(cx: &mut App) {
             // replacement during the app's own slower shutdown.
             #[cfg(not(test))]
             if let Some(supervisor) = &s.supervisor {
-                supervisor.configure(false, false);
+                supervisor.configure(false, false, DictationConfig::default());
             }
         }
     }
+}
+
+/// Build the helper's complete, replayable preference snapshot.
+pub(crate) fn dictation_configuration(
+    prefs: &vorkspace_ui::preferences::Preferences,
+) -> DictationConfig {
+    DictationConfig {
+        enabled: prefs.dictation_enabled,
+        microphone: prefs.dictation_microphone.clone(),
+        words: prefs.dictation_words.clone(),
+        shortcut: match prefs.keybindings.get("App: Dictation") {
+            Some(shortcut) => shortcut.clone().unwrap_or_default(),
+            None => DictationConfig::default().shortcut,
+        },
+    }
+}
+pub(crate) fn ensure(cx: &mut App) -> Entity<Service> {
+    service(cx)
+}
+pub(crate) fn dictation_setup(cx: &mut App) {
+    service(cx).update(cx, |s, cx| {
+        if !s.send(Command::SetUpDictation) {
+            s.dictation_status = DictationStatus {
+                phase: DictationPhase::Error,
+                message: "The background helper is connecting. Try again in a moment.".into(),
+                active: false,
+            };
+            cx.notify();
+        }
+    });
 }
 
 #[cfg(test)]
@@ -175,7 +220,7 @@ mod tests {
     #[gpui::test]
     fn a_cancelled_panel_quit_leaves_the_helper_running(cx: &mut TestAppContext) {
         let service = cx.update(|cx| {
-            configure(true, true, cx);
+            configure(true, true, DictationConfig::default(), cx);
             get(cx).unwrap()
         });
         service.update(cx, |s, cx| s.notice(Notice::Action(Action::Quit), cx));
@@ -186,9 +231,9 @@ mod tests {
 
     #[gpui::test]
     fn close_to_tray_needs_the_icon(cx: &mut TestAppContext) {
-        cx.update(|cx| configure(true, false, cx));
+        cx.update(|cx| configure(true, false, DictationConfig::default(), cx));
         assert!(!cx.update(|cx| menu_bar_ready(cx)));
-        cx.update(|cx| configure(false, true, cx));
+        cx.update(|cx| configure(false, true, DictationConfig::default(), cx));
         assert!(cx.update(|cx| menu_bar_ready(cx)));
     }
 }

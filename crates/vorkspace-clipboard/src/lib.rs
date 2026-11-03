@@ -1,6 +1,10 @@
 //! The contract between the app and its clipboard helper, which outlives the app
 //! so that copies keep being recorded after Quit. Only control messages cross the
 //! socket: clipboard contents stay in the helper.
+mod dictation_config;
+pub use dictation_config::{
+    DictationConfig, DictationPhase, DictationStatus, WordRule, word_rules,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io::{self, BufRead, BufReader, Write},
@@ -11,7 +15,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-const PROTOCOL: u32 = 1;
+const PROTOCOL: u32 = 8;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 const CONNECT_ATTEMPTS: usize = 60;
 const CONNECT_DELAY: Duration = Duration::from_millis(50);
@@ -24,12 +28,15 @@ pub enum Command {
     Configure {
         recording: bool,
         icon: bool,
+        dictation: DictationConfig,
     },
     /// How to reopen this exact app, including the data it was started with.
     Relaunch {
         program: String,
         arguments: Vec<String>,
     },
+    SetUpDictation,
+    CancelDictation,
     Clear,
     Toggle,
     Shutdown,
@@ -48,6 +55,7 @@ pub enum Notice {
     Hello { protocol: u32, modified: u128 },
     Error(Option<String>),
     Action(Action),
+    Dictation(DictationStatus),
 }
 
 impl Notice {
@@ -133,10 +141,16 @@ pub fn relaunch_command(app: &Path, arguments: Vec<String>) -> Command {
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 struct Desired {
+    dictation: DictationConfig,
     recording: bool,
     icon: bool,
+}
+impl Desired {
+    fn active(&self) -> bool {
+        self.recording || self.dictation.enabled
+    }
 }
 #[derive(Default)]
 struct Shared {
@@ -172,15 +186,24 @@ impl Supervisor {
         Self { shared, socket }
     }
 
-    pub fn configure(&self, recording: bool, icon: bool) {
-        *self.shared.desired.lock().unwrap() = Desired { recording, icon };
+    pub fn configure(&self, recording: bool, icon: bool, dictation: DictationConfig) {
+        *self.shared.desired.lock().unwrap() = Desired {
+            recording,
+            icon,
+            dictation: dictation.clone(),
+        };
         self.shared.wake.notify_all();
         if !recording {
             // Stopping recording drops the history a queued clear was aimed at.
             *self.shared.clear_pending.lock().unwrap() = false;
         }
-        let command = Command::Configure { recording, icon };
-        if !self.send(command.clone()) && !recording {
+        let active = recording || dictation.enabled;
+        let command = Command::Configure {
+            recording,
+            icon,
+            dictation,
+        };
+        if !self.send(command.clone()) && !active {
             let shared = self.shared.clone();
             let socket = self.socket.clone();
             std::thread::spawn(move || retire(&shared, &socket, command));
@@ -221,7 +244,7 @@ fn retire(shared: &Shared, socket: &Path, command: Command) {
             return;
         };
         let accepted = receive::<Notice>(&mut BufReader::new(&stream)).is_some();
-        if shared.desired.lock().unwrap().recording {
+        if shared.desired.lock().unwrap().active() {
             return;
         }
         if accepted {
@@ -243,7 +266,7 @@ fn supervise(
         drop(
             shared
                 .wake
-                .wait_while(shared.desired.lock().unwrap(), |desired| !desired.recording)
+                .wait_while(shared.desired.lock().unwrap(), |desired| !desired.active())
                 .unwrap(),
         );
         let Some(stream) = connect(helper, socket) else {
@@ -278,8 +301,20 @@ fn supervise(
             // Under this lock, a configure either lands before publication and is
             // sent here, or sees the stream and sends itself.
             let mut published = shared.stream.lock().unwrap();
-            let Desired { recording, icon } = *shared.desired.lock().unwrap();
-            if send(&stream, &Command::Configure { recording, icon }).is_ok()
+            let Desired {
+                recording,
+                icon,
+                dictation,
+            } = shared.desired.lock().unwrap().clone();
+            if send(
+                &stream,
+                &Command::Configure {
+                    recording,
+                    icon,
+                    dictation,
+                },
+            )
+            .is_ok()
                 && send(&stream, relaunch).is_ok()
             {
                 *published = stream.try_clone().ok();
@@ -481,4 +516,24 @@ mod tests {
         assert_ne!(first, socket_path(Path::new("/tmp/vorkspace.app/helper")));
         assert!(first.to_string_lossy().len() < 104);
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct InputDevice {
+    pub uid: String,
+    pub name: String,
+    pub builtin: bool,
+}
+pub fn input_devices() -> Vec<InputDevice> {
+    use std::ffi::{CStr, c_char};
+    unsafe extern "C" {
+        fn vorkspace_dictation_devices(callback: extern "C" fn(*const c_char));
+    }
+    thread_local! { static DEVICES: std::cell::RefCell<Vec<InputDevice>> = const { std::cell::RefCell::new(Vec::new()) }; }
+    extern "C" fn receive(json: *const c_char) {
+        let value = unsafe { CStr::from_ptr(json) }.to_bytes();
+        DEVICES.with(|d| *d.borrow_mut() = serde_json::from_slice(value).unwrap_or_default());
+    }
+    unsafe { vorkspace_dictation_devices(receive) };
+    DEVICES.with(|d| std::mem::take(&mut *d.borrow_mut()))
 }

@@ -1,6 +1,6 @@
 //! The notch is a separate, nonactivating native surface, never window chrome.
 use super::*;
-use gpui::{AnyElement, Focusable, MouseMoveEvent, PathBuilder, canvas, point};
+use gpui::{AnyElement, Focusable, MouseMoveEvent};
 use std::time::Duration;
 use vorkspace_ui::{clock::Instant, pane_motion::PaneSlide};
 
@@ -353,38 +353,7 @@ impl Vox {
                     cx.stop_propagation();
                 }
             }))
-            .child(
-                canvas(
-                    |_, _, _| (),
-                    |bounds, _, window, _| {
-                        let x = bounds.left();
-                        let y = bounds.top();
-                        let w = bounds.size.width;
-                        let h = bounds.size.height;
-                        let top = px(SHOULDER);
-                        let bottom = px(14.).min(h / 2.);
-                        let mut shape = PathBuilder::fill();
-                        shape.move_to(point(x, y));
-                        shape.line_to(point(x + w, y));
-                        shape.curve_to(point(x + w - top, y + top), point(x + w - top, y));
-                        shape.line_to(point(x + w - top, y + h - bottom));
-                        shape.curve_to(
-                            point(x + w - top - bottom, y + h),
-                            point(x + w - top, y + h),
-                        );
-                        shape.line_to(point(x + top + bottom, y + h));
-                        shape.curve_to(point(x + top, y + h - bottom), point(x + top, y + h));
-                        shape.line_to(point(x + top, y + top));
-                        shape.curve_to(point(x, y), point(x + top, y));
-                        shape.close();
-                        if let Ok(shape) = shape.build() {
-                            window.paint_path(shape, gpui::black());
-                        }
-                    },
-                )
-                .absolute()
-                .size_full(),
-            )
+            .child(native::body())
             .child(
                 div()
                     .h(px(geometry.notch_height))

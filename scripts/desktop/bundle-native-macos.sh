@@ -78,7 +78,9 @@ cat > "$native_clipboard/Contents/Info.plist" <<PLIST
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$native_version</string>
 <key>CFBundleVersion</key><string>$native_version</string>
-<key>LSMinimumSystemVersion</key><string>11.0</string>
+<key>LSMinimumSystemVersion</key><string>26.0</string>
+<key>NSMicrophoneUsageDescription</key><string>Dictation uses your microphone only while you dictate. Speech stays on this Mac.</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
 <key>LSUIElement</key><true/>
 </dict></plist>
 PLIST
@@ -96,7 +98,7 @@ else
 fi
 native_identity="${VORKSPACE_SIGNING_IDENTITY:--}"
 if [ "$native_identity" = - ]; then
-  codesign --force --sign - "$native_clipboard"
+  codesign --force --sign - --entitlements scripts/desktop/native-entitlements.plist "$native_clipboard"
   codesign --force --sign - "$native_bundle"
 else
   # Sparkle contains nested executables; sign from the leaves toward the root.

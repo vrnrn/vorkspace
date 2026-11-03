@@ -4421,6 +4421,7 @@ version = "1.1.0"
 dependencies = [
  "async-channel",
  "gpui-pre",
+ "gpui-pre-apple",
  "gpui-pre-macos",
  "image",
  "libc",
@@ -4434,6 +4435,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "vorkspace-macos",
+ "vorkspace-ui",
 ]
 
 [[package]]
@@ -4541,6 +4543,7 @@ name = "vorkspace-macos"
 version = "1.1.0"
 dependencies = [
  "async-channel",
+ "block2 0.6.2",
  "gpui-pre",
  "libc",
  "objc2 0.6.4",

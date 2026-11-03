@@ -378,6 +378,11 @@ fn secret_fields_preserve_unicode_value_and_mask_drawing_ime_and_clipboard(
     window
         .update(cx, |input, window, cx| {
             input.set_secret(true);
+            let rendered = input.render(window, cx).into_element();
+            assert_eq!(
+                gpui::Element::a11y_role(&rendered),
+                Some(Role::PasswordInput)
+            );
             input.select_all(&SelectAll, window, cx);
             assert_eq!(input.content.as_ref(), secret);
             let (display, _) = input.display_text();
@@ -581,4 +586,20 @@ fn hover_cursor_stationary_cached_composer_replacement(cx: &mut TestAppContext) 
     visual.update(|w, _| w.activate_window());
     visual.run_until_parked();
     assert_eq!(visual.cursor_style(), CursorStyle::IBeam);
+}
+
+#[gpui::test]
+fn synthetic_paste_reaches_focused_input_without_moving_focus(cx: &mut TestAppContext) {
+    let window = field(cx, true);
+    window
+        .update(cx, |input, window, cx| {
+            assert!(input.focus.is_focused(window));
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                "synthetic dictation fixture".into(),
+            ));
+            input.paste(&Paste, window, cx);
+            assert_eq!(input.content.as_ref(), "synthetic dictation fixture");
+            assert!(input.focus.is_focused(window));
+        })
+        .unwrap();
 }

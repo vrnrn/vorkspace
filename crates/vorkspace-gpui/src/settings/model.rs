@@ -132,7 +132,7 @@ impl Section {
     fn keywords(self) -> &'static str {
         match self {
             Section::General => {
-                "version update sounds notifications notes rail clipboard copy paste"
+                "version update sounds notifications notes rail clipboard copy paste dictation microphone custom words"
             }
             Section::Vox => "voice microphone speech conversation memory silent",
             Section::Connections => "ssh remote host machine server environment always on",
@@ -261,6 +261,18 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::General,
         "Clipboard",
         "copy paste text screenshot image clipboard memory menu bar",
+    ),
+    (
+        "dictation-enabled",
+        Section::General,
+        "Dictation",
+        "local speech microphone apple transcription permissions language model",
+    ),
+    (
+        "dictation-words",
+        Section::General,
+        "Custom words",
+        "dictation vocabulary preferred spelling dictionary aliases corrections",
     ),
     (
         "file-tabs",

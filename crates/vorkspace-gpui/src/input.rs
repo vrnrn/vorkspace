@@ -1652,7 +1652,9 @@ impl Render for Input {
         div()
             .id("native-composer")
             .relative()
-            .role(if self.single_line {
+            .role(if self.secret {
+                Role::PasswordInput
+            } else if self.single_line {
                 Role::TextInput
             } else {
                 Role::MultilineTextInput

@@ -13,3 +13,5 @@ Vox uses your selected microphone and keeps its conversation and memories betwee
 Rust manages the call and checks every request. A small private browser surface handles only microphone and sound, keeping the existing Codex sign-in. End releases the microphone immediately and asks Codex to finish saving the conversation. Closing the window also lets an active call finish saving. If that save cannot be confirmed, Vox says so. A failed reconnection keeps the saved conversation available instead of silently replacing it.
 
 The small audio page lives in `embedded/vox`; Rust owns the call and any actions it takes in the app.
+
+Vox and [dictation](dictation.md) take turns using the notch and microphone. Stop one before starting the other.

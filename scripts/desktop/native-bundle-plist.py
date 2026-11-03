@@ -18,7 +18,7 @@ def configure(plist, env):
         if not re.fullmatch(r"\d+(?:\.\d+){0,2}", value):
             raise ValueError(f"Invalid {key}")
         result[key] = value
-    result["LSMinimumSystemVersion"] = "11.0"
+    result["LSMinimumSystemVersion"] = "26.0"
     result["NSMicrophoneUsageDescription"] = "Vox uses your selected microphone only while a voice call is active."
     feed, key, framework = (env.get(k) for k in ("VORKSPACE_UPDATE_FEED", "VORKSPACE_UPDATE_PUBLIC_KEY", "VORKSPACE_SPARKLE_FRAMEWORK"))
     if any((feed, key, framework)):
@@ -40,7 +40,7 @@ def configure(plist, env):
         if not re.fullmatch(r"\d+(?:\.\d+){0,2}", minimum):
             raise ValueError("Sparkle framework must declare its minimum macOS version")
         minimum_parts = tuple(map(int, minimum.split(".")))
-        if minimum_parts + (0,) * (3 - len(minimum_parts)) > (11, 0, 0):
+        if minimum_parts + (0,) * (3 - len(minimum_parts)) > (26, 0, 0):
             raise ValueError("Sparkle framework requires a newer macOS version than the application")
         result.update(SUFeedURL=feed, SUPublicEDKey=key, SUEnableAutomaticChecks=True,
                       SUAutomaticallyUpdate=False, SUAllowsAutomaticUpdates=True,

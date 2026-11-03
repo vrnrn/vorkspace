@@ -442,6 +442,7 @@ impl Shell {
             self.workspace.preferences.clipboard_history,
             // Retain the saved preference key so existing users keep their choice.
             self.workspace.preferences.bot_menu_bar_icon,
+            crate::clipboard::dictation_configuration(&self.workspace.preferences),
             cx,
         );
         if let Some(vox) = &self.vox {

@@ -53,6 +53,12 @@ pub(crate) const BINDINGS: &[Binding] = &[
         fixed: false,
     },
     Binding {
+        command: "App: Dictation",
+        keys: "⌃⇧Space",
+        when: "Anywhere",
+        fixed: false,
+    },
+    Binding {
         command: "App: Vox",
         keys: "⌃⌥Space",
         when: "Anywhere",

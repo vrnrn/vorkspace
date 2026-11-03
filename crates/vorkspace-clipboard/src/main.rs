@@ -1,5 +1,7 @@
 //! The clipboard helper: a small menu bar process that keeps clipboard history
 //! after the app quits. History stays in memory and dies with this process.
+mod dictation;
+mod dictation_panel;
 mod history;
 #[cfg(not(test))]
 mod menu;
@@ -102,7 +104,7 @@ fn run(step: Option<Step>, cx: &mut App) {
                 let _ = Process::new(program).args(arguments).spawn();
             }
         }
-        Some(Step::Exit) => cx.quit(),
+        Some(Step::Exit) => dictation::shutdown(cx),
         None => {}
     }
 }
@@ -188,6 +190,7 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             helper.reported_error = None;
             let step = helper.control.connected();
             report_error(cx);
+            dictation::status(cx);
             run(step, cx);
         }
         Event::Disconnected => {
@@ -196,9 +199,17 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             let step = helper.control.disconnected();
             run(step, cx);
         }
-        Event::Command(Command::Configure { recording, icon }) => {
-            let step = cx.global_mut::<Helper>().control.configure(recording);
+        Event::Command(Command::Configure {
+            recording,
+            icon,
+            dictation,
+        }) => {
+            let step = cx
+                .global_mut::<Helper>()
+                .control
+                .configure(recording || dictation.enabled);
             service::configure(recording, cx);
+            dictation::configure(dictation, cx);
             sync_status(icon, cx);
             report_error(cx);
             run(step, cx);
@@ -206,9 +217,11 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
         Event::Command(Command::Relaunch { program, arguments }) => {
             cx.global_mut::<Helper>().relaunch = Some((program, arguments));
         }
+        Event::Command(Command::SetUpDictation) => dictation::setup(cx),
+        Event::Command(Command::CancelDictation) => dictation::cancel(cx),
         Event::Command(Command::Clear) => service::clear(cx),
         Event::Command(Command::Toggle) => toggle(false, cx),
-        Event::Command(Command::Shutdown) => cx.quit(),
+        Event::Command(Command::Shutdown) => dictation::shutdown(cx),
     }
 }
 
@@ -237,6 +250,7 @@ fn main() {
         .with_windowing(gpui::WindowingRequest::Headless)
         .run(move |cx: &mut App| {
             cx.set_global(Helper::default());
+            dictation::init(cx);
             service::configure(false, cx);
             if let Some(service) = service::get(cx) {
                 cx.observe(&service, |_, cx| report_error(cx)).detach();

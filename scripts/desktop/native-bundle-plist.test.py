@@ -41,13 +41,13 @@ class BundleTests(unittest.TestCase):
             self.assertEqual(len(base64.b64decode(result["SUPublicEDKey"], validate=True)), 32)
             with self.assertRaises(ValueError):
                 module.configure(dict(self.plist, VorkspaceDataMode="dev-data"), {"VORKSPACE_SPARKLE_FRAMEWORK": framework})
-    def test_framework_cannot_raise_the_existing_users_minimum_os(self):
-        with framework_directory("12.0") as framework:
+    def test_framework_cannot_exceed_the_macos_26_product_minimum(self):
+        with framework_directory("27.0") as framework:
             with self.assertRaises(ValueError):
                 module.configure(self.plist, {"VORKSPACE_SPARKLE_FRAMEWORK": framework})
-        with framework_directory("11.0") as framework:
+        with framework_directory("26.0") as framework:
             result = module.configure(self.plist, {"VORKSPACE_SPARKLE_FRAMEWORK": framework})
-            self.assertEqual(result["LSMinimumSystemVersion"], "11.0")
+            self.assertEqual(result["LSMinimumSystemVersion"], "26.0")
     def test_development_has_no_update_feed(self):
         result = module.configure(self.plist, {})
         self.assertNotIn("SUFeedURL", result)
