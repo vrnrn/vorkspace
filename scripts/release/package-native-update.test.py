@@ -55,7 +55,7 @@ class PackageTests(unittest.TestCase):
             archive = output / "vorkspace-native-1.0.0.zip"
             archive.write_bytes(b"test update")
             (output / "appcast.xml").write_text('''<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>
-<enclosure url="https://example.test/vorkspace-native-1.0.0.zip" length="11" sparkle:edSignature="test signature"/>
+<enclosure url="https://example.test/downloads/vorkspace-native-1.0.0.zip" length="11" sparkle:edSignature="test signature"/>
 </item></channel></rss>''')
 
     def test_adhoc_package_needs_only_sparkle_signature(self):
@@ -96,6 +96,22 @@ class PackageTests(unittest.TestCase):
                 self.run_tool("--compat-signing-key", str(self.key))
         run.assert_not_called()
 
+    def test_release_requires_matching_sparkle_minimum(self):
+        self.info["LSMinimumSystemVersion"] = "26.0"
+        self.write_info()
+        with patch.object(module, "run", side_effect=self.fake_packaging), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                self.run_tool()
+
+    def test_legacy_feed_rejects_new_os_floor(self):
+        self.info["LSMinimumSystemVersion"] = "26.0"
+        self.write_info()
+        with patch.object(module.shutil, "which", return_value="/usr/bin/minisign"), \
+             patch.object(module, "run") as run, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                self.run_tool("--compat-signing-key", str(self.key), "--compat-public-key", str(self.key))
+        run.assert_not_called()
+
     @unittest.skipUnless(sys.platform == "darwin" and os.environ.get("VORKSPACE_TEST_SPARKLE"),
                          "requires macOS and VORKSPACE_TEST_SPARKLE pointing at the pinned distribution")
     def test_real_adhoc_archive_has_verified_sparkle_signature(self):
@@ -109,6 +125,7 @@ try key.rawRepresentation.base64EncodedData().write(to: URL(fileURLWithPath: pat
 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
 print(key.publicKey.rawRepresentation.base64EncodedString())
 ''')
+        self.info["LSMinimumSystemVersion"] = "11.0"
         self.info["SUPublicEDKey"] = subprocess.check_output(["swift", str(keygen), str(self.key)], text=True).strip()
         self.write_info()
         executable = self.bundle / "Contents/MacOS/vorkspace"

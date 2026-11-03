@@ -37,14 +37,28 @@ define_class!(
         }
     }
 );
+struct NavigationContext {
+    app: gpui::AsyncApp,
+    recovery_markup: RefCell<Option<Arc<str>>>,
+}
+
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "VorkspaceArtifactNavigation"]
     #[thread_kind=MainThreadOnly]
-    #[ivars=gpui::AsyncApp]
+    #[ivars=NavigationContext]
     struct NavigationGuard;
     unsafe impl NSObjectProtocol for NavigationGuard {}
     unsafe impl WKNavigationDelegate for NavigationGuard {
+        #[unsafe(method(webViewWebContentProcessDidTerminate:))]
+        unsafe fn content_terminated(&self, web: &WKWebView) {
+            if let Some(markup) = self.ivars().recovery_markup.borrow().as_ref() {
+                unsafe {
+                    web.loadHTMLString_baseURL(&NSString::from_str(markup), None);
+                }
+            }
+        }
+
         #[unsafe(method(webView:decidePolicyForNavigationAction:decisionHandler:))]
         unsafe fn decide(
             &self,
@@ -59,7 +73,7 @@ define_class!(
                     || url.to_string().starts_with("http://"))
             {
                 let url = url.to_string();
-                self.ivars().clone().update(|cx| cx.open_url(&url));
+                self.ivars().app.clone().update(|cx| cx.open_url(&url));
             }
             let allowed = url.is_none_or(|url| {
                 let s = url.to_string();
@@ -97,7 +111,7 @@ define_class!(
             if body.len()>MAX_MESSAGE_BYTES{return}
             let Ok(mut value)=serde_json::from_str::<serde_json::Value>(&body)else{return};
             if value["nonce"].as_str()!=Some(&self.ivars().nonce){return}
-            let Some(id)=value["id"].as_u64()else{return};
+            let Some(id)=value["id"].as_str().filter(|id|id.len()<=80).map(str::to_owned)else{return};
             let Some(web)=(unsafe{message.webView()})else{return};
             value.as_object_mut().map(|value|value.remove("nonce"));
             let reply:Reply=Rc::new(move|result|{
@@ -169,11 +183,18 @@ fn sandbox(body: &str) -> String {
 
 fn meetings_sandbox(body: &str, nonce: &str) -> String {
     let client = r#"<script>
-(()=>{let next=0;const pending=new Map();
-const request=(method,params={})=>new Promise((resolve,reject)=>{const id=++next;pending.set(id,{resolve,reject});parent.postMessage({kind:'vorkspace.request',id,method,params},'*')});
+(()=>{
+let next=0;
+const generation=crypto.getRandomValues(new Uint32Array(4)).join('-'),pending=new Map();
+const request=(method,params={})=>new Promise((resolve,reject)=>{
+    const id=generation+':'+(++next);
+    const timeout=setTimeout(()=>{pending.delete(id);reject(new Error('The meeting request timed out.'))},method==='meetings.summarize'?16*60*1000:30*1000);
+    pending.set(id,{resolve,reject,timeout});
+    parent.postMessage({kind:'vorkspace.request',id,method,params},'*');
+});
 window.meetingsRequest=request;
 addEventListener('message',event=>{if(event.source!==parent)return;const data=event.data;
-if(data?.kind==='vorkspace.reply'){const item=pending.get(data.id);if(!item)return;pending.delete(data.id);if(data.error)item.reject(new Error(data.error));else item.resolve(data.result)}
+if(data?.kind==='vorkspace.reply'){const item=pending.get(data.id);if(!item)return;pending.delete(data.id);clearTimeout(item.timeout);if(data.error)item.reject(new Error(data.error));else item.resolve(data.result)}
 if(data?.kind==='vorkspace.visibility'){dispatchEvent(new CustomEvent('vorkspace-visibility',{detail:data.visible}))}
 if(data?.kind==='vorkspace.theme'){const style=document.documentElement.style;style.setProperty('--foreground',data.foreground);style.setProperty('--accent',data.accent);style.setProperty('--link',data.accent);style.setProperty('--background',data.light?'#fafafa':'#141414');style.setProperty('--surface',data.light?'#eee':'#222');style.setProperty('--muted',data.light?'#737373':'#969696');style.setProperty('--border',data.light?'#d4d4d4':'#383838');style.colorScheme=data.light?'light':'dark'}
 });})();
@@ -182,7 +203,7 @@ if(data?.kind==='vorkspace.theme'){const style=document.documentElement.style;st
     let nonce = serde_json::to_string(nonce).unwrap();
     html.push_str(&format!(r#"<script>
 addEventListener('message',event=>{{const frame=document.querySelector('iframe');if(event.source!==frame.contentWindow||event.origin!=='null'||event.data?.kind!=='vorkspace.request')return;
-const data=event.data;if(!Number.isSafeInteger(data.id)||typeof data.method!=='string')return;
+const data=event.data;if(typeof data.id!=='string'||data.id.length>80||typeof data.method!=='string')return;
 const encoded=JSON.stringify({{nonce:{nonce},id:data.id,method:data.method,params:data.params}});if(new TextEncoder().encode(encoded).length>{limit}){{frame.contentWindow.postMessage({{kind:'vorkspace.reply',id:data.id,error:'Meeting edit exceeds its size limit.'}},'*');return;}}
 window.webkit.messageHandlers.vorkspaceMeetings.postMessage(encoded);
 }});
@@ -395,7 +416,10 @@ impl gpui::Render for Html {
                                 web_rect,
                                 &config,
                             );
-                            let guard = NavigationGuard::alloc(mtm).set_ivars(app.clone());
+                            let guard = NavigationGuard::alloc(mtm).set_ivars(NavigationContext {
+                                app: app.clone(),
+                                recovery_markup: RefCell::new(bridge.as_ref().map(|_| html.clone())),
+                            });
                             let guard: Retained<NavigationGuard> = msg_send![super(guard), init];
                             web.setNavigationDelegate(Some(ProtocolObject::from_ref(&*guard)));
                             web.loadHTMLString_baseURL(&NSString::from_str(&html), None);
@@ -413,6 +437,9 @@ impl gpui::Render for Html {
                     }
                     if let Some(view) = view.as_mut() {
                         if !Arc::ptr_eq(&view.markup, &html) {
+                            if let Some(markup) = view._guard.ivars().recovery_markup.borrow_mut().as_mut() {
+                                *markup = html.clone();
+                            }
                             unsafe {
                                 view.web
                                     .loadHTMLString_baseURL(&NSString::from_str(&html), None);

@@ -1,13 +1,13 @@
 //! The built-in Meetings document view. Only this bundled page can call its commands.
 pub(crate) mod capture;
+pub(crate) use capture::stop_active;
 
 use crate::native_view::html::{Html, Reply};
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, Render, Window, div, prelude::*,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
-    path::PathBuf,
     rc::Rc,
     sync::{
         Arc,
@@ -22,6 +22,12 @@ use vorkspace_core::{
 use vorkspace_meetings::Meetings;
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
+
+/// Meetings send user transcripts to a background process. Read-only
+/// agent sandboxes still permit tools, so use explicit no-tools modes.
+pub(crate) fn supports_summary(kind: Kind) -> bool {
+    kind == Kind::Claude || kind.is_pi()
+}
 
 pub(crate) struct Page {
     meetings: Result<Meetings, String>,
@@ -119,6 +125,7 @@ impl Page {
         let params = value.get_mut("params").map(Value::take).unwrap_or_default();
         let id = params["id"].as_str().unwrap_or_default();
         match value["method"].as_str() {
+            Some("audio.current") => reply(Ok(json!(capture::current(cx)))),
             Some("audio.stop") => reply(capture::stop(id, cx)),
             Some("audio.status") => reply(capture::status(
                 id,
@@ -181,7 +188,7 @@ impl Page {
         let cwd = self.cwd.clone();
         let profiles: Vec<(Kind, Profile)> = Kind::ALL
             .into_iter()
-            .filter(|kind| !self.hidden.iter().any(|id| id == kind.id()))
+            .filter(|kind| supports_summary(*kind) && !self.hidden.iter().any(|id| id == kind.id()))
             .map(|kind| {
                 let profile = crate::accounts::get(cx)
                     .map(|center| center.read(cx).selected(kind, &cwd))
@@ -190,8 +197,8 @@ impl Page {
             })
             .collect();
         let work = cx.background_executor().spawn(async move {
-            let cwd = PathBuf::from(cwd);
-            meetings.summarize(&id, |settings, prompt| {
+            let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
+            meetings.summarize(&id, &cancel, |settings, prompt| {
                 if cancel.load(Ordering::Acquire) {
                     return Err("Meeting summary canceled.".into());
                 }
@@ -205,7 +212,7 @@ impl Page {
                     provider::Request {
                         kind: *kind,
                         binary,
-                        cwd: cwd.clone(),
+                        cwd: scratch.path().into(),
                         prompt,
                         provider_id: None,
                         model: Some(settings.model.clone()),

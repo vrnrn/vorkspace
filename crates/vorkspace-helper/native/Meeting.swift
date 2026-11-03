@@ -12,6 +12,17 @@ private struct MeetingConfiguration: Decodable { let id: String; let microphone:
     func finish() async throws { try check() }
 }
 
+/// An OS permission dialog may outlive the capture task. Cancellation ends
+/// the wait without letting a late permission callback start an audio source.
+private func awaitPermission(_ request: (@escaping @Sendable (Bool) -> Void) -> Void) async {
+    let (results, continuation) = AsyncStream<Bool>.makeStream()
+    request { granted in
+        continuation.yield(granted)
+        continuation.finish()
+    }
+    for await _ in results { break }
+}
+
 /// One parent owns the language reservation and both channel lifecycles. It
 /// publishes Stop only after both analyzers and native audio sources have closed.
 @MainActor private final class MeetingController {
@@ -46,13 +57,19 @@ private struct MeetingConfiguration: Decodable { let id: String; let microphone:
                 }
                 guard !self.stopped else { throw CancellationError() }
                 if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-                    _ = await AVCaptureDevice.requestAccess(for: .audio)
+                    await awaitPermission { AVCaptureDevice.requestAccess(for: .audio, completionHandler: $0) }
                 }
                 guard !self.stopped else { throw CancellationError() }
                 guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
                     throw DictationError("Allow Microphone for vorkspace helper in System Settings.")
                 }
-                guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
+                if !CGPreflightScreenCaptureAccess() {
+                    await awaitPermission { complete in
+                        Task.detached { complete(CGRequestScreenCaptureAccess()) }
+                    }
+                }
+                guard !self.stopped else { throw CancellationError() }
+                guard CGPreflightScreenCaptureAccess() else {
                     throw DictationError("Allow Screen & System Audio Recording for vorkspace helper in System Settings, then record again.")
                 }
                 reserved = try await AssetInventory.reserve(locale: supported)
@@ -117,6 +134,7 @@ private struct MeetingConfiguration: Decodable { let id: String; let microphone:
     }
     func cancel() {
         stopped = true
+        if turns.isEmpty { active?.cancel() }
         for turn in turns where !turn.cancelled { turn.cancel() }
     }
 }

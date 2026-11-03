@@ -192,8 +192,9 @@ impl SettingsView {
             Kind::ALL
                 .into_iter()
                 .filter(|kind| {
-                    kind.id() == selected
-                        || !self.prefs.hidden_providers.iter().any(|id| id == kind.id())
+                    crate::meetings::supports_summary(*kind)
+                        && (kind.id() == selected
+                            || !self.prefs.hidden_providers.iter().any(|id| id == kind.id()))
                 })
                 .map(|kind| (kind.id().into(), kind.label().into(), None)),
         );
@@ -206,13 +207,19 @@ impl SettingsView {
             cx,
             |this, value, cx| {
                 if let Some(editor) = &mut this.meeting_editor {
-                    editor.provider = value;
-                    editor.result = None;
+                    if editor.provider != value {
+                        editor.provider = value;
+                        editor
+                            .model
+                            .update(cx, |input, cx| input.set_text(String::new(), cx));
+                        editor.result = None;
+                    }
                 }
                 cx.notify();
             },
         );
         let models = Kind::parse(&selected)
+            .filter(|kind| crate::meetings::supports_summary(*kind))
             .and_then(|kind| self.discovered_models(kind, cx))
             .or_else(|| self.ctx.catalogs.get(&selected));
         let mut controls = vec![div().w(px(200.)).child(model.clone()).into_any_element()];
@@ -256,7 +263,16 @@ impl SettingsView {
                     model: editor.model.read(cx).content.trim().into(),
                     prompt: editor.prompt.read(cx).content.to_string(),
                 };
-                editor.result = Some(editor.meetings.save_settings(&settings));
+                editor.result = Some(
+                    if settings.provider.is_empty()
+                        || Kind::parse(&settings.provider)
+                            .is_some_and(crate::meetings::supports_summary)
+                    {
+                        editor.meetings.save_settings(&settings)
+                    } else {
+                        Err("Choose a provider with a tool-free summary mode.".into())
+                    },
+                );
             }
             cx.notify();
         }));

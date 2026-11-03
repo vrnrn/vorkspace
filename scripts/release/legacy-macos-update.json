@@ -1,0 +1,15 @@
+{
+  "version": "1.1.2",
+  "notes": "",
+  "pub_date": "2026-11-02T01:46:05.803083+00:00",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIG1pbmlzaWduIHNlY3JldCBrZXkKUlVSWUFnOTdsR2J6cmx2dmQrZ3Y3Umh6eFIrV296UTRoNlJSZFozODczZ1prK2ljV3VWb1N2TzdYSmswMlJJRk9ZNU1zWXYrZVdaTDBRQlZleURGZlo1aVNiSGRrdXJxSWdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNTgzOTY1CWZpbGU6dm9ya3NwYWNlLTI3LjEuYXBwLnRhci5negloYXNoZWQKL3ROMGd5NkRRTVMvTUppcCtaNFdiMTZJTGtnNG8zOEhleFg3bGhacGJTUkppLzBEVHl2dVJQS3JQOURKTDg0aTk2VWZQandPUVVxV2gweTJlOVBoQ2c9PQo=",
+      "url": "https://github.com/vrnrn/vorkspace/releases/download/mac-v1.1.2/vorkspace-27.1.app.tar.gz"
+    },
+    "darwin-aarch64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIG1pbmlzaWduIHNlY3JldCBrZXkKUlVSWUFnOTdsR2J6cmx2dmQrZ3Y3Umh6eFIrV296UTRoNlJSZFozODczZ1prK2ljV3VWb1N2TzdYSmswMlJJRk9ZNU1zWXYrZVdaTDBRQlZleURGZlo1aVNiSGRrdXJxSWdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNTgzOTY1CWZpbGU6dm9ya3NwYWNlLTI3LjEuYXBwLnRhci5negloYXNoZWQKL3ROMGd5NkRRTVMvTUppcCtaNFdiMTZJTGtnNG8zOEhleFg3bGhacGJTUkppLzBEVHl2dVJQS3JQOURKTDg0aTk2VWZQandPUVVxV2gweTJlOVBoQ2c9PQo=",
+      "url": "https://github.com/vrnrn/vorkspace/releases/download/mac-v1.1.2/vorkspace-27.1.app.tar.gz"
+    }
+  }
+}

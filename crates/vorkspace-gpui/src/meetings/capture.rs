@@ -63,6 +63,22 @@ pub(crate) fn init(cx: &mut App) {
     service(cx);
 }
 
+pub(super) fn current(cx: &App) -> Option<State> {
+    let recording = &cx.try_global::<MeetingCapture>()?.0.read(cx).recording;
+    recording
+        .state
+        .as_ref()
+        .filter(|state| state.phase.active())
+        .cloned()
+}
+
+pub(crate) fn stop_active(cx: &mut App) -> Result<(), String> {
+    if let Some(state) = current(cx) {
+        stop(&state.id, cx)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn active(cx: &App) -> bool {
     cx.try_global::<MeetingCapture>()
         .is_some_and(|capture| capture.0.read(cx).recording.active())
@@ -109,7 +125,13 @@ impl Capture {
                 if owner == OWNER
                     && (recording.state.is_none() || recording.matches(&state.id)) =>
             {
-                recording.state = Some(state);
+                let finishing = recording
+                    .state
+                    .as_ref()
+                    .is_some_and(|current| current.phase == Phase::Finishing);
+                if !finishing || !state.phase.active() {
+                    recording.state = Some(state);
+                }
             }
             AudioNotice::Segment { id, owner, segment }
                 if owner == OWNER && recording.matches(&id) =>
@@ -210,7 +232,7 @@ pub(super) fn start(id: String, directory: PathBuf, cx: &mut App) -> Result<Valu
             });
         })
         .detach();
-        Ok(json!({"id":id,"accepted":true}))
+        Ok(json!({"id":id,"state":capture.recording.state}))
     })
 }
 

@@ -4565,6 +4565,7 @@ version = "1.1.0"
 dependencies = [
  "libc",
  "pulldown-cmark",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

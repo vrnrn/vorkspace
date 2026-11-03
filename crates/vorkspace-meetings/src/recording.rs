@@ -1,14 +1,13 @@
 //! Durable transcript ownership shared by the audio helper and Meetings.
 //! Audio is never stored. The owner lock covers preparation through final commit.
-use crate::valid_id;
+use crate::{directory::Directory, valid_id};
+use rustix::fs::OFlags;
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{File, OpenOptions},
+    ffi::OsStr,
+    fs::File,
     io::{Read, Write},
-    os::{
-        fd::AsRawFd,
-        unix::fs::{OpenOptionsExt, PermissionsExt},
-    },
+    os::fd::AsRawFd,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -62,63 +61,68 @@ pub fn directory(base: &Path, id: &str) -> Result<PathBuf, String> {
     Ok(base.join("recordings").join(id))
 }
 pub fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    let dir = parent(path, true)?;
+    atomic_json_in(&dir, name(path)?, value)
+}
+
+fn name(path: &Path) -> Result<&OsStr, String> {
+    path.file_name()
+        .ok_or_else(|| "Missing meeting filename".into())
+}
+
+fn parent(path: &Path, create: bool) -> Result<Directory, String> {
+    Directory::open(path.parent().ok_or("Missing data directory")?, create)
+        .map_err(|error| error.to_string())
+}
+
+fn atomic_json_in(dir: &Directory, name: &OsStr, value: &impl Serialize) -> Result<(), String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let parent = path.parent().ok_or("Missing data directory")?;
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| e.to_string())?;
-    let temporary = parent.join(format!(
+    let temporary = format!(
         ".write-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    );
+    let temporary = OsStr::new(&temporary);
+    let mut file = dir
+        .file(temporary, OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL)
+        .map_err(|error| error.to_string())?;
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&temporary)
-            .map_err(|e| e.to_string())?;
-        let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+        let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
         file.write_all(&bytes)
             .and_then(|_| file.sync_all())
-            .map_err(|e| e.to_string())?;
-        std::fs::rename(&temporary, path).map_err(|e| e.to_string())?;
-        File::open(parent)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())
+            .and_then(|_| dir.publish(temporary, name))
+            .map_err(|error| error.to_string())
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        dir.remove(temporary);
     }
     result
 }
+
 pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path, limit: usize) -> Result<T, String> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|e| e.to_string())?;
+    read_json_in(&parent(path, false)?, name(path)?, limit)
+}
+
+fn read_json_in<T: serde::de::DeserializeOwned>(
+    dir: &Directory,
+    name: &OsStr,
+    limit: usize,
+) -> Result<T, String> {
+    let file = dir
+        .file(name, OFlags::RDONLY)
+        .map_err(|error| error.to_string())?;
     let mut bytes = Vec::new();
     file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| error.to_string())?;
     if bytes.len() > limit {
-        return Err("Saved plugin data exceeds its limit".into());
+        return Err("Saved meeting data exceeds its limit".into());
     }
-    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+    serde_json::from_slice(&bytes).map_err(|error| error.to_string())
 }
-fn lock_file(path: &Path) -> Result<File, String> {
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|e| e.to_string())
-}
+
 pub struct Owner {
-    directory: PathBuf,
+    directory: Directory,
     _lock: File,
     log: File,
     pub state: State,
@@ -128,27 +132,25 @@ pub struct Owner {
 impl Owner {
     pub fn create(base: &Path, id: &str) -> Result<Self, String> {
         let directory = directory(base, id)?;
-        std::fs::create_dir_all(directory.parent().unwrap()).map_err(|e| e.to_string())?;
-        // Reusing an ID is rejected: uncertain start effects are never replayed.
-        std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
-            .map_err(|e| e.to_string())?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(directory.join("owner.lock"))
-            .map_err(|e| e.to_string())?;
+        // Reusing an ID is rejected. A Start with an uncertain outcome is never replayed.
+        let directory = parent(&directory, true)?
+            .create_child(OsStr::new(id))
+            .map_err(|error| error.to_string())?;
+        let lock = directory
+            .file(
+                OsStr::new("owner.lock"),
+                OFlags::RDWR | OFlags::CREATE | OFlags::EXCL,
+            )
+            .map_err(|error| error.to_string())?;
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err("Recording already has an owner".into());
         }
-        let log = OpenOptions::new()
-            .append(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(directory.join("transcript.jsonl"))
-            .map_err(|e| e.to_string())?;
+        let log = directory
+            .file(
+                OsStr::new("transcript.jsonl"),
+                OFlags::WRONLY | OFlags::APPEND | OFlags::CREATE | OFlags::EXCL,
+            )
+            .map_err(|error| error.to_string())?;
         let state = State {
             id: id.into(),
             started_at: now_ms(),
@@ -156,7 +158,7 @@ impl Owner {
             phase: Phase::Starting,
             error: None,
         };
-        atomic_json(&directory.join("state.json"), &state)?;
+        atomic_json_in(&directory, OsStr::new("state.json"), &state)?;
         Ok(Self {
             directory,
             _lock: lock,
@@ -177,7 +179,7 @@ impl Owner {
             self.log.sync_all().map_err(|e| e.to_string())?;
             next.ended_at = Some(now_ms());
         }
-        atomic_json(&self.directory.join("state.json"), &next)?;
+        atomic_json_in(&self.directory, OsStr::new("state.json"), &next)?;
         self.state = next;
         Ok(())
     }
@@ -222,26 +224,41 @@ impl Owner {
 /// Recovery acquires the same owner lock before interpreting an active root.
 /// A live recorder always wins; missing/unknown files never mean a finished turn.
 pub fn state(base: &Path, id: &str) -> Result<State, String> {
-    let directory = directory(base, id)?;
-    let lock = lock_file(&directory.join("owner.lock"))?;
-    let owned = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
-    let mut state: State = read_json(&directory.join("state.json"), 16 * 1024)?;
-    if owned && state.phase.active() {
+    let dir = Directory::open(&directory(base, id)?, false).map_err(|error| error.to_string())?;
+    state_in(&dir, id)
+}
+
+fn state_in(dir: &Directory, id: &str) -> Result<State, String> {
+    let lock = dir
+        .file(OsStr::new("owner.lock"), OFlags::RDWR)
+        .map_err(|error| error.to_string())?;
+    let result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(error.to_string());
+        }
+    }
+    let mut state: State = read_json_in(dir, OsStr::new("state.json"), 16 * 1024)?;
+    if state.id != id {
+        return Err("Recording state has a different recording ID".into());
+    }
+    if result == 0 && state.phase.active() {
         state.phase = Phase::Interrupted;
-        state.ended_at = Some(now_ms());
+        state.ended_at = None;
         state.error =
             Some("Recording was interrupted. All saved transcript segments are retained.".into());
-        atomic_json(&directory.join("state.json"), &state)?;
+        atomic_json_in(dir, OsStr::new("state.json"), &state)?;
     }
     Ok(state)
 }
+
 pub fn read(base: &Path, id: &str) -> Result<Transcript, String> {
-    let state = state(base, id)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(directory(base, id)?.join("transcript.jsonl"))
-        .map_err(|e| e.to_string())?;
+    let dir = Directory::open(&directory(base, id)?, false).map_err(|error| error.to_string())?;
+    let state = state_in(&dir, id)?;
+    let file = dir
+        .file(OsStr::new("transcript.jsonl"), OFlags::RDONLY)
+        .map_err(|error| error.to_string())?;
     let mut bytes = Vec::new();
     file.take(MAX_TRANSCRIPT as u64 + 1)
         .read_to_end(&mut bytes)
@@ -267,6 +284,7 @@ pub fn read(base: &Path, id: &str) -> Result<Transcript, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::OpenOptions;
     #[test]
     fn one_owner_preserves_segments_and_recovery_never_interrupts_live_work() {
         let dir = tempfile::tempdir().unwrap();

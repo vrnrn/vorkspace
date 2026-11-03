@@ -17,8 +17,19 @@ class Element {
     this.classList = { toggle: (name, on) => on ? classes.add(name) : classes.delete(name) };
   }
   setAttribute(name, value) { this.attributes[name] = value; }
-  replaceChildren() { this.children = []; }
-  append(...children) { this.children.push(...children); }
+  get firstElementChild() { return this.children[0]; }
+  get lastElementChild() { return this.children.at(-1); }
+  replaceChildren() { for (const child of [...this.children]) if (child instanceof Element) child.remove(); this.children = []; }
+  remove() {
+    if (!this.parent) return;
+    this.parent.children.splice(this.parent.children.indexOf(this), 1);
+    this.parent = null;
+  }
+  insertBefore(child, next) {
+    if (child instanceof Element) { child.remove(); child.parent = this; }
+    this.children.splice(next ? this.children.indexOf(next) : this.children.length, 0, child);
+  }
+  append(...children) { for (const child of children) this.insertBefore(child, null); }
   querySelector() { return this.span ??= new Element(); }
 }
 function deferred() {
@@ -36,13 +47,17 @@ function document(id) {
 async function harness() {
   const elements = new Map(), intervals = [], records = new Map([['A', document('A')], ['B', document('B')]]);
   const get = (id) => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  const pending = new Map(), summaryResponses = new Map(), statusResponses = new Map(), writes = [], stops = [];
-  let phase = "starting";
+  const readResponses = new Map(), pending = new Map(), summaryResponses = new Map(), statusResponses = new Map(), writes = [], stops = [];
+  let phase = "starting", feed = {};
   const call = async (method, params = {}) => {
     if (pending.has(method + ":" + (params.id ?? ""))) await pending.get(method + ":" + (params.id ?? "")).promise;
     if (method === "meetings.list") return [...records.values()].map(({ meeting, state }) => structuredClone({ meeting, state }));
-    if (method === "meetings.read") return structuredClone(records.get(params.id));
-    if (method === "meetings.start") return { id: "live" };
+    if (method === "meetings.read") {
+      const snapshot = structuredClone(records.get(params.id));
+      await readResponses.get(params.id)?.promise;
+      return snapshot;
+    }
+    if (method === "meetings.start") return { id: "live", state: { id: "live", phase: "starting", started_at: 1000 } };
     if (method === "meetings.summarize") {
       const doc = records.get(params.id);
       doc.meeting.summary.text = "Updated by AI"; doc.meeting.revision++;
@@ -61,9 +76,10 @@ async function harness() {
       doc.meeting.revision++;
       return structuredClone({ ...doc.meeting, summary_html: doc.summary_html });
     }
+    if (method === "audio.current") return null;
     if (method === "audio.stop") { stops.push(params.id); phase = "finishing"; return { accepted: true }; }
     if (method === "audio.status") {
-      const snapshot = { state: { id: "live", phase, started_at: 1000 }, segments: [], partials: {}, reload: false };
+      const snapshot = { state: { id: "live", phase, started_at: 1000 }, segments: [], partials: {}, reload: false, ...feed };
       await statusResponses.get(params.id)?.promise;
       return snapshot;
     }
@@ -81,7 +97,7 @@ async function harness() {
     return button.onclick();
   };
   const input = (id, text) => { get(id).value = text; get(id).oninput(); };
-  return { get, open, input, pending, summaryResponses, statusResponses, writes, stops, records, tick: () => intervals[0](), phase: (value) => { phase = value; } };
+  return { get, open, input, pending, readResponses, summaryResponses, statusResponses, writes, stops, records, tick: () => intervals[0](), phase: (value) => { phase = value; }, feed: (value) => { feed = value; } };
 }
 
 test("delayed document reads preserve newer input", async () => {
@@ -308,6 +324,77 @@ test("switching to Transcript while Stop loads it keeps the saved recording", as
   assert.equal(ui.get("editor").readOnly, true);
   read.resolve();
   await terminalPoll;
+  await setImmediate();
   assert.equal(ui.get("editor").value, "Captured words");
   assert.equal(ui.get("editor").readOnly, false);
+});
+
+
+test("a stale document snapshot cannot reactivate a finished recording", async () => {
+  const ui = await harness();
+  const live = document("live");
+  live.state.phase = "recording";
+  ui.records.set("live", live);
+  await ui.get("record").onclick();
+  ui.phase("recording"); await ui.tick(); await ui.open("A");
+  const read = deferred();
+  ui.readResponses.set("live", read);
+  const navigation = ui.open("live");
+  await setImmediate();
+  live.state.phase = "stopped";
+  ui.phase("stopped"); await ui.tick();
+  ui.readResponses.delete("live");
+  read.resolve(); await navigation;
+  assert.equal(ui.get("record").attributes["aria-pressed"], "false");
+  assert.equal(ui.get("editor").value, "live transcript");
+});
+
+const segment = (sequence) => ({sequence, start_ms: sequence, source: "system", text: `phrase ${sequence}`});
+
+test("gap recovery follows the capture across view changes and bounds the retained transcript", async () => {
+  const ui = await harness();
+  const live = document("live");
+  live.state.phase = "recording";
+  live.segments = Array.from({ length: 500 }, (_, index) => segment(index + 1));
+  live.sequence = 500;
+  ui.records.set("live", live);
+  await ui.get("record").onclick();
+  ui.phase("recording"); await ui.tick();
+  const read = deferred();
+  ui.readResponses.set("live", read);
+  ui.feed({reload: true, segments: [segment(500)]});
+  const recovery = ui.tick();
+  await setImmediate();
+  await ui.get("show-transcript").onclick();
+  read.resolve(); await recovery; await setImmediate();
+  const finals = ui.get("finals");
+  assert.equal(finals.children.length, 400);
+  assert.equal(finals.firstElementChild.children[1], "phrase 101");
+
+  ui.feed({segments: [segment(501)]});
+  await ui.tick();
+  assert.equal(finals.children.length, 400);
+  assert.equal(finals.firstElementChild.children[1], "phrase 102");
+  assert.equal(finals.lastElementChild.children[1], "phrase 501");
+});
+
+test("an unselected capture's failure is visible without a saved row", async () => {
+  const ui = await harness();
+  await ui.get("record").onclick();
+  await ui.open("A");
+  ui.feed({ state: { id: "live", phase: "failed", error: "Voice lease denied" } });
+  await ui.tick();
+  assert.equal(ui.get("notice").textContent, "Voice lease denied");
+  assert.equal(ui.get("title").value, "A");
+  assert.equal(ui.get("record").attributes["aria-pressed"], "false");
+});
+
+test("a title save updates the focused list row in place", async () => {
+  const ui = await harness();
+  await ui.open("A");
+  const row = ui.get("list").children[0];
+  ui.input("title", "Renamed");
+  await ui.get("save").onclick();
+  assert.equal(ui.get("list").children[0], row);
+  assert.equal(row.children[0].textContent, "Renamed");
 });

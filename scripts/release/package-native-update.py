@@ -13,7 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
 
 
@@ -54,6 +54,13 @@ def minisign_file(path, parser, private=False):
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(decoded)
         yield normalized
+
+
+def system_version(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", value):
+        return None
+    parts = tuple(map(int, value.split(".")))
+    return parts + (0,) * (3 - len(parts))
 
 
 def compatibility_update(args, info, parser):
@@ -128,6 +135,11 @@ def main():
         parser.error("Bundle build number must contain one to three numeric components")
     if not re.fullmatch(r"\d+\.\d+\.\d+", info.get("CFBundleShortVersionString", "")):
         parser.error("Bundle version must contain three numeric components")
+    minimum = system_version(info.get("LSMinimumSystemVersion"))
+    if "LSMinimumSystemVersion" in info and minimum is None:
+        parser.error("Bundle minimum macOS version must contain one to three numeric components")
+    if args.compat_signing_key and (minimum is None or minimum > (11, 0, 0)):
+        parser.error("The legacy updater requires a bundle that supports macOS 11.0")
     if args.ed_key_file:
         protected_file(args.ed_key_file, parser, "Ed25519 key")
     if args.compat_signing_key:
@@ -156,11 +168,19 @@ def main():
     # generate_appcast exits successfully even when a mismatched key causes an
     # unsigned enclosure. Refuse that output rather than announcing an unusable
     # update; the stock verifier checks its archive signature as well.
-    signatures = [enclosure.get("{http://www.andymatuschak.org/xml-namespaces/sparkle}edSignature")
-                  for feed in args.output.glob("*.xml")
-                  for enclosure in ET.parse(feed).iter("enclosure")
-                  if Path(unquote(urlparse(enclosure.get("url", "")).path)).name == archive.name
-                  and enclosure.get("length") == str(archive.stat().st_size)]
+    sparkle_ns = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
+    url = args.download_url_prefix.rstrip("/") + "/" + archive.name
+    signatures = []
+    for feed in args.output.glob("*.xml"):
+        for item in ET.parse(feed).iter("item"):
+            enclosure = item.find("enclosure")
+            if enclosure is None or enclosure.get("url") != url:
+                continue
+            if enclosure.get("length") != str(archive.stat().st_size):
+                parser.error("Sparkle appcast archive length does not match the packaged update")
+            if minimum is not None and system_version(item.findtext(sparkle_ns + "minimumSystemVersion")) != minimum:
+                parser.error("Sparkle appcast minimum macOS version does not match the packaged update")
+            signatures.append(enclosure.get(sparkle_ns + "edSignature"))
     if not signatures or not all(signatures):
         parser.error("Sparkle did not sign this update; verify the signing key matches the bundle's SUPublicEDKey")
     for signature in set(signatures):

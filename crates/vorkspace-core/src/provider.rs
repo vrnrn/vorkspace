@@ -1156,11 +1156,19 @@ pub fn run_text(request: Request, cancel: Arc<AtomicBool>) -> Result<String, Str
     run_text_with_timeout(request, cancel, DEFAULT_TEXT_TIMEOUT)
 }
 
+/// Providers with an explicit tool-free background invocation.
+pub fn supports_text_only(kind: Kind) -> bool {
+    matches!(kind, Kind::Codex | Kind::Claude) || kind.is_pi()
+}
+
 pub fn run_text_with_timeout(
     mut request: Request,
     cancel: Arc<AtomicBool>,
     timeout: Duration,
 ) -> Result<String, String> {
+    if !supports_text_only(request.kind) {
+        return Err("This provider cannot run tool-free background text requests.".into());
+    }
     request.provider_id = None;
     request.settings = Settings {
         account: request.settings.account.clone(),
@@ -1330,6 +1338,8 @@ fn run_operation(
             if settings.text_only {
                 command.args([
                     "--tools",
+                    "",
+                    "--setting-sources",
                     "",
                     "--max-turns",
                     "1",
