@@ -16,12 +16,18 @@ enum FinishAction {
 struct FixtureCase {
     wav: PathBuf,
     expected: String,
+    #[serde(default)]
+    expected_live: Option<String>,
+    #[serde(default)]
+    automatic: bool,
     action: FinishAction,
 }
 
 struct Clip {
     samples: Vec<f32>,
     expected: Option<String>,
+    expected_live: Option<String>,
+    automatic: bool,
     action: FinishAction,
 }
 
@@ -95,6 +101,8 @@ pub fn run(
         .map(|path| Clip {
             samples: pcm(path),
             expected: None,
+            expected_live: None,
+            automatic: false,
             action: FinishAction::Deliver,
         })
         .collect();
@@ -115,6 +123,8 @@ pub fn run_matrix(lock: PathBuf, model: PathBuf, manifest: &Path) {
         .map(|case| Clip {
             samples: pcm(&case.wav),
             expected: Some(case.expected),
+            expected_live: case.expected_live,
+            automatic: case.automatic,
             action: case.action,
         })
         .collect();
@@ -195,12 +205,27 @@ async fn exercise(
         if live == "Existing: " {
             return Err(format!("turn {} had no live delivery", index + 1));
         }
+        if clip
+            .expected_live
+            .as_ref()
+            .is_some_and(|expected| live != format!("Existing: {expected}"))
+        {
+            return Err(format!(
+                "turn {} unexpected live delivery: {live:?}",
+                index + 1
+            ));
+        }
         sink.borrow_mut().forced_busy = true;
+        let stopped_at = Instant::now();
         service.update(cx, |s, _| {
             if s.attempt.stop() != Some(epoch) {
                 return Err("stop refused".into());
             }
-            s.finish_input()
+            s.finish_input(if clip.automatic {
+                worker::FinishReason::Automatic
+            } else {
+                worker::FinishReason::UserStop
+            })
         })?;
         let deadline = Instant::now() + Duration::from_secs(15);
         while service.read_with(cx, |s, _| s.finished.is_none()) {
@@ -211,6 +236,7 @@ async fn exercise(
                 .timer(Duration::from_millis(20))
                 .await;
         }
+        let stop_to_worker_done_ms = stopped_at.elapsed().as_millis();
         let (pending, delivered) = service.read_with(cx, |s, _| {
             (s.pending_text.clone(), s.delivered.text().to_owned())
         });
@@ -292,8 +318,9 @@ async fn exercise(
             return Err("retired attempt inserted later text".into());
         }
         println!(
-            "turn={} action={action} live={live:?} pending={pending:?} final={final_text:?} deltas={deltas:?} blocked={} ",
+            "turn={} action={action} automatic={} live={live:?} pending={pending:?} final={final_text:?} deltas={deltas:?} blocked={} stop_to_worker_done_ms={stop_to_worker_done_ms}",
             index + 1,
+            clip.automatic,
             sink.borrow().blocked
         );
     }

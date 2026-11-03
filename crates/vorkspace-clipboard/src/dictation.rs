@@ -620,7 +620,7 @@ impl Service {
         }
         match self.attempt.phase {
             Phase::Starting => self.cancel(cx),
-            Phase::Recording => self.stop(cx),
+            Phase::Recording => self.stop(worker::FinishReason::UserStop, cx),
             Phase::Transcribing => self.cancel(cx),
             Phase::Cancelling => {}
             Phase::Idle => {
@@ -714,7 +714,7 @@ impl Service {
                                         return true;
                                     }
                                     if started.elapsed() >= Duration::from_secs(120) {
-                                        s.stop(cx);
+                                        s.stop(worker::FinishReason::Automatic, cx);
                                     }
                                 }
                                 s.deliver(epoch, cx);
@@ -767,7 +767,7 @@ impl Service {
         }
         Ok(())
     }
-    fn finish_input(&mut self) -> Result<(), String> {
+    fn finish_input(&mut self, reason: worker::FinishReason) -> Result<(), String> {
         if self.attempt.phase != Phase::Transcribing {
             return Err("Finish was not admitted".into());
         }
@@ -775,7 +775,7 @@ impl Service {
             .as_ref()
             .ok_or("Missing dictation worker".to_string())?
             .1
-            .finish()?;
+            .finish(reason)?;
         self.native_started = false;
         Ok(())
     }
@@ -828,7 +828,7 @@ impl Service {
                     return false;
                 }
                 if health == CaptureHealth::Full {
-                    self.stop(cx);
+                    self.stop(worker::FinishReason::Automatic, cx);
                     return false;
                 }
                 true
@@ -842,7 +842,7 @@ impl Service {
             }
         }
     }
-    fn stop(&mut self, cx: &mut Context<Self>) {
+    fn stop(&mut self, reason: worker::FinishReason, cx: &mut Context<Self>) {
         if self.attempt.phase == Phase::Starting {
             self.cancel(cx);
             return;
@@ -870,7 +870,7 @@ impl Service {
             return;
         };
         let _ = (selected, epoch);
-        if let Err(e) = self.drain(true).and_then(|_| self.finish_input()) {
+        if let Err(e) = self.drain(true).and_then(|_| self.finish_input(reason)) {
             self.fail_turn(e, cx);
             return;
         }
@@ -1525,7 +1525,7 @@ mod capture_tests {
                 s.words = vorkspace_core::dictation_words::parse("work space => Vorkspace");
                 assert!(s.begin_turn(epoch + 1).is_err());
                 s.begin_turn(epoch).unwrap();
-                assert!(s.finish_input().is_err());
+                assert!(s.finish_input(worker::FinishReason::UserStop).is_err());
                 let turn = rx.try_recv().unwrap();
                 assert_eq!(turn.epoch, epoch);
                 s.words = vorkspace_core::dictation_words::parse("work space => Workspace");
@@ -1533,10 +1533,16 @@ mod capture_tests {
                 s.feed_audio(&vec![0.25; worker::SAMPLE_RATE + 8]).unwrap();
                 assert!(s.attempt.recording(epoch));
                 assert_eq!(s.attempt.stop(), Some(epoch));
-                s.finish_input().unwrap();
+                s.finish_input(worker::FinishReason::UserStop).unwrap();
                 let mut received = Vec::new();
-                while let worker::Input::Audio(audio) = turn.input.try_recv().unwrap() {
-                    received.extend(audio);
+                loop {
+                    match turn.input.try_recv().unwrap() {
+                        worker::Input::Audio(audio) => received.extend(audio),
+                        worker::Input::Finish(reason) => {
+                            assert_eq!(reason, worker::FinishReason::UserStop);
+                            break;
+                        }
+                    }
                 }
                 assert_eq!(received, vec![0.25; worker::SAMPLE_RATE + 8]);
                 assert!(!s.native_started);
@@ -1747,7 +1753,7 @@ mod capture_tests {
                     s.panel.unwrap().read(cx).unwrap().state,
                     panel::State::Starting
                 );
-                s.stop(cx); // Defensive early-stop path is cancellation too.
+                s.stop(worker::FinishReason::UserStop, cx); // Early stop is cancellation too.
                 assert_eq!(s.status, "Cancelled · ⌘, to start again");
                 assert_eq!(s.attempt.phase, Phase::Idle);
             });

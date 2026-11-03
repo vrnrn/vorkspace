@@ -240,7 +240,7 @@ async fn exercise(
                         if s.attempt.stop() != Some(epoch) {
                             return Err("Finish admission refused".into());
                         }
-                        s.finish_input()
+                        s.finish_input(worker::FinishReason::UserStop)
                     })?;
                 }
             }

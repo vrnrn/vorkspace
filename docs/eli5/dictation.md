@@ -40,10 +40,17 @@ field while you speak. It waits for words to settle instead of inserting guesses
 and deleting them later. Press **⌘,** again to finish the last words, without
 repeating what is already there. The notch shows a microphone, not your text.
 On screens without a notch, the microphone appears by itself at the top center.
-The model can miss punctuation at the end of a sentence, including a final
-period when you stop. A separate way of decoding the same speech can supply a
-mark, but can also change words or put a period on a question or unfinished
-phrase. Vorkspace does not use that result or guess the missing mark.
+The model can miss punctuation at the end of a sentence. When you explicitly
+stop Unified English dictation, Vorkspace can guess a question mark or period
+for a few simple kinds of sentence. It leaves many other phrases alone, including
+numbers and obvious technical text. It never changes the words to add the mark.
+The guess cannot hear your intended meaning: it can miss a mark or choose the
+wrong one, for example a period for a question phrased like a statement. It can
+also mistake an unfinished phrase for a sentence. Existing marks are kept, and
+the guess does not change words while you are speaking. The other models and
+automatic recording limits do not use this guess. A separate way of decoding
+the same speech can also supply a mark, but can change words or put a period on
+a question or unfinished phrase, so Vorkspace does not use that result.
 Quiet background noise need not hold the last settled word until you speak again.
 TDT checks overlapping pieces of speech, so words can arrive in small bursts.
 Flash is a fast English option that does not add punctuation or capital letters.

@@ -55,7 +55,8 @@ pub fn compare_unified(lock: &Path, model: &Path, wavs: &[std::path::PathBuf]) {
         for chunk in pcm.chunks(1600) {
             tx.send(worker::Input::Audio(chunk.to_vec())).unwrap();
         }
-        tx.send(worker::Input::Finish).unwrap();
+        tx.send(worker::Input::Finish(worker::FinishReason::Automatic))
+            .unwrap();
         let turn = Turn {
             epoch: index as u64 + 1,
             input: rx,
@@ -279,7 +280,7 @@ pub fn run(
         for chunk in vec![0.; worker::SAMPLE_RATE * tail_ms / 1000].chunks(worker::SAMPLE_RATE) {
             pipe.audio(chunk.to_vec()).unwrap();
         }
-        pipe.finish().unwrap();
+        pipe.finish(worker::FinishReason::UserStop).unwrap();
         loop {
             match events.recv_blocking().unwrap() {
                 Event::Done(e, result) => {

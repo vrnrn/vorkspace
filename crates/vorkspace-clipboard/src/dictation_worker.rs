@@ -8,6 +8,7 @@ use transcribe_cpp::{
     RunExtension, RunOptions, StreamOptions, TimestampKind,
 };
 use vorkspace_core::dictation_words::{Corrector, Rule};
+mod completion;
 pub(crate) mod eou;
 mod tdt_stream;
 
@@ -43,7 +44,12 @@ const QUEUED_BLOCK_SAMPLES: usize = SAMPLE_RATE / 10;
 const QUEUED_BLOCKS: usize = 80; // at most eight seconds of pending PCM
 pub enum Input {
     Audio(Vec<f32>),
-    Finish,
+    Finish(FinishReason),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FinishReason {
+    UserStop,
+    Automatic,
 }
 pub struct Turn {
     pub epoch: u64,
@@ -80,8 +86,8 @@ impl Pipe {
         }
         Ok(())
     }
-    pub fn finish(&self) -> Result<(), String> {
-        self.send(Input::Finish)
+    pub fn finish(&self, reason: FinishReason) -> Result<(), String> {
+        self.send(Input::Finish(reason))
     }
     fn send(&self, input: Input) -> Result<(), String> {
         self.tx.try_send(input).map_err(|_| "Local dictation could not keep up. Further insertion stopped; text already inserted is kept. Try a shorter recording.".into())
@@ -240,7 +246,7 @@ impl WarmModel {
                             publisher.advance(turn, stable, false, &mut emit)?;
                         }
                     }
-                    Input::Finish => {
+                    Input::Finish(_) => {
                         let text = model.finish()?;
                         let stable = tail.observe(&text, &[], &publisher.source, true);
                         publisher.advance(turn, stable, true, &mut emit)?;
@@ -290,7 +296,7 @@ impl WarmModel {
                             publisher.advance(turn, stable, false, &mut emit)?;
                         }
                     }
-                    Input::Finish => {
+                    Input::Finish(reason) => {
                         stream.finalize().map_err(|e| e.to_string())?;
                         let snapshot = stream.text();
                         let text = snapshot.committed;
@@ -314,8 +320,11 @@ impl WarmModel {
                             &mut tail,
                             &mut publisher,
                             &mut raw_prefix,
-                            &text,
-                            &snapshot.full,
+                            UnifiedFinal {
+                                committed: &text,
+                                text: &snapshot.full,
+                                reason,
+                            },
                             &mut emit,
                         )?;
                         return Ok(());
@@ -334,7 +343,7 @@ impl WarmModel {
             loop {
                 let (text, finished) = match receive(turn, &mut count)? {
                     Input::Audio(block) => (incremental.feed(&block, &mut decode)?, false),
-                    Input::Finish => (incremental.finish(&mut decode)?, true),
+                    Input::Finish(_) => (incremental.finish(&mut decode)?, true),
                 };
                 if let Some(text) = text {
                     publisher.advance_segment(turn, &text, finished, &mut emit)?;
@@ -350,17 +359,23 @@ impl WarmModel {
     }
 }
 
+struct UnifiedFinal<'a> {
+    committed: &'a str,
+    text: &'a str,
+    reason: FinishReason,
+}
+
 fn finish_unified(
     turn: &Turn,
     tail: &mut StableTail,
     publisher: &mut Publisher,
     raw_prefix: &mut CommittedPrefix,
-    committed: &str,
-    final_text: &str,
+    result: UnifiedFinal<'_>,
     emit: &mut impl FnMut(Event) -> Result<(), String>,
 ) -> Result<(), String> {
-    raw_prefix.advance(committed)?;
-    let stable = tail.observe(final_text, &[], &publisher.source, true);
+    raw_prefix.advance(result.committed)?;
+    let stable = tail.observe(result.text, &[], &publisher.source, true);
+    publisher.complete_on_stop = result.reason == FinishReason::UserStop;
     publisher.advance(turn, stable, true, emit)
 }
 
@@ -398,6 +413,7 @@ struct Publisher {
     corrected: String,
     sent: CommittedPrefix,
     corrector: Corrector,
+    complete_on_stop: bool,
 }
 impl Publisher {
     fn new(rules: Vec<Rule>) -> Self {
@@ -406,6 +422,7 @@ impl Publisher {
             corrected: String::new(),
             sent: CommittedPrefix::default(),
             corrector: Corrector::new(rules),
+            complete_on_stop: false,
         }
     }
     fn advance(
@@ -455,6 +472,15 @@ impl Publisher {
             self.corrector.push(&suffix, finished)
         };
         self.corrected.push_str(&corrected);
+        if finished
+            && self.complete_on_stop
+            && let Some(mark) = completion::suggest(&self.corrected)
+        {
+            // Corrections are already complete. Insert only a mark before the
+            // still-private trailing whitespace; never feed it into aliases.
+            let end = self.corrected.trim_end_matches(char::is_whitespace).len();
+            self.corrected.insert(end, mark);
+        }
         // A future punctuation token belongs before trailing whitespace. Keep
         // that whitespace private until more text or Finish fixes its position.
         let visible = if finished {
@@ -492,7 +518,7 @@ fn receive(turn: &Turn, count: &mut usize) -> Result<Input, String> {
                 }
                 return Ok(Input::Audio(pcm));
             }
-            Ok(Input::Finish) => return Ok(Input::Finish),
+            Ok(Input::Finish(reason)) => return Ok(Input::Finish(reason)),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(_) => return Err("Cancelled".into()),
         }
@@ -782,8 +808,11 @@ mod tests {
             &mut tail,
             &mut publisher,
             &mut raw_prefix,
-            "Héllo ",
-            "Héllo?  ",
+            UnifiedFinal {
+                committed: "Héllo ",
+                text: "Héllo?  ",
+                reason: FinishReason::Automatic,
+            },
             &mut |event| {
                 if let Event::Committed(_, text) = event {
                     values.push(text);
@@ -802,9 +831,135 @@ mod tests {
                 &mut tail,
                 &mut publisher,
                 &mut raw_prefix,
-                "Héllo ",
-                "Changed?",
+                UnifiedFinal {
+                    committed: "Héllo ",
+                    text: "Changed?",
+                    reason: FinishReason::Automatic
+                },
                 &mut |_| panic!("rewrite")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn completion_is_only_for_user_stop_and_never_replays_live_words() {
+        for (reason, model_final, expected) in [
+            (
+                FinishReason::UserStop,
+                "What is your name  ",
+                "What is your name?  ",
+            ),
+            (
+                FinishReason::Automatic,
+                "What is your name  ",
+                "What is your name  ",
+            ),
+            (
+                FinishReason::UserStop,
+                "What is your name?  ",
+                "What is your name?  ",
+            ),
+        ] {
+            let (_pipe, input) = Pipe::new();
+            let turn = Turn {
+                epoch: 13,
+                cancel: CancelToken::new(),
+                input,
+                words: Vec::new(),
+            };
+            let mut publisher = Publisher::new(Vec::new());
+            let mut tail = StableTail::default();
+            let mut raw = CommittedPrefix::default();
+            raw.advance("What is your name").unwrap();
+            let mut values = Vec::new();
+            let mut emit = |event| {
+                if let Event::Committed(_, text) = event {
+                    values.push(text);
+                }
+                Ok(())
+            };
+            publisher
+                .advance_stable(&turn, "What is your name", &mut emit)
+                .unwrap();
+            finish_unified(
+                &turn,
+                &mut tail,
+                &mut publisher,
+                &mut raw,
+                UnifiedFinal {
+                    committed: "What is your name",
+                    text: model_final,
+                    reason,
+                },
+                &mut emit,
+            )
+            .unwrap();
+            assert_eq!(values[0], "What is your name");
+            assert_eq!(values.last().unwrap(), expected);
+            let mut delivered = CommittedPrefix::default();
+            assert_eq!(delivered.advance(&values[0]).unwrap(), "What is your name");
+            assert_eq!(
+                delivered.advance(values.last().unwrap()).unwrap(),
+                &expected["What is your name".len()..]
+            );
+            assert_eq!(delivered.advance(values.last().unwrap()).unwrap(), "");
+        }
+    }
+
+    #[test]
+    fn completion_follows_alias_correction_and_cancel_fences_it() {
+        let (_pipe, input) = Pipe::new();
+        let turn = Turn {
+            epoch: 14,
+            cancel: CancelToken::new(),
+            input,
+            words: Vec::new(),
+        };
+        let rules = vorkspace_core::dictation_words::parse("work space => Vorkspace").unwrap();
+        let mut publisher = Publisher::new(rules);
+        let mut tail = StableTail::default();
+        let mut raw = CommittedPrefix::default();
+        let mut values = Vec::new();
+        let mut emit = |event| {
+            if let Event::Committed(_, text) = event {
+                values.push(text);
+            }
+            Ok(())
+        };
+        publisher
+            .advance(&turn, "I think work ", false, &mut emit)
+            .unwrap();
+        raw.advance("I think work space is ready").unwrap();
+        finish_unified(
+            &turn,
+            &mut tail,
+            &mut publisher,
+            &mut raw,
+            UnifiedFinal {
+                committed: "I think work space is ready",
+                text: "I think work space is ready",
+                reason: FinishReason::UserStop,
+            },
+            &mut emit,
+        )
+        .unwrap();
+        assert_eq!(values.last().unwrap(), "I think Vorkspace is ready.");
+        assert!(values.windows(2).all(|pair| pair[1].starts_with(&pair[0])));
+
+        turn.cancel.cancel();
+        assert!(
+            finish_unified(
+                &turn,
+                &mut tail,
+                &mut publisher,
+                &mut raw,
+                UnifiedFinal {
+                    committed: "I think work space is ready",
+                    text: "I think work space is ready",
+                    reason: FinishReason::UserStop
+                },
+                &mut |_| panic!("cancelled completion")
             )
             .is_err()
         );
@@ -838,8 +993,11 @@ mod tests {
                     &mut tail,
                     &mut publisher,
                     &mut raw_prefix,
-                    text,
-                    text,
+                    UnifiedFinal {
+                        committed: text,
+                        text,
+                        reason: FinishReason::Automatic,
+                    },
                     &mut emit,
                 )
                 .unwrap();
@@ -965,13 +1123,16 @@ mod tests {
             pipe.audio(vec![0.; QUEUED_BLOCK_SAMPLES]).unwrap();
         }
         assert!(pipe.audio(vec![0.]).is_err());
-        assert!(pipe.finish().is_err());
+        assert!(pipe.finish(FinishReason::UserStop).is_err());
         assert!(matches!(rx.recv().unwrap(), Input::Audio(_)));
-        pipe.finish().unwrap();
+        pipe.finish(FinishReason::UserStop).unwrap();
         for _ in 1..QUEUED_BLOCKS {
             assert!(matches!(rx.recv().unwrap(), Input::Audio(_)));
         }
-        assert!(matches!(rx.recv().unwrap(), Input::Finish));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            Input::Finish(FinishReason::UserStop)
+        ));
     }
     #[test]
     fn large_capture_drains_cannot_exceed_the_same_eight_second_queue() {

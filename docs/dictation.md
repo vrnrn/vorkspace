@@ -43,11 +43,19 @@ Press **⌘,** again to drain
 and finalize; only the remaining suffix of a final hypothesis that extends the
 source prefix already accepted by the correction pipeline is inserted. Trailing
 whitespace waits until its position is known, so punctuation can precede it
-without moving the cursor. The model may omit punctuation, including a final
-period after an explicit Stop; the helper does not guess it. Unified's separate
-offline decode is not an interchangeable final result: it can revise words and
-punctuate a fragment or a question as a statement. It is therefore not used to
-replace or extend the live transcript.
+without moving the cursor. For Unified English only, an explicit Stop can add
+one `?` or `.` after correction if the model left a short, plain-English,
+single-sentence transcript unpunctuated. A small text heuristic recognizes
+some direct question shapes and some first-person statements; it refuses many
+other forms, including numbers and obvious technical text. It does not run on
+live partials, automatic capture limits, TDT or Flash. It does not analyze
+prosody or determine intent: it can miss a mark, mistake a fragment, or put a
+period on a declarative-form question. Existing punctuation wins. The mark is
+an ordinary append-only suffix subject to the same cancellation and destination
+checks as recognized text; aliases are resolved before it is considered.
+Unified's separate offline decode is not an interchangeable final result: it
+can revise words and punctuate a fragment or a question as a statement. It is
+therefore not used to replace or extend the live transcript.
 The nonactivating notch shows only the right-hand microphone indicator. On a
 notched screen its black body overlaps the obscured notch area; without a notch,
 the indicator is centered at the top of the screen. Status and errors remain
@@ -328,14 +336,17 @@ transitions using explicitly supplied existing models and isolated paths. The de
 compares the production streaming worker and offline decoding sequentially on
 the same warm Unified model. It feeds the chunks synchronously without real-time
 cadence, prints text from the explicitly supplied public or generated WAV files,
-and never opens a microphone or destination.
+and never opens a microphone or destination. Its model comparison uses an
+automatic-finish reason, so its streaming result excludes the Stop heuristic.
 `--dictation-delivery-matrix /absolute/lock /absolute/model /absolute/cases.json`
 feeds Unified fixtures through the production Service and worker with one warm
 model and a memory-only destination. The JSON array contains `wav` (absolute
 PCM16 mono 16 kHz path), `expected` (exact final worker text), and `action`
-(`deliver`, `cancel`, `edit`, or `focus`). It checks live delivery, the pending
-suffix while the simulated clipboard read window is busy, and stale delivery
-after invalidation. Each clip must produce live text and a final suffix. These
+(`deliver`, `cancel`, `edit`, or `focus`), plus optional `expected_live` (exact
+text delivered before Stop) and `automatic` (finish without a user Stop). It
+checks live delivery, the pending suffix while the simulated clipboard read
+window is busy, and stale delivery after invalidation. Each clip must produce
+live text and a final suffix. These
 memory checks do not establish what a real field did.
 The debug-only
 `--tdt-window-fixture /absolute/model.gguf /absolute/public.wav` also prints TDT
