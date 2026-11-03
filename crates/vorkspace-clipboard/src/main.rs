@@ -300,6 +300,14 @@ fn main() {
 #[cfg(debug_assertions)]
 fn fixture() -> bool {
     let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1).map(String::as_str) == Some("--unified-final-compare") {
+        vorkspace_clipboard::dictation_live_fixture::compare_unified(
+            Path::new(args.get(2).expect("isolated lock path")),
+            Path::new(args.get(3).expect("model path")),
+            &args[4..].iter().map(PathBuf::from).collect::<Vec<_>>(),
+        );
+        return true;
+    }
     if args.get(1).map(String::as_str) == Some("--dictation-delivery-fixture") {
         dictation::delivery_fixture::run(
             PathBuf::from(args.get(2).expect("isolated lock path")),
@@ -312,6 +320,14 @@ fn fixture() -> bool {
                 Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
                 _ => panic!("expected unified, tdt-v3 or eou"),
             },
+        );
+        return true;
+    }
+    if args.get(1).map(String::as_str) == Some("--dictation-delivery-matrix") {
+        dictation::delivery_fixture::run_matrix(
+            PathBuf::from(args.get(2).expect("isolated lock path")),
+            PathBuf::from(args.get(3).expect("model path")),
+            Path::new(args.get(4).expect("fixture manifest path")),
         );
         return true;
     }

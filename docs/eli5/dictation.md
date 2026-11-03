@@ -40,8 +40,10 @@ field while you speak. It waits for words to settle instead of inserting guesses
 and deleting them later. Press **⌘,** again to finish the last words, without
 repeating what is already there. The notch shows a microphone, not your text.
 On screens without a notch, the microphone appears by itself at the top center.
-The model can miss punctuation at the end of a sentence; Vorkspace does not
-guess punctuation that the model did not supply.
+The model can miss punctuation at the end of a sentence, including a final
+period when you stop. A separate way of decoding the same speech can supply a
+mark, but can also change words or put a period on a question or unfinished
+phrase. Vorkspace does not use that result or guess the missing mark.
 Quiet background noise need not hold the last settled word until you speak again.
 TDT checks overlapping pieces of speech, so words can arrive in small bursts.
 Flash is a fast English option that does not add punctuation or capital letters.
@@ -148,10 +150,13 @@ Developer builds can feed a known public recording through the same live worker
 twice, measuring words arriving before Stop and checking model reuse. A separate
 offline check joins or crashes disposable helper processes to exercise the model
 lock and retry, using existing models and no microphone. Another checks the last
-word during a noisy pause. A field check uses only synthetic text to test several
-pastes, edits, focus changes and cancellation. This requires the signed helper's
-normal Accessibility permission; a missing grant is reported without changing
-permissions. These checks never use your microphone, composer or database.
+word during a noisy pause. Developers can also compare the streaming and offline
+results on the same prepared model, or test several recordings and simulated
+destination changes without using a real field. A field check uses only synthetic
+text to test several pastes, edits, focus changes and cancellation. This requires
+the signed helper's normal Accessibility permission; a missing grant is reported
+without changing permissions. These checks never use your microphone, composer
+or database.
 
 A combined developer check can also send the known public recording through the
 real dictation controller and watch the disposable text field change while the

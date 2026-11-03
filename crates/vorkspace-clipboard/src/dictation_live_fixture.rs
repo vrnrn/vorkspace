@@ -19,6 +19,83 @@ fn fixture_lease() -> EngineLease {
     }
 }
 
+/// Compare real streaming with a separate offline pass, serially on one warm
+/// Unified model. Inputs are explicitly supplied public/generated WAV files.
+pub fn compare_unified(lock: &Path, model: &Path, wavs: &[std::path::PathBuf]) {
+    assert!(lock.is_absolute() && model.is_absolute() && !wavs.is_empty());
+    let _lease = EngineLease::acquire_at(lock).expect("isolated fixture model lease");
+    let cancel = CancelToken::new();
+    let started = Instant::now();
+    let warm = worker::WarmModel::load(crate::ModelId::UnifiedEnglish, model, &cancel)
+        .expect("prepare Unified fixture model");
+    println!(
+        "prepare_ms={} model_loads={}",
+        started.elapsed().as_millis(),
+        worker::model_loads()
+    );
+    for (index, wav) in wavs.iter().enumerate() {
+        assert!(wav.is_absolute());
+        let reader = hound::WavReader::open(wav).expect("fixture WAV");
+        assert_eq!(
+            (
+                reader.spec().sample_rate,
+                reader.spec().channels,
+                reader.spec().bits_per_sample
+            ),
+            (16000, 1, 16)
+        );
+        assert_eq!(reader.spec().sample_format, hound::SampleFormat::Int);
+        assert!(reader.duration() > 0 && reader.duration() as usize <= worker::SAMPLE_RATE * 20);
+        let pcm: Vec<_> = reader
+            .into_samples::<i16>()
+            .map(|s| s.unwrap() as f32 / 32768.)
+            .collect();
+        assert!(!pcm.is_empty() && pcm.len() <= worker::SAMPLE_RATE * 20);
+        let (tx, rx) = mpsc::channel();
+        for chunk in pcm.chunks(1600) {
+            tx.send(worker::Input::Audio(chunk.to_vec())).unwrap();
+        }
+        tx.send(worker::Input::Finish).unwrap();
+        let turn = Turn {
+            epoch: index as u64 + 1,
+            input: rx,
+            cancel: CancelToken::new(),
+            words: Vec::new(),
+        };
+        let mut events = Vec::new();
+        let started = Instant::now();
+        warm.turn(&turn, |event| {
+            if let Event::Committed(_, text) = event {
+                events.push(text);
+            }
+            Ok(())
+        })
+        .expect("stream fixture");
+        let stream_ms = started.elapsed().as_millis();
+        let started = Instant::now();
+        let (offline, pnc_runtime_control) = warm
+            .offline_unified_fixture(&pcm, &cancel)
+            .expect("offline fixture");
+        let offline_ms = started.elapsed().as_millis();
+        let streamed = events.last().cloned().unwrap_or_default();
+        println!(
+            "{}",
+            serde_json::json!({
+                "wav": wav.file_name().unwrap().to_string_lossy(),
+                "audio_ms": pcm.len() * 1000 / worker::SAMPLE_RATE,
+                "streamed": streamed,
+                "offline": offline,
+                "events": events,
+                "stream_compute_ms": stream_ms,
+                "offline_compute_ms": offline_ms,
+                "pnc_runtime_control": pnc_runtime_control,
+            })
+        );
+    }
+    assert_eq!(worker::model_loads(), 1);
+    println!("model_loads=1 worker=synchronous microphone=false destination=false");
+}
+
 /// Explicit public-audio inspection of TDT's offline windows and word timing.
 /// This does not open the microphone or access a destination field.
 pub fn inspect_tdt_windows(model: &Path, wav: &Path) {

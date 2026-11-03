@@ -194,6 +194,30 @@ impl WarmModel {
             model: WarmEngine::Gguf(model),
         })
     }
+
+    /// Compare an explicit public/generated fixture with the same warm weights
+    /// used by the streaming worker. This is never called by live dictation.
+    #[cfg(debug_assertions)]
+    pub fn offline_unified_fixture(
+        &self,
+        pcm: &[f32],
+        cancel: &CancelToken,
+    ) -> Result<(String, bool), String> {
+        let WarmEngine::Gguf(model) = &self.model else {
+            return Err("Expected the Unified GGUF model".into());
+        };
+        if self.id != ModelId::UnifiedEnglish {
+            return Err("Expected the Unified model".into());
+        }
+        let mut session = model.session().map_err(|error| error.to_string())?;
+        session.set_cancel_token(cancel);
+        let supports_pnc = model.supports(transcribe_cpp::Feature::Pnc);
+        session
+            .run(pcm, &run_options(self.id, &[]))
+            .map(|result| (result.text, supports_pnc))
+            .map_err(|error| error.to_string())
+    }
+
     pub fn turn(
         &self,
         turn: &Turn,

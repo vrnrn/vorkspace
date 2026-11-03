@@ -43,8 +43,11 @@ Press **⌘,** again to drain
 and finalize; only the remaining suffix of a final hypothesis that extends the
 source prefix already accepted by the correction pipeline is inserted. Trailing
 whitespace waits until its position is known, so punctuation can precede it
-without moving the cursor. The model may
-omit punctuation, including at the end of a sentence; the helper does not invent it.
+without moving the cursor. The model may omit punctuation, including a final
+period after an explicit Stop; the helper does not guess it. Unified's separate
+offline decode is not an interchangeable final result: it can revise words and
+punctuate a fragment or a question as a statement. It is therefore not used to
+replace or extend the live transcript.
 The nonactivating notch shows only the right-hand microphone indicator. On a
 notched screen its black body overlaps the obscured notch area; without a notch,
 the indicator is centered at the top of the screen. Status and errors remain
@@ -321,6 +324,20 @@ clipboard read window without accessing a real field or clipboard. The scripts
 in `crates/vorkspace-clipboard/tests/` check continuous
 public speech, noisy pauses on all engines and real multi-process model-owner
 transitions using explicitly supplied existing models and isolated paths. The debug-only
+`--unified-final-compare /absolute/lock /absolute/model /absolute/clip.wav [...]`
+compares the production streaming worker and offline decoding sequentially on
+the same warm Unified model. It feeds the chunks synchronously without real-time
+cadence, prints text from the explicitly supplied public or generated WAV files,
+and never opens a microphone or destination.
+`--dictation-delivery-matrix /absolute/lock /absolute/model /absolute/cases.json`
+feeds Unified fixtures through the production Service and worker with one warm
+model and a memory-only destination. The JSON array contains `wav` (absolute
+PCM16 mono 16 kHz path), `expected` (exact final worker text), and `action`
+(`deliver`, `cancel`, `edit`, or `focus`). It checks live delivery, the pending
+suffix while the simulated clipboard read window is busy, and stale delivery
+after invalidation. Each clip must produce live text and a final suffix. These
+memory checks do not establish what a real field did.
+The debug-only
 `--tdt-window-fixture /absolute/model.gguf /absolute/public.wav` also prints TDT
 window hypotheses and word timings for the supplied fixture. Debug-only
 `--insertion-fixture PID success|edit|focus|cancel` preflights the signed helper's
