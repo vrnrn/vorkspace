@@ -44,15 +44,16 @@ and finalize; only the remaining suffix of a final hypothesis that extends the
 source prefix already accepted by the correction pipeline is inserted. Trailing
 whitespace waits until its position is known, so punctuation can precede it
 without moving the cursor. For Unified English only, an explicit Stop can add
-one `?` or `.` after correction if the model left a short, plain-English,
-single-sentence transcript unpunctuated. A small text heuristic recognizes
-some direct question shapes and some first-person statements; it refuses many
-other forms, including numbers and obvious technical text. It does not run on
-live partials, automatic capture limits, TDT or Flash. It does not analyze
-prosody or determine intent: it can miss a mark, mistake a fragment, or put a
-period on a declarative-form question. Existing punctuation wins. The mark is
-an ordinary append-only suffix subject to the same cancellation and destination
-checks as recognized text; aliases are resolved before it is considered.
+one `?` after correction if the model leaves a short, plain-English direct
+question unpunctuated. A narrow text heuristic considers the final sentence and
+some conversational openings after a comma. It refuses ambiguous boundaries,
+many question forms, recognizable numbers, and obvious technical text. It does
+not run on live partials, automatic capture limits, TDT or Flash. It does not analyze
+prosody or determine intent: it can miss a question or mistake a fragment or
+statement for one. Existing punctuation wins. Missing periods are not guessed.
+The question mark is an ordinary append-only suffix subject to the same
+cancellation and destination checks as recognized text; aliases are resolved
+before it is considered.
 Unified's separate offline decode is not an interchangeable final result: it
 can revise words and punctuate a fragment or a question as a statement. It is
 therefore not used to replace or extend the live transcript.
@@ -343,10 +344,11 @@ feeds Unified fixtures through the production Service and worker with one warm
 model and a memory-only destination. The JSON array contains `wav` (absolute
 PCM16 mono 16 kHz path), `expected` (exact final worker text), and `action`
 (`deliver`, `cancel`, `edit`, or `focus`), plus optional `expected_live` (exact
-text delivered before Stop) and `automatic` (finish without a user Stop). It
+text delivered before Stop), `automatic` (finish without a user Stop), and
+`expect_no_suffix` (successful completion without another insertion). It
 checks live delivery, the pending suffix while the simulated clipboard read
 window is busy, and stale delivery after invalidation. Each clip must produce
-live text and a final suffix. These
+live text; it normally also needs a final suffix. These
 memory checks do not establish what a real field did.
 The debug-only
 `--tdt-window-fixture /absolute/model.gguf /absolute/public.wav` also prints TDT

@@ -41,12 +41,12 @@ and deleting them later. Press **⌘,** again to finish the last words, without
 repeating what is already there. The notch shows a microphone, not your text.
 On screens without a notch, the microphone appears by itself at the top center.
 The model can miss punctuation at the end of a sentence. When you explicitly
-stop Unified English dictation, Vorkspace can guess a question mark or period
-for a few simple kinds of sentence. It leaves many other phrases alone, including
-numbers and obvious technical text. It never changes the words to add the mark.
-The guess cannot hear your intended meaning: it can miss a mark or choose the
-wrong one, for example a period for a question phrased like a statement. It can
-also mistake an unfinished phrase for a sentence. Existing marks are kept, and
+stop Unified English dictation, Vorkspace can guess a question mark for a few
+direct question shapes, including after some earlier sentences or greetings.
+It leaves many other phrases alone, including recognizable numbers and obvious
+technical text. It never changes the words to add the mark, and it does not
+guess missing periods. The guess cannot hear your intended meaning: it can miss a question or
+mistake a statement or unfinished phrase for one. Existing marks are kept, and
 the guess does not change words while you are speaking. The other models and
 automatic recording limits do not use this guess. A separate way of decoding
 the same speech can also supply a mark, but can change words or put a period on

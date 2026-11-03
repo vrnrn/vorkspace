@@ -844,21 +844,54 @@ mod tests {
 
     #[test]
     fn completion_is_only_for_user_stop_and_never_replays_live_words() {
-        for (reason, model_final, expected) in [
+        for (reason, live, model_final, expected) in [
             (
                 FinishReason::UserStop,
+                "What is your name",
                 "What is your name  ",
                 "What is your name?  ",
             ),
             (
                 FinishReason::Automatic,
+                "What is your name",
                 "What is your name  ",
                 "What is your name  ",
             ),
             (
                 FinishReason::UserStop,
+                "What is your name",
                 "What is your name?  ",
                 "What is your name?  ",
+            ),
+            (
+                FinishReason::UserStop,
+                "What is your name",
+                "What is your name.",
+                "What is your name.",
+            ),
+            (
+                FinishReason::UserStop,
+                "That sounds great. What is your name",
+                "That sounds great. What is your name  ",
+                "That sounds great. What is your name?  ",
+            ),
+            (
+                FinishReason::UserStop,
+                "Hi there, what is your name",
+                "Hi there, what is your name",
+                "Hi there, what is your name?",
+            ),
+            (
+                FinishReason::UserStop,
+                "I want to go home",
+                "I want to go home",
+                "I want to go home",
+            ),
+            (
+                FinishReason::UserStop,
+                "I want to go home",
+                "I want to go home.",
+                "I want to go home.",
             ),
         ] {
             let (_pipe, input) = Pipe::new();
@@ -871,7 +904,7 @@ mod tests {
             let mut publisher = Publisher::new(Vec::new());
             let mut tail = StableTail::default();
             let mut raw = CommittedPrefix::default();
-            raw.advance("What is your name").unwrap();
+            raw.advance(live).unwrap();
             let mut values = Vec::new();
             let mut emit = |event| {
                 if let Event::Committed(_, text) = event {
@@ -879,29 +912,27 @@ mod tests {
                 }
                 Ok(())
             };
-            publisher
-                .advance_stable(&turn, "What is your name", &mut emit)
-                .unwrap();
+            publisher.advance_stable(&turn, live, &mut emit).unwrap();
             finish_unified(
                 &turn,
                 &mut tail,
                 &mut publisher,
                 &mut raw,
                 UnifiedFinal {
-                    committed: "What is your name",
+                    committed: live,
                     text: model_final,
                     reason,
                 },
                 &mut emit,
             )
             .unwrap();
-            assert_eq!(values[0], "What is your name");
+            assert_eq!(values[0], live);
             assert_eq!(values.last().unwrap(), expected);
             let mut delivered = CommittedPrefix::default();
-            assert_eq!(delivered.advance(&values[0]).unwrap(), "What is your name");
+            assert_eq!(delivered.advance(&values[0]).unwrap(), live);
             assert_eq!(
                 delivered.advance(values.last().unwrap()).unwrap(),
-                &expected["What is your name".len()..]
+                expected.strip_prefix(live).unwrap()
             );
             assert_eq!(delivered.advance(values.last().unwrap()).unwrap(), "");
         }
@@ -916,7 +947,7 @@ mod tests {
             input,
             words: Vec::new(),
         };
-        let rules = vorkspace_core::dictation_words::parse("work space => Vorkspace").unwrap();
+        let rules = vorkspace_core::dictation_words::parse("given name => name").unwrap();
         let mut publisher = Publisher::new(rules);
         let mut tail = StableTail::default();
         let mut raw = CommittedPrefix::default();
@@ -928,23 +959,23 @@ mod tests {
             Ok(())
         };
         publisher
-            .advance(&turn, "I think work ", false, &mut emit)
+            .advance(&turn, "What is your given ", false, &mut emit)
             .unwrap();
-        raw.advance("I think work space is ready").unwrap();
+        raw.advance("What is your given name").unwrap();
         finish_unified(
             &turn,
             &mut tail,
             &mut publisher,
             &mut raw,
             UnifiedFinal {
-                committed: "I think work space is ready",
-                text: "I think work space is ready",
+                committed: "What is your given name",
+                text: "What is your given name",
                 reason: FinishReason::UserStop,
             },
             &mut emit,
         )
         .unwrap();
-        assert_eq!(values.last().unwrap(), "I think Vorkspace is ready.");
+        assert_eq!(values.last().unwrap(), "What is your name?");
         assert!(values.windows(2).all(|pair| pair[1].starts_with(&pair[0])));
 
         turn.cancel.cancel();
@@ -955,14 +986,55 @@ mod tests {
                 &mut publisher,
                 &mut raw,
                 UnifiedFinal {
-                    committed: "I think work space is ready",
-                    text: "I think work space is ready",
+                    committed: "What is your given name",
+                    text: "What is your given name",
                     reason: FinishReason::UserStop
                 },
                 &mut |_| panic!("cancelled completion")
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn cancellation_before_finalization_blocks_the_question_suffix() {
+        let (_pipe, input) = Pipe::new();
+        let turn = Turn {
+            epoch: 15,
+            cancel: CancelToken::new(),
+            input,
+            words: Vec::new(),
+        };
+        let mut publisher = Publisher::new(Vec::new());
+        let mut tail = StableTail::default();
+        let mut raw = CommittedPrefix::default();
+        let live = "That sounds great. What is your name";
+        raw.advance(live).unwrap();
+        let mut events = Vec::new();
+        publisher
+            .advance_stable(&turn, live, &mut |event| {
+                events.push(event);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        turn.cancel.cancel();
+        assert!(
+            finish_unified(
+                &turn,
+                &mut tail,
+                &mut publisher,
+                &mut raw,
+                UnifiedFinal {
+                    committed: live,
+                    text: live,
+                    reason: FinishReason::UserStop
+                },
+                &mut |_| panic!("cancelled question suffix")
+            )
+            .is_err()
+        );
+        assert_eq!(events.len(), 1);
     }
 
     #[test]

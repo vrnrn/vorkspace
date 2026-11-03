@@ -20,6 +20,8 @@ struct FixtureCase {
     expected_live: Option<String>,
     #[serde(default)]
     automatic: bool,
+    #[serde(default)]
+    expect_no_suffix: bool,
     action: FinishAction,
 }
 
@@ -28,6 +30,7 @@ struct Clip {
     expected: Option<String>,
     expected_live: Option<String>,
     automatic: bool,
+    expect_no_suffix: bool,
     action: FinishAction,
 }
 
@@ -103,6 +106,7 @@ pub fn run(
             expected: None,
             expected_live: None,
             automatic: false,
+            expect_no_suffix: false,
             action: FinishAction::Deliver,
         })
         .collect();
@@ -125,6 +129,7 @@ pub fn run_matrix(lock: PathBuf, model: PathBuf, manifest: &Path) {
             expected: Some(case.expected),
             expected_live: case.expected_live,
             automatic: case.automatic,
+            expect_no_suffix: case.expect_no_suffix,
             action: case.action,
         })
         .collect();
@@ -228,7 +233,7 @@ async fn exercise(
             })
         })?;
         let deadline = Instant::now() + Duration::from_secs(15);
-        while service.read_with(cx, |s, _| s.finished.is_none()) {
+        while service.read_with(cx, |s, _| s.finished.is_none() && s.turn.is_some()) {
             if Instant::now() > deadline {
                 return Err("no final worker receipt".into());
             }
@@ -237,10 +242,27 @@ async fn exercise(
                 .await;
         }
         let stop_to_worker_done_ms = stopped_at.elapsed().as_millis();
-        let (pending, delivered) = service.read_with(cx, |s, _| {
-            (s.pending_text.clone(), s.delivered.text().to_owned())
+        let (pending, delivered, complete, ready) = service.read_with(cx, |s, _| {
+            (
+                s.pending_text.clone(),
+                s.delivered.text().to_owned(),
+                s.turn.is_none(),
+                s.attempt.phase == Phase::Idle && s.status == "Ready · ⌘, to start and stop",
+            )
         });
-        if !pending.starts_with(&delivered) || pending == delivered || sink.borrow().blocked == 0 {
+        if clip.expect_no_suffix {
+            if !matches!(clip.action, FinishAction::Deliver)
+                || !complete
+                || !ready
+                || pending != delivered
+            {
+                return Err("expected successful finalization without a suffix".into());
+            }
+        } else if complete
+            || !pending.starts_with(&delivered)
+            || pending == delivered
+            || sink.borrow().blocked == 0
+        {
             return Err("final suffix did not wait behind read window".into());
         }
         if clip
@@ -318,9 +340,10 @@ async fn exercise(
             return Err("retired attempt inserted later text".into());
         }
         println!(
-            "turn={} action={action} automatic={} live={live:?} pending={pending:?} final={final_text:?} deltas={deltas:?} blocked={} stop_to_worker_done_ms={stop_to_worker_done_ms}",
+            "turn={} action={action} automatic={} no_suffix={} live={live:?} pending={pending:?} final={final_text:?} deltas={deltas:?} blocked={} stop_to_worker_done_ms={stop_to_worker_done_ms}",
             index + 1,
             clip.automatic,
+            clip.expect_no_suffix,
             sink.borrow().blocked
         );
     }
