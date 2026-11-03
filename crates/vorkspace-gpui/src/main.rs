@@ -13,6 +13,8 @@ mod controls;
 mod conversation;
 mod dev_reload;
 mod diagrams;
+#[cfg(debug_assertions)]
+mod dictation_focus_fixture;
 mod file_link;
 mod file_tools;
 mod fixtures;
@@ -132,6 +134,11 @@ fn launch_bounds(cx: &App) -> WindowBounds {
 }
 
 fn main() {
+    #[cfg(debug_assertions)]
+    if let Some(output) = std::env::var_os("VORKSPACE_DICTATION_FOCUS_FIXTURE") {
+        dictation_focus_fixture::run(output.into());
+        return;
+    }
     #[cfg(debug_assertions)]
     if std::env::var_os("VORKSPACE_VOX_PREVIEW").is_some() {
         vox::preview::run();

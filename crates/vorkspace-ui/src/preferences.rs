@@ -24,6 +24,11 @@ pub struct Preferences {
     pub notes: bool,
     pub quick_composer: bool,
     pub clipboard_history: bool,
+    pub dictation_enabled: bool,
+    pub dictation_microphone: String,
+    pub dictation_model: vorkspace_core::dictation_model::ModelId,
+    /// One local preferred term or `heard => preferred` correction per line.
+    pub dictation_words: String,
     pub working_agents: bool,
     pub close_to_tray: bool,
     // Appearance
@@ -139,6 +144,10 @@ impl Default for Preferences {
             notes: true,
             quick_composer: false,
             clipboard_history: true,
+            dictation_enabled: false,
+            dictation_microphone: "builtin".into(),
+            dictation_model: Default::default(),
+            dictation_words: String::new(),
             working_agents: true,
             close_to_tray: true,
             theme: "dark".into(),
@@ -313,5 +322,78 @@ fn apply_window_scale<T: 'static>(window: &mut gpui::Window, cx: &mut gpui::Cont
     if window.ui_scale() != scale {
         window.set_ui_scale(scale, cx);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod dictation_tests {
+    use super::*;
+    #[test]
+    fn unified_is_default_only_when_the_model_is_missing() {
+        use vorkspace_core::dictation_model::ModelId;
+        assert_eq!(
+            Preferences::default().dictation_model,
+            ModelId::UnifiedEnglish
+        );
+        assert_eq!(
+            serde_json::from_str::<Preferences>("{}")
+                .unwrap()
+                .dictation_model,
+            ModelId::UnifiedEnglish
+        );
+        for model in [ModelId::ParakeetTdtV3, ModelId::ParakeetRealtimeEou] {
+            let json = format!(r#"{{"dictation_model":"{}"}}"#, model.key());
+            let prefs: Preferences = serde_json::from_str(&json).unwrap();
+            assert_eq!(prefs.dictation_model, model);
+            assert_eq!(
+                serde_json::from_str::<Preferences>(&serde_json::to_string(&prefs).unwrap())
+                    .unwrap()
+                    .dictation_model,
+                model
+            );
+        }
+    }
+    #[test]
+    fn custom_words_round_trip_without_enabling_dictation() {
+        let mut prefs: Preferences = serde_json::from_str("{}").unwrap();
+        prefs.dictation_words = "Vorkspace\nwork space => Vorkspace\nclawed => Claude".into();
+        let restored: Preferences =
+            serde_json::from_str(&serde_json::to_string(&prefs).unwrap()).unwrap();
+        assert_eq!(restored.dictation_words, prefs.dictation_words);
+        assert!(!restored.dictation_enabled);
+    }
+    #[test]
+    fn dictation_microphone_defaults_and_preserves_native_uid() {
+        let prefs: Preferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(prefs.dictation_microphone, "builtin");
+        let prefs: Preferences =
+            serde_json::from_str(r#"{"dictation_microphone":"uid:device-42"}"#).unwrap();
+        let restored: Preferences =
+            serde_json::from_str(&serde_json::to_string(&prefs).unwrap()).unwrap();
+        assert_eq!(restored.dictation_microphone, "uid:device-42");
+    }
+    #[test]
+    fn dictation_requires_explicit_serialized_opt_in() {
+        assert!(!Preferences::default().dictation_enabled);
+        for json in [
+            "{}",
+            r#"{"clipboard_history":true,"vox_enabled":true,"theme":"light"}"#,
+        ] {
+            let prefs: Preferences = serde_json::from_str(json).unwrap();
+            assert!(!prefs.dictation_enabled);
+            let saved = serde_json::to_string(&prefs).unwrap();
+            assert!(
+                !serde_json::from_str::<Preferences>(&saved)
+                    .unwrap()
+                    .dictation_enabled
+            );
+        }
+        let enabled: Preferences = serde_json::from_str(r#"{"dictation_enabled":true}"#).unwrap();
+        assert!(enabled.dictation_enabled);
+        assert!(
+            serde_json::from_str::<Preferences>(&serde_json::to_string(&enabled).unwrap())
+                .unwrap()
+                .dictation_enabled
+        );
     }
 }

@@ -36,6 +36,7 @@ cp crates/vorkspace-gpui/assets/icon.icns "$native_bundle/Contents/Resources/vor
 # Add these before signing so the signature covers the notices too.
 native_licenses="$native_bundle/Contents/Resources/licenses"
 mkdir -p "$native_licenses"
+cp licenses/LICENSE-GGML-MIT licenses/LICENSE-HEX-MIT licenses/LICENSE-TRANSCRIBE-MIT licenses/LICENSE-FLUIDAUDIO-APACHE licenses/LICENSE-SHA1-MIT "$native_licenses/"
 cp LICENSE NOTICE licenses/LICENSE-GPUI-APACHE licenses/LICENSE-UPSTREAM-MIT licenses/LICENSE-MACCY-MIT "$native_licenses/"
 cp crates/vorkspace-gpui/assets/hugeicons.LICENSE \
   crates/vorkspace-gpui/assets/dark-plus.LICENSE \
@@ -79,6 +80,8 @@ cat > "$native_clipboard/Contents/Info.plist" <<PLIST
 <key>CFBundleShortVersionString</key><string>$native_version</string>
 <key>CFBundleVersion</key><string>$native_version</string>
 <key>LSMinimumSystemVersion</key><string>11.0</string>
+<key>NSMicrophoneUsageDescription</key><string>Local dictation records your microphone only between shortcut toggles. Audio stays on this Mac.</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
 <key>LSUIElement</key><true/>
 </dict></plist>
 PLIST
@@ -96,7 +99,7 @@ else
 fi
 native_identity="${VORKSPACE_SIGNING_IDENTITY:--}"
 if [ "$native_identity" = - ]; then
-  codesign --force --sign - "$native_clipboard"
+  codesign --force --sign - --entitlements scripts/desktop/native-entitlements.plist "$native_clipboard"
   codesign --force --sign - "$native_bundle"
 else
   # Sparkle contains nested executables; sign from the leaves toward the root.

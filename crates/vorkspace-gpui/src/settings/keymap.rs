@@ -45,7 +45,33 @@ pub(crate) fn apply(prefs: &Preferences, cx: &mut App) {
             bindings.push(custom);
         }
     }
+    // These actions have menu-only defaults now, but retain custom user bindings.
+    for (command, action_name) in [
+        ("App: Settings", "workspace::OpenSettings"),
+        ("App: Switch Model", "workspace::SwitchModel"),
+    ] {
+        if let Some(Some(shortcut)) = prefs.keybindings.get(command)
+            && let Ok(action) = cx.build_action(action_name, None)
+            && let Ok(custom) = KeyBinding::load(
+                shortcut,
+                action,
+                Some(std::rc::Rc::new(
+                    gpui::KeyBindingContextPredicate::parse("Workspace").unwrap(),
+                )),
+                false,
+                None,
+                &gpui::DummyKeyboardMapper,
+            )
+        {
+            bindings.push(custom);
+        }
+    }
     cx.clear_key_bindings();
+    bindings.retain(|b| {
+        !b.keystrokes()
+            .iter()
+            .any(|k| matches!(k.unparse().as_str(), "cmd-," | "cmd-."))
+    });
     cx.bind_keys(bindings);
     cx.global_mut::<Defaults>().applied = prefs.keybindings.clone();
 }
