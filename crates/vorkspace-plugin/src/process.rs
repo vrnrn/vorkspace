@@ -8,20 +8,28 @@ use std::{
 };
 static CHILDREN: AtomicUsize = AtomicUsize::new(0);
 const MAX_CHILDREN: usize = 8;
-struct Admission;
-impl Admission {
-    fn acquire() -> Result<Self, String> {
-        CHILDREN
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < MAX_CHILDREN).then_some(n + 1)
-            })
-            .map_err(|_| "Plugins are busy. Try again shortly.")?;
-        Ok(Self)
+struct Admission<'a>(&'a AtomicUsize);
+impl<'a> Admission<'a> {
+    fn acquire(counter: &'a AtomicUsize) -> Result<Self, String> {
+        // Keep this on stable atomic primitives shared by local and CI toolchains.
+        let mut observed = counter.load(Ordering::Acquire);
+        while observed < MAX_CHILDREN {
+            match counter.compare_exchange_weak(
+                observed,
+                observed + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(Self(counter)),
+                Err(current) => observed = current,
+            }
+        }
+        Err("Plugins are busy. Try again shortly.".into())
     }
 }
-impl Drop for Admission {
+impl Drop for Admission<'_> {
     fn drop(&mut self) {
-        CHILDREN.fetch_sub(1, Ordering::AcqRel);
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 struct Connection {
@@ -171,7 +179,7 @@ pub fn call(
     timeout: Duration,
     mut host: impl FnMut(&str, &Value) -> Result<Value, String>,
 ) -> Result<(Manifest, Value), String> {
-    let _admission = Admission::acquire()?;
+    let _admission = Admission::acquire(&CHILDREN)?;
     let mut child = Command::new(executable)
         .current_dir(&context.cwd)
         .env_remove("VORKSPACE_APP_TOKEN")
@@ -222,6 +230,32 @@ mod tests {
         std::fs::write(&path,format!("#!/usr/bin/env python3\nimport sys,json,time,os\ninit=json.loads(sys.stdin.readline())\ndef send(id,result):\n print(json.dumps({{'jsonrpc':'2.0','id':id,'result':result}}),flush=True)\nsend(1,{{'protocol_version':1,'id':'fixture','name':'Fixture','version':'1','capabilities':[],'ui':True}})\n{body}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         path
+    }
+    #[test]
+    fn concurrent_admission_bounds_processes_and_releases_every_slot() {
+        let counter = AtomicUsize::new(0);
+        let barrier = std::sync::Barrier::new(MAX_CHILDREN * 2);
+        let mut held = std::thread::scope(|scope| {
+            let handles = (0..MAX_CHILDREN * 2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        Admission::acquire(&counter).ok()
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .filter_map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(held.len(), MAX_CHILDREN);
+        assert_eq!(counter.load(Ordering::Acquire), MAX_CHILDREN);
+        assert!(Admission::acquire(&counter).is_err());
+        drop(held.pop());
+        held.push(Admission::acquire(&counter).unwrap());
+        drop(held);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
     }
     #[test]
     fn round_trip_correlates_responses_and_refuses_identity_changes() {
