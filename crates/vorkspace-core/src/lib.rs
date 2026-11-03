@@ -8,8 +8,6 @@ pub mod catalog;
 pub mod checkpoint;
 pub mod context;
 pub mod desktop_preferences;
-pub mod dictation_model;
-pub mod dictation_words;
 pub mod diff;
 pub mod external_editor;
 pub mod files;

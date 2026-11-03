@@ -34,11 +34,11 @@ The profile and data selection are independent. Everything after `--` goes to th
 
 ### The clipboard helper
 
-History, ⌘⇧C and the menu bar icon belong to `vorkspace-clipboard`, a separate process nested in the bundle at `Contents/Helpers/vorkspace Clipboard.app`. While **Keep recent copies** or **Local dictation** is on, it keeps running after the development app exits, by design:
+History, ⌘⇧C and the menu bar icon belong to `vorkspace-clipboard`, a separate process nested in the bundle at `Contents/Helpers/vorkspace Clipboard.app`. While **Keep recent copies** is on, it keeps running after the development app exits, by design:
 
 - Rebuilding replaces it on the next launch, which clears its history.
 - Each bundle path gets its own helper, so a development build and the installed app can run side by side. You'll see two menu bar icons, and only the first gets ⌘⇧C. The other reports that in Settings.
-- To stop it, use Quit in the clipboard menu or turn off both **Keep recent copies** and **Local dictation**.
+- To stop it, use Quit in the clipboard menu or turn off **Keep recent copies**.
 
 `cargo run` builds only the app, and the app looks for the helper beside its own binary. To include it, build both in the same profile:
 
@@ -80,7 +80,3 @@ In a new linked worktree, run `npm run worktree:seed` before the first build. To
 `npm run check` runs tooling, voice, host, formatting, Clippy, and workspace tests. `npm run check:fast` skips the host and GPUI suites. `npm run test:rust` runs every Rust test in parallel, one process per test. `npm run host:package` creates a self-contained remote host archive including Node.
 
 See [verification](testing.md), [data selection](data-storage.md), and [signed update packaging](updates.md).
-
-Local dictation shares the clipboard background helper and can keep it alive
-with clipboard history off. Its model download, permissions and shortcuts are
-described in [local dictation](dictation.md).

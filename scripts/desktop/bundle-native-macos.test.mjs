@@ -53,7 +53,6 @@ test("Finder launches use normal desktop data by default and honor explicit isol
       // The helper must not share an identity with the app, or the Dock can't launch it.
       assert.ok(helper.includes("<key>CFBundleIdentifier</key><string>com.vorkspace.gpui.clipboard</string>"));
       assert.ok(helper.includes("<key>LSUIElement</key><true/>"));
-      assert.ok(helper.includes("<key>NSMicrophoneUsageDescription</key>"));
       await assert.rejects(access(join(bundle, "MacOS/vorkspace-launcher")));
       const launched = spawnSync(join(bundle, "MacOS/vorkspace-gpui"), ["--cwd", "a project with spaces"], {
         encoding: "utf8",

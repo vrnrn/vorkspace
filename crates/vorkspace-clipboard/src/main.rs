@@ -1,9 +1,5 @@
 //! The clipboard helper: a small menu bar process that keeps clipboard history
 //! after the app quits. History stays in memory and dies with this process.
-mod dictation;
-#[cfg(debug_assertions)]
-use vorkspace_clipboard::dictation_model;
-mod dictation_panel;
 mod history;
 #[cfg(not(test))]
 mod menu;
@@ -106,9 +102,7 @@ fn run(step: Option<Step>, cx: &mut App) {
                 let _ = Process::new(program).args(arguments).spawn();
             }
         }
-        Some(Step::Exit) => {
-            dictation::shutdown(cx);
-        }
+        Some(Step::Exit) => cx.quit(),
         None => {}
     }
 }
@@ -194,7 +188,6 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             helper.reported_error = None;
             let step = helper.control.connected();
             report_error(cx);
-            dictation::status(cx);
             run(step, cx);
         }
         Event::Disconnected => {
@@ -203,21 +196,9 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             let step = helper.control.disconnected();
             run(step, cx);
         }
-        Event::Command(Command::Configure {
-            recording,
-            icon,
-            dictation,
-            setup,
-            model,
-            microphone,
-            words,
-        }) => {
-            let step = cx
-                .global_mut::<Helper>()
-                .control
-                .configure_setup(recording || dictation, setup);
+        Event::Command(Command::Configure { recording, icon }) => {
+            let step = cx.global_mut::<Helper>().control.configure(recording);
             service::configure(recording, cx);
-            dictation::configure(dictation, model, &microphone, &words, cx);
             sync_status(icon, cx);
             report_error(cx);
             run(step, cx);
@@ -225,22 +206,9 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
         Event::Command(Command::Relaunch { program, arguments }) => {
             cx.global_mut::<Helper>().relaunch = Some((program, arguments));
         }
-        Event::Command(Command::DownloadModel { request, model }) => {
-            dictation::download(request, model, cx)
-        }
-        Event::Command(Command::ModelStatus { request, model }) => {
-            dictation::model_status(request, model, cx)
-        }
-        Event::Command(Command::CancelModel { request, model }) => {
-            dictation::cancel_model(request, model, cx)
-        }
-        Event::Command(Command::DictationPermissions) => dictation::permissions(cx),
-        Event::Command(Command::CancelDictation) => dictation::cancel(cx),
         Event::Command(Command::Clear) => service::clear(cx),
         Event::Command(Command::Toggle) => toggle(false, cx),
-        Event::Command(Command::Shutdown) => {
-            dictation::shutdown(cx);
-        }
+        Event::Command(Command::Shutdown) => cx.quit(),
     }
 }
 
@@ -253,11 +221,6 @@ fn socket_argument() -> Option<PathBuf> {
 }
 
 fn main() {
-    #[cfg(debug_assertions)]
-    if fixture() {
-        return;
-    }
-
     let Some(socket) = socket_argument() else {
         eprintln!("vorkspace-clipboard is started by vorkspace: --socket PATH");
         std::process::exit(2);
@@ -274,7 +237,6 @@ fn main() {
         .with_windowing(gpui::WindowingRequest::Headless)
         .run(move |cx: &mut App| {
             cx.set_global(Helper::default());
-            dictation::init(cx);
             service::configure(false, cx);
             if let Some(service) = service::get(cx) {
                 cx.observe(&service, |_, cx| report_error(cx)).detach();
@@ -295,212 +257,4 @@ fn main() {
             })
             .detach();
         });
-}
-
-#[cfg(debug_assertions)]
-fn fixture() -> bool {
-    let args = std::env::args().collect::<Vec<_>>();
-    if args.get(1).map(String::as_str) == Some("--unified-final-compare") {
-        vorkspace_clipboard::dictation_live_fixture::compare_unified(
-            Path::new(args.get(2).expect("isolated lock path")),
-            Path::new(args.get(3).expect("model path")),
-            &args[4..].iter().map(PathBuf::from).collect::<Vec<_>>(),
-        );
-        return true;
-    }
-    if args.get(1).map(String::as_str) == Some("--dictation-delivery-fixture") {
-        dictation::delivery_fixture::run(
-            PathBuf::from(args.get(2).expect("isolated lock path")),
-            PathBuf::from(args.get(3).expect("model path")),
-            PathBuf::from(args.get(4).expect("question WAV path")),
-            PathBuf::from(args.get(5).expect("statement WAV path")),
-            match args.get(6).map(String::as_str) {
-                None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
-                Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
-                Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
-                _ => panic!("expected unified, tdt-v3 or eou"),
-            },
-        );
-        return true;
-    }
-    if args.get(1).map(String::as_str) == Some("--dictation-delivery-matrix") {
-        dictation::delivery_fixture::run_matrix(
-            PathBuf::from(args.get(2).expect("isolated lock path")),
-            PathBuf::from(args.get(3).expect("model path")),
-            Path::new(args.get(4).expect("fixture manifest path")),
-        );
-        return true;
-    }
-    if args.get(1).map(String::as_str) == Some("--dictation-engine-service-fixture") {
-        let selected = match args.get(4).map(String::as_str) {
-            None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
-            Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
-            Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
-            _ => panic!("expected unified, tdt-v3 or eou"),
-        };
-        dictation::engine_fixture::run(
-            PathBuf::from(args.get(2).expect("isolated lock path")),
-            PathBuf::from(args.get(3).expect("model path")),
-            selected,
-        );
-        return true;
-    }
-    if args.get(1).map(String::as_str) == Some("--dictation-engine-owner-fixture") {
-        let selected = match args.get(4).map(String::as_str) {
-            None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
-            Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
-            Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
-            _ => panic!("expected unified, tdt-v3 or eou"),
-        };
-        vorkspace_clipboard::dictation_live_fixture::engine_owner(
-            Path::new(args.get(2).expect("isolated lock path")),
-            Path::new(args.get(3).expect("model path")),
-            selected,
-        );
-        return true;
-    }
-    if args.get(1).map(String::as_str) == Some("--live-field-fixture") {
-        let selected = match args.get(5).map(String::as_str) {
-            None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
-            Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
-            Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
-            _ => panic!("expected unified, tdt-v3 or eou"),
-        };
-        dictation::field_fixture::run(
-            PathBuf::from(args.get(2).expect("public fixture model path")),
-            PathBuf::from(args.get(3).expect("public JFK WAV path")),
-            args.get(4)
-                .expect("disposable target PID")
-                .parse()
-                .expect("positive target PID"),
-            selected,
-        );
-        return true;
-    }
-    if args.get(1).map(String::as_str) == Some("--insertion-fixture") {
-        unsafe extern "C" {
-            fn vorkspace_dictation_insertion_probe(
-                pid: i32,
-                scenario: *const std::ffi::c_char,
-                report: extern "C" fn(*const std::ffi::c_char),
-            ) -> i32;
-        }
-        extern "C" fn report(p: *const std::ffi::c_char) {
-            println!(
-                "{}",
-                unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy()
-            );
-        }
-        let pid = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(0);
-        let scenario =
-            std::ffi::CString::new(args.get(3).map(String::as_str).unwrap_or("success")).unwrap();
-        let code = unsafe { vorkspace_dictation_insertion_probe(pid, scenario.as_ptr(), report) };
-        std::process::exit(code);
-    }
-    if args.get(1).map(String::as_str) == Some("--capture-health-fixture") {
-        unsafe extern "C" {
-            fn vorkspace_dictation_capture_probe(
-                microphone: *const std::ffi::c_char,
-                request_permission: bool,
-                interrupt: bool,
-                report: extern "C" fn(*const std::ffi::c_char),
-            ) -> i32;
-        }
-        extern "C" fn report(json: *const std::ffi::c_char) {
-            println!(
-                "{}",
-                unsafe { std::ffi::CStr::from_ptr(json) }.to_string_lossy()
-            );
-        }
-        let microphone =
-            std::ffi::CString::new(args.get(2).map(String::as_str).unwrap_or("builtin"))
-                .expect("microphone choice must contain no NUL");
-        let request = args.iter().any(|arg| arg == "--request-microphone");
-        let interrupt = args.iter().any(|arg| arg == "--interrupt-fixture");
-        gpui::Application::with_platform(std::rc::Rc::new(gpui_macos::MacPlatform::new(false)))
-            .with_windowing(gpui::WindowingRequest::Headless)
-            .run(move |cx| {
-                cx.spawn(async move |cx| {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(100))
-                        .await;
-                    cx.update(|_| {
-                        let code = unsafe {
-                            vorkspace_dictation_capture_probe(
-                                microphone.as_ptr(),
-                                request,
-                                interrupt,
-                                report,
-                            )
-                        };
-                        std::process::exit(code);
-                    });
-                })
-                .detach();
-            });
-        return true;
-    }
-
-    if args.get(1).map(String::as_str) == Some("--tdt-window-fixture") {
-        vorkspace_clipboard::dictation_live_fixture::inspect_tdt_windows(
-            std::path::Path::new(args.get(2).expect("TDT model path")),
-            std::path::Path::new(args.get(3).expect("public WAV path")),
-        );
-        return true;
-    }
-    if args.get(1).map(String::as_str) == Some("--live-dictation-fixture") {
-        let model = match args.get(4).map(String::as_str) {
-            None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
-            Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
-            Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
-            _ => panic!("expected unified, tdt-v3 or eou"),
-        };
-        vorkspace_clipboard::dictation_live_fixture::run(
-            std::path::Path::new(args.get(2).expect("fixture model path")),
-            std::path::Path::new(args.get(3).expect("public WAV path")),
-            model,
-            args.get(5)
-                .map_or(1, |n| n.parse().expect("fixture repeats")),
-            args.get(6).map_or(2, |n| n.parse().expect("fixture turns")),
-            args.get(7)
-                .map_or(1, |n| n.parse().expect("fixture gap seconds")),
-            args.get(8).map_or("", String::as_str),
-        );
-        return true;
-    }
-    if args.get(1).map(String::as_str) == Some("--download-model-fixture") {
-        let path = PathBuf::from(args.get(2).expect("model output path"));
-        let selected = match args.get(3).map(String::as_str) {
-            None | Some("unified") => vorkspace_clipboard::ModelId::UnifiedEnglish,
-            Some("tdt-v3") => vorkspace_clipboard::ModelId::ParakeetTdtV3,
-            Some("eou") => vorkspace_clipboard::ModelId::ParakeetRealtimeEou,
-            _ => panic!("expected unified, tdt-v3 or eou"),
-        };
-        dictation_model::download(selected, &path, &transcribe_cpp::CancelToken::new(), |_| {})
-            .expect("fixture model download");
-        return true;
-    }
-    if args.get(1).map(String::as_str) != Some("--transcribe-fixture") {
-        return false;
-    }
-    let model = PathBuf::from(args.get(2).expect("model path"));
-    let wav = hound::WavReader::open(args.get(3).expect("WAV path")).unwrap();
-    assert_eq!(wav.spec().channels, 1);
-    assert_eq!(wav.spec().sample_rate, 16000);
-    let pcm = wav
-        .into_samples::<i16>()
-        .map(|v| v.unwrap() as f32 / 32768.)
-        .collect::<Vec<_>>();
-    assert!(pcm.len() <= 16000 * 120);
-    println!(
-        "{}",
-        dictation_model::transcribe(
-            vorkspace_clipboard::ModelId::default(),
-            &model,
-            &pcm,
-            &transcribe_cpp::CancelToken::new()
-        )
-        .expect("fixture inference")
-    );
-    true
 }

@@ -442,10 +442,6 @@ impl Shell {
             self.workspace.preferences.clipboard_history,
             // Retain the saved preference key so existing users keep their choice.
             self.workspace.preferences.bot_menu_bar_icon,
-            self.workspace.preferences.dictation_enabled,
-            self.workspace.preferences.dictation_model,
-            &self.workspace.preferences.dictation_microphone,
-            &self.workspace.preferences.dictation_words,
             cx,
         );
         if let Some(vox) = &self.vox {

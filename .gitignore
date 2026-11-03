@@ -37,9 +37,6 @@ npm-debug.log*
 # Patches for review, never pushed
 /.work/
 
-# Isolated local feature checkouts
-/.worktrees/
-
 # Local visual checks and design detector cache
 /output/
 /design-qa.md

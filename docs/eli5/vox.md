@@ -1,6 +1,6 @@
 # Vox
 
-Vox is an optional voice assistant that appears around your Mac's notch. Turn it on in Settings, then press ⌘. from any app, or click the microphone above Subscriptions in Vorkspace. You can change the shortcut in Keyboard Shortcuts. Vox starts disabled.
+Vox is an optional voice assistant that appears around your Mac's notch. Turn it on in Settings, then press Control Option Space from any app, or click the microphone above Subscriptions in Vorkspace. You can change the shortcut in Keyboard Shortcuts. Vox starts disabled.
 
 Its face appears on the left of the notch and a small colored dot appears on the right. Green means it is listening, amber means it is thinking, blue means it is replying, and red means something went wrong. Move your pointer over the dot to get a stop button, or a start button if no call is running. Silent mode opens the reply below the notch without reading it aloud. On a screen without a notch, Vox appears at the top center.
 
@@ -13,7 +13,3 @@ Vox uses your selected microphone and keeps its conversation and memories betwee
 Rust manages the call and checks every request. A small private browser surface handles only microphone and sound, keeping the existing Codex sign-in. End releases the microphone immediately and asks Codex to finish saving the conversation. Closing the window also lets an active call finish saving. If that save cannot be confirmed, Vox says so. A failed reconnection keeps the saved conversation available instead of silently replacing it.
 
 The small audio page lives in `embedded/vox`; Rust owns the call and any actions it takes in the app.
-
-Vox and local dictation take turns using the microphone and notch. Stop the current
-one before starting the other. Dictation uses ⌘, and can continue after the main
-app quits; Vox still shuts down with its workspace.

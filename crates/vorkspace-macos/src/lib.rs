@@ -1,10 +1,8 @@
 pub mod accessibility;
 pub mod global_hotkey;
 pub mod hang_diagnostics;
-pub mod notch;
 pub mod restart;
 pub mod status_menu;
 pub mod updater;
-pub mod voice_lease;
 pub mod webkit;
 pub mod window_appearance;

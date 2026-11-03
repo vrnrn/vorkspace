@@ -1,5 +1,5 @@
 //! macOS application hotkeys via HIToolbox; no accessibility permission needed.
-use std::{cell::Cell, ffi::c_void};
+use std::ffi::c_void;
 #[repr(C)]
 struct EventType {
     class: u32,
@@ -14,7 +14,6 @@ struct HotKeyId {
 type Handler = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> i32;
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
-    fn GetEventKind(event: *mut c_void) -> u32;
     fn GetApplicationEventTarget() -> *mut c_void;
     fn InstallEventHandler(
         target: *mut c_void,
@@ -50,7 +49,6 @@ pub struct Registration {
     state: Box<State>,
 }
 struct State {
-    down: Cell<bool>,
     id: HotKeyId,
     sender: async_channel::Sender<()>,
 }
@@ -75,10 +73,7 @@ unsafe extern "C" fn pressed(_next: *mut c_void, event: *mut c_void, data: *mut 
     if error != 0 || id != state.id {
         return -9874;
     }
-    let down = unsafe { GetEventKind(event) } == 5;
-    if edge(&state.down, down) {
-        let _ = state.sender.try_send(());
-    }
+    let _ = state.sender.try_send(());
     0
 }
 impl Registration {
@@ -87,7 +82,6 @@ impl Registration {
         let (tx, rx) = async_channel::bounded(1);
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
         let mut state = Box::new(State {
-            down: Cell::new(false),
             id: HotKeyId {
                 signature: u32::from_be_bytes(*b"Vork"),
                 id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -99,21 +93,15 @@ impl Registration {
         // HIToolbox callbacks and registration are confined to GPUI's main thread.
         unsafe {
             let target = GetApplicationEventTarget();
-            let events = [
-                EventType {
-                    class: u32::from_be_bytes(*b"keyb"),
-                    kind: 5,
-                },
-                EventType {
-                    class: u32::from_be_bytes(*b"keyb"),
-                    kind: 6,
-                },
-            ];
+            let event = EventType {
+                class: u32::from_be_bytes(*b"keyb"),
+                kind: 5,
+            };
             let error = InstallEventHandler(
                 target,
                 pressed,
-                2,
-                events.as_ptr(),
+                1,
+                &event,
                 (&mut *state as *mut State).cast(),
                 &mut handler,
             );
@@ -197,8 +185,6 @@ fn parse(shortcut: &str) -> Result<(u32, u32), String> {
         "l" => 37,
         "j" => 38,
         "k" => 40,
-        "comma" | "," => 43,
-        "period" | "." => 47,
         "n" => 45,
         "m" => 46,
         "tab" => 48,
@@ -215,29 +201,4 @@ fn parse(shortcut: &str) -> Result<(u32, u32), String> {
         return Err("Global shortcut needs a modifier key.".into());
     }
     Ok((code, modifiers))
-}
-
-/// HIToolbox can repeat pressed events. Only a release rearms a toggle.
-fn edge(held: &Cell<bool>, down: bool) -> bool {
-    let previous = held.replace(down);
-    down && !previous
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn autorepeat_needs_a_release_before_another_toggle() {
-        let held = Cell::new(false);
-        assert!(edge(&held, true));
-        for _ in 0..100 {
-            assert!(!edge(&held, true));
-        }
-        assert!(!edge(&held, false));
-        assert!(edge(&held, true));
-    }
-    #[test]
-    fn punctuation_shortcuts_are_native_keycodes() {
-        assert_eq!(parse("cmd-,").unwrap(), (43, 256));
-        assert_eq!(parse("cmd-.").unwrap(), (47, 256));
-    }
 }
