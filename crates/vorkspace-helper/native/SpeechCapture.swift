@@ -70,7 +70,7 @@ final class SpeechCapture: SpeechInput, @unchecked Sendable {
     init(microphone: String, format: AVAudioFormat) throws {
         (stream, continuation) = AsyncThrowingStream.makeStream(bufferingPolicy: .bufferingOldest(32))
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
-            throw DictationError("Allow microphone access for vorkspace Clipboard in Dictation settings.")
+            throw DictationError("Allow microphone access for vorkspace helper in Dictation settings.")
         }
         guard let device = resolveMicrophone(microphone, devices: inputDevices(), system: defaultInputDevice()) else {
             throw DictationError("The selected microphone is unavailable. Connect it or choose another microphone.")

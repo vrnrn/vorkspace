@@ -35,7 +35,7 @@ The profile and data selection are independent. Everything after `--` goes to th
 
 ### The clipboard helper
 
-History, dictation, ⌘⇧C and the menu bar icon belong to `vorkspace-clipboard`, a separate process nested in the bundle at `Contents/Helpers/vorkspace Clipboard.app`. While **Keep recent copies** or **Dictation** is on, it keeps running after the development app exits, by design:
+History, dictation, ⌘⇧C and the menu bar icon belong to `vorkspace-helper`, a separate process nested in the bundle at `Contents/Helpers/vorkspace helper.app`. While **Keep recent copies** or **Dictation** is on, it keeps running after the development app exits, by design:
 
 - Rebuilding replaces it on the next launch, which clears its history.
 - Each bundle path gets its own helper, so a development build and the installed app can run side by side. You'll see two menu bar icons, and only the first gets ⌘⇧C. The other reports that in Settings.
@@ -44,7 +44,7 @@ History, dictation, ⌘⇧C and the menu bar icon belong to `vorkspace-clipboard
 `cargo run` builds only the app, and the app looks for the helper beside its own binary. To include it, build both in the same profile:
 
 ```sh
-cargo build --locked -p vorkspace-clipboard --profile native-dev
+cargo build --locked -p vorkspace-helper --profile native-dev
 cargo run --locked -p vorkspace-gpui --profile native-dev
 ```
 

@@ -39,3 +39,5 @@ Interface zoom makes the whole workspace larger or smaller, from 60% to 160%. Cl
 The app works with VoiceOver and the keyboard. VoiceOver says when a session finishes or needs you, Tab reaches tabs and the main buttons, and spinners stop when Reduce Motion is on.
 
 Each Mac window remembers which mouse pointer it should show. It updates the pointer straight away and puts it back if macOS resets it. Web and video panes are drawn by macOS itself, so whenever one moves, hides, or appears, the window recalculates where its own pointer rules apply.
+
+The background app is named **vorkspace helper**. It owns clipboard history and dictation, and remains available after the main app quits while either feature is enabled.

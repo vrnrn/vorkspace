@@ -11,9 +11,9 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use vorkspace_clipboard::{Action, Command, Notice, Supervisor, receive, send};
+use vorkspace_helper::{Action, Command, Notice, Supervisor, receive, send};
 
-const HELPER: &str = env!("CARGO_BIN_EXE_vorkspace-clipboard");
+const HELPER: &str = env!("CARGO_BIN_EXE_vorkspace-helper");
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 struct Running(Child);
@@ -81,7 +81,7 @@ fn reading_hello_preserves_an_immediately_following_notice() {
 }
 
 fn relaunch() -> Command {
-    vorkspace_clipboard::relaunch_command(Path::new("/tmp/vorkspace-gpui"), Vec::new())
+    vorkspace_helper::relaunch_command(Path::new("/tmp/vorkspace-gpui"), Vec::new())
 }
 
 fn socket(directory: &tempfile::TempDir) -> PathBuf {
@@ -121,7 +121,7 @@ fn the_helper_outlives_the_app_while_recording_and_exits_when_turned_off() {
 
 #[test]
 fn dictation_keeps_the_helper_alive_with_history_off_and_survives_reconnect() {
-    use vorkspace_clipboard::{DictationConfig, DictationPhase};
+    use vorkspace_helper::{DictationConfig, DictationPhase};
     let directory = tempfile::tempdir().unwrap();
     let socket = socket(&directory);
     let mut helper = start(Path::new(HELPER), &socket);
@@ -224,7 +224,7 @@ fn one_helper_and_one_client_at_a_time() {
 fn the_supervisor_restarts_a_lost_helper_and_replaces_an_outdated_one() {
     let directory = tempfile::tempdir().unwrap();
     let socket = socket(&directory);
-    let installed = directory.path().join("vorkspace-clipboard");
+    let installed = directory.path().join("vorkspace-helper");
     std::fs::copy(HELPER, &installed).unwrap();
     // Left recording before an update replaced its binary.
     let mut outdated = start(&installed, &socket);

@@ -13,7 +13,7 @@ mod native {
     use std::rc::Rc;
     define_class!(
         #[unsafe(super(NSObject))]
-        #[name="VorkspaceClipboardStatusTarget"]
+        #[name="VorkspaceHelperStatusTarget"]
         #[thread_kind=MainThreadOnly]
         #[ivars=Rc<dyn Fn()>]
         struct Target;
@@ -44,7 +44,7 @@ mod native {
                 } else {
                     button.setTitle(&NSString::from_str("v_"));
                 }
-                button.setToolTip(Some(&NSString::from_str("vorkspace Clipboard · ⌘⇧C")));
+                button.setToolTip(Some(&NSString::from_str("vorkspace helper · ⌘⇧C")));
                 // Every physical click dispatches even if dragged out before mouse-up.
                 button.sendActionOn(NSEventMask::LeftMouseDown);
                 unsafe {

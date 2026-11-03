@@ -18,8 +18,8 @@ case "$native_data_mode" in
 esac
 native_bundle="$native_target/vorkspace.app"
 native_binary="$native_target/vorkspace-gpui"
-native_clipboard_binary="$native_target/vorkspace-clipboard"
-for binary in "$native_binary" "$native_clipboard_binary"; do
+native_helper_binary="$native_target/vorkspace-helper"
+for binary in "$native_binary" "$native_helper_binary"; do
   if [ ! -f "$binary" ]; then
     echo "Missing native executable: $binary" >&2
     echo 'Build it with cargo first, or use npm run build.' >&2
@@ -64,17 +64,19 @@ cat > "$native_bundle/Contents/Info.plist" <<PLIST
 PLIST
 # A nested app with its own identity: sharing the main bundle's would make macOS
 # treat vorkspace as running after Quit, so the Dock could no longer launch it.
-native_clipboard="$native_bundle/Contents/Helpers/vorkspace Clipboard.app"
-mkdir -p "$native_clipboard/Contents/MacOS"
-cp "$native_clipboard_binary" "$native_clipboard/Contents/MacOS/vorkspace-clipboard.next"
-mv -f "$native_clipboard/Contents/MacOS/vorkspace-clipboard.next" "$native_clipboard/Contents/MacOS/vorkspace-clipboard"
-cat > "$native_clipboard/Contents/Info.plist" <<PLIST
+# Remove only the generated legacy bundle when repackaging an older build.
+rm -rf "$native_bundle/Contents/Helpers/vorkspace Clipboard.app"
+native_helper="$native_bundle/Contents/Helpers/vorkspace helper.app"
+mkdir -p "$native_helper/Contents/MacOS"
+cp "$native_helper_binary" "$native_helper/Contents/MacOS/vorkspace-helper.next"
+mv -f "$native_helper/Contents/MacOS/vorkspace-helper.next" "$native_helper/Contents/MacOS/vorkspace-helper"
+cat > "$native_helper/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>vorkspace-clipboard</string>
+<key>CFBundleExecutable</key><string>vorkspace-helper</string>
 <key>CFBundleIdentifier</key><string>com.vorkspace.gpui.clipboard</string>
-<key>CFBundleName</key><string>vorkspace Clipboard</string>
+<key>CFBundleName</key><string>vorkspace helper</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$native_version</string>
 <key>CFBundleVersion</key><string>$native_version</string>
@@ -98,7 +100,7 @@ else
 fi
 native_identity="${VORKSPACE_SIGNING_IDENTITY:--}"
 if [ "$native_identity" = - ]; then
-  codesign --force --sign - --entitlements scripts/desktop/native-entitlements.plist "$native_clipboard"
+  codesign --force --sign - --entitlements scripts/desktop/native-entitlements.plist "$native_helper"
   codesign --force --sign - "$native_bundle"
 else
   # Sparkle contains nested executables; sign from the leaves toward the root.

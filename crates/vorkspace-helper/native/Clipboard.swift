@@ -423,25 +423,25 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
     }
 }
 
-@_cdecl("vorkspace_clipboard_create")
+@_cdecl("vorkspace_helper_create")
 func create(_ callback: @escaping @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt64, UnsafePointer<CChar>?) -> Void, _ context: UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer {
     Unmanaged.passRetained(ClipboardMenu(callback: callback, context: context)).toOpaque()
 }
-@_cdecl("vorkspace_clipboard_destroy")
+@_cdecl("vorkspace_helper_destroy")
 func destroy(_ pointer: UnsafeMutableRawPointer) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).release() }
-@_cdecl("vorkspace_clipboard_visible")
+@_cdecl("vorkspace_helper_visible")
 func visible(_ pointer: UnsafeMutableRawPointer) -> Bool { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().visible }
-@_cdecl("vorkspace_clipboard_accept_toggle")
+@_cdecl("vorkspace_helper_accept_toggle")
 func acceptToggle(_ pointer: UnsafeMutableRawPointer, _ statusClick: Bool) -> Bool { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().acceptToggle(statusClick: statusClick) }
-@_cdecl("vorkspace_clipboard_toggle")
+@_cdecl("vorkspace_helper_toggle")
 func toggle(_ pointer: UnsafeMutableRawPointer, _ x: Double, _ y: Double, _ width: Double, _ height: Double, _ statusClick: Bool) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().toggle(x: x, y: y, statusWidth: width, statusHeight: height, statusClick: statusClick) }
-@_cdecl("vorkspace_clipboard_hide")
+@_cdecl("vorkspace_helper_hide")
 func hide(_ pointer: UnsafeMutableRawPointer) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().hide() }
-@_cdecl("vorkspace_clipboard_begin")
+@_cdecl("vorkspace_helper_begin")
 func begin(_ pointer: UnsafeMutableRawPointer) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().begin() }
-@_cdecl("vorkspace_clipboard_add")
+@_cdecl("vorkspace_helper_add")
 func add(_ pointer: UnsafeMutableRawPointer, _ id: UInt64, _ title: UnsafePointer<CChar>, _ isImage: Bool, _ pixels: UnsafePointer<UInt8>?, _ width: Int, _ height: Int) {
     Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().add(id: id, title: String(cString: title), isImage: isImage, pixels: pixels, width: width, height: height)
 }
-@_cdecl("vorkspace_clipboard_end")
+@_cdecl("vorkspace_helper_end")
 func end(_ pointer: UnsafeMutableRawPointer, _ message: UnsafePointer<CChar>, _ enabled: Bool) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().end(message: String(cString: message), enabled: enabled) }

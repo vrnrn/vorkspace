@@ -5,6 +5,7 @@ fn main() {
     let sources = [
         "Clipboard.swift",
         "Dictation.swift",
+        "DictationKey.swift",
         "DictationWords.swift",
         "DictationTarget.swift",
         "SpeechCapture.swift",
@@ -15,7 +16,7 @@ fn main() {
         println!("cargo:rerun-if-changed={}", source.display());
     }
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let library = output.join("libVorkspaceClipboard.a");
+    let library = output.join("libVorkspaceHelper.a");
     let arch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
         Ok("aarch64") => "arm64",
         Ok("x86_64") => "x86_64",
@@ -29,7 +30,7 @@ fn main() {
             "-static",
             "-O",
             "-module-name",
-            "VorkspaceClipboard",
+            "VorkspaceHelper",
             "-target",
             &format!("{arch}-apple-macos26.0"),
         ])
@@ -60,7 +61,7 @@ fn main() {
     }
     // The app links only device enumeration. The helper owns capture and text.
     println!("cargo:rustc-link-search=native={}", output.display());
-    println!("cargo:rustc-link-lib=static=VorkspaceClipboard");
+    println!("cargo:rustc-link-lib=static=VorkspaceHelper");
     for framework in [
         "Speech",
         "AVFoundation",
