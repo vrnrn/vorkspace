@@ -13,7 +13,6 @@ final class SystemSpeechCapture: NSObject, SpeechInput, SCStreamOutput, SCStream
     private let lock = NSLock()
     private var stopped = false
     private var converter: SpeechBufferConverter?
-    private var timeline = SpeechTimeline()
     private let queue = DispatchQueue(label: "vorkspace.system-speech")
     @MainActor private var capture: SCStream?
     @MainActor private var startup: Task<Void, Never>?
@@ -85,9 +84,8 @@ final class SystemSpeechCapture: NSObject, SpeechInput, SCStreamOutput, SCStream
             let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(sample, at: 0, frameCount: Int32(frames), into: pcm.mutableAudioBufferList)
             guard status == noErr else { throw DictationError("System audio could not be read.") }
             if converter == nil { converter = try SpeechBufferConverter(from: natural, to: format) }
-            let output = try converter!.convert(pcm)
+            let (output, time) = try converter!.convert(pcm, at: sample.presentationTimeStamp - origin)
             guard output.frameLength > 0 else { return }
-            let time = try timeline.start(host: sample.presentationTimeStamp, origin: origin, buffer: output)
             guard !isStopped else { return }
             if case .dropped = continuation.yield(AnalyzerInput(buffer: output, bufferStartTime: time)) {
                 throw DictationError("System audio could not keep up. The saved transcript is preserved.")

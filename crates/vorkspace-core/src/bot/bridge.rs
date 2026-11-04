@@ -14,40 +14,92 @@ use std::{
     time::Duration,
 };
 
-pub const HELP: &str = r#"vorkspace app access
-Usage: vorkspace-gpui app ACTION --json '{...}' [--request-id ID]
-Pass --input FILE or --input - to read a JSON object instead.
-Actions:
-models.list {}
-bots.list {}; bots.read {bot,before?,limit?,maxChars?}; bots.send {to,message,expectReply?}
-Peer replies arrive in the sender's conversation after the recipient finishes. End your turn to allow queued replies to run.
+// One action per line lets the CLI and a Bot's scoped reference share the
+// same signatures. Keep explanatory help separate from the action catalog.
+const ACTIONS: &str = r#"models.list {}
+bots.list {}
+bots.read {bot,before?,limit?,maxChars?}
+bots.send {to,message,expectReply?}
 sessions.list {project?}
 sessions.read {sessionId,project?,before?,limit?,maxChars?}
 sessions.start {prompt,project?,harness?,model?,modelSettings?,runtimeMode?,title?,draft?,reveal?,workspaceMode?,worktreeBase?,worktreeCwd?,notifyOnComplete?,placement?,besideSessionId?}
 sessions.send {sessionId,prompt,project?,notifyOnComplete?}
 sessions.draft {sessionId,prompt,project?}
-sessions.stop / sessions.archive / sessions.delete {sessionId,project?}
-worktrees.list {project?} reports dirty, merged, unpublishedCommits, sessions and removable for each worktree.
+sessions.stop {sessionId,project?}
+sessions.archive {sessionId,project?}
+sessions.delete {sessionId,project?}
+worktrees.list {project?}
 worktrees.create {branch,base?,existing?,project?}
-worktrees.remove {path,project?} removes a worktree only if nothing would be lost: it refuses uncommitted or unique work, ignored files tools can't regenerate, open terminals and unarchived sessions. A merged branch goes with it.
+worktrees.remove {path,project?}
 folders.list {project?}
 folders.move {sessionId,folderId?,newFolderName?,project?}
-notes.list {limit?,offset?}; notes.read {id}; notes.write {id?,title,body,tags?}
-todos.list {project?}; todos.add {title,status?,project?}; todos.update {id,title?,status?,before?,project?}; todos.remove {id,project?}
-To-do statuses are todo, inProgress and done. Bots use their own board unless project names an assigned project's board.
-minions.hire {name,role,specialties?,project?}; minions.fire {minion}; minions.list {}
-minions.retry / minions.discard {minion,messageId}
-Minions are persistent team members. Reuse bots.send/bots.read and team-only channels for work; users cannot message Minions.
-minions.spawn {prompt,name?,role?,specialties?,project?,harness?,model?} is compatibility hire plus an initial peer task.
-artifacts.list {kind?,limit?,offset?}; artifacts.read {id}; artifacts.write {id?,kind,title,body,summary?}
-channels.list {}; channels.create {name,topic?,members:[Bot names]}; channels.read {channel,limit?}; channels.post {channel,message,to?:[Bot names]}
-soul.read {}; soul.update {text,expectedHash}
-memory.read {topic?}; memory.search {query,since?}; memory.add {fact,topic?,until?}; memory.replace {find,fact,topic?,until?}; memory.remove {find,topic?}
-habits.list {}; habits.add {name,instructions,schedule:{kind,time?,minute?,dayOfWeek?}}; habits.update {id,name?,instructions?,schedule?,enabled?}; habits.run {id}; habits.remove {id}
+notes.list {limit?,offset?}
+notes.read {id}
+notes.write {id?,title,body,tags?}
+todos.list {project?}
+todos.add {title,status?,project?}
+todos.update {id,title?,status?,before?,project?}
+todos.remove {id,project?}
+minions.hire {name,role,specialties?,project?}
+minions.fire {minion}
+minions.list {}
+minions.retry {minion,messageId}
+minions.discard {minion,messageId}
+minions.spawn {prompt,name?,role?,specialties?,project?,harness?,model?}
+artifacts.list {kind?,limit?,offset?}
+artifacts.read {id}
+artifacts.write {id?,kind,title,body,summary?}
+channels.list {}
+channels.create {name,topic?,members:[Bot names]}
+channels.read {channel,limit?}
+channels.post {channel,message,to?:[Bot names]}
+soul.read {}
+soul.update {text,expectedHash}
+memory.read {topic?}
+memory.search {query,since?}
+memory.add {fact,topic?,until?}
+memory.replace {find,fact,topic?,until?}
+memory.remove {find,topic?}
+habits.list {}
+habits.add {name,instructions,schedule:{kind,time?,minute?,dayOfWeek?}}
+habits.update {id,name?,instructions?,schedule?,enabled?}
+habits.run {id}
+habits.remove {id}
 chat.card {type:"pr",repo?,number,note?} / {type:"session",sessionId,note?} / {type:"choices",options:[text]} / {type:"habit",name,instructions,schedule}
-The CLI returns {ok,result,requestId}. Retry uncertain mutations with the same request ID.
-Assigned projects alone may be addressed. Credentials are provided in the environment; never print them.
 "#;
+
+const COMMAND_NOTES: &str = "The CLI returns {ok,result,requestId}. Retry uncertain mutations with the same request ID. Assigned projects alone may be addressed. Credentials are provided in the environment; never print them.";
+
+fn help() -> String {
+    format!(
+        "vorkspace app access\nUsage: vorkspace-gpui app ACTION --json '{{...}}' [--request-id ID]\nPass --input FILE or --input - to read a JSON object instead.\nActions:\n{ACTIONS}\n\
+         Peer replies arrive in the sender's conversation after the recipient finishes. End your turn to allow queued replies to run.\n\
+         worktrees.list reports dirty, merged, unpublishedCommits, sessions and removable for each worktree. worktrees.remove refuses uncommitted or unique work, ignored files tools can't regenerate, open terminals and unarchived sessions. A merged branch goes with it.\n\
+         To-do statuses are todo, inProgress and done. Bots use their own board unless project names an assigned project's board.\n\
+         Minions are persistent team members. Reuse bots.send/bots.read and team-only channels for work; users cannot message Minions. minions.spawn is compatibility hire plus an initial peer task.\n\
+         {COMMAND_NOTES}\n"
+    )
+}
+
+pub(super) fn command_reference(minion: bool, minions_enabled: bool) -> String {
+    let mut reference = String::from(
+        "Use this reference directly. A question mark marks an optional JSON field. Pass --input FILE or --input - for larger JSON.\nAvailable app actions:\n",
+    );
+    for line in ACTIONS.lines() {
+        let action = line.split_once(' ').expect("action followed by fields").0;
+        if minion && !super::api::minion_allowed(action)
+            || !minions_enabled && action.starts_with("minions.")
+        {
+            continue;
+        }
+        reference.push_str(line);
+        reference.push('\n');
+    }
+    reference.push_str(COMMAND_NOTES);
+    reference.push_str("\nFor a requested copy of your saved files, soul.read {} returns SOUL.md in result.text. memory.read {} returns MEMORY.md in result.text. Use memory.read with each listed topic name for memory/<topic>.md, and with topic archive for memory/archive.md. A null text means the file is absent.");
+    reference
+}
+
 #[derive(Serialize, Deserialize)]
 struct Wire {
     session: i64,
@@ -195,7 +247,7 @@ pub fn client(args: &[String]) -> Result<Value, String> {
         .first()
         .is_none_or(|s| matches!(s.as_str(), "help" | "--help" | "-h"))
     {
-        return Ok(json!({"help":HELP}));
+        return Ok(json!({"help":help()}));
     }
     let action = args[0].clone();
     let mut input = json!({});
@@ -277,6 +329,37 @@ pub fn client(args: &[String]) -> Result<Value, String> {
 #[cfg(test)]
 mod capability_tests {
     use super::*;
+
+    #[test]
+    fn bot_reference_and_offline_help_share_valid_actions() {
+        let result = client(&["help".into()]).unwrap();
+        let help = result["help"].as_str().unwrap();
+        let bot = command_reference(false, true);
+        let minion = command_reference(true, true);
+        let disabled = command_reference(false, false);
+        let mut seen = std::collections::HashSet::new();
+        for line in ACTIONS.lines() {
+            let (action, _) = line.split_once(' ').unwrap();
+            assert!(seen.insert(action), "{action} is duplicated");
+            assert!(
+                super::super::api::validate(action, &json!({})).is_ok(),
+                "{action}"
+            );
+            assert!(help.lines().any(|candidate| candidate == line), "{action}");
+            assert!(bot.lines().any(|candidate| candidate == line), "{action}");
+            assert_eq!(
+                minion.lines().any(|candidate| candidate == line),
+                super::super::api::minion_allowed(action),
+                "{action}"
+            );
+            assert_eq!(
+                disabled.lines().any(|candidate| candidate == line),
+                !action.starts_with("minions."),
+                "{action}"
+            );
+        }
+    }
+
     fn send(
         server: &Server,
         session: i64,

@@ -218,7 +218,7 @@ impl Bots {
             return;
         };
         let bot = self.roster.storage_owner(&actor.id).unwrap().clone();
-        if actor.is_minion() && !minion_allowed(&call.action) {
+        if actor.is_minion() && !bot::api::minion_allowed(&call.action) {
             let _ = call
                 .reply
                 .send(Err(format!("Minions cannot use {}", call.action)));
@@ -722,32 +722,6 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
             }).detach();
         }
     }
-}
-
-/// What a minion may do with its parent's capability: share memory and the
-/// board, read, and take notes; never start work or change its parent.
-fn minion_allowed(action: &str) -> bool {
-    action.starts_with("memory.")
-        || action.starts_with("todos.")
-        || action.starts_with("notes.")
-        || matches!(
-            action,
-            "bots.list"
-                | "bots.read"
-                | "bots.send"
-                | "channels.list"
-                | "channels.read"
-                | "channels.create"
-                | "channels.post"
-                | "models.list"
-                | "soul.read"
-                | "sessions.list"
-                | "sessions.read"
-                | "worktrees.list"
-                | "minions.list"
-                | "artifacts.list"
-                | "artifacts.read"
-        )
 }
 
 impl Bots {

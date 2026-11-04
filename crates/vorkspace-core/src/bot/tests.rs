@@ -676,6 +676,25 @@ fn minions_resolve_to_their_parent_and_share_its_context() {
 }
 
 #[test]
+fn bot_prompt_explains_memory_file_reads_without_discovery() {
+    let files = files::AgentFiles {
+        topics: vec!["release-notes".into()],
+        ..Default::default()
+    };
+    let context = context(
+        &Bot::default(),
+        &files,
+        Path::new("/Applications/Vork Space/vorkspace-gpui"),
+    );
+    assert!(context.contains("'/Applications/Vork Space/vorkspace-gpui' app ACTION --json JSON"));
+    assert!(context.contains("soul.read {} returns SOUL.md in result.text"));
+    assert!(context.contains("memory.read {} returns MEMORY.md in result.text"));
+    assert!(context.contains("Topic notes: release-notes"));
+    assert!(context.contains("memory/archive.md"));
+    assert!(!context.contains("app help"));
+}
+
+#[test]
 fn the_minion_guide_follows_the_setting() {
     let files = files::AgentFiles::default();
     let bot = Bot {
