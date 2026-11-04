@@ -77,6 +77,20 @@ impl Store {
     pub fn mark_edit_recovery_required(&self, id: i64) -> Result<(), String> {
         self.save_setting(&format!("edit-recovery:{id}"),"A previous edit changed provider context before local history could be reconciled. Start a new conversation; the saved history is preserved here.")
     }
+    /// A confirmed rewind that lost the local compare-and-swap leaves the
+    /// canonical history intact. Abandon only the exact thread that rewound.
+    pub fn recover_confirmed_rewind(
+        &self,
+        id: i64,
+        edit: &EditSnapshot,
+        returned_binding: &str,
+    ) -> Result<(), String> {
+        if returned_binding == edit.provider_id {
+            self.reset_provider_id_if(id, Some(returned_binding))?;
+        }
+        self.clear_edit_recovery(id)
+    }
+
     fn clear_edit_recovery(&self, id: i64) -> Result<(), String> {
         self.save_setting(&format!("edit-recovery:{id}"), "")
     }
@@ -180,9 +194,7 @@ impl Store {
         if session.provider != edit.provider
             || session.provider_id.as_deref() != Some(edit.provider_id.as_str())
         {
-            return Err(
-                "Provider session changed; cancel the edit and reopen this conversation".into(),
-            );
+            return Err("Provider session changed before the edit could be applied".into());
         }
         let settings = self.agent_settings(id)?.unwrap_or_default();
         if settings.account.id != edit.account_id

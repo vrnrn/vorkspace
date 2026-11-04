@@ -1,7 +1,11 @@
 //! Last-turn editing recalls first, and rewinds only when the user resubmits.
 use super::*;
 use std::path::PathBuf;
-use vorkspace_core::{provider, store::EditSnapshot, transcript::Row};
+use vorkspace_core::{
+    provider,
+    store::EditSnapshot,
+    transcript::{Row, Transcript},
+};
 
 #[derive(Default)]
 pub(super) struct State {
@@ -15,6 +19,11 @@ impl State {
     pub(super) fn pending(&self) -> bool {
         self.active || self.prepared.is_some() || self.blocked
     }
+}
+
+enum EditOutcome {
+    Rewound(Box<EditSnapshot>, String),
+    Recovered,
 }
 
 fn latest_user(rows: &[Row]) -> Option<usize> {
@@ -142,7 +151,10 @@ impl Conversation {
                     Ok(_) => {
                         this.status = "Composer or conversation changed; edit cancelled".into()
                     }
-                    Err(error) => this.status = format!("Could not edit last message: {error}"),
+                    Err(error) => {
+                        this.status = format!("Could not edit last message: {error}");
+                        this.refresh_if_stale(cx);
+                    }
                 }
                 if !this.editing_last_turn.pending() {
                     this.run_history_actions(cx);
@@ -222,40 +234,38 @@ impl Conversation {
             || self.follow_ups.edit.is_some()
             || self.follow_ups.sending.is_some()
             || self.follow_ups.state.revision != self.follow_ups.persisted
-            || !edit.matches(self.transcript.read(cx).source_rows())
+        {
+            self.status = "Finish the current action before submitting the edit".into();
+            cx.notify();
+            return true;
+        }
+        if !edit.matches(self.transcript.read(cx).source_rows())
             || self.summary.provider_id.as_deref() != Some(edit.provider_id.as_str())
             || self.summary.provider != edit.provider()
             || self.settings.account.id != edit.account_id
             || self.execution_cwd() != edit.cwd
         {
-            self.status = "Conversation changed; cancel the edit before sending".into();
-            cx.notify();
+            self.editing_last_turn.prepared = None;
+            self.persist_composer(cx);
+            self.status =
+                "The saved turn changed. Your edited text remains in the composer.".into();
+            self.recover_history_in_place(cx);
             return true;
         }
         let kind = Kind::from_id(&self.summary.provider);
-        let Some(binary) = provider::resolve(kind) else {
-            self.status = format!(
-                "{} executable was not found; edited prompt preserved",
-                kind.label()
-            );
-            cx.notify();
-            return true;
-        };
         self.attach_account(cx);
         let mut settings = self.settings.clone();
         settings.environment.extend(self.app_environment.clone());
-        let request = provider::Request {
-            kind,
-            binary,
-            cwd: PathBuf::from(self.execution_cwd()),
-            prompt: String::new(),
-            provider_id: Some(edit.provider_id.clone()),
-            model: self.model.clone(),
-            settings,
-        };
+        let cwd = PathBuf::from(self.execution_cwd());
+        let model = self.model.clone();
         let prompt = self.input.read(cx).content.to_string();
         let attachments = self.attachments.clone();
         let checked_attachments = attachments.clone();
+        let mut competing = Transcript::default();
+        competing.begin("user");
+        competing.append(&prompt);
+        competing.attach_files(&attachments);
+        let attempt = vorkspace_core::session::new_id();
         self.editing_last_turn.active = true;
         // Keep the visible draft in place until confirmation, including on a
         // rejected RPC. IME composition was checked before making it read-only.
@@ -265,10 +275,31 @@ impl Conversation {
         let id = self.summary.id;
         let work = cx.background_executor().spawn(async move {
             vorkspace_core::composer::validate_attachments(&checked_attachments)?;
-            locked(&store)?.validate_edit_last_turn(id, &edit)?;
+            {
+                let store = locked(&store)?;
+                if let Err(error) = store.validate_edit_last_turn(id, &edit) {
+                    if !store.uses_vorkspace_schema() {
+                        return Err(error);
+                    }
+                    store.preserve_turn_overlap(id, &attempt, &competing.rows, None)?;
+                    return Ok(EditOutcome::Recovered);
+                }
+            }
+            let binary = provider::resolve(kind).ok_or_else(|| {
+                format!("{} executable was not found", kind.label())
+            })?;
+            let request = provider::Request {
+                kind,
+                binary,
+                cwd,
+                prompt: String::new(),
+                provider_id: Some(edit.provider_id.clone()),
+                model,
+                settings,
+            };
             let binding = match provider::rewind_last_turn(request, edit.provider_turn_id.as_deref()) {
-                Ok(binding)=>binding,
-                Err(error)=> {
+                Ok(binding) => binding,
+                Err(error) => {
                     if error.provider_may_have_changed {
                         locked(&store)?.mark_edit_recovery_required(id)?;
                         return Err(format!("Provider recovery required: {error}"));
@@ -276,21 +307,27 @@ impl Conversation {
                     return Err(error.to_string());
                 }
             };
-            // Provider confirmation is the only path to the destructive write.
-            match locked(&store)?.finish_edit_last_turn(id, &edit, &binding) {
-                Ok(()) => Ok((edit, binding)),
-                Err(error) => Err(format!(
+            let mut store = locked(&store)?;
+            match store.finish_edit_last_turn(id, &edit, &binding) {
+                Ok(()) => Ok(EditOutcome::Rewound(Box::new(edit), binding)),
+                Err(error) if !store.uses_vorkspace_schema() => Err(format!(
                     "Provider recovery required: Provider rewound, but local history changed: {error}"
                 )),
+                Err(_) => {
+                    store.preserve_turn_overlap(id, &attempt, &competing.rows, None)
+                        .and_then(|()| store.recover_confirmed_rewind(id, &edit, &binding))
+                        .map_err(|error| format!("Provider recovery required: {error}"))?;
+                    Ok(EditOutcome::Recovered)
+                }
             }
         });
         cx.spawn(async move |this,cx| {
-            let result: Result<(EditSnapshot,String),String> = work.await;
+            let result: Result<EditOutcome,String> = work.await;
             let _ = this.update(cx,|this,cx| {
                 this.editing_last_turn.active = false;
                 this.input.update(cx,|input,_| input.set_read_only(false));
                 match result {
-                    Ok((edit,binding)) => {
+                    Ok(EditOutcome::Rewound(edit,binding)) => {
                         this.editing_last_turn.prepared = None;
                         this.summary.provider_id = Some(binding);
                         this.settings.turns.retain(|&row,_| row < edit.start);
@@ -307,6 +344,12 @@ impl Conversation {
                             this.preserve_interrupted_edit(prompt,attachments,edit.start,cx);
                         }
                         this.run_history_actions(cx);
+                    }
+                    Ok(EditOutcome::Recovered) => {
+                        this.editing_last_turn.prepared = None;
+                        this.persist_composer(cx);
+                        this.status = "Saved both versions. Review your draft before sending.".into();
+                        this.recover_history_in_place(cx);
                     }
                     Err(error) => {
                         if error.starts_with("Provider recovery required:") {
@@ -359,6 +402,65 @@ mod tests {
     use gpui::TestAppContext;
     use std::sync::Mutex;
     use vorkspace_core::{store::Store, transcript::Transcript};
+    #[gpui::test]
+    fn stale_last_turn_edit_is_recovered_before_provider_lookup(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("history.db");
+        let mut store = Store::open_vorkspace(&path).unwrap();
+        let mut session = store.create("codex", "/project").unwrap();
+        let id = session.id;
+        store.provider_id(id, "thread").unwrap();
+        session.provider_id = Some("thread".into());
+        let mut history = Transcript::default();
+        history.begin("user");
+        history.append("Original prompt");
+        history.begin("assistant");
+        history.append("Original answer");
+        store.write_rows(id, 0, &history.rows).unwrap();
+        let edit = store
+            .prepare_edit_last_turn(id, &history.rows, Some("turn"))
+            .unwrap();
+        let mut other = Store::open_vorkspace(&path).unwrap();
+        let mut saved = other.load(id).unwrap();
+        saved.rows[1].text = "New saved answer".into();
+        other.write_rows(id, 1, &saved.rows[1..]).unwrap();
+
+        let chat = cx.new(|cx| Conversation::new(session, Arc::new(Mutex::new(store)), cx));
+        chat.update(cx, |chat, cx| {
+            chat.loaded = true;
+            chat.transcript
+                .update(cx, |view, cx| view.replace_history(history.rows, cx));
+            chat.editing_last_turn.prepared = Some(edit);
+            chat.input.update(cx, |input, cx| {
+                input.set_text("Edited but unsent".into(), cx)
+            });
+            assert!(chat.submit_edited(cx));
+        });
+        let executor = cx.foreground_executor().clone();
+        executor.block_test(cx.condition(&chat, |chat, cx| {
+            !chat.loading
+                && !chat.editing_last_turn.pending()
+                && chat.transcript.read(cx).source_rows()[1].text == "New saved answer"
+        }));
+        cx.run_until_parked();
+        chat.read_with(cx, |chat, cx| {
+            assert_eq!(chat.input.read(cx).content.as_str(), "Edited but unsent");
+            assert_eq!(chat.transcript.read(cx).source_rows(), saved.rows);
+            assert_eq!(chat.summary.provider_id.as_deref(), Some("thread"));
+        });
+        let reopened = Store::read_vorkspace(&path).unwrap();
+        let versions = reopened.recovered_turns(id).unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(
+            reopened
+                .read_recovered_turn(id, &versions[0].id)
+                .unwrap()
+                .unwrap()[0]
+                .text,
+            "Edited but unsent"
+        );
+    }
+
     #[gpui::test]
     fn cancelled_recall_preserves_history_and_native_provider_binding(cx: &mut TestAppContext) {
         let mut store = Store::open(Path::new(":memory:")).unwrap();

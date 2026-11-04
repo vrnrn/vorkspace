@@ -33,6 +33,8 @@ mod edit;
 mod shared;
 pub use shared::{IndexedHistoryCursor, IndexedHistoryPage};
 mod side_threads;
+mod turn_history;
+pub use turn_history::{recovery_text, RecoveredTurn, TurnHistory};
 pub(crate) mod todos;
 pub use crate::session::native_model;
 use crate::transcript::{Row, Transcript};
@@ -946,7 +948,9 @@ impl Store {
             return Err("Remote transcripts are owned by the host".into());
         }
         if self.shared.is_some() {
-            return self.shared_write_rows(session, start, rows, message_id);
+            return self
+                .shared_write_rows(session, start, rows, message_id, None)
+                .map(|_| ());
         }
 
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;

@@ -34,6 +34,7 @@ fn update(index: usize, finished: bool) -> vorkspace_runtime::runtime::Update {
         handoff: None,
         status: format!("Synthetic status {index}"),
         finished,
+        history_recovery: None,
     }
 }
 
@@ -242,4 +243,105 @@ pub(crate) fn sidebar_tool_update(label: Option<&str>) -> vorkspace_runtime::run
     update.rows.clear();
     update.activity = label.map(str::to_owned);
     update
+}
+
+#[gpui::test]
+fn recovered_turn_refreshes_the_live_view_and_keeps_the_unsent_composer(cx: &mut TestAppContext) {
+    verify_recovered_turn_refresh(cx, false);
+}
+
+#[gpui::test]
+fn pending_recovered_turn_survives_the_live_history_refresh(cx: &mut TestAppContext) {
+    verify_recovered_turn_refresh(cx, true);
+}
+
+fn verify_recovered_turn_refresh(cx: &mut TestAppContext, pending: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.db");
+    let mut store = Store::open_vorkspace(&path).unwrap();
+    let summary = store.create("codex", "/project").unwrap();
+    let id = summary.id;
+    let stale = update(0, false).rows;
+    let mut saved = stale.clone();
+    saved[0].text = "Latest durable history".into();
+    store.write_rows(id, 0, &saved).unwrap();
+    if pending {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER refuse_recovery BEFORE INSERT ON conversation_turn_recoveries
+            BEGIN SELECT RAISE(ABORT,'disk full fixture'); END;",
+        )
+        .unwrap();
+        assert!(
+            store
+                .save_or_retain_turn_overlap(id, "competing-turn", &stale, None)
+                .is_err()
+        );
+    } else {
+        store
+            .preserve_turn_overlap(id, "competing-turn", &stale, None)
+            .unwrap();
+    }
+    let losing = stale.clone();
+    let store = Arc::new(std::sync::Mutex::new(store));
+    let database = store.clone();
+    let window = cx.update(|cx| {
+        input::bind(cx);
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| {
+                let mut view = Conversation::new(summary, database, cx);
+                view.loaded = true;
+                view
+            })
+        })
+        .unwrap()
+    });
+    window
+        .update(cx, |view, _, cx| {
+            view.transcript
+                .update(cx, |view, cx| view.replace_history(stale, cx));
+            view.input.update(cx, |input, cx| {
+                input.set_text("Unsent draft while streaming".into(), cx)
+            });
+            view.persist_composer(cx);
+        })
+        .unwrap();
+    let (tx, rx) = async_channel::bounded(1);
+    start_receiver(window, rx, cx);
+    tx.try_send(vorkspace_runtime::runtime::Update {
+        finished: true,
+        status: "Recovered a competing version of this turn".into(),
+        history_recovery: Some(if pending {
+            vorkspace_runtime::runtime::HistoryRecovery::Unsaved
+        } else {
+            vorkspace_runtime::runtime::HistoryRecovery::Saved
+        }),
+        ..Default::default()
+    })
+    .unwrap();
+    drop(tx);
+    let entity = window.entity(cx).unwrap();
+    let executor = cx.foreground_executor().clone();
+    executor.block_test(cx.condition(&entity, |view, cx| {
+        !view.busy
+            && !view.loading
+            && view.transcript.read(cx).source_rows()[0].text == "Latest durable history"
+    }));
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(view.transcript.read(cx).source_rows(), saved);
+            assert_eq!(
+                view.input.read(cx).content.as_str(),
+                "Unsent draft while streaming"
+            );
+            assert!(view.recovered_turn_banner(cx).is_some());
+            let store = locked(&store).unwrap();
+            assert_eq!(store.recovered_turns(id).unwrap()[0].pending, pending);
+            assert_eq!(
+                store.read_recovered_turn(id, "competing-turn").unwrap(),
+                Some(losing)
+            );
+        })
+        .unwrap();
 }

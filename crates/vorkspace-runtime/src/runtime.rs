@@ -58,7 +58,16 @@ pub struct Update {
     pub handoff: Option<Option<vorkspace_core::agent::Handoff>>,
     pub status: String,
     pub finished: bool,
+    /// The losing turn has a separate owner in the same chat. Replace the projected
+    /// transcript from storage instead of applying the losing row offsets.
+    pub history_recovery: Option<HistoryRecovery>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryRecovery {
+    Saved,
+    Unsaved,
+}
+
 fn publish(
     tx: &async_channel::Sender<Update>,
     cancel: &AtomicBool,
@@ -131,6 +140,7 @@ fn run_turn_using(
     let user_request = prompt.clone();
     let mut transcript = Transcript::default();
     let mut history_loaded = false;
+    let recovery_id = vorkspace_core::bot::new_id();
     let shared = locked(&store)
         .map(|s| s.uses_vorkspace_schema())
         .unwrap_or(false);
@@ -179,7 +189,7 @@ fn run_turn_using(
                 "This provider account was removed. Choose another account to continue.".into(),
             );
         }
-        transcript = locked(&store)?.load(summary.id)?;
+        (transcript, pending.writer) = locked(&store)?.load_turn_history(summary.id)?;
         history_loaded = true;
         turn_start = transcript.rows.len();
         settings.ticket_context_data_dir =
@@ -198,6 +208,9 @@ fn run_turn_using(
         persisted.plan = false;
         persisted.operator = false;
         persisted.orchestrator = false;
+        if pending.writer.is_some() {
+            persisted.turns.clear();
+        }
         let start = transcript.begin(if settings.internal_message {
             "bot-system"
         } else {
@@ -223,7 +236,8 @@ fn run_turn_using(
         // Keep the already painted prompt in the failure replay even if saving
         // the turn's configuration fails before its first transcript write.
         locked(&store)?.configure_agent(summary.id, &summary.provider, &persisted)?;
-        locked(&store)?.write_rows_with_message(
+        pending.write(
+            &mut *locked(&store)?,
             summary.id,
             start,
             &transcript.rows[start..],
@@ -245,7 +259,7 @@ fn run_turn_using(
             .iter()
             .rposition(Row::is_prompt)
             .map_or(0, |at| at + 1);
-        persistence::save_turn_receipt(&store, summary.id, turn, info.clone())?;
+        pending.receipt(&store, summary.id, turn, info.clone())?;
         turn_receipt = Some((turn, info));
         initial_delivery = settings.bot_message_id.clone();
         let creating_worktree = settings.new_worktree && settings.worktree_cwd.is_none();
@@ -594,7 +608,7 @@ fn run_turn_using(
                                     provider_turn_id: root.provider_turn_id.clone(),
                                     ..Default::default()
                                 };
-                                persistence::save_turn_receipt(&store, summary.id, turn, steer)?;
+                                pending.receipt(&store, summary.id, turn, steer)?;
                             }
                             follow_up_delivered.push(message.id);
                         }
@@ -813,6 +827,7 @@ fn run_turn_using(
                             handoff,
                             status,
                             finished: false,
+                            history_recovery: None,
                         },
                     )
                 })();
@@ -846,8 +861,6 @@ fn run_turn_using(
         }
         result
     })();
-    let submission_save = submissions.finish(&result, provider_completion_confirmed);
-    drop(submissions);
     let cancelled =
         cancel.load(Ordering::Relaxed) || result.as_ref().is_err_and(|error| error == "Stopped");
     let handoff = prepared_handoff.map(|mut ready| {
@@ -865,16 +878,6 @@ fn run_turn_using(
             Some(ready)
         }
     });
-    let handoff_save = if let Some(ready) = &handoff {
-        locked(&store).and_then(|store| {
-            let mut persisted = store.agent_settings(summary.id)?.unwrap_or_default();
-            persisted.pending_provider_switch = None;
-            persisted.handoff = ready.clone();
-            store.save_agent_settings(summary.id, &persisted)
-        })
-    } else {
-        Ok(())
-    };
     // A storage error or cancelled publish can leave this turn's latest rows
     // unseen by the UI. Replay the turn on failure before sending an error or
     // settled tools; starting after those missing rows would abort in patch().
@@ -918,7 +921,9 @@ fn run_turn_using(
             store.finish_turn(&session, cwd, id)
         });
     }
-    let (start, rows, mut status) = if !history_loaded {
+    let (mut start, mut rows, mut status) = if pending.overlap {
+        (0, Vec::new(), String::new())
+    } else if !history_loaded {
         // A rejected preflight has no row baseline. Writing an error at row 0
         // would replace a real conversation's first saved message.
         (
@@ -928,15 +933,17 @@ fn run_turn_using(
                 "Ready".into()
             } else {
                 result
+                    .as_ref()
                     .err()
+                    .cloned()
                     .unwrap_or_else(|| "Conversation was not loaded".into())
             },
         )
-    } else if let Err(error) = result
+    } else if let Err(error) = result.as_ref()
         && !cancelled
     {
         let start = final_start.min(transcript.begin("error"));
-        transcript.append(&error);
+        transcript.append(error);
         pending.changed(start);
         let error = match pending.flush(
             &store,
@@ -945,7 +952,7 @@ fn run_turn_using(
             &context,
             std::time::Instant::now(),
         ) {
-            Ok(()) => error,
+            Ok(()) => error.clone(),
             Err(storage) => format!("{error} · Saving failed: {storage}"),
         };
         (start, transcript.rows[start..].to_vec(), error)
@@ -967,15 +974,56 @@ fn run_turn_using(
     };
     // Settle provenance in storage before notifying the view, including when
     // its window has closed or the provider was cancelled.
-    if let Some((turn, mut info)) = turn_receipt {
+    if let Some((turn, mut info)) = turn_receipt.filter(|_| !pending.overlap) {
         let completed = vorkspace_core::time::now_ms();
         info.duration_ms = info.started_at.map_or(0, |at| completed.saturating_sub(at));
         info.duration_known = true;
         info.completed_at = info.started_at.map(|_| completed);
-        if let Err(error) = persistence::save_turn_receipt(&store, summary.id, turn, info) {
+        if let Err(error) = pending.receipt(&store, summary.id, turn, info) {
             status = format!("{status} · Saving turn metadata failed: {error}");
         }
     }
+    let mut history_recovery = None;
+    if pending.overlap {
+        let recovery = locked(&store).and_then(|store| {
+            store.save_or_retain_turn_overlap(
+                summary.id,
+                &recovery_id,
+                &transcript.rows[turn_start..],
+                provider_id
+                    .as_deref()
+                    .filter(|_| submissions.was_dispatched()),
+            )
+        });
+        match recovery {
+            Ok(()) => {
+                history_recovery = Some(HistoryRecovery::Saved);
+                start = 0;
+                rows.clear();
+                status = "Recovered a competing version of this turn".into();
+            }
+            Err(error) => {
+                // The store retains the complete payload until its retry
+                // commits, independently of the projected transcript.
+                history_recovery = Some(HistoryRecovery::Unsaved);
+                start = turn_start;
+                rows = transcript.rows[turn_start..].to_vec();
+                status = format!("Could not save the recovered version: {error}");
+            }
+        }
+    }
+    let submission_save = submissions.finish(&result, provider_completion_confirmed);
+    drop(submissions);
+    let handoff_save = if let Some(ready) = handoff.as_ref().filter(|_| !pending.overlap) {
+        locked(&store).and_then(|store| {
+            let mut persisted = store.agent_settings(summary.id)?.unwrap_or_default();
+            persisted.pending_provider_switch = None;
+            persisted.handoff = ready.clone();
+            store.save_agent_settings(summary.id, &persisted)
+        })
+    } else {
+        Ok(())
+    };
     if let Err(error) = submission_save {
         status = format!("{status} · Saving local send receipt failed: {error}");
     }
@@ -993,9 +1041,10 @@ fn run_turn_using(
         delivered: initial_delivery,
         start,
         rows,
-        provider_id,
+        provider_id: if pending.overlap { None } else { provider_id },
+        history_recovery,
         usage_limit: if cancelled { None } else { usage_limit },
-        handoff,
+        handoff: if pending.overlap { None } else { handoff },
         status,
         finished: true,
         ..Default::default()

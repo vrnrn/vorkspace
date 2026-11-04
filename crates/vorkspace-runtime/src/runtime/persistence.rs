@@ -11,6 +11,8 @@ pub(super) struct PendingSave {
     last_flush: Instant,
     interval: Duration,
     context_owner: Option<(String, String)>,
+    pub(super) writer: Option<vorkspace_core::store::TurnHistory>,
+    pub(super) overlap: bool,
 }
 
 impl PendingSave {
@@ -25,6 +27,8 @@ impl PendingSave {
                 Duration::ZERO
             },
             context_owner: None,
+            writer: None,
+            overlap: false,
         }
     }
 
@@ -58,7 +62,7 @@ impl PendingSave {
         }
         let mut store = locked(store)?;
         if let Some(from) = self.from {
-            store.write_rows(session, from, &transcript.rows[from..])?;
+            self.write(&mut store, session, from, &transcript.rows[from..], None)?;
         }
         if self.context_dirty {
             if let Some((provider, account)) = &self.context_owner {
@@ -74,6 +78,42 @@ impl PendingSave {
         Ok(())
     }
 
+    pub(super) fn write(
+        &mut self,
+        store: &mut Store,
+        session: i64,
+        from: usize,
+        rows: &[Row],
+        message: Option<&str>,
+    ) -> Result<(), String> {
+        if !self.overlap {
+            self.overlap =
+                !store.write_turn_rows(session, from, rows, message, self.writer.as_mut())?;
+        }
+        if self.overlap {
+            return Err("The saved conversation changed during this turn".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn receipt(
+        &mut self,
+        store: &Database,
+        session: i64,
+        at: usize,
+        info: vorkspace_core::agent::TurnInfo,
+    ) -> Result<(), String> {
+        if let Some(writer) = self.writer.as_mut() {
+            self.overlap = !locked(store)?.save_turn_info(session, at, info, writer)?;
+            if self.overlap {
+                return Err("The saved conversation changed during this turn".into());
+            }
+            Ok(())
+        } else {
+            save_turn_receipt(store, session, at, info)
+        }
+    }
+
     pub(super) fn accept(
         &mut self,
         store: &Database,
@@ -84,7 +124,8 @@ impl PendingSave {
         now: Instant,
     ) -> Result<(), String> {
         let from = self.from.map_or(from, |old| old.min(from));
-        locked(store)?.write_rows_with_message(
+        self.write(
+            &mut *locked(store)?,
             session,
             from,
             &transcript.rows[from..],

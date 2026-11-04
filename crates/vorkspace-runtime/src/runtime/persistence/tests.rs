@@ -360,3 +360,95 @@ fn a_setup_failure_outlives_a_turn_that_never_reached_the_agent() {
     assert!(warning.unwrap().contains("no network"));
     tidy(&repo);
 }
+
+#[test]
+fn streaming_overlap_publishes_a_durable_recovery_instead_of_stale_offsets() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.db");
+    let mut store = Store::open_vorkspace(&path).unwrap();
+    let mut summary = store.create("codex", dir.path().to_str().unwrap()).unwrap();
+    let id = summary.id;
+    store.provider_id(id, "fixture-thread").unwrap();
+    summary.provider_id = Some("fixture-thread".into());
+    let mut history = Transcript::default();
+    history.begin("user");
+    history.append("Earlier prompt");
+    store.write_rows(id, 0, &history.rows).unwrap();
+    let store = Arc::new(Mutex::new(store));
+    let binary = dir.path().join("provider");
+    std::fs::write(&binary, r#"#!/usr/bin/env python3
+import json, sys
+def send(value):
+    print(json.dumps(value), flush=True)
+for line in sys.stdin:
+    value = json.loads(line)
+    if value.get('id') == 1:
+        send({'id': 1, 'result': {}})
+    elif value.get('id') == 2:
+        send({'id': 2, 'result': {'thread': {'id': 'fixture-thread'}}})
+    elif value.get('id') == 3:
+        send({'method': 'item/agentMessage/delta', 'params': {'itemId': 'answer', 'delta': 'Competing model output'}})
+        send({'method': 'turn/completed', 'params': {'turn': {'status': 'completed'}}})
+"#).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let draft = serde_json::json!({"cwd":"/project","text":"Unsent successor","attachments":[],"mcpTags":[],"selectionStart":0,"selectionEnd":0});
+    let (tx, rx) = async_channel::unbounded();
+    let (_control, controls) = std::sync::mpsc::channel();
+    run_turn_using(
+        TurnInput {
+            summary,
+            prompt: "The competing prompt".into(),
+            settings: Settings::default(),
+        },
+        controls,
+        store.clone(),
+        Arc::new(AtomicBool::new(false)),
+        tx,
+        |_| {
+            // Binary resolution runs after admission and before provider I/O.
+            let mut other = Store::open_vorkspace(&path).unwrap();
+            let mut winner = other.load(id).unwrap();
+            let from = winner.append("Durable other version");
+            other.write_rows(id, from, &winner.rows[from..]).unwrap();
+            other.save_composer_draft(id, 0, &draft).unwrap();
+            // A view can observe the winner without renewing the stale worker.
+            assert_eq!(locked(&store).unwrap().load(id).unwrap().rows, winner.rows);
+            Some(binary)
+        },
+    );
+    let finished = std::iter::from_fn(|| rx.try_recv().ok())
+        .find(|update| update.finished)
+        .unwrap();
+    assert_eq!(
+        finished.history_recovery,
+        Some(HistoryRecovery::Saved),
+        "{}",
+        finished.status
+    );
+    assert!(finished.rows.is_empty());
+    let reopened = Store::read_vorkspace(&path).unwrap();
+    let saved = reopened.load(id).unwrap();
+    assert!(
+        saved
+            .rows
+            .iter()
+            .any(|row| row.text == "Durable other version")
+    );
+    assert!(
+        !saved
+            .rows
+            .iter()
+            .any(|row| row.text == "Competing model output")
+    );
+    let recovery = reopened.recovered_turns(id).unwrap();
+    assert_eq!(recovery.len(), 1);
+    let rows = reopened
+        .read_recovered_turn(id, &recovery[0].id)
+        .unwrap()
+        .unwrap();
+    assert!(rows.iter().any(|row| row.text == "The competing prompt"));
+    assert!(rows.iter().any(|row| row.text == "Competing model output"));
+    assert_eq!(reopened.composer_draft(id).unwrap().unwrap().payload, draft);
+}

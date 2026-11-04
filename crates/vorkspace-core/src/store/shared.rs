@@ -12,7 +12,7 @@ mod ordinary;
 #[cfg(test)]
 mod tests;
 
-use super::{Reminder, Session, Store};
+use super::{Reminder, Session, Store, TurnHistory};
 use crate::{
     agent::Settings,
     context::Usage,
@@ -42,6 +42,8 @@ pub(super) struct Shared {
     account_source: RefCell<Option<crate::accounts::Book>>,
     preferences: std::sync::Arc<crate::desktop_preferences::DesktopPreferences>,
     read_only: bool,
+    pub(super) pending_turn_recoveries:
+        RefCell<HashMap<i64, Vec<super::turn_history::PendingTurnRecovery>>>,
 }
 
 /// A revision guard, rather than another owned copy of every rich source block.
@@ -412,6 +414,7 @@ impl Store {
                     )
                 }),
                 read_only,
+                pending_turn_recoveries: Default::default(),
             }),
         };
         // Register only identities here. No blocks_json is read at startup.
@@ -938,7 +941,7 @@ impl Store {
         Ok(Some(settings))
     }
     pub(super) fn shared_save_agent(&self, id: i64, settings: &Settings) -> Result<(), String> {
-        self.shared_save_turns(id, &settings.turns)?;
+        self.shared_save_turns(id, &settings.turns, None)?;
         self.shared_save_agent_preferences(id, settings)
     }
     /// Preference-only updates for validated operations which already preserve
@@ -998,18 +1001,28 @@ impl Store {
     }
     /// Add native turn receipts to their original desktop prompt objects.
     /// Unknown rich fields and existing provenance are retained verbatim.
-    fn shared_save_turns(
+    pub(super) fn shared_save_turns(
         &self,
         id: i64,
         turns: &HashMap<usize, crate::agent::TurnInfo>,
-    ) -> Result<(), String> {
+        writer: Option<&mut TurnHistory>,
+    ) -> Result<bool, String> {
         if turns.is_empty() {
-            return Ok(());
+            return Ok(true);
         }
         self.shared_writable()?;
-        let tx = sql(self.conn.unchecked_transaction())?;
+        let tx = sql(rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
         let mut blocks = self.shared_blocks(id)?;
-        self.shared_validate_history_or_fast_forward(id, &blocks)?;
+        if let Some(writer) = writer.as_ref() {
+            if !self.shared_writer_matches(id, &blocks, writer)? {
+                return Ok(false);
+            }
+        } else {
+            self.shared_validate_history_or_fast_forward(id, &blocks)?;
+        }
         let (session_provider, session_model): (String, String) = sql(self.conn.query_row(
             "SELECT harness,model FROM sessions WHERE id=?1",
             [self.persisted_session_id(id)?],
@@ -1094,7 +1107,18 @@ impl Store {
         if changed {
             self.shared_store_blocks(id, &blocks)?;
         }
+        let writer_state = if writer.is_some() && changed {
+            Some((
+                self.shared_turn_version(id)?,
+                TurnHistory::fingerprints(&blocks::project(&blocks)?).collect(),
+            ))
+        } else {
+            None
+        };
         sql(tx.commit())?;
+        if let (Some(writer), Some((version, rows))) = (writer, writer_state) {
+            writer.committed(version, 0, rows);
+        }
         if changed {
             self.shared
                 .as_ref()
@@ -1103,8 +1127,22 @@ impl Store {
                 .borrow_mut()
                 .insert(id, HistoryRevision::of(&blocks));
         }
-        Ok(())
+        Ok(true)
     }
+
+    fn shared_writer_matches(
+        &self,
+        id: i64,
+        blocks: &[Value],
+        writer: &TurnHistory,
+    ) -> Result<bool, String> {
+        let version = self.shared_turn_version(id)?;
+        // Metadata or an unrelated migration may advance the scalar. Row
+        // equality still proves that the writer's numeric offsets are valid.
+        Ok((version.is_some() && writer.version == version)
+            || writer.matches(&blocks::project(blocks)?))
+    }
+
     pub(super) fn shared_context(&self, id: i64) -> Result<Option<Usage>, String> {
         let fields = format!(
             "{},{}",
@@ -1394,19 +1432,28 @@ impl Store {
         start: usize,
         rows: &[Row],
         message_id: Option<&str>,
-    ) -> Result<(), String> {
+        mut writer: Option<&mut TurnHistory>,
+    ) -> Result<bool, String> {
         self.shared_writable()?;
         self.shared_history_schema()?;
-        self.shared_card_rows_current(id, rows)?;
-        if message_id.is_none() && self.shared_write_incremental(id, start, rows)? {
-            return Ok(());
+        if message_id.is_none()
+            && self.shared_write_incremental(id, start, rows, writer.as_deref_mut())?
+        {
+            return Ok(true);
         }
         let tx = sql(rusqlite::Transaction::new_unchecked(
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         ))?;
         let current = self.shared_blocks(id)?;
-        self.shared_validate_history(id, &current)?;
+        if let Some(writer) = writer.as_ref() {
+            if !self.shared_writer_matches(id, &current, writer)? {
+                return Ok(false);
+            }
+        } else {
+            self.shared_validate_history(id, &current)?;
+        }
+        self.shared_card_rows_current(id, rows)?;
         let mut next = blocks::merge(&current, start, rows)?;
         if let Some(message) = message_id {
             if let Some(prompt) = next
@@ -1438,7 +1485,18 @@ impl Store {
             self.shared_patch(id, &[("updated_at", json!(crate::time::now_ms()))])?;
         }
         let index = self.shared_build_history_index(id, &next)?;
+        let writer_state = if writer.is_some() {
+            Some((
+                self.shared_turn_version(id)?,
+                TurnHistory::fingerprints(&blocks::project(&next)?).collect(),
+            ))
+        } else {
+            None
+        };
         sql(tx.commit())?;
+        if let (Some(writer), Some((version, rows))) = (writer, writer_state) {
+            writer.committed(version, 0, rows);
+        }
         if let Some(queue) = next_queue {
             self.shared
                 .as_ref()
@@ -1465,7 +1523,7 @@ impl Store {
             .borrow_mut()
             .remove(&id);
         // The source appRequestId is the durable, transactional receipt.
-        Ok(())
+        Ok(true)
     }
     pub(super) fn shared_reset_provider_id_if(
         &self,
@@ -1818,6 +1876,12 @@ impl Store {
             .conn
             .execute("DELETE FROM sessions WHERE id=?1", [original]))?;
         sql(tx.commit())?;
+        self.shared
+            .as_ref()
+            .unwrap()
+            .pending_turn_recoveries
+            .borrow_mut()
+            .remove(&id);
         self.shared
             .as_ref()
             .unwrap()

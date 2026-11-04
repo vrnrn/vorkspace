@@ -181,6 +181,20 @@ impl Store {
             .query_row("PRAGMA schema_version", [], |row| row.get(0)))
     }
 
+    pub(in crate::store) fn shared_turn_version(
+        &self,
+        id: i64,
+    ) -> Result<Option<(i64, i64)>, String> {
+        let schema = self.shared_schema_version()?;
+        if self.shared.as_ref().unwrap().history_schema.get() != Some(schema) {
+            return Ok(None);
+        }
+        Ok(Some((
+            schema,
+            self.history_revision(&self.persisted_session_id(id)?)?,
+        )))
+    }
+
     fn shared_history_fast_forwards(
         &self,
         id: i64,
@@ -281,6 +295,7 @@ impl Store {
         super::super::composer_draft::ensure_draft_schema(&tx)?;
         super::super::composer_draft::ensure_recovery_schema(&tx)?;
         ensure_bookkeeping_schema(&tx)?;
+        super::super::turn_history::ensure_recovery_schema(&tx)?;
         // All normal writers of this database must finish their lazy schema
         // work before a whole-database schema version guards active history.
         sql(super::super::local_submissions::ensure_table(&tx))?;
@@ -451,6 +466,7 @@ impl Store {
         id: i64,
         start: usize,
         rows: &[Row],
+        writer: Option<&mut TurnHistory>,
     ) -> Result<bool, String> {
         let indices = self.shared.as_ref().unwrap().incremental.borrow();
         let Some(index) = indices.get(&id) else {
@@ -460,6 +476,12 @@ impl Store {
         // digest on commit. Its next delta rebuilds the compact index once.
         if self.shared.as_ref().unwrap().snapshots.borrow().get(&id)
             != Some(&HistoryRevision::Stored(index.revision))
+        {
+            return Ok(false);
+        }
+        if writer
+            .as_ref()
+            .is_some_and(|writer| writer.version != Some((index.schema, index.revision)))
         {
             return Ok(false);
         }
@@ -474,8 +496,13 @@ impl Store {
             return Ok(false);
         }
         if self.history_revision(&original)? != index.revision {
-            return Err(CHANGED.into());
+            return if writer.is_some() {
+                Ok(false)
+            } else {
+                Err(CHANGED.into())
+            };
         }
+        self.shared_card_rows_current(id, rows)?;
         if start > index.rows {
             return Err(
                 "Transcript changed; refusing to overwrite a different conversation revision"
@@ -503,6 +530,7 @@ impl Store {
         drop(query);
         let next = blocks::merge(&previous, start - offset, rows)?;
         let mut entries = Vec::with_capacity(next.len());
+        let mut writer_rows = Vec::new();
         let mut row_offset = offset;
         let mut next_key = index
             .entries
@@ -540,7 +568,11 @@ impl Store {
                     params![original, position],
                 ))?;
             }
-            let len = blocks::project(std::slice::from_ref(block))?.len();
+            let projected = blocks::project(std::slice::from_ref(block))?;
+            let len = projected.len();
+            if writer.is_some() {
+                writer_rows.extend(TurnHistory::fingerprints(&projected));
+            }
             entries.push(Entry {
                 key: position,
                 offset: row_offset,
@@ -582,6 +614,9 @@ impl Store {
         }
         let revision = self.history_revision(&original)?;
         sql(tx.commit())?;
+        if let Some(writer) = writer {
+            writer.committed(Some((index.schema, revision)), offset, writer_rows);
+        }
         drop(indices);
         let mut indices = self.shared.as_ref().unwrap().incremental.borrow_mut();
         let index = indices.get_mut(&id).unwrap();

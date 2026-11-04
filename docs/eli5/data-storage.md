@@ -12,7 +12,7 @@ When an agent adds text, the app saves the changed part of the chat instead of c
 
 Before using this faster saving method, the app prepares the storage needed for queued messages, Bot drafts, delivery claims, local send records, notes, to-dos, and automations. If an unrelated database change happens, the next save checks the saved messages and continues when they match. Changes made by another writer still receive the usual protection.
 
-Saved tool details stay intact even when the screen shows only a short preview. If another window changes the history first, the app asks you to reopen it rather than overwrite that change. A failed save leaves the previous saved chat and message receipts together. The remote host follows the same rules.
+Saved tool details stay intact even when the screen shows only a short preview. If another window changes the same conversation during a local turn, the app reloads the saved conversation in place and keeps the competing version under **Recovered versions**. Your unsent draft stays in the composer. If saving the competing version fails, you can still copy it or retry while the app is open. A failed save leaves the previous saved chat and message receipts together. The remote host follows the same rules.
 
 After the remote host saves a chat in separate blocks, keep using host software that understands that format. Older host software that expects one large saved chat cannot open the converted data. Disconnecting your desktop does not affect the saved chat or stop the host.
 
