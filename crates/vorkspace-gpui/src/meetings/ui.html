@@ -42,11 +42,6 @@ select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-button.primary {
-  background: var(--surface);
-  color: var(--foreground);
-  border-color: var(--accent);
-}
 ::selection {
   background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
@@ -76,29 +71,88 @@ textarea {
   height: 100%;
 }
 aside {
-  width: 264px;
-  min-width: 220px;
+  width: 280px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface) 35%, var(--background));
 }
-.toolbar {
-  height: 52px;
-  min-height: 52px;
+.search {
+  height: 36px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
+  gap: 6px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
 }
-.toolbar h1 {
-  font-size: 14px;
-  margin: 0;
+.search-icon,
+.search-icon svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+.search input {
   flex: 1;
-  font-weight: 600;
+  height: 28px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  color: var(--foreground);
+  font-size: 14px;
 }
-.toolbar button {
+aside svg path,
+#delete-meeting svg path {
+  stroke: currentColor;
+}
+#list {
+  overflow: auto;
+  flex: 1;
+  padding: 6px;
+}
+#list button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 2px;
+  line-height: 1.45;
+}
+#list button:hover {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+#list button[aria-current=true] {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.list-title {
+  max-width: 100%;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.list-date {
+  order: -1;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.list-empty {
+  padding: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 19px;
+}
+.recording-controls {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
 }
 .record {
   display: flex;
@@ -109,59 +163,6 @@ aside {
   width: 12px;
   height: 12px;
   fill: #e75a63;
-}
-.record[aria-pressed=true] svg {
-  fill: #e75a63;
-}
-.search {
-  margin: 0 14px 10px;
-}
-.search input {
-  width: 100%;
-  background: var(--background);
-}
-#list {
-  overflow: auto;
-  flex: 1;
-  padding: 0 6px 12px;
-}
-#list button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  border-color: transparent;
-  background: transparent;
-  border-radius: 6px;
-  padding: 11px 10px;
-  margin: 2px 0;
-  line-height: 1.4;
-}
-#list button[aria-current=true] {
-  background: color-mix(in srgb, var(--foreground) 9%, transparent);
-}
-.list-title {
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.list-date {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 4px;
-  font-variant-numeric: tabular-nums;
-}
-.list-empty {
-  padding: 14px 10px;
-  color: var(--muted);
-  line-height: 1.6;
-}
-.source-hint {
-  font-size: 11px;
-  color: var(--muted);
-  border-top: 1px solid var(--border);
-  padding: 12px 14px;
-  line-height: 1.55;
 }
 main {
   flex: 1;
@@ -188,54 +189,89 @@ main {
   flex: 1;
   min-height: 0;
   flex-direction: column;
+  gap: 20px;
+  width: min(100%, 1024px);
+  margin-inline: auto;
+  padding: 32px;
+  overflow-y: auto;
 }
 .document-header {
-  padding: 18px 26px 12px;
-  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 #title {
-  display: block;
-  font-size: 21px;
-  font-weight: 600;
+  width: 100%;
   border: 0;
   padding: 0;
-  margin: 0 0 7px;
-  background: transparent;
-  width: 100%;
+  font-size: 20px;
+  font-weight: 600;
 }
 .metadata {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   line-height: 1.6;
 }
 .document-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  padding: 10px 26px;
-  min-height: 46px;
-}
-.spacer {
-  flex: 1;
-}
-.segmented {
-  display: flex;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 2px;
-  background: var(--surface);
-}
-.segmented button {
-  border: 0;
-  min-height: 23px;
-  padding: 3px 9px;
-  background: transparent;
+  min-height: 28px;
   font-size: 12px;
 }
-.segmented button[aria-pressed=true] {
-  background: var(--background);
-  box-shadow: 0 1px 2px #0002;
+.document-actions button {
+  font-weight: 500;
+}
+#summarize:enabled {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: transparent;
+}
+#delete-meeting,
+#cancel-delete {
+  background: transparent;
+  border-color: transparent;
+}
+#delete-meeting {
+  color: light-dark(#b42338, #f87171);
+}
+#delete-meeting .delete-icon,
+#delete-meeting svg {
+  display: inline-block;
+  vertical-align: -2px;
+  width: 14px;
+  height: 14px;
+}
+#delete-meeting .delete-icon {
+  margin-right: 5px;
+}
+#delete-meeting:hover:enabled,
+#cancel-delete:hover {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.document-tabs {
+  display: flex;
+  flex-shrink: 0;
+  align-items: stretch;
+  gap: 16px;
+  min-height: 36px;
+  border-bottom: 1px solid var(--border);
+}
+.document-tabs button {
+  border: 0;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.document-tabs button[aria-pressed=true] {
+  color: var(--foreground);
+  border-bottom-color: var(--foreground);
 }
 #mode-edit {
   background: transparent;
@@ -245,29 +281,24 @@ main {
 }
 .editor-area {
   flex: 1;
-  min-height: 0;
+  min-height: 160px;
   display: flex;
-  padding: 0 26px 22px;
 }
 #editor {
   width: 100%;
   height: 100%;
   border: 0;
-  padding: 5px 0;
-  border-radius: 0;
-  font-size: 14px;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: 13px / 20px ui-monospace, Menlo, monospace;
   outline-offset: 4px;
 }
 #preview {
   display: none;
-  overflow: auto;
   width: 100%;
   font-size: 14px;
   line-height: 1.7;
   padding: 0 0 24px;
-}
-#preview > * {
-  max-width: 72ch;
 }
 #preview h1,
 #preview h2,
@@ -333,7 +364,8 @@ main {
 }
 .notice {
   display: none;
-  margin: 0 26px 10px;
+  width: min(calc(100% - 64px), 960px);
+  margin: 10px auto 0;
   padding: 9px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -347,20 +379,6 @@ main {
 .back {
   display: none;
 }
-.recording-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #e75a63;
-  margin-right: 5px;
-}
-
-.small {
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.6;
-}
 #analysis-state {
   font-size: 11px;
   color: var(--muted);
@@ -369,20 +387,11 @@ main {
   aside {
     width: 224px;
   }
-  .toolbar {
-    padding: 10px;
-  }
-  .document-header {
-    padding: 18px;
-  }
-  .document-actions {
-    padding: 10px 18px;
-  }
-  .editor-area {
-    padding: 0 18px 18px;
+  #document {
+    padding: 24px;
   }
   .notice {
-    margin: 0 18px 10px;
+    width: calc(100% - 48px);
   }
 }
 @media (max-width: 620px) {
@@ -397,16 +406,7 @@ main {
   }
   .back {
     display: inline-block;
-    margin: 0 0 12px;
-  }
-  #title {
-    font-size: 20px;
-  }
-  .document-actions {
-    flex-wrap: wrap;
-  }
-  .document-header {
-    padding-top: 14px;
+    align-self: flex-start;
   }
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -418,18 +418,28 @@ main {
 </style>
 <div id="app">
 <aside aria-label="Meetings">
- <div class="toolbar"><button id="record" class="record" title="Record or stop meeting (⌘⇧R)" aria-label="Record meeting" aria-pressed="false"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5"/></svg><span>Record</span></button><h1>Meetings</h1></div>
- <div class="search"><input id="search" type="search" placeholder="Search meetings" aria-label="Search meetings"></div>
+ <label class="search"><span class="search-icon" aria-hidden="true"><!-- search-icon --></span><input id="search" type="search" placeholder="Filter meetings" aria-label="Filter meetings"></label>
  <nav id="list" aria-label="Recorded meetings"></nav>
- <div class="source-hint">Microphone + system audio<br>Only transcripts and meeting details are saved.</div>
+ <div class="recording-controls"><button id="record" class="record" title="Record or stop meeting (⌘⇧R)" aria-label="Record meeting" aria-pressed="false"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5"/></svg><span>Record</span></button></div>
 </aside>
 <main>
  <div id="notice" class="notice" role="status"></div>
- <div id="empty"><h2>Record a meeting</h2><p>Record a meeting to capture its transcript. When it ends, turn the discussion into clear notes and action items.</p><p class="small">Recording reserves the microphone.<br>Dictation and Vox are available again when it stops.</p></div>
+ <div id="empty"><h2>Record a meeting</h2><p>Record a meeting to capture its transcript. When it ends, turn the discussion into notes and action items.</p></div>
  <section id="document" aria-label="Meeting document">
-  <header class="document-header"><button id="back" class="back">Meetings</button><input id="title" placeholder="Untitled meeting" aria-label="Meeting title"><div id="metadata" class="metadata"></div></header>
-  <div class="document-actions"><div class="segmented" aria-label="Meeting view"><button id="show-transcript" aria-pressed="true">Transcript</button><button id="show-summary" aria-pressed="false" disabled>Summary</button></div><span class="spacer"></span><button id="record-mobile" class="back" title="Record or stop meeting (⌘⇧R)">Record</button><span id="analysis-state" role="status"></span><button id="save">Save changes</button><button id="mode-edit" hidden>Edit Markdown</button><button id="summarize">Summarize</button></div>
-   <div class="editor-area"><textarea id="editor" spellcheck="true" aria-label="Meeting transcript"></textarea><article id="preview" aria-label="Meeting summary"></article><div id="live" aria-label="Live transcript" aria-live="polite"><div id="finals"></div><div id="partials"></div></div></div>
+  <header class="document-header">
+   <button id="back" class="back">Meetings</button>
+   <input id="title" placeholder="Untitled meeting" aria-label="Meeting title">
+   <div id="metadata" class="metadata"></div>
+   <div class="document-actions">
+    <button id="record-mobile" class="back" title="Record or stop meeting (⌘⇧R)">Record</button>
+    <button id="summarize">Summarize</button><button id="save">Save changes</button>
+    <button id="mode-edit" hidden>Edit Markdown</button>
+    <button id="delete-meeting" aria-label="Delete meeting"><span class="delete-icon" aria-hidden="true"><!-- delete-icon --></span><span>Delete</span></button>
+    <button id="cancel-delete" hidden>Cancel</button><span id="analysis-state" role="status"></span>
+   </div>
+  </header>
+  <div class="document-tabs" aria-label="Meeting view"><button id="show-summary" aria-pressed="false" disabled>Summary</button><button id="show-transcript" aria-pressed="true">Transcript</button></div>
+  <div class="editor-area"><textarea id="editor" spellcheck="true" aria-label="Meeting transcript"></textarea><article id="preview" aria-label="Meeting summary"></article><div id="live" aria-label="Live transcript" aria-live="polite"><div id="finals"></div><div id="partials"></div></div></div>
  </section>
 </main>
 </div>
@@ -437,6 +447,7 @@ main {
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id), call = (method, params = {}) => meetingsRequest(method, params);
+  let confirmDelete = null, deleting = false;
   let rows = [], selected = null, doc = null, view = "transcript", editingSummary = false, dirty = false, dirtyFields = new Set(), editEpoch = 0, capture = null, connecting = true, visible = true, polling = false, analysis = false, loadEpoch = 0, listEpoch = 0, saving = null, recordBusy = false;
   const isActive = (state) => ["starting", "recording", "finishing"].includes(state?.phase), date = (ms) => new Date(ms).toLocaleString(void 0, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }), time = (ms) => {
     const s = Math.floor(ms / 1e3);
@@ -450,9 +461,12 @@ main {
   const rowNodes = new Map();
   const emptyList = document.createElement("div");
   emptyList.className = "list-empty";
+  function visibleRows() {
+    const query = $("search").value.trim().toLowerCase();
+    return rows.filter(row => row.meeting && row.state && row.meeting.title.toLowerCase().includes(query));
+  }
   function renderList() {
-    const root = $("list"), query = $("search").value.toLowerCase();
-    const displayed = rows.filter(row => row.meeting && row.state && row.meeting.title.toLowerCase().includes(query));
+    const root = $("list"), displayed = visibleRows();
     const ids = new Set(displayed.map(row => row.meeting.id));
     for (const [id, button] of rowNodes) {
       if (ids.has(id)) continue;
@@ -480,7 +494,7 @@ main {
     }
     if (index) emptyList.remove();
     else {
-      emptyList.textContent = query ? "No matching meetings." : "Your recorded meetings will appear here.";
+      emptyList.textContent = $("search").value.trim() ? "No matching meetings." : "Your recorded meetings will appear here.";
       if (root.children[0] !== emptyList) root.append(emptyList);
     }
   }
@@ -516,13 +530,20 @@ main {
     const state = recording ? capture.state : doc?.state, phase = capture?.state.phase;
     $("record").setAttribute("aria-pressed", String(!!capture));
     $("record").querySelector("span").textContent = capture ? phase === "finishing" ? "Finishing…" : "Stop" : "Record";
-    $("record").disabled = phase === "finishing" || recordBusy || connecting;
+    $("record").disabled = phase === "finishing" || recordBusy || connecting || deleting;
     $("record-mobile").textContent = $("record").querySelector("span").textContent;
     $("record-mobile").disabled = $("record").disabled;
     $("record").setAttribute("aria-label", capture ? "Stop recording meeting" : "Record meeting");
-    $("title").readOnly = recording || !!doc?.awaitingTranscript;
+    $("title").readOnly = recording || !!doc?.awaitingTranscript || deleting;
+    $("editor").readOnly = recording || !!doc?.awaitingTranscript || deleting;
+    $("delete-meeting").hidden = !doc?.meeting || recording || !!doc?.awaitingTranscript;
+    $("delete-meeting").disabled = deleting || analysis || !!saving;
+    $("delete-meeting").querySelector("span:last-child").textContent = deleting ? "Deleting…" : confirmDelete === selected ? "Delete meeting?" : "Delete";
+    $("cancel-delete").hidden = !confirmDelete || confirmDelete !== selected;
+    $("cancel-delete").disabled = deleting;
+    $("save").disabled = deleting;
     $("show-summary").disabled = !doc?.meeting?.summary;
-    $("summarize").disabled = recording || !!doc?.awaitingTranscript || analysis || !doc?.transcript?.trim();
+    $("summarize").disabled = recording || !!doc?.awaitingTranscript || analysis || deleting || !doc?.transcript?.trim();
     $("summarize").textContent = analysis ? "Summarizing…" : doc?.meeting?.summary ? "Summarize again" : "Summarize";
     $("mode-edit").hidden = view !== "summary";
     $("mode-edit").textContent = editingSummary ? "Preview" : "Edit Markdown";
@@ -541,7 +562,6 @@ main {
     const preview = view === "summary" && !editingSummary;
     $("preview").style.display = !live && preview ? "block" : "none";
     $("editor").style.display = !live && !preview ? "block" : "none";
-    $("editor").readOnly = live;
     $("editor").setAttribute("aria-label", view === "summary" ? "Summary Markdown" : "Meeting transcript");
     if (preview) $("preview").innerHTML = doc?.summary_html || "";
     else if (!live) $("editor").value = view === "summary" ? doc?.meeting?.summary?.text || "" : doc?.transcript || "";
@@ -549,6 +569,7 @@ main {
     $("show-summary").setAttribute("aria-pressed", String(view === "summary"));
   }
   async function save() {
+    if (deleting) return;
     if (saving) { await saving; return; }
     if (!dirty || !doc) return;
     const id = selected, epoch = editEpoch, fields = new Set(dirtyFields), body = $("editor").value, params = { id, revision: doc.meeting.revision };
@@ -582,6 +603,7 @@ main {
     return selected === version.id && loadEpoch === version.load && editEpoch === version.edits && !dirty;
   }
   async function open(id) {
+    if (deleting) return;
     loadEpoch++;
     if (id === selected && doc && !doc.awaitingTranscript) return;
     const version = documentVersion();
@@ -595,12 +617,45 @@ main {
       if (!currentDocument(version)) return;
       if (isActive(value.state) && capture?.id !== id) throw new Error("Recording state changed. Select the meeting to reload it.");
     }
+    confirmDelete = null;
     selected = id;
     doc = value;
     view = "transcript";
     editingSummary = false;
     notice("");
     renderDocument();
+  }
+
+  async function deleteMeeting() {
+    if (!doc?.meeting || capture?.id === selected || doc.awaitingTranscript || deleting || saving || analysis) return;
+    if (confirmDelete !== selected) {
+      confirmDelete = selected;
+      renderState();
+      return;
+    }
+    const { id, revision } = doc.meeting;
+    const position = visibleRows().findIndex(row => row.meeting.id === id);
+    deleting = true;
+    loadEpoch++;
+    renderState();
+    try {
+      await call("meetings.delete", { id, revision });
+      listEpoch++;
+      rows = rows.filter(row => row.meeting.id !== id);
+      selected = null;
+      doc = null;
+      dirty = false;
+      dirtyFields.clear();
+      notice("");
+    } finally {
+      deleting = false;
+      confirmDelete = null;
+      renderState();
+    }
+    renderDocument();
+    const visible = visibleRows();
+    const next = visible[Math.min(Math.max(0, position), visible.length - 1)];
+    if (next && !next.error) await open(next.meeting.id);
   }
 
   // The capture model owns the cursor and bounded transcript independently of
@@ -633,7 +688,7 @@ main {
     if (follow) live.scrollTop = live.scrollHeight;
   }
   async function toggleRecord() {
-    if (connecting || recordBusy || capture?.state.phase === "finishing") return;
+    if (connecting || recordBusy || deleting || capture?.state.phase === "finishing") return;
     recordBusy = true;
     renderState();
     try {
@@ -663,6 +718,7 @@ main {
       adoptCapture(result.state);
       if (!currentDocument(version)) return;
       loadEpoch++;
+      confirmDelete = null;
       selected = result.id;
       doc = null;
       view = "transcript";
@@ -739,7 +795,7 @@ main {
     }
   }
   async function summarize() {
-    if (!doc || analysis) return;
+    if (!doc || analysis || deleting) return;
     const version = documentVersion();
     await save();
     if (!currentDocument(version)) return;
@@ -774,15 +830,23 @@ main {
   }
   $("record").onclick = $("record-mobile").onclick = () => toggleRecord().catch(showError);
   $("search").oninput = renderList;
+  $("list").oncontextmenu = event => event.preventDefault();
+  $("delete-meeting").onclick = () => deleteMeeting().catch(showError);
+  $("cancel-delete").onclick = () => {
+    confirmDelete = null;
+    renderState();
+  };
   $("title").oninput = () => setDirty("title");
   $("editor").oninput = () => setDirty(view === "summary" ? "summary" : "transcript");
   $("save").onclick = () => save().catch(showError);
   $("summarize").onclick = () => summarize().catch(showError);
   async function changeDocument(change) {
+    if (deleting) return;
     loadEpoch++;
     const version = documentVersion();
     await save();
     if (!currentDocument(version)) return;
+    confirmDelete = null;
     change();
     renderDocument();
   }
@@ -802,6 +866,10 @@ main {
     if (visible) poll();
   });
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && confirmDelete && !deleting) {
+      confirmDelete = null;
+      renderState();
+    }
     if (event.metaKey && event.key.toLowerCase() === "s") {
       event.preventDefault();
       save().catch(showError);

@@ -23,6 +23,7 @@ pub use commands::{
     NativeCommand, NativeSubcommand,
 };
 mod attachments;
+mod codex_text;
 mod compaction;
 mod follow_up;
 mod frames;
@@ -1156,15 +1157,32 @@ pub fn run_text(request: Request, cancel: Arc<AtomicBool>) -> Result<String, Str
     run_text_with_timeout(request, cancel, DEFAULT_TEXT_TIMEOUT)
 }
 
-/// Providers with an explicit tool-free background invocation.
+/// Providers available for background text generation.
 pub fn supports_text_only(kind: Kind) -> bool {
     matches!(kind, Kind::Codex | Kind::Claude) || kind.is_pi()
 }
 
 pub fn run_text_with_timeout(
-    mut request: Request,
+    request: Request,
     cancel: Arc<AtomicBool>,
     timeout: Duration,
+) -> Result<String, String> {
+    run_background_text(request, cancel, Operation::Turn(timeout))
+}
+
+/// A background request that verifies Codex restrictions before delivering input.
+pub fn run_restricted_text(
+    request: Request,
+    cancel: Arc<AtomicBool>,
+    timeout: Duration,
+) -> Result<String, String> {
+    run_background_text(request, cancel, Operation::RestrictedText(timeout))
+}
+
+fn run_background_text(
+    mut request: Request,
+    cancel: Arc<AtomicBool>,
+    operation: Operation,
 ) -> Result<String, String> {
     if !supports_text_only(request.kind) {
         return Err("This provider cannot run tool-free background text requests.".into());
@@ -1178,7 +1196,7 @@ pub fn run_text_with_timeout(
         ..Default::default()
     };
     let mut output = String::new();
-    run_operation(request, cancel, None, Operation::Turn(timeout), |events| {
+    run_operation(request, cancel, None, operation, |events| {
         for event in events {
             match event {
                 Event::Text(text) if output.len() + text.len() <= 64 * 1024 => {
@@ -1237,6 +1255,7 @@ const DEFAULT_TEXT_TIMEOUT: Duration = Duration::from_secs(45);
 
 enum Operation {
     Turn(Duration),
+    RestrictedText(Duration),
     Catalog,
     Compact,
     Commands,
@@ -1252,8 +1271,10 @@ fn run_operation(
     let probe = matches!(operation, Operation::Catalog);
     let compact = matches!(operation, Operation::Compact);
     let command_probe = matches!(operation, Operation::Commands);
+    let restricted_codex =
+        matches!(operation, Operation::RestrictedText(_)) && request.kind == Kind::Codex;
     let text_timeout = match operation {
-        Operation::Turn(timeout) => timeout,
+        Operation::Turn(timeout) | Operation::RestrictedText(timeout) => timeout,
         _ => DEFAULT_TEXT_TIMEOUT,
     };
     if !request.kind.is_supported() {
@@ -1305,7 +1326,11 @@ fn run_operation(
     match request.kind {
         Kind::Codex => {
             command.arg("app-server");
-            crate::visual_bridge::configure_codex(&mut command, &request.settings.environment);
+            if restricted_codex {
+                codex_text::configure(&mut command);
+            } else {
+                crate::visual_bridge::configure_codex(&mut command, &request.settings.environment);
+            }
             if let Some(bot) = &request.settings.bot {
                 if let Some(home) = crate::bot::codex_home(&bot.root, &request.settings.account.id)?
                 {
@@ -1469,6 +1494,7 @@ fn run_operation(
         protocol.request.provider_id = Some(id.clone());
         pending.push(Event::SessionId(id));
     }
+    let mut codex_setup = restricted_codex.then_some(codex_text::Setup::Initialize);
     let mut stop_confirmed = false;
     let result = (|| {
         protocol.probe = probe;
@@ -1612,6 +1638,18 @@ fn run_operation(
                             return Err("Stopped".into());
                         }
                     }
+                    let value = if let Some(setup) = &mut codex_setup {
+                        let Some(value) = setup.receive(value, &protocol.request, &mut stdin)?
+                        else {
+                            continue;
+                        };
+                        if value["id"] == 2 && cancel.load(Ordering::Acquire) {
+                            return Err("Stopped".into());
+                        }
+                        value
+                    } else {
+                        value
+                    };
                     let events = match protocol.frame(value, &mut stdin) {
                         Ok(events) => events,
                         Err(_) if interrupted => return Err("Stopped".into()),

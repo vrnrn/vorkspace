@@ -5,7 +5,7 @@ use crate::{
     workspace::Connector,
 };
 use gpui::{AnyElement, Context, Entity, SharedString, div, prelude::*, px};
-use vorkspace_core::provider::Kind;
+use vorkspace_core::provider::{self, Kind};
 use vorkspace_meetings::{Meetings, Settings};
 use vorkspace_ui::theme::content;
 
@@ -192,7 +192,7 @@ impl SettingsView {
             Kind::ALL
                 .into_iter()
                 .filter(|kind| {
-                    crate::meetings::supports_summary(*kind)
+                    provider::supports_text_only(*kind)
                         && (kind.id() == selected
                             || !self.prefs.hidden_providers.iter().any(|id| id == kind.id()))
                 })
@@ -219,7 +219,7 @@ impl SettingsView {
             },
         );
         let models = Kind::parse(&selected)
-            .filter(|kind| crate::meetings::supports_summary(*kind))
+            .filter(|kind| provider::supports_text_only(*kind))
             .and_then(|kind| self.discovered_models(kind, cx))
             .or_else(|| self.ctx.catalogs.get(&selected));
         let mut controls = vec![div().w(px(200.)).child(model.clone()).into_any_element()];
@@ -265,8 +265,7 @@ impl SettingsView {
                 };
                 editor.result = Some(
                     if settings.provider.is_empty()
-                        || Kind::parse(&settings.provider)
-                            .is_some_and(crate::meetings::supports_summary)
+                        || Kind::parse(&settings.provider).is_some_and(provider::supports_text_only)
                     {
                         editor.meetings.save_settings(&settings)
                     } else {

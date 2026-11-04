@@ -66,6 +66,12 @@ async function harness() {
       await summaryResponses.get(params.id)?.promise;
       return snapshot;
     }
+    if (method === "meetings.delete") {
+      const doc = records.get(params.id);
+      if (params.revision !== doc.meeting.revision) throw new Error("This meeting changed.");
+      records.delete(params.id);
+      return null;
+    }
     if (method === "meetings.update") {
       writes.push(structuredClone(params));
       const doc = records.get(params.id);
@@ -424,4 +430,41 @@ test("Stop settles while a live gap read is still waiting", async () => {
   gap.resolve(); await setImmediate();
   assert.equal(ui.get("editor").value, "live transcript");
   assert.equal(ui.get("finals").children.length, 0);
+});
+
+test("filtering meetings leaves the current document open and rows suppress the frame menu", async () => {
+  const ui = await harness();
+  await ui.open("A");
+  ui.input("search", " b ");
+  assert.deepEqual(ui.get("list").children.map(row => row.children[0].textContent), ["B"]);
+  assert.equal(ui.get("title").value, "A");
+  let prevented = false;
+  ui.get("list").oncontextmenu({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+});
+
+test("deleting confirms the selected meeting and selects the next available row", async () => {
+  const ui = await harness();
+  await ui.open("A");
+  await ui.get("delete-meeting").onclick();
+  assert.equal(ui.records.has("A"), true);
+  assert.equal(ui.get("cancel-delete").hidden, false);
+  ui.get("cancel-delete").onclick();
+  await ui.get("delete-meeting").onclick();
+  await ui.get("delete-meeting").onclick();
+  assert.equal(ui.records.has("A"), false);
+  assert.equal(ui.get("title").value, "B");
+});
+
+test("a rejected deletion preserves the open draft", async () => {
+  const ui = await harness();
+  await ui.open("A");
+  ui.input("editor", "Unsaved changes");
+  ui.records.get("A").meeting.revision++;
+  await ui.get("delete-meeting").onclick();
+  await ui.get("delete-meeting").onclick();
+  assert.equal(ui.records.has("A"), true);
+  assert.equal(ui.get("editor").value, "Unsaved changes");
+  assert.equal(ui.get("save").style.display, "inline-block");
+  assert.match(ui.get("notice").textContent, /changed/);
 });

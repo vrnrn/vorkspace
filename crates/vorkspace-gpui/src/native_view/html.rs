@@ -266,7 +266,15 @@ impl Html {
         }
     }
     pub(crate) fn meetings(handler: RequestHandler) -> Self {
-        let body = include_str!("../meetings/ui.html").to_owned();
+        let body = include_str!("../meetings/ui.html")
+            .replace(
+                "<!-- search-icon -->",
+                include_str!("../../assets/search.svg"),
+            )
+            .replace(
+                "<!-- delete-icon -->",
+                include_str!("../../assets/hugeicons/trash.svg"),
+            );
         let mut html = Self::new(body);
         html.bridge = Some(Rc::new(Bridge {
             nonce: uuid::Uuid::new_v4().simple().to_string(),
