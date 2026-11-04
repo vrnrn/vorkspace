@@ -20,6 +20,8 @@ Once you type `/operator` in a thread, that agent can:
 - **Read and write your Notes (`notes.list`, `notes.read`, `notes.write`)**: It can look up your saved notes in Vorkspace or jot down a new note for you.
 - **Keep a to-do list (`todos.list`, `todos.add`, `todos.update`, `todos.remove`)**: It can add items to its board (or its project's board), move them between To do, In progress and Done, and tidy them up.
 
+Bots and Minions already have the commands they can use in their instructions. They can read their saved soul and memory through Vorkspace when you ask, including topic notes and archived facts.
+
 ## How Bots Use Their Teams
 
 With **Settings › Bots › Minions** enabled, a parent Bot can hire lasting team members with `minions.hire`, giving each a name, role and optional specialties. Hiring does not start a job or require picking a project. The parent checks `minions.list`, then reuses a member with `bots.send` for each new job. Its replies normally return automatically. The older `minions.spawn` shortcut hires a member and sends a first job together. These team actions belong to Bots; typing `/operator` in an ordinary session does not grant them.
