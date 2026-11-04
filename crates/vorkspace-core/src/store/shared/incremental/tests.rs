@@ -560,6 +560,41 @@ fn normalized_block_ownership_moves_are_rejected_for_both_stores() {
 }
 
 #[test]
+fn warm_metadata_guard_proves_prefix_contents_before_accepting_an_append() {
+    for modified in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let (store, id, original, history) = fixture_at(&path, false);
+        let mut other = Store::open_vorkspace(&path).unwrap();
+        let mut current = other.load(id).unwrap();
+        if modified {
+            current.rows[0].text.push_str(" externally edited");
+        }
+        current.begin("assistant");
+        current.append("Another writer appended this.");
+        other.write_rows(id, 0, &current.rows).unwrap();
+        let input = json!({"cwd":"/project","text":"Keep unsent input","selectionStart":0,"selectionEnd":0,"attachments":[],"mcpTags":[]});
+        store.save_composer_draft(id, 0, &input).unwrap();
+        let mut state = store.follow_ups(id).unwrap();
+        state.draft = Some(crate::follow_up::Message {
+            id: "pending".into(),
+            text: "Keep unsent input".into(),
+            at: history.rows.len(),
+            ..Default::default()
+        });
+
+        assert_eq!(store.save_follow_ups(id, &state).is_ok(), !modified);
+        drop(store);
+        drop(other);
+        let reopened = Store::open_vorkspace(&path).unwrap();
+        let id = reopened.resolve_session_id(&original).unwrap();
+        assert_eq!(reopened.load(id).unwrap().rows, current.rows);
+        assert_eq!(reopened.composer_draft(id).unwrap().unwrap().payload, input);
+        assert_eq!(reopened.follow_ups(id).unwrap().draft.is_some(), !modified);
+    }
+}
+
+#[test]
 fn malformed_duplicate_positions_decline_incremental_indexing() {
     let (store, id, original, _) = fixture(false);
     store
@@ -575,12 +610,11 @@ fn malformed_duplicate_positions_decline_incremental_indexing() {
     assert_eq!(store.shared_blocks(id).unwrap(), blocks);
 }
 #[test]
-fn schema_change_requires_each_stale_writer_to_reload_and_allows_recovery_without_restart() {
-    let (mut store, first, _, first_history) = fixture(false);
+fn unrelated_schema_change_revalidates_each_transcript_without_reload() {
+    let (mut store, first, _, mut first_history) = fixture(false);
     let second = store.create("codex", "/project").unwrap().id;
-    let history = rich_source();
-    store.shared_store_blocks(second, &history).unwrap();
-    let second_history = store.load(second).unwrap();
+    store.shared_store_blocks(second, &rich_source()).unwrap();
+    let mut second_history = store.load(second).unwrap();
     store
         .write_rows(second, second_history.rows.len(), &[])
         .unwrap();
@@ -588,26 +622,48 @@ fn schema_change_requires_each_stale_writer_to_reload_and_allows_recovery_withou
         .conn
         .execute_batch("CREATE TABLE unrelated_external_schema_change(value TEXT)")
         .unwrap();
-    assert!(store
-        .save_follow_ups(first, &Default::default())
-        .unwrap_err()
-        .contains("changed in another window"));
-    assert!(store
-        .write_rows(first, first_history.rows.len(), &[])
-        .unwrap_err()
-        .contains("changed in another window"));
-    store.load(first).unwrap();
+
+    let from = first_history.begin("assistant");
+    first_history.append("First writer continued");
     store
-        .write_rows(first, first_history.rows.len(), &[])
+        .write_rows(first, from, &first_history.rows[from..])
         .unwrap();
-    assert!(store
-        .write_rows(second, second_history.rows.len(), &[])
-        .unwrap_err()
-        .contains("changed in another window"));
-    store.load(second).unwrap();
+    let from = second_history.begin("assistant");
+    second_history.append("Second writer continued");
     store
-        .write_rows(second, second_history.rows.len(), &[])
+        .write_rows(second, from, &second_history.rows[from..])
         .unwrap();
+
+    assert_eq!(store.load(first).unwrap().rows, first_history.rows);
+    assert_eq!(store.load(second).unwrap().rows, second_history.rows);
+    assert_eq!(store.shared_blocks(first).unwrap()[1], rich_source()[1]);
+    assert_eq!(store.shared_blocks(second).unwrap()[1], rich_source()[1]);
+}
+
+#[test]
+fn altered_trigger_cannot_make_opaque_edits_look_like_unchanged_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.db");
+    let (mut store, id, original, mut transcript) = fixture_at(&path, false);
+    let revision = store.history_revision(&original).unwrap();
+    let external = Connection::open(&path).unwrap();
+    external
+        .execute_batch("DROP TRIGGER history_ordinary_blocks_UPDATE")
+        .unwrap();
+    external.execute(
+        "UPDATE ordinary_blocks SET block_json=json_set(block_json,'$.future.external',true) WHERE session_id=?1 AND position=0",
+        [&original],
+    ).unwrap();
+    assert_eq!(store.history_revision(&original).unwrap(), revision);
+    let from = transcript.begin("assistant");
+    transcript.append("Do not overwrite a change hidden from the projection.");
+    assert!(store
+        .write_rows(id, from, &transcript.rows[from..])
+        .is_err());
+    let durable = store.shared_blocks(id).unwrap();
+    assert_eq!(durable[0]["future"]["external"], 1);
+    assert_eq!(durable.len(), rich_source().len());
+    assert_eq!(durable[1], rich_source()[1]);
 }
 
 #[test]

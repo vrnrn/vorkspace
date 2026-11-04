@@ -40,13 +40,52 @@ pub(super) struct Entry {
     pub offset: usize,
     pub rows: usize,
     pub handoff: bool,
+    pub digest: HistoryRevision,
 }
 #[derive(Clone, Debug)]
 pub(super) struct HistoryIndex {
     pub revision: i64,
+    pub schema: i64,
     pub kind: Kind,
     pub entries: Vec<Entry>,
     pub rows: usize,
+}
+
+impl HistoryIndex {
+    pub(super) fn patch_card(&mut self, key: i64, previous: &Value, next: &Value) -> bool {
+        let Ok(at) = self.entries.binary_search_by_key(&key, |entry| entry.key) else {
+            return false;
+        };
+        let entry = &mut self.entries[at];
+        if !entry.digest.matches(std::slice::from_ref(previous)) {
+            return false;
+        }
+        entry.digest = HistoryRevision::of(std::slice::from_ref(next));
+        true
+    }
+
+    fn matches_prefix<'a>(&self, blocks: &mut impl Iterator<Item = &'a Value>) -> bool {
+        self.entries.iter().all(|entry| {
+            blocks
+                .next()
+                .is_some_and(|block| entry.digest.matches(std::slice::from_ref(block)))
+        })
+    }
+
+    fn covers(&self, blocks: &[Value]) -> bool {
+        self.entries.len() == blocks.len() && self.matches_prefix(&mut blocks.iter())
+    }
+
+    fn fast_forwards(&self, blocks: &[Value]) -> bool {
+        if self.entries.is_empty() || self.entries.len() >= blocks.len() {
+            return false;
+        }
+        if self.matches_prefix(&mut blocks.iter()) {
+            return true;
+        }
+        let mut sent = blocks.iter().filter(|block| block["draft"] != true);
+        self.matches_prefix(&mut sent) && sent.next().is_some()
+    }
 }
 
 impl Store {
@@ -120,63 +159,45 @@ impl Store {
                 .unwrap_or_else(|| expected.matches(blocks))),
             HistoryRevision::Invalidated => Ok(false),
             HistoryRevision::Stored(revision) => {
-                let schema: i64 = sql(self
-                    .conn
-                    .query_row("PRAGMA schema_version", [], |row| row.get(0)))?;
-                if self.shared.as_ref().unwrap().history_schema.get() != Some(schema) {
+                let shared = self.shared.as_ref().unwrap();
+                let indices = shared.incremental.borrow();
+                let Some(index) = indices.get(&id).filter(|index| index.revision == *revision)
+                else {
                     return Ok(false);
+                };
+                if self.shared_schema_version()? == index.schema {
+                    return Ok(self.history_revision(&self.persisted_session_id(id)?)? == *revision);
                 }
-                Ok(self.history_revision(&self.persisted_session_id(id)?)? == *revision)
+                // A database-wide schema cookie only qualifies the fast path.
+                // Verify the complete rich history before accepting old offsets.
+                Ok(index.covers(blocks))
             }
         }
     }
 
-    pub(super) fn shared_history_fast_forwards(
+    pub(super) fn shared_schema_version(&self) -> Result<i64, String> {
+        sql(self
+            .conn
+            .query_row("PRAGMA schema_version", [], |row| row.get(0)))
+    }
+
+    fn shared_history_fast_forwards(
         &self,
         id: i64,
         expected: &HistoryRevision,
         blocks: &[Value],
-    ) -> Result<bool, String> {
-        if expected.fast_forwards(blocks) {
-            return Ok(true);
+    ) -> bool {
+        match expected {
+            HistoryRevision::Stored(revision) => self
+                .shared
+                .as_ref()
+                .unwrap()
+                .incremental
+                .borrow()
+                .get(&id)
+                .is_some_and(|index| index.revision == *revision && index.fast_forwards(blocks)),
+            _ => expected.fast_forwards(blocks),
         }
-        if let HistoryRevision::Stored(rev) = expected {
-            let schema: i64 = sql(self
-                .conn
-                .query_row("PRAGMA schema_version", [], |row| row.get(0)))?;
-            if self.shared.as_ref().unwrap().history_schema.get() != Some(schema) {
-                return Ok(false);
-            }
-            let original = self.persisted_session_id(id)?;
-            let current_rev = self.history_revision(&original)?;
-            if current_rev >= *rev {
-                let indices = self.shared.as_ref().unwrap().incremental.borrow();
-                if let Some(index) = indices.get(&id) {
-                    if index.revision == *rev {
-                        let non_draft: Vec<&Value> =
-                            blocks.iter().filter(|b| b["draft"] != true).collect();
-                        if non_draft.len() >= index.entries.len() {
-                            let kind = index.kind;
-                            let keys = sql(sql(self.conn.prepare(&format!(
-                                "SELECT {} FROM {} WHERE session_id=?1 ORDER BY {}",
-                                kind.position(),
-                                self.shared_history_table(kind, &original)?,
-                                kind.position()
-                            )))?
-                            .query_map([&original], |row| row.get::<_, i64>(0)))?
-                            .collect::<rusqlite::Result<Vec<_>>>()
-                            .map_err(|e| e.to_string())?;
-                            let index_keys: Vec<i64> =
-                                index.entries.iter().map(|e| e.key).collect();
-                            if keys.starts_with(&index_keys) {
-                                return Ok(true);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Ok(false)
     }
 
     pub(super) fn shared_validate_history(&self, id: i64, blocks: &[Value]) -> Result<(), String> {
@@ -195,7 +216,7 @@ impl Store {
     ) -> Result<bool, String> {
         if let Some(expected) = self.shared.as_ref().unwrap().snapshots.borrow().get(&id) {
             if !self.shared_history_matches(id, expected, blocks)? {
-                if !self.shared_history_fast_forwards(id, expected, blocks)? {
+                if !self.shared_history_fast_forwards(id, expected, blocks) {
                     return Err(CHANGED.into());
                 }
                 return Ok(true);
@@ -246,14 +267,14 @@ impl Store {
     /// explicit history save or app mutation adds storage and mutation guards
     /// inside one coordinated transaction. Existing normalized rows and their identities stay put.
     pub(in crate::store) fn shared_history_schema(&self) -> Result<(), String> {
-        let schema: i64 = sql(self
-            .conn
-            .query_row("PRAGMA schema_version", [], |row| row.get(0)))?;
+        let schema = self.shared_schema_version()?;
         if self.shared.as_ref().unwrap().history_schema.get() == Some(schema) {
             return Ok(());
         }
-        let changed_schema = self.shared.as_ref().unwrap().history_schema.get().is_some();
-        let tx = sql(self.conn.unchecked_transaction())?;
+        let tx = sql(rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
         super::super::app_commands::ensure(&tx)?;
         // A failed child draft can record recovery while its caller streams.
         // These local tables must exist before scalar history guards are live.
@@ -329,33 +350,9 @@ impl Store {
                 )))?;
             }
         }
+        // Read the cookie while the transaction still owns its DDL.
+        let schema = self.shared_schema_version()?;
         sql(tx.commit())?;
-        if changed_schema {
-            // Source tables/triggers may have changed while a scalar guard was
-            // live. Keep every stale writer refused until its own explicit
-            // load replaces this guard with a fresh canonical digest.
-            for revision in self
-                .shared
-                .as_ref()
-                .unwrap()
-                .snapshots
-                .borrow_mut()
-                .values_mut()
-            {
-                if matches!(revision, HistoryRevision::Stored(_)) {
-                    *revision = HistoryRevision::Invalidated;
-                }
-            }
-            self.shared
-                .as_ref()
-                .unwrap()
-                .incremental
-                .borrow_mut()
-                .clear();
-        }
-        let schema = sql(self
-            .conn
-            .query_row("PRAGMA schema_version", [], |row| row.get(0)))?;
         self.shared
             .as_ref()
             .unwrap()
@@ -406,6 +403,7 @@ impl Store {
         let Some(kind) = self.shared_history_index_kind(&original)? else {
             return Ok(None);
         };
+        let schema = self.shared_schema_version()?;
         let keys = sql(sql(self.conn.prepare(&format!(
             "SELECT {} FROM {} WHERE session_id=?1 ORDER BY {}",
             kind.position(),
@@ -421,6 +419,10 @@ impl Store {
         if keys.windows(2).any(|keys| keys[0] >= keys[1]) {
             return Err("Stored conversation positions are not unique and increasing; its data was preserved".into());
         }
+        if self.shared.as_ref().unwrap().history_schema.get() != Some(schema) {
+            // DDL raced setup. Publish only the canonical digest for this write.
+            return Ok(None);
+        }
         let mut rows = 0;
         let mut entries = Vec::with_capacity(blocks.len());
         for (key, block) in keys.into_iter().zip(blocks) {
@@ -430,12 +432,14 @@ impl Store {
                 offset: rows,
                 rows: len,
                 handoff: block["role"] == "handoff",
+                digest: HistoryRevision::of(std::slice::from_ref(block)),
             });
             rows += len;
         }
         let revision = self.history_revision(&original)?;
         Ok(Some(HistoryIndex {
             revision,
+            schema,
             kind,
             entries,
             rows,
@@ -459,8 +463,16 @@ impl Store {
         {
             return Ok(false);
         }
-        let tx = sql(self.conn.unchecked_transaction())?;
+        let tx = sql(rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
         let original = self.persisted_session_id(id)?;
+        if self.shared_schema_version()? != index.schema {
+            // The full path compares the saved rich blocks within its own
+            // write transaction, then builds a fresh index on success.
+            return Ok(false);
+        }
         if self.history_revision(&original)? != index.revision {
             return Err(CHANGED.into());
         }
@@ -510,7 +522,8 @@ impl Store {
                 },
                 |entry| entry.key,
             );
-            if previous.get(local) != Some(block) {
+            let changed = previous.get(local) != Some(block);
+            if changed {
                 self.shared_write_indexed_block(&original, index.kind, position, block)?;
             }
             if index.kind == Kind::Bot
@@ -533,6 +546,11 @@ impl Store {
                 offset: row_offset,
                 rows: len,
                 handoff: block["role"] == "handoff",
+                digest: if changed {
+                    HistoryRevision::of(std::slice::from_ref(block))
+                } else {
+                    index.entries[from + local].digest
+                },
             });
             row_offset += len;
             after_handoff = block["role"] == "handoff";

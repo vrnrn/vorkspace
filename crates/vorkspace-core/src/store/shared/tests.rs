@@ -1786,7 +1786,7 @@ fn first_app_command_preserves_an_active_scalar_history_guard_and_append() {
 }
 
 #[test]
-fn app_command_schema_coordination_does_not_bless_external_schema_drift() {
+fn app_command_schema_coordination_revalidates_unchanged_history() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("history.db");
     let mut store = Store::open_vorkspace(&path).unwrap();
@@ -1796,7 +1796,6 @@ fn app_command_schema_coordination_does_not_bless_external_schema_drift() {
     let from = history.begin("user");
     history.append("Durable original");
     store.write_rows(id, from, &history.rows[from..]).unwrap();
-    let original = history.rows.clone();
     assert!(matches!(
         store.shared.as_ref().unwrap().snapshots.borrow()[&id],
         HistoryRevision::Stored(_)
@@ -1818,15 +1817,12 @@ fn app_command_schema_coordination_does_not_bless_external_schema_drift() {
         )
         .unwrap();
     let from = history.begin("assistant");
-    history.append("A stale append must be rejected");
-    assert!(store
-        .write_rows(id, from, &history.rows[from..])
-        .unwrap_err()
-        .contains("changed in another window"));
+    history.append("Continued after unrelated DDL");
+    store.write_rows(id, from, &history.rows[from..]).unwrap();
     drop(store);
     assert_eq!(
         Store::open_vorkspace(&path).unwrap().load(id).unwrap().rows,
-        original
+        history.rows
     );
 }
 
