@@ -63,6 +63,7 @@ impl Store {
             return Ok(None);
         }
         let before = self.history_revision(&original)?;
+        let schema = self.shared_schema_version()?;
         let previous = block.clone();
         let fields = block["botCard"].as_object_mut().unwrap();
         // Merge only changed fields. Keep opaque metadata and external IDs in
@@ -94,14 +95,23 @@ impl Store {
         let mut indices = shared.incremental.borrow_mut();
         let mut local = shared.card_revisions.borrow_mut();
         match snapshots.get(&session).copied() {
-            Some(HistoryRevision::Stored(guard)) if guard == before => {
-                snapshots.insert(session, HistoryRevision::Stored(revision));
-                if let Some(index) = indices.get_mut(&session) {
-                    if index.revision == before {
+            Some(HistoryRevision::Stored(guard)) => {
+                // A card CAS proves only this block. Keep a stale scalar guard
+                // stale until a full comparison proves the other blocks.
+                let mut advanced = false;
+                if let Some(index) = indices
+                    .get_mut(&session)
+                    .filter(|index| index.revision == guard)
+                {
+                    advanced = index.patch_card(key, &previous, &block);
+                    if advanced && index.schema == schema && guard == before {
                         index.revision = revision;
-                    } else {
-                        indices.remove(&session);
+                        snapshots.insert(session, HistoryRevision::Stored(revision));
                     }
+                }
+                if !advanced {
+                    snapshots.insert(session, HistoryRevision::Invalidated);
+                    indices.remove(&session);
                 }
                 local.remove(&session);
             }

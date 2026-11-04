@@ -1401,7 +1401,10 @@ impl Store {
         if message_id.is_none() && self.shared_write_incremental(id, start, rows)? {
             return Ok(());
         }
-        let tx = sql(self.conn.unchecked_transaction())?;
+        let tx = sql(rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
         let current = self.shared_blocks(id)?;
         self.shared_validate_history(id, &current)?;
         let mut next = blocks::merge(&current, start, rows)?;
@@ -1444,26 +1447,17 @@ impl Store {
                 .borrow_mut()
                 .insert(id, queue);
         }
-        self.shared
-            .as_ref()
-            .unwrap()
-            .snapshots
-            .borrow_mut()
-            .insert(id, HistoryRevision::of(&next));
-        if let Some(index) = index {
-            self.shared
-                .as_ref()
-                .unwrap()
-                .snapshots
-                .borrow_mut()
-                .insert(id, HistoryRevision::Stored(index.revision));
-            self.shared
-                .as_ref()
-                .unwrap()
-                .incremental
-                .borrow_mut()
-                .insert(id, index);
-        }
+        let shared = self.shared.as_ref().unwrap();
+        let mut indices = shared.incremental.borrow_mut();
+        let revision = if let Some(index) = index {
+            let revision = HistoryRevision::Stored(index.revision);
+            indices.insert(id, index);
+            revision
+        } else {
+            indices.remove(&id);
+            HistoryRevision::of(&next)
+        };
+        shared.snapshots.borrow_mut().insert(id, revision);
         self.shared
             .as_ref()
             .unwrap()
