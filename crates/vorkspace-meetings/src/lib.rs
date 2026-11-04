@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    ffi::OsStr,
     fs::File,
     os::fd::AsRawFd,
     path::{Path, PathBuf},
@@ -132,12 +133,17 @@ impl Meetings {
         for entry in dir.entries().map_err(|error| error.to_string())? {
             let entry = entry.map_err(|error| error.to_string())?;
             let id = entry.file_name().to_string_lossy().into_owned();
+            if let Some(retired) = id.strip_prefix(".deleted-").filter(|id| valid_id(id)) {
+                let _ = self.delete(retired, 0);
+                continue;
+            }
             if !valid_id(&id) {
                 continue;
             }
             // A directory without the root marker was never published. A corrupt
             // published record stays visible without hiding healthy meetings.
-            if !root.join(&id).join("state.json").exists() {
+            let marker = root.join(&id).join("state.json");
+            if !marker.exists() {
                 continue;
             }
             let row = (|| {
@@ -151,7 +157,15 @@ impl Meetings {
                     "state":{"started_at":state.started_at,"phase":state.phase}
                 }))
             })();
-            rows.push(row.unwrap_or_else(|error| json!({"meeting":{"id":id,"title":"Unreadable meeting"},"state":{"started_at":0,"phase":"failed"},"error":error})));
+            match row {
+                Ok(row) => rows.push(row),
+                Err(error) if marker.exists() => rows.push(json!({
+                    "meeting":{"id":id,"title":"Unreadable meeting"},
+                    "state":{"started_at":0,"phase":"failed"},
+                    "error":error
+                })),
+                Err(_) => {}
+            }
         }
         rows.sort_by_key(|row| std::cmp::Reverse(row["state"]["started_at"].as_u64().unwrap_or(0)));
         Ok(Value::Array(rows))
@@ -185,8 +199,9 @@ impl Meetings {
             }
             meeting.title = title.trim().into();
         }
+        let state = recording::state(&self.directory, id)?;
         if params.get("transcript").is_some() {
-            if recording::state(&self.directory, id)?.phase.active() {
+            if state.phase.active() {
                 return Err("Stop recording before editing its transcript".into());
             }
             let text = if params["transcript"].is_null() {
@@ -222,6 +237,80 @@ impl Meetings {
         let mut result = value(meeting)?;
         result["summary_html"] = json!(html);
         Ok(result)
+    }
+    pub fn delete(&self, id: &str, expected_revision: u64) -> Result<(), String> {
+        use rustix::fs::{AtFlags, OFlags};
+        use std::{io::ErrorKind, os::unix::ffi::OsStrExt};
+
+        let metadata = self.metadata_path(id)?;
+        let _lock = self.lock()?;
+        let open = |result: std::io::Result<directory::Directory>| match result {
+            Ok(dir) => Ok(Some(dir)),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.to_string()),
+        };
+        let Some(recordings) = open(directory::Directory::open(
+            &self.directory.join("recordings"),
+            false,
+        ))?
+        else {
+            return Ok(());
+        };
+        let retired = format!(".deleted-{id}");
+        let retired = OsStr::new(&retired);
+        let live = open(recordings.child(OsStr::new(id)))?;
+        let dir = if let Some(dir) = open(recordings.child(retired))? {
+            if live.is_some() {
+                return Err("Meeting deletion found both a live and retired recording.".into());
+            }
+            dir
+        } else {
+            let Some(dir) = live else { return Ok(()) };
+            let owner = dir
+                .file(OsStr::new("owner.lock"), OFlags::RDWR)
+                .map_err(|error| error.to_string())?;
+            if unsafe { libc::flock(owner.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                let error = std::io::Error::last_os_error();
+                return Err(if error.kind() == ErrorKind::WouldBlock {
+                    "Stop recording before deleting this meeting.".into()
+                } else {
+                    error.to_string()
+                });
+            }
+            if self.metadata(id)?.revision != expected_revision {
+                return Err(
+                    "This meeting changed. Review the latest version before deleting it.".into(),
+                );
+            }
+            // Retire the recording root before removing either data file. Its
+            // reserved name makes cleanup retryable without republishing it.
+            recordings
+                .publish(OsStr::new(id), retired)
+                .map_err(|error| error.to_string())?;
+            dir
+        };
+        if let Some(documents) = open(directory::Directory::open(
+            &self.directory.join("meetings"),
+            false,
+        ))? {
+            documents
+                .unlink(
+                    metadata.file_name().ok_or("Invalid meeting filename")?,
+                    AtFlags::empty(),
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        for entry in dir.entries().map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let name = entry.file_name().to_bytes();
+            if name != b"." && name != b".." {
+                dir.unlink(OsStr::from_bytes(name), AtFlags::empty())
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        recordings
+            .unlink(retired, AtFlags::REMOVEDIR)
+            .map_err(|error| error.to_string())
     }
     pub fn prepare(&self, title: &str) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().simple().to_string();
@@ -309,6 +398,7 @@ impl Meetings {
             return Err("Meeting summary canceled.".into());
         }
         let mut current = self.metadata(id)?;
+        recording::state(&self.directory, id)?;
         if current.revision != meeting.revision {
             return Err("The meeting changed while summarizing. Its transcript and existing summary were preserved.".into());
         }
@@ -548,6 +638,80 @@ mod tests {
             std::fs::remove_file(&nested).unwrap();
             std::fs::rename(&backup, &nested).unwrap();
         }
+    }
+
+    #[test]
+    fn deleting_checks_the_current_revision_and_prevents_late_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let (meetings, id) = saved(root.path());
+        meetings
+            .update(&json!({"id":id,"revision":0,"title":"Latest"}))
+            .unwrap();
+        assert!(meetings.delete(&id, 0).unwrap_err().contains("changed"));
+        assert_eq!(meetings.read(&id).unwrap()["meeting"]["title"], "Latest");
+
+        let late = meetings.summarize(&id, &AtomicBool::new(false), |_, _| {
+            meetings.delete(&id, 1).unwrap();
+            Ok("Do not recreate the meeting".into())
+        });
+        assert!(late.is_err());
+        assert!(
+            meetings
+                .update(&json!({"id":id,"revision":1,"title":"Stale"}))
+                .is_err()
+        );
+        assert!(meetings.read(&id).is_err());
+        assert_eq!(meetings.list().unwrap(), json!([]));
+        assert!(!meetings.metadata_path(&id).unwrap().exists());
+        assert_eq!(
+            std::fs::read_dir(root.path().join("recordings"))
+                .unwrap()
+                .count(),
+            0
+        );
+        meetings.delete(&id, 1).unwrap();
+    }
+
+    #[test]
+    fn deleting_waits_for_the_recorder_to_release_the_transcript() {
+        let root = tempfile::tempdir().unwrap();
+        let meetings = Meetings {
+            directory: root.path().into(),
+        };
+        let id = meetings.prepare("Capture").unwrap();
+        let mut owner = Owner::create(root.path(), &id).unwrap();
+        assert!(
+            meetings
+                .delete(&id, 0)
+                .unwrap_err()
+                .contains("Stop recording")
+        );
+        owner.phase(recording::Phase::Stopped, None).unwrap();
+        assert!(meetings.delete(&id, 0).is_err());
+        drop(owner);
+        meetings.delete(&id, 0).unwrap();
+        assert_eq!(meetings.list().unwrap(), json!([]));
+    }
+
+    #[test]
+    fn listing_completes_cleanup_after_a_recording_has_been_retired() {
+        let root = tempfile::tempdir().unwrap();
+        let (meetings, id) = saved(root.path());
+        let live = recording::directory(root.path(), &id).unwrap();
+        let retired = live.with_file_name(format!(".deleted-{id}"));
+        std::fs::create_dir(&retired).unwrap();
+        assert_eq!(meetings.list().unwrap().as_array().unwrap().len(), 1);
+        assert!(meetings.read(&id).is_ok());
+        std::fs::remove_dir(&retired).unwrap();
+        std::fs::rename(&live, &retired).unwrap();
+        assert!(
+            meetings
+                .update(&json!({"id":id,"revision":0,"title":"Stale"}))
+                .is_err()
+        );
+        assert_eq!(meetings.list().unwrap(), json!([]));
+        assert!(!retired.exists());
+        assert!(!meetings.metadata_path(&id).unwrap().exists());
     }
 
     #[test]

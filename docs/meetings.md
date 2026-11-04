@@ -1,6 +1,6 @@
 # Meetings
 
-Open **Meetings** in the left sidebar. **Record** (⌘⇧R) starts on-device transcription of the selected dictation microphone and system audio. **Stop** finishes both sources and saves a document. The list, search, editable transcript and Markdown summary stay in one Notes-style view; a narrow pane switches between list and document.
+Open **Meetings** in the left sidebar. **Record** at the bottom of the meeting list (⌘⇧R) starts on-device transcription of the selected dictation microphone and system audio. **Stop** finishes both sources and saves a document. The list filter, editable transcript and Markdown summary use the Notes layout. A narrow pane switches between list and document.
 
 Meetings requires macOS 26+, a supported installed Apple speech language, Microphone permission and Screen & System Audio Recording permission for **vorkspace helper**. Install the language from Dictation settings first. Capture attaches only system-audio output, never screen frames. Audio is processed in memory and is not retained as a recording. Headphones help avoid the microphone also hearing remote participants through speakers. “Microphone” and “System audio” identify sources, not individual speakers.
 
@@ -21,11 +21,13 @@ Metadata is atomically replaced after flushing; an exclusive owner lock distingu
 
 ## Summaries
 
-Open **Settings → Connectors → Meetings**, select Claude, Pi, or Oh My Pi, choose or enter a model, edit the summary prompt, and press **Save**. Settings use the provider account already selected in Vorkspace. Audio stays on the Mac; clicking **Summarize** sends transcript text to the chosen provider, which may be a cloud service.
+Open **Settings → Connectors → Meetings**, select Codex, Claude, Pi, or Oh My Pi, choose or enter a model, edit the summary prompt, and press **Save**. Settings use the provider account already selected in Vorkspace. Audio stays on the Mac. Clicking **Summarize** sends transcript text to the chosen provider, which may be a cloud service.
 
 Each generation pass has a three-minute deadline within a 15-minute budget for the whole summary. Intermediate passes preserve details relevant to the requested notes.
 
-The default prompt produces Summary, Discussion, Decisions, Action items and Open questions. It asks for factual notes, useful timestamps and explicit uncertainty, with owners or due dates only when stated. Long transcripts are processed in bounded sections and reduced before applying the final format. Analysis uses the selected provider’s tool-disabled mode from a private temporary working directory. Provider accounts are still selected from the active project’s settings.
+The default prompt produces Summary, Discussion, Decisions, Action items and Open questions. It asks for factual notes, useful timestamps and explicit uncertainty, with owners or due dates only when stated. Long transcripts are processed in bounded sections and reduced before applying the final format. Analysis runs in a private temporary working directory using the account selected for the active project. Codex requires CLI 0.166.0 or newer. Vorkspace starts an ephemeral Codex thread without an execution environment and verifies restrictions on shell, web, browser, agents, hooks, and MCP access before sending the transcript. If setup fails, the transcript stays local.
+
+**Delete** removes a finished meeting and its transcript and summary after confirmation. The recording root is retired under the recorder lock before cleanup so a delayed edit or summary cannot republish it.
 
 **Transcript** keeps the source available. **Summary** displays polished Markdown, and **Edit Markdown** edits that summary. **Save changes** (⌘S) saves title and document edits. Updates validate the saved revision. A late summary cannot overwrite a meeting that changed while analysis ran; provider failures preserve the original transcript and any previous summary. Editing the transcript marks an older summary as stale until it is regenerated.
 

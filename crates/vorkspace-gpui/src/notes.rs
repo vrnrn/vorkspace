@@ -62,7 +62,6 @@ impl Focusable for Notes {
 impl Notes {
     pub(crate) fn new(store: Database, cx: &mut Context<Self>) -> Self {
         let query = cx.new(|cx| Input::field("Filter notes", "Filter notes", content(0.4), cx));
-        query.update(cx, |input, _| input.set_font_size(12.));
         let title = cx.new(|cx| {
             let mut input = Input::field("Note title", "Untitled", content(0.35), cx);
             input.set_font_size(20.);

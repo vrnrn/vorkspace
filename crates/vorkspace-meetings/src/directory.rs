@@ -47,7 +47,7 @@ impl Directory {
         Ok(dir)
     }
 
-    fn child(&self, name: &OsStr) -> io::Result<Self> {
+    pub(crate) fn child(&self, name: &OsStr) -> io::Result<Self> {
         Ok(Self(fs::openat(&self.0, name, DIRECTORY, Mode::empty())?))
     }
 
@@ -74,6 +74,14 @@ impl Directory {
         fs::renameat(&self.0, temporary, &self.0, name)?;
         fs::fsync(&self.0)?;
         Ok(())
+    }
+
+    pub(crate) fn unlink(&self, name: &OsStr, flags: AtFlags) -> io::Result<()> {
+        match fs::unlinkat(&self.0, name, flags) {
+            Ok(()) => Ok(fs::fsync(&self.0)?),
+            Err(Errno::NOENT) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub(crate) fn remove(&self, name: &OsStr) {

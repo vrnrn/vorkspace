@@ -24,12 +24,6 @@ use vorkspace_meetings::Meetings;
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
 
-/// Meetings send user transcripts to a background process. Read-only
-/// agent sandboxes still permit tools, so use explicit no-tools modes.
-pub(crate) fn supports_summary(kind: Kind) -> bool {
-    kind == Kind::Claude || kind.is_pi()
-}
-
 pub(crate) struct Page {
     meetings: Result<Meetings, String>,
     cwd: String,
@@ -157,12 +151,25 @@ impl Page {
                 .detach();
             }
             Some("meetings.summarize") => self.summarize(meetings, id.to_owned(), reply, cx),
-            Some(method @ ("meetings.list" | "meetings.read" | "meetings.update")) => {
+            Some("meetings.delete") if capture::current(cx).is_some_and(|state| state.id == id) => {
+                reply(Err("Stop recording before deleting this meeting.".into()));
+            }
+            Some(
+                method
+                @ ("meetings.list" | "meetings.read" | "meetings.update" | "meetings.delete"),
+            ) => {
                 let method = method.to_owned();
                 let work = cx.background_executor().spawn(async move {
                     match method.as_str() {
                         "meetings.list" => meetings.list(),
                         "meetings.read" => meetings.read(params["id"].as_str().unwrap_or_default()),
+                        "meetings.delete" => {
+                            let revision = params["revision"]
+                                .as_u64()
+                                .ok_or("Missing meeting revision")?;
+                            meetings.delete(params["id"].as_str().unwrap_or_default(), revision)?;
+                            Ok(Value::Null)
+                        }
                         _ => meetings.update(&params),
                     }
                 });
@@ -189,7 +196,9 @@ impl Page {
         let cwd = self.cwd.clone();
         let profiles: Vec<(Kind, Profile)> = Kind::ALL
             .into_iter()
-            .filter(|kind| supports_summary(*kind) && !self.hidden.iter().any(|id| id == kind.id()))
+            .filter(|kind| {
+                provider::supports_text_only(*kind) && !self.hidden.iter().any(|id| id == kind.id())
+            })
             .map(|kind| {
                 let profile = crate::accounts::get(cx)
                     .map(|center| center.read(cx).selected(kind, &cwd))
@@ -209,7 +218,7 @@ impl Page {
                     .ok_or("This provider is unavailable in Vorkspace.")?;
                 let binary = provider::resolve(*kind)
                     .ok_or("Connect the selected AI provider in Settings first.")?;
-                provider::run_text_with_timeout(
+                provider::run_restricted_text(
                     provider::Request {
                         kind: *kind,
                         binary,
