@@ -7,6 +7,7 @@ pub(super) struct TurnRecoveries {
     open: Option<(String, Arc<str>)>,
     selection: u64,
     refresh: u64,
+    retrying: bool,
 }
 
 impl Conversation {
@@ -67,6 +68,33 @@ impl Conversation {
         .detach();
     }
 
+    fn retry_recovered_turn(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.turn_recoveries.retrying {
+            return;
+        }
+        self.turn_recoveries.retrying = true;
+        let store = self.store.clone();
+        let session = self.summary.id;
+        let work = cx
+            .background_executor()
+            .spawn(async move { locked(&store)?.retry_turn_overlap(session, &id) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.turn_recoveries.retrying = false;
+                match result {
+                    Ok(()) => this.recover_history_in_place(cx),
+                    Err(error) => {
+                        this.status = format!("Could not save the recovered version: {error}")
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     pub(super) fn recovered_turn_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let versions = &self.turn_recoveries.versions;
         if versions.is_empty() {
@@ -86,6 +114,8 @@ impl Conversation {
                 .position(|version| version.id == *id)
                 .unwrap_or(0);
             let copy = text.clone();
+            let retry = id.clone();
+            let pending = versions.get(index).is_some_and(|version| version.pending);
             banner = banner
                 .child(
                     div()
@@ -152,6 +182,29 @@ impl Conversation {
                             })),
                         ),
                 )
+                .when(pending, |banner| {
+                    banner.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child("Kept in memory. Copy or retry the save before quitting.")
+                            .child(
+                                crate::controls::secondary_button(
+                                    "recovery-retry",
+                                    "Retry saving this version",
+                                    true,
+                                    self.turn_recoveries.retrying,
+                                )
+                                .child("Retry save")
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.retry_recovered_turn(retry.clone(), cx)
+                                    },
+                                )),
+                            ),
+                    )
+                })
                 .child(
                     div()
                         .id("recovered-turn-preview")
@@ -167,7 +220,11 @@ impl Conversation {
                     false,
                     false,
                 )
-                .child(format!("Recovered versions ({})", versions.len()))
+                .child(if versions.iter().any(|version| version.pending) {
+                    "Recovered versions · Save pending".into()
+                } else {
+                    format!("Recovered versions ({})", versions.len())
+                })
                 .on_click(cx.listener(|this, _, _, cx| this.open_recovered_turn(0, cx))),
             );
         }

@@ -42,6 +42,8 @@ pub(super) struct Shared {
     account_source: RefCell<Option<crate::accounts::Book>>,
     preferences: std::sync::Arc<crate::desktop_preferences::DesktopPreferences>,
     read_only: bool,
+    pub(super) pending_turn_recoveries:
+        RefCell<HashMap<i64, Vec<super::turn_history::PendingTurnRecovery>>>,
 }
 
 /// A revision guard, rather than another owned copy of every rich source block.
@@ -412,6 +414,7 @@ impl Store {
                     )
                 }),
                 read_only,
+                pending_turn_recoveries: Default::default(),
             }),
         };
         // Register only identities here. No blocks_json is read at startup.
@@ -1873,6 +1876,12 @@ impl Store {
             .conn
             .execute("DELETE FROM sessions WHERE id=?1", [original]))?;
         sql(tx.commit())?;
+        self.shared
+            .as_ref()
+            .unwrap()
+            .pending_turn_recoveries
+            .borrow_mut()
+            .remove(&id);
         self.shared
             .as_ref()
             .unwrap()

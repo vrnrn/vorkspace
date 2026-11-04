@@ -58,7 +58,7 @@ pub struct Update {
     pub handoff: Option<Option<vorkspace_core::agent::Handoff>>,
     pub status: String,
     pub finished: bool,
-    /// The losing turn is durable in the same chat. Replace the projected
+    /// The losing turn has a separate owner in the same chat. Replace the projected
     /// transcript from storage instead of applying the losing row offsets.
     pub history_recovery: Option<HistoryRecovery>,
 }
@@ -986,7 +986,7 @@ fn run_turn_using(
     let mut history_recovery = None;
     if pending.overlap {
         let recovery = locked(&store).and_then(|store| {
-            store.preserve_turn_overlap(
+            store.save_or_retain_turn_overlap(
                 summary.id,
                 &recovery_id,
                 &transcript.rows[turn_start..],
@@ -1003,8 +1003,8 @@ fn run_turn_using(
                 status = "Recovered a competing version of this turn".into();
             }
             Err(error) => {
-                // Keep the in-memory turn visible until a durable recovery
-                // exists. The authoritative transcript is still untouched.
+                // The store retains the complete payload until its retry
+                // commits, independently of the projected transcript.
                 history_recovery = Some(HistoryRecovery::Unsaved);
                 start = turn_start;
                 rows = transcript.rows[turn_start..].to_vec();

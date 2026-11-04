@@ -42,6 +42,13 @@ impl TurnHistory {
 pub struct RecoveredTurn {
     pub id: String,
     pub created_at: u64,
+    pub pending: bool,
+}
+
+pub(super) struct PendingTurnRecovery {
+    version: RecoveredTurn,
+    rows: Vec<Row>,
+    abandoned_binding: Option<(String, i64)>,
 }
 
 pub(super) fn ensure_recovery_schema(conn: &Connection) -> Result<(), String> {
@@ -120,6 +127,84 @@ impl Store {
         rows: &[Row],
         abandoned_binding: Option<&str>,
     ) -> Result<(), String> {
+        self.write_turn_recovery(id, attempt, rows, abandoned_binding, None)
+    }
+
+    /// The database may be temporarily unwritable. Keep the complete losing
+    /// turn in the store owner, independently of any window or row projection.
+    pub fn save_or_retain_turn_overlap(
+        &self,
+        id: i64,
+        attempt: &str,
+        rows: &[Row],
+        abandoned_binding: Option<&str>,
+    ) -> Result<(), String> {
+        let binding = abandoned_binding.and_then(|binding| {
+            self.session_history_revision(id)
+                .ok()
+                .map(|rev| (binding.to_owned(), rev))
+        });
+        let expected = binding
+            .as_ref()
+            .map(|(binding, revision)| (binding.as_str(), *revision));
+        if let Err(error) = self.write_turn_recovery(
+            id,
+            attempt,
+            rows,
+            expected.map(|(binding, _)| binding),
+            expected.map(|(_, rev)| rev),
+        ) {
+            if let Some(shared) = &self.shared {
+                let mut all = shared.pending_turn_recoveries.borrow_mut();
+                let versions = all.entry(id).or_default();
+                if !versions.iter().any(|pending| pending.version.id == attempt) {
+                    versions.push(PendingTurnRecovery {
+                        version: RecoveredTurn {
+                            id: attempt.into(),
+                            created_at: crate::time::now_ms(),
+                            pending: true,
+                        },
+                        rows: rows.to_vec(),
+                        abandoned_binding: binding,
+                    });
+                }
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn retry_turn_overlap(&self, id: i64, attempt: &str) -> Result<(), String> {
+        let Some(shared) = &self.shared else {
+            return Err("This recovery is unavailable".into());
+        };
+        let mut all = shared.pending_turn_recoveries.borrow_mut();
+        let versions = all.get_mut(&id).ok_or("This recovery is unavailable")?;
+        let at = versions
+            .iter()
+            .position(|pending| pending.version.id == attempt)
+            .ok_or("This recovery is unavailable")?;
+        let pending = &versions[at];
+        let (binding, revision) = match pending.abandoned_binding.as_ref() {
+            Some((binding, revision)) => (Some(binding.as_str()), Some(*revision)),
+            None => (None, None),
+        };
+        self.write_turn_recovery(id, attempt, &pending.rows, binding, revision)?;
+        versions.remove(at);
+        if versions.is_empty() {
+            all.remove(&id);
+        }
+        Ok(())
+    }
+
+    fn write_turn_recovery(
+        &self,
+        id: i64,
+        attempt: &str,
+        rows: &[Row],
+        abandoned_binding: Option<&str>,
+        expected_revision: Option<i64>,
+    ) -> Result<(), String> {
         self.shared_writable()?;
         let original = self.persisted_session_id(id)?;
         let raw = serde_json::to_string(rows).map_err(|e| e.to_string())?;
@@ -144,6 +229,11 @@ impl Store {
             }
         }
         if let Some(binding) = abandoned_binding.filter(|_| inserted != 0) {
+            if let Some(expected) = expected_revision {
+                if self.history_revision(&original)? != expected {
+                    return tx.commit().map_err(|e| e.to_string());
+                }
+            }
             // A subsequent explicit send starts fresh if the losing
             // provider thread still owns the binding. A successor wins.
             tx.execute(
@@ -155,6 +245,38 @@ impl Store {
     }
 
     pub fn recovered_turns(&self, id: i64) -> Result<Vec<RecoveredTurn>, String> {
+        let mut pending = self
+            .shared
+            .as_ref()
+            .and_then(|shared| {
+                shared
+                    .pending_turn_recoveries
+                    .borrow()
+                    .get(&id)
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .map(|entry| entry.version.clone())
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .unwrap_or_default();
+        let saved = self.saved_turn_recoveries(id);
+        match saved {
+            Ok(saved) => pending.extend(saved),
+            Err(error) if pending.is_empty() => return Err(error),
+            Err(_) => {} // Pending copies remain available even if SQLite cannot read.
+        }
+        pending.sort_by(|a, b| {
+            b.pending
+                .cmp(&a.pending)
+                .then(b.created_at.cmp(&a.created_at))
+                .then(a.id.cmp(&b.id))
+        });
+        Ok(pending)
+    }
+
+    fn saved_turn_recoveries(&self, id: i64) -> Result<Vec<RecoveredTurn>, String> {
         if self.shared.is_none() || !shared::has_table(&self.conn, "conversation_turn_recoveries")?
         {
             return Ok(Vec::new());
@@ -167,6 +289,7 @@ impl Store {
                 Ok(RecoveredTurn {
                     id: row.get(0)?,
                     created_at: row.get::<_, i64>(1)?.max(0) as u64,
+                    pending: false,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -175,6 +298,15 @@ impl Store {
     }
 
     pub fn read_recovered_turn(&self, id: i64, attempt: &str) -> Result<Option<Vec<Row>>, String> {
+        if let Some(shared) = &self.shared {
+            let all = shared.pending_turn_recoveries.borrow();
+            if let Some(pending) = all
+                .get(&id)
+                .and_then(|entries| entries.iter().find(|entry| entry.version.id == attempt))
+            {
+                return Ok(Some(pending.rows.clone()));
+            }
+        }
         if self.shared.is_none() || !shared::has_table(&self.conn, "conversation_turn_recoveries")?
         {
             return Ok(None);
@@ -190,7 +322,7 @@ impl Store {
 
 pub fn recovery_text(rows: &[Row]) -> String {
     let mut text =
-        String::from("This version was saved separately after the conversation changed.\n");
+        String::from("This version was recovered separately after the conversation changed.\n");
     for row in rows {
         if row.first {
             let label = match row.role.as_str() {
@@ -265,5 +397,63 @@ mod tests {
             Some(left.rows)
         );
         assert_eq!(reopened.composer_draft(id).unwrap().unwrap().payload, draft);
+    }
+
+    #[test]
+    fn failed_recovery_write_survives_refresh_and_retry_preserves_newer_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pending-recovery.db");
+        let mut store = Store::open_vorkspace(&path).unwrap();
+        let id = store.create("codex", "/project").unwrap().id;
+        let mut history = Transcript::default();
+        history.begin("assistant");
+        history.append("Current answer");
+        store.write_rows(id, 0, &history.rows).unwrap();
+        store.provider_id(id, "winning-thread").unwrap();
+        let mut losing = Transcript::default();
+        losing.begin("assistant");
+        losing.append("Unsaved competing answer");
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TRIGGER refuse_recovery
+            BEFORE INSERT ON conversation_turn_recoveries
+            BEGIN SELECT RAISE(ABORT,'disk full fixture'); END;",
+            )
+            .unwrap();
+
+        assert!(store
+            .save_or_retain_turn_overlap(id, "turn", &losing.rows, Some("winning-thread"))
+            .unwrap_err()
+            .contains("disk full fixture"));
+        assert!(store.retry_turn_overlap(id, "turn").is_err());
+        assert_eq!(store.load(id).unwrap().rows, history.rows);
+        assert!(store.recovered_turns(id).unwrap()[0].pending);
+        assert_eq!(
+            store.read_recovered_turn(id, "turn").unwrap(),
+            Some(losing.rows.clone())
+        );
+
+        store
+            .conn
+            .execute_batch("DROP TRIGGER refuse_recovery")
+            .unwrap();
+        let mut other = Store::open_vorkspace(&path).unwrap();
+        let mut latest = other.load(id).unwrap();
+        let at = latest.append(" with a newer commit");
+        other.write_rows(id, at, &latest.rows[at..]).unwrap();
+        store.retry_turn_overlap(id, "turn").unwrap();
+        assert_eq!(store.recovered_turns(id).unwrap().len(), 1);
+        assert!(!store.recovered_turns(id).unwrap()[0].pending);
+        let reopened = Store::read_vorkspace(&path).unwrap();
+        assert_eq!(
+            reopened.read_recovered_turn(id, "turn").unwrap(),
+            Some(losing.rows)
+        );
+        assert_eq!(reopened.load(id).unwrap().rows, latest.rows);
+        assert_eq!(
+            reopened.sessions().unwrap()[0].provider_id.as_deref(),
+            Some("winning-thread")
+        );
     }
 }

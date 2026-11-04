@@ -753,10 +753,8 @@ impl Conversation {
                             } else if history_recovery.is_none() {
                                 this.finish_orchestration_plan(cx);
                             }
-                            if let Some(recovery) = history_recovery {
-                                if recovery == vorkspace_runtime::runtime::HistoryRecovery::Saved {
-                                    this.recover_history_in_place(cx);
-                                }
+                            if history_recovery.is_some() {
+                                this.recover_history_in_place(cx);
                             } else {
                                 this.settings.turns = this.transcript.read(cx).turns.clone();
                                 this.save_settings(cx);

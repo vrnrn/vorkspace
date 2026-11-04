@@ -247,6 +247,15 @@ pub(crate) fn sidebar_tool_update(label: Option<&str>) -> vorkspace_runtime::run
 
 #[gpui::test]
 fn recovered_turn_refreshes_the_live_view_and_keeps_the_unsent_composer(cx: &mut TestAppContext) {
+    verify_recovered_turn_refresh(cx, false);
+}
+
+#[gpui::test]
+fn pending_recovered_turn_survives_the_live_history_refresh(cx: &mut TestAppContext) {
+    verify_recovered_turn_refresh(cx, true);
+}
+
+fn verify_recovered_turn_refresh(cx: &mut TestAppContext, pending: bool) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("history.db");
     let mut store = Store::open_vorkspace(&path).unwrap();
@@ -256,15 +265,31 @@ fn recovered_turn_refreshes_the_live_view_and_keeps_the_unsent_composer(cx: &mut
     let mut saved = stale.clone();
     saved[0].text = "Latest durable history".into();
     store.write_rows(id, 0, &saved).unwrap();
-    store
-        .preserve_turn_overlap(id, "competing-turn", &stale, None)
+    if pending {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER refuse_recovery BEFORE INSERT ON conversation_turn_recoveries
+            BEGIN SELECT RAISE(ABORT,'disk full fixture'); END;",
+        )
         .unwrap();
+        assert!(
+            store
+                .save_or_retain_turn_overlap(id, "competing-turn", &stale, None)
+                .is_err()
+        );
+    } else {
+        store
+            .preserve_turn_overlap(id, "competing-turn", &stale, None)
+            .unwrap();
+    }
+    let losing = stale.clone();
+    let store = Arc::new(std::sync::Mutex::new(store));
+    let database = store.clone();
     let window = cx.update(|cx| {
         input::bind(cx);
         cx.open_window(Default::default(), |_, cx| {
             cx.new(|cx| {
-                let mut view =
-                    Conversation::new(summary, Arc::new(std::sync::Mutex::new(store)), cx);
+                let mut view = Conversation::new(summary, database, cx);
                 view.loaded = true;
                 view
             })
@@ -286,7 +311,11 @@ fn recovered_turn_refreshes_the_live_view_and_keeps_the_unsent_composer(cx: &mut
     tx.try_send(vorkspace_runtime::runtime::Update {
         finished: true,
         status: "Recovered a competing version of this turn".into(),
-        history_recovery: Some(vorkspace_runtime::runtime::HistoryRecovery::Saved),
+        history_recovery: Some(if pending {
+            vorkspace_runtime::runtime::HistoryRecovery::Unsaved
+        } else {
+            vorkspace_runtime::runtime::HistoryRecovery::Saved
+        }),
         ..Default::default()
     })
     .unwrap();
@@ -307,6 +336,12 @@ fn recovered_turn_refreshes_the_live_view_and_keeps_the_unsent_composer(cx: &mut
                 "Unsent draft while streaming"
             );
             assert!(view.recovered_turn_banner(cx).is_some());
+            let store = locked(&store).unwrap();
+            assert_eq!(store.recovered_turns(id).unwrap()[0].pending, pending);
+            assert_eq!(
+                store.read_recovered_turn(id, "competing-turn").unwrap(),
+                Some(losing)
+            );
         })
         .unwrap();
 }
