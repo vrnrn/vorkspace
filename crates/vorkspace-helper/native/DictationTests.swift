@@ -83,13 +83,16 @@ private final class FileSpeechInput: SpeechInput {
             do {
                 let frames = AVAudioFrameCount(min(8192, file.processingFormat.sampleRate / 10))
                 var first = true
-                var delivered: Int64 = 0
                 while !Task.isCancelled, file.framePosition < file.length {
                     let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames)!
+                    let position = file.framePosition
                     try file.read(into: buffer)
-                    let output = try converter.convert(buffer)
-                    let start = offset.map { CMTime(seconds: $0, preferredTimescale: 48_000) + CMTime(value: delivered, timescale: CMTimeScale(output.format.sampleRate)) }
-                    delivered += Int64(output.frameLength)
+                    let sourceTime = offset.map {
+                        CMTime(seconds: $0, preferredTimescale: 48_000)
+                            + CMTime(value: position, timescale: CMTimeScale(buffer.format.sampleRate))
+                    }
+                    let (output, start) = try converter.convert(buffer, at: sourceTime)
+                    guard output.frameLength > 0 else { continue }
                     if case .dropped = continuation.yield(AnalyzerInput(buffer: output, bufferStartTime: start)) {
                         throw DictationError("Fixture input overflowed.")
                     }
@@ -196,20 +199,37 @@ struct DictationTests {
         owner.stop()
     }
 
-    @MainActor static func main() async throws {
+    private static func recordingClock() throws {
         let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600)!
-        buffer.frameLength = 1600
-        var timeline = SpeechTimeline()
-        let origin = CMTime(seconds: 10, preferredTimescale: 48_000)
-        let first = try timeline.start(host: origin + CMTime(seconds: 0.3, preferredTimescale: 48_000), origin: origin, buffer: buffer)
-        precondition(abs(first.seconds - 0.3) < 0.00001)
-        let rounded = try timeline.start(host: origin + CMTime(seconds: 0.399, preferredTimescale: 48_000), origin: origin, buffer: buffer)
-        precondition(abs(rounded.seconds - 0.4) < 0.00001)
-        let gap = try timeline.start(host: origin + CMTime(seconds: 0.8, preferredTimescale: 48_000), origin: origin, buffer: buffer)
-        precondition(abs(gap.seconds - 0.8) < 0.00001)
-        do { _ = try timeline.start(host: origin, origin: origin, buffer: buffer); preconditionFailure("Backwards audio must fail.") } catch {}
-        print("Meeting clock gaps, resampler rounding and backwards-clock refusal passed")
+        for rate: Int32 in [16_000, 44_100, 48_000] {
+            let natural = AVAudioFormat(standardFormatWithSampleRate: Double(rate), channels: 1)!
+            let input = AVAudioPCMBuffer(pcmFormat: natural, frameCapacity: 4800)!
+            input.frameLength = 4800
+            memset(input.floatChannelData![0], 0, Int(input.frameLength) * MemoryLayout<Float>.size)
+            let converter = try SpeechBufferConverter(from: natural, to: format)
+            let origin = CMTime(value: 3, timescale: 10)
+            var expected = origin
+            for packet in 0..<20 {
+                let stamp = origin + CMTime(value: Int64(packet * 4800), timescale: rate)
+                let (output, time) = try converter.convert(input, at: stamp)
+                precondition(time == expected, "Contiguous source audio must have contiguous analyzer timestamps.")
+                expected = expected + CMTime(value: Int64(output.frameLength), timescale: 16_000)
+            }
+            let afterGap = CMTime(value: 10, timescale: 1)
+            let (_, gapStart) = try converter.convert(input, at: afterGap)
+            precondition(gapStart == afterGap)
+            do {
+                _ = try converter.convert(input, at: origin)
+                preconditionFailure("Backwards source audio must fail.")
+            } catch let error as DictationError {
+                precondition(error.localizedDescription.contains("backwards"))
+            }
+        }
+        print("Meeting clocks keep resampled buffers contiguous, preserve gaps, and reject backwards input")
+    }
+
+    @MainActor static func main() async throws {
+        try recordingClock()
         shortcutReleaseOrders()
         shortcutAutorepeat()
         let chord = DictationModifierPolicy(key: 49, modifiers: 4608)

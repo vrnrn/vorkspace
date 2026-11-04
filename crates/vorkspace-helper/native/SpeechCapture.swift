@@ -18,30 +18,15 @@ extension SpeechInput {
     @MainActor func close() async { stop() }
 }
 
-/// Converted buffers must not overlap. Preserve real clock gaps and tolerate
-/// only sub-sample rounding at the resampler's boundary.
-struct SpeechTimeline {
-    private var end: CMTime?
-    mutating func start(host: CMTime, origin: CMTime, buffer: AVAudioPCMBuffer) throws -> CMTime {
-        let actual = CMTimeSubtract(host, origin)
-        guard actual.isValid, actual.seconds.isFinite, actual.seconds >= 0 else {
-            throw DictationError("Audio lost its recording clock.")
-        }
-        var start = actual
-        if let end, CMTimeCompare(start, end) < 0 {
-            guard end.seconds - start.seconds <= 0.002 else { throw DictationError("Audio moved backwards on its recording clock.") }
-            start = end
-        }
-        end = CMTimeAdd(start, CMTime(value: Int64(buffer.frameLength), timescale: CMTimeScale(buffer.format.sampleRate)))
-        return start
-    }
-}
-
-/// Shared by microphone capture and the explicit, file-only speech fixture.
+/// The input timestamps describe raw PCM. A stateful converter can hold
+/// frames and return them in a later call, so only its output frame count
+/// advances the analyzer timestamp inside a continuous run.
 final class SpeechBufferConverter {
     let natural: AVAudioFormat
     let format: AVAudioFormat
     private let converter: AVAudioConverter
+    private var sourceEnd: CMTime?
+    private var nextOutputTime: CMTime?
     init(from natural: AVAudioFormat, to format: AVAudioFormat) throws {
         guard natural.sampleRate > 0, natural.channelCount > 0,
               let converter = AVAudioConverter(from: natural, to: format) else {
@@ -50,13 +35,35 @@ final class SpeechBufferConverter {
         self.natural = natural; self.format = format; self.converter = converter
         converter.primeMethod = .none
     }
-    func convert(_ buffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
+    func convert(_ buffer: AVAudioPCMBuffer, at sourceTime: CMTime? = nil)
+        throws -> (buffer: AVAudioPCMBuffer, startTime: CMTime?) {
         guard buffer.format == natural, buffer.frameLength > 0, buffer.frameLength <= 8192 else {
             throw DictationError("The microphone format changed. Try again.")
         }
         let frames = ceil(Double(buffer.frameLength) * format.sampleRate / natural.sampleRate) + 32
         guard frames <= 16_384, let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)) else {
             throw DictationError("The microphone produced an unsupported audio buffer.")
+        }
+        if let sourceTime {
+            guard sourceTime.isNumeric, sourceTime >= .zero else {
+                throw DictationError("Audio lost its recording clock.")
+            }
+            if let sourceEnd {
+                let gap = sourceTime - sourceEnd
+                let jitter = CMTime(value: 2, timescale: 1000)
+                guard gap >= CMTime.zero - jitter else {
+                    throw DictationError("Audio moved backwards on its recording clock.")
+                }
+                if gap > jitter {
+                    // Audio buffered before a discontinuity belongs to the
+                    // old run and must not leak into the new timestamp range.
+                    converter.reset()
+                    nextOutputTime = max(sourceTime, nextOutputTime ?? sourceTime)
+                }
+            } else {
+                nextOutputTime = sourceTime
+            }
+            sourceEnd = sourceTime + CMTime(value: Int64(buffer.frameLength), timescale: CMTimeScale(natural.sampleRate))
         }
         var supplied = false
         var error: NSError?
@@ -67,7 +74,11 @@ final class SpeechBufferConverter {
         guard status != .error, error == nil else {
             throw DictationError("Microphone audio could not be converted. Try again.")
         }
-        return output
+        let startTime = nextOutputTime
+        if let startTime {
+            nextOutputTime = startTime + CMTime(value: Int64(output.frameLength), timescale: CMTimeScale(format.sampleRate))
+        }
+        return (output, startTime)
     }
 }
 
@@ -82,7 +93,6 @@ final class SpeechCapture: SpeechInput, @unchecked Sendable {
     private let natural: AVAudioFormat
     private let converter: SpeechBufferConverter
     private let clockOrigin: CMTime?
-    private var timeline = SpeechTimeline()
     private var observer: NSObjectProtocol?
     private var tapped = false
     private var stopped = false
@@ -156,21 +166,20 @@ final class SpeechCapture: SpeechInput, @unchecked Sendable {
         defer { lock.unlock() }
         guard !stopped else { return }
         let output: AVAudioPCMBuffer
-        do { output = try converter.convert(buffer) }
-        catch { continuation.finish(throwing: error); onFailure?(error); return }
+        let stamp: CMTime?
+        do {
+            let sourceTime = try clockOrigin.map { origin in
+                guard time.isHostTimeValid else { throw DictationError("The microphone lost its recording clock.") }
+                return CMClockMakeHostTimeFromSystemUnits(time.hostTime) - origin
+            }
+            (output, stamp) = try converter.convert(buffer, at: sourceTime)
+        } catch { continuation.finish(throwing: error); onFailure?(error); return }
         guard output.frameLength > 0 else { return }
         if let samples = output.floatChannelData?[0] {
             var sum: Float = 0
             for index in 0..<Int(output.frameLength) { sum += samples[index] * samples[index] }
             amplitude = min(1, sqrt(sum / Float(output.frameLength)) * 12)
         }
-        let stamp: CMTime?
-        do {
-            if let origin = clockOrigin {
-                guard time.isHostTimeValid else { throw DictationError("The microphone lost its recording clock.") }
-                stamp = try timeline.start(host: CMClockMakeHostTimeFromSystemUnits(time.hostTime), origin: origin, buffer: output)
-            } else { stamp = nil }
-        } catch { continuation.finish(throwing: error); onFailure?(error); return }
         switch continuation.yield(AnalyzerInput(buffer: output, bufferStartTime: stamp)) {
         case .dropped:
             let error = DictationError("Speech recognition could not keep up with this microphone. Try again.")
