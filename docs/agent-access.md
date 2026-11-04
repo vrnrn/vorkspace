@@ -15,6 +15,8 @@ Type `/operator` at the start of a composer message to enable vorkspace access i
 - `notes.list` returns note IDs and titles; `notes.read` returns a full project note by ID; `notes.write` creates a note or updates an existing project note.
 - `todos.list`, `todos.add`, `todos.update` and `todos.remove` manage the caller's to-do board: an operator session's project board, a Bot's own board, or a Minion's parent board. `project` can select an assigned project board. Statuses are `todo`, `inProgress` and `done`; `todos.update` can rename an item, change its status and place it `before` another item in its column.
 
+Bots and Minions receive the available app actions and JSON fields in their provider context. The reference uses the same catalog as CLI help and the Minion capability filter. The context explains how to read saved soul, root memory, topics, and archive through the authenticated CLI. Existing provider sessions receive the updated context when its fingerprint changes.
+
 ## Persistent Bot teams
 
 Minions require **Settings › Bots › Minions**. A parent Bot hires persistent members with roles and specialties, reuses them for later tasks, and retires them when no longer useful. Hiring itself starts no task and requires no project. These are Bot actions, not additional `/operator` permissions:

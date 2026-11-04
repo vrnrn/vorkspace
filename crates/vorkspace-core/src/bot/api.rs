@@ -193,6 +193,32 @@ pub fn is_read_only(action: &str) -> bool {
     )
 }
 
+/// What a minion may do with its parent's capability: share memory and the
+/// board, read, and take notes; never start work or change its parent.
+pub fn minion_allowed(action: &str) -> bool {
+    action.starts_with("memory.")
+        || action.starts_with("todos.")
+        || action.starts_with("notes.")
+        || matches!(
+            action,
+            "bots.list"
+                | "bots.read"
+                | "bots.send"
+                | "channels.list"
+                | "channels.read"
+                | "channels.create"
+                | "channels.post"
+                | "models.list"
+                | "soul.read"
+                | "sessions.list"
+                | "sessions.read"
+                | "worktrees.list"
+                | "minions.list"
+                | "artifacts.list"
+                | "artifacts.read"
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
