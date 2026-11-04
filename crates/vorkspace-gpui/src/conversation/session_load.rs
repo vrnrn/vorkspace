@@ -158,6 +158,7 @@ impl Conversation {
             return;
         }
         self.loading = true;
+        self.refresh_turn_recoveries(cx);
         self.refresh_catalog(cx);
         let store = self.store.clone();
         let id = self.summary.id;
@@ -331,6 +332,15 @@ impl Conversation {
         .detach();
     }
     pub(crate) fn refresh_if_stale(&mut self, cx: &mut Context<Self>) {
+        self.refresh_history(false, cx);
+    }
+
+    pub(super) fn recover_history_in_place(&mut self, cx: &mut Context<Self>) {
+        self.refresh_turn_recoveries(cx);
+        self.refresh_history(true, cx);
+    }
+
+    fn refresh_history(&mut self, recovering: bool, cx: &mut Context<Self>) {
         if !self.loaded {
             self.load(cx);
             return;
@@ -351,6 +361,9 @@ impl Conversation {
             self.refresh_remote_snapshot(cx);
             return;
         }
+        if recovering {
+            self.loading = true;
+        }
         let id = self.summary.id;
         let store = self.store.clone();
         let current_rev = self.loaded_history_revision;
@@ -359,15 +372,31 @@ impl Conversation {
         let work = cx.background_executor().spawn(async move {
             let store = locked(&store)?;
             let rev = store.session_history_revision(id).unwrap_or(0);
-            if current_rev == Some(rev) {
+            if !recovering && current_rev == Some(rev) {
                 return Ok::<_, String>(None);
             }
             let history = store.load(id)?;
-            let turns = store.agent_settings(id)?.unwrap_or_default().turns;
+            let settings = store.agent_settings(id)?.unwrap_or_default();
+            let binding = if recovering {
+                store
+                    .sessions()?
+                    .into_iter()
+                    .find(|session| session.id == id)
+                    .map(|session| {
+                        (
+                            session.provider,
+                            session.provider_id,
+                            settings.account.id.clone(),
+                        )
+                    })
+            } else {
+                None
+            };
             Ok(Some((
                 crate::transcript::PreparedHistory::new(history.rows, bot),
-                turns,
+                settings.turns,
                 rev,
+                binding,
             )))
         });
         cx.spawn(async move |this, cx| {
@@ -377,7 +406,7 @@ impl Conversation {
                 // restore or refresh takes ownership of the visible transcript.
                 if this.submission_generation != submission
                     || this.loaded_history_revision != current_rev
-                    || this.loading
+                    || (this.loading && !recovering)
                     || this.history_unloaded
                     || this.history_partial
                     || this.busy
@@ -385,7 +414,20 @@ impl Conversation {
                 {
                     return;
                 }
-                if let Ok(Some((history, turns, rev))) = result {
+                if recovering {
+                    this.loading = false;
+                    if let Err(error) = &result {
+                        this.status = format!("Could not refresh saved history: {error}");
+                        cx.notify();
+                    }
+                }
+                if let Ok(Some((history, turns, rev, binding))) = result {
+                    if let Some((provider, binding, account)) = binding
+                        && this.summary.provider == provider
+                        && this.settings.account.id == account
+                    {
+                        this.summary.provider_id = binding;
+                    }
                     this.settings.turns = turns.clone();
                     this.transcript.update(cx, |view, cx| {
                         view.turns = turns;
@@ -413,6 +455,9 @@ impl Conversation {
                             }
                         }
                         this.save_follow_ups(cx);
+                    }
+                    if recovering {
+                        this.run_history_actions(cx);
                     }
                     this.sync_review(cx);
                     cx.emit(SessionChanged);

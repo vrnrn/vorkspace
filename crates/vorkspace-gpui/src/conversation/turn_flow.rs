@@ -510,6 +510,7 @@ impl Conversation {
                                 completion.set_native_commands(commands, cx)
                             });
                         }
+                        let history_recovery = update.history_recovery;
                         let activity_changed = this.activity != update.activity;
                         this.activity = update.activity;
                         let needed_approval = this.needs_approval();
@@ -729,7 +730,9 @@ impl Conversation {
                             if this.status != "Ready" && !this.follow_ups.state.messages.is_empty()
                             {
                                 this.follow_ups.state.paused = true;
-                                this.save_follow_ups(cx);
+                                if history_recovery.is_none() {
+                                    this.save_follow_ups(cx);
+                                }
                             }
                             this.approvals.clear();
                             this.questions.clear();
@@ -747,13 +750,19 @@ impl Conversation {
                             if stopping {
                                 this.planning_orchestration = false;
                                 this.orchestration_progress = None;
-                            } else {
+                            } else if history_recovery.is_none() {
                                 this.finish_orchestration_plan(cx);
                             }
-                            this.settings.turns = this.transcript.read(cx).turns.clone();
-                            this.save_settings(cx);
+                            if let Some(recovery) = history_recovery {
+                                if recovery == vorkspace_runtime::runtime::HistoryRecovery::Saved {
+                                    this.recover_history_in_place(cx);
+                                }
+                            } else {
+                                this.settings.turns = this.transcript.read(cx).turns.clone();
+                                this.save_settings(cx);
+                                this.run_history_actions(cx);
+                            }
                             this.refresh_git(cx);
-                            this.run_history_actions(cx);
                             cx.emit(SessionChanged);
                         } else if incoming_notification_input
                             || needed_approval != this.needs_approval()

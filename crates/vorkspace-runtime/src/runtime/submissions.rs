@@ -64,6 +64,9 @@ impl Submissions {
         )?);
         Ok(())
     }
+    pub(super) fn was_dispatched(&self) -> bool {
+        self.dispatched
+    }
     pub(super) fn dispatch_initial(&mut self) -> Result<(), String> {
         let attempt = self.initial.as_ref().ok_or("Local send was not reserved")?;
         if !locked(&self.store)?

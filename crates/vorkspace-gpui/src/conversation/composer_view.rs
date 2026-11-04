@@ -214,6 +214,7 @@ impl Conversation {
             )
             .children(self.composer_recovery_banner(cx))
             .children(self.local_submission_banner(cx))
+            .children(self.recovered_turn_banner(cx))
             .children(self.attachment_chips(cx))
             .child(
                 // Even padding centres send beside one line and keeps it at

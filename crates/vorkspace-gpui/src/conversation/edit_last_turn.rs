@@ -1,7 +1,11 @@
 //! Last-turn editing recalls first, and rewinds only when the user resubmits.
 use super::*;
 use std::path::PathBuf;
-use vorkspace_core::{provider, store::EditSnapshot, transcript::Row};
+use vorkspace_core::{
+    provider,
+    store::EditSnapshot,
+    transcript::{Row, Transcript},
+};
 
 #[derive(Default)]
 pub(super) struct State {
@@ -15,6 +19,11 @@ impl State {
     pub(super) fn pending(&self) -> bool {
         self.active || self.prepared.is_some() || self.blocked
     }
+}
+
+enum EditOutcome {
+    Rewound(Box<EditSnapshot>, String),
+    Recovered,
 }
 
 fn latest_user(rows: &[Row]) -> Option<usize> {
@@ -142,7 +151,10 @@ impl Conversation {
                     Ok(_) => {
                         this.status = "Composer or conversation changed; edit cancelled".into()
                     }
-                    Err(error) => this.status = format!("Could not edit last message: {error}"),
+                    Err(error) => {
+                        this.status = format!("Could not edit last message: {error}");
+                        this.refresh_if_stale(cx);
+                    }
                 }
                 if !this.editing_last_turn.pending() {
                     this.run_history_actions(cx);
@@ -256,6 +268,11 @@ impl Conversation {
         let prompt = self.input.read(cx).content.to_string();
         let attachments = self.attachments.clone();
         let checked_attachments = attachments.clone();
+        let mut competing = Transcript::default();
+        competing.begin("user");
+        competing.append(&prompt);
+        competing.attach_files(&attachments);
+        let attempt = vorkspace_core::session::new_id();
         self.editing_last_turn.active = true;
         // Keep the visible draft in place until confirmation, including on a
         // rejected RPC. IME composition was checked before making it read-only.
@@ -265,10 +282,19 @@ impl Conversation {
         let id = self.summary.id;
         let work = cx.background_executor().spawn(async move {
             vorkspace_core::composer::validate_attachments(&checked_attachments)?;
-            locked(&store)?.validate_edit_last_turn(id, &edit)?;
+            {
+                let store = locked(&store)?;
+                if let Err(error) = store.validate_edit_last_turn(id, &edit) {
+                    if !store.uses_vorkspace_schema() {
+                        return Err(error);
+                    }
+                    store.preserve_turn_overlap(id, &attempt, &competing.rows, None)?;
+                    return Ok(EditOutcome::Recovered);
+                }
+            }
             let binding = match provider::rewind_last_turn(request, edit.provider_turn_id.as_deref()) {
-                Ok(binding)=>binding,
-                Err(error)=> {
+                Ok(binding) => binding,
+                Err(error) => {
                     if error.provider_may_have_changed {
                         locked(&store)?.mark_edit_recovery_required(id)?;
                         return Err(format!("Provider recovery required: {error}"));
@@ -276,21 +302,27 @@ impl Conversation {
                     return Err(error.to_string());
                 }
             };
-            // Provider confirmation is the only path to the destructive write.
-            match locked(&store)?.finish_edit_last_turn(id, &edit, &binding) {
-                Ok(()) => Ok((edit, binding)),
-                Err(error) => Err(format!(
+            let mut store = locked(&store)?;
+            match store.finish_edit_last_turn(id, &edit, &binding) {
+                Ok(()) => Ok(EditOutcome::Rewound(Box::new(edit), binding)),
+                Err(error) if !store.uses_vorkspace_schema() => Err(format!(
                     "Provider recovery required: Provider rewound, but local history changed: {error}"
                 )),
+                Err(_) => {
+                    store.preserve_turn_overlap(id, &attempt, &competing.rows, None)
+                        .and_then(|()| store.recover_confirmed_rewind(id, &edit, &binding))
+                        .map_err(|error| format!("Provider recovery required: {error}"))?;
+                    Ok(EditOutcome::Recovered)
+                }
             }
         });
         cx.spawn(async move |this,cx| {
-            let result: Result<(EditSnapshot,String),String> = work.await;
+            let result: Result<EditOutcome,String> = work.await;
             let _ = this.update(cx,|this,cx| {
                 this.editing_last_turn.active = false;
                 this.input.update(cx,|input,_| input.set_read_only(false));
                 match result {
-                    Ok((edit,binding)) => {
+                    Ok(EditOutcome::Rewound(edit,binding)) => {
                         this.editing_last_turn.prepared = None;
                         this.summary.provider_id = Some(binding);
                         this.settings.turns.retain(|&row,_| row < edit.start);
@@ -307,6 +339,12 @@ impl Conversation {
                             this.preserve_interrupted_edit(prompt,attachments,edit.start,cx);
                         }
                         this.run_history_actions(cx);
+                    }
+                    Ok(EditOutcome::Recovered) => {
+                        this.editing_last_turn.prepared = None;
+                        this.persist_composer(cx);
+                        this.status = "Saved both versions. Review your draft before sending.".into();
+                        this.recover_history_in_place(cx);
                     }
                     Err(error) => {
                         if error.starts_with("Provider recovery required:") {

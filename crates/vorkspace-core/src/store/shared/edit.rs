@@ -58,7 +58,7 @@ impl Store {
         }
         let rows = blocks::project(&blocks)?;
         if rows != expected {
-            return Err("Conversation changed; reopen it before editing".into());
+            return Err("Conversation changed before the edit could be prepared".into());
         }
         let latest = blocks
             .iter()

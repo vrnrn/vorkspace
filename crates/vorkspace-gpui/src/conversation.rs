@@ -30,6 +30,7 @@ mod team_history;
 mod ticket_context;
 mod title;
 mod turn_flow;
+mod turn_recovery;
 use crate::{
     git_tools::git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
     input,
@@ -184,6 +185,7 @@ pub(crate) struct Conversation {
     attaching: bool,
     file_drag: bool,
     attachment_error: Option<String>,
+    turn_recoveries: turn_recovery::TurnRecoveries,
     unconfirmed_submission: Option<vorkspace_core::store::SubmissionReceipt>,
     reviewing_submission: bool,
     submission_recovery_epoch: u64,
@@ -525,6 +527,7 @@ impl Conversation {
             file_drag: false,
             attachment_error: None,
             unconfirmed_submission: None,
+            turn_recoveries: Default::default(),
             reviewing_submission: false,
             submission_recovery_epoch: 0,
             app_environment: Default::default(),
