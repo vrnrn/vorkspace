@@ -388,6 +388,7 @@ impl Page {
             return;
         }
         self.intent += 1;
+        self.open_epoch += 1;
         self.error = None;
         let draft = doc.draft.get_or_insert_with(|| Draft {
             revision: doc.saved.as_ref().map_or(0, |saved| saved.meeting.revision),
@@ -468,6 +469,9 @@ impl Page {
             return;
         }
         self.intent += 1;
+        if matches!(action, Action::Open(_) | Action::NewDraft(_)) {
+            self.open_epoch += 1;
+        }
         if self.document.as_ref().is_some_and(Document::dirty) {
             self.after_save = Some((self.intent, action));
             self.save(cx);
@@ -503,7 +507,7 @@ impl Page {
         {
             return;
         }
-        self.next_open = Some((self.intent, id, true));
+        self.next_open = Some((self.open_epoch, id, true));
         self.open_next(cx);
     }
 
@@ -514,7 +518,7 @@ impl Page {
         let Some((epoch, id, retry)) = self.next_open.take() else {
             return;
         };
-        if epoch != self.intent {
+        if epoch != self.open_epoch {
             return;
         }
         let Some(meetings) = self.storage(cx) else {
@@ -558,7 +562,7 @@ impl Page {
         cx: &mut Context<Self>,
     ) {
         self.opening = false;
-        if !self.enabled || self.intent != epoch {
+        if !self.enabled || self.open_epoch != epoch {
             return;
         }
         match result {
@@ -787,6 +791,7 @@ impl Page {
         let id = doc.id().to_owned();
         let lease = doc.lease.clone();
         self.intent += 1;
+        self.open_epoch += 1;
         self.discarding = true;
         self.sync_read_only(cx);
         let drafts = self.drafts.clone();
@@ -853,6 +858,7 @@ impl Page {
         let revision = doc.saved.as_ref().map_or(0, |saved| saved.meeting.revision);
         let lease = doc.lease.clone();
         self.intent += 1;
+        self.open_epoch += 1;
         self.deleting = true;
         self.sync_read_only(cx);
         let drafts = self.drafts.clone();

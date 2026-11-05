@@ -23,7 +23,10 @@ impl Page {
                 .clone()
         });
         self.note_ids.insert(note_id.into(), id.clone());
-        if self.document.as_ref().is_some_and(|doc| doc.id() == id) {
+        if self.document.as_ref().is_some_and(|doc| doc.id() == id)
+            && !self.opening
+            && self.next_open.is_none()
+        {
             return;
         }
         self.navigate(

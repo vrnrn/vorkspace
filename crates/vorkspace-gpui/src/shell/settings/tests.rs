@@ -160,7 +160,6 @@ fn settings_replace_native_rail_and_tabs_and_return_to_the_same_session(cx: &mut
         "settings-nav-gitlab",
         "settings-nav-jira",
         "settings-nav-notes",
-        "settings-nav-meetings",
         "settings-nav-todos",
         "settings-nav-archive",
         "settings-nav-worktrees",

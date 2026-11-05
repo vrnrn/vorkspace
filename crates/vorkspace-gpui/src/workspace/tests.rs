@@ -100,7 +100,7 @@ fn original_layout_is_used_for_fresh_and_previously_experimental_workspaces() {
 #[test]
 fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_state() {
     let saved = serde_json::json!({
-        "sidebar_navigation_order": ["notes", "unknown", "plugins", "github", "notes", "automations"],
+        "sidebar_navigation_order": ["notes", "unknown", "plugins", "github", "notes", "meetings", "automations"],
         "sidebar_hidden_connectors": ["github"],
         "compact_session_cards": false,
         "sidebar_activity_visible": true,
@@ -108,15 +108,7 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     let mut state = Workspace::restore(Some(&saved.to_string()), &[], "/work");
     assert_eq!(
         state.sidebar_navigation_order,
-        [
-            "notes",
-            "github",
-            "automations",
-            "gitlab",
-            "jira",
-            "meetings",
-            "todos"
-        ]
+        ["notes", "github", "automations", "gitlab", "jira", "todos"]
     );
     use SidebarNavigation::{Automations, Connector as Provider, Notes};
     let available = [
@@ -128,15 +120,7 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     assert!(state.reorder_sidebar_navigation(Provider(Connector::Jira), Notes, false, &available));
     assert_eq!(
         state.sidebar_navigation_order,
-        [
-            "jira",
-            "notes",
-            "github",
-            "gitlab",
-            "automations",
-            "meetings",
-            "todos"
-        ]
+        ["jira", "notes", "github", "gitlab", "automations", "todos"]
     );
     // GitLab's slot survives its absence; hidden GitHub is still reorderable.
     assert!(state.reorder_sidebar_navigation(
@@ -147,15 +131,7 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     ));
     assert_eq!(
         state.sidebar_navigation_order,
-        [
-            "jira",
-            "notes",
-            "automations",
-            "gitlab",
-            "github",
-            "meetings",
-            "todos"
-        ]
+        ["jira", "notes", "automations", "gitlab", "github", "todos"]
     );
     assert!(!state.reorder_sidebar_navigation(
         Provider(Connector::Gitlab),
@@ -183,15 +159,7 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     ));
     assert_eq!(
         state.sidebar_navigation_order,
-        [
-            "jira",
-            "gitlab",
-            "notes",
-            "automations",
-            "github",
-            "meetings",
-            "todos"
-        ]
+        ["jira", "gitlab", "notes", "automations", "github", "todos"]
     );
 }
 

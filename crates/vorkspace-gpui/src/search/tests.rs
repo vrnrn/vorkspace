@@ -131,15 +131,37 @@ fn app_search_debounce_scope_keyboard_and_stale_results(cx: &mut TestAppContext)
                 .height,
             px(36.)
         );
-        for (selector, min_width) in [
-            ("app-search-scope-0", 28.),
-            ("app-search-scope-1", 70.),
-            ("app-search-scope-2", 32.),
-            ("app-search-scope-3", 45.),
-        ] {
+        for (selector, (_, label)) in [
+            "app-search-scope-0",
+            "app-search-scope-1",
+            "app-search-scope-2",
+            "app-search-scope-3",
+        ]
+        .into_iter()
+        .zip(Scope::ALL)
+        {
+            let width = window
+                .update(visual, |_, window, _| {
+                    let mut font = window.text_style().font();
+                    font.weight = gpui::FontWeight::MEDIUM;
+                    window
+                        .text_system()
+                        .shape_line(
+                            label.into(),
+                            px(page::LABEL_SIZE),
+                            &[gpui::TextRun {
+                                len: label.len(),
+                                font,
+                                ..Default::default()
+                            }],
+                            None,
+                        )
+                        .width
+                })
+                .unwrap();
             assert!(
-                visual.debug_bounds(selector).unwrap().size.width > px(min_width),
-                "scope buttons must render their labels"
+                visual.debug_bounds(selector).unwrap().size.width >= width - px(1.),
+                "scope tabs must fit their shaped labels without the old pill padding: {label}"
             );
         }
         let files = visual.debug_bounds("app-search-scope-2").unwrap();

@@ -174,7 +174,7 @@ fn a_stale_open_cannot_replace_input_or_take_its_lease(cx: &mut TestAppContext) 
     let pending_open = DraftBuffer::default()
         .open(&meetings, &destination, None)
         .unwrap();
-    let epoch = page.read_with(cx, |page, _| page.intent);
+    let epoch = page.read_with(cx, |page, _| page.open_epoch);
     type_into(&page, Field::Transcript, "Planning edits", 8..8, cx);
     page.update(cx, |page, cx| {
         page.complete_open(epoch, true, Ok(pending_open), cx);
@@ -183,6 +183,50 @@ fn a_stale_open_cannot_replace_input_or_take_its_lease(cx: &mut TestAppContext) 
         assert_eq!(doc.text(Field::Transcript), "Planning edits");
         assert!(meetings.try_edit(&selected).unwrap().is_none());
         assert!(meetings.try_edit(&destination).unwrap().is_some());
+    });
+}
+
+#[gpui::test]
+fn returning_to_authored_text_does_not_cancel_a_recording_open(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let pending = DraftBuffer::default().open(&meetings, &id, None).unwrap();
+    let page = cx.new(|cx| Page::with_meetings(Ok(meetings.clone()), cx));
+    page.update(cx, |page, cx| {
+        page.note_ids.insert("note".into(), id.clone());
+        page.opening = true;
+        let epoch = page.open_epoch;
+        page.hide_note_content(cx);
+        page.complete_open(epoch, true, Ok(pending), cx);
+        assert!(page.is_for_note("note"));
+        assert!(
+            page.document
+                .as_ref()
+                .unwrap()
+                .text(Field::Transcript)
+                .contains("release checklist")
+        );
+        assert!(!page.opening);
+    });
+}
+
+#[gpui::test]
+fn returning_to_the_loaded_note_supersedes_another_pending_open(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let other = recorded(&meetings, "Review");
+    let page = page(&meetings, &id, cx);
+    let pending = DraftBuffer::default()
+        .open(&meetings, &other, None)
+        .unwrap();
+    page.update(cx, |page, cx| {
+        page.opening = true;
+        let epoch = page.open_epoch;
+        page.show_note("planning-note", Some(&id), cx);
+        page.complete_open(epoch, true, Ok(pending), cx);
+        assert!(page.is_for_note("planning-note"));
+        assert!(page.next_open.is_none());
+        assert!(meetings.try_edit(&other).unwrap().is_some());
     });
 }
 

@@ -37,6 +37,8 @@ pub(crate) struct Page {
     section: Section,
     pending_focus: Option<Field>,
     intent: u64,
+    // Loading follows document identity and edits, independent of the shown tab.
+    open_epoch: u64,
     opening: bool,
     next_open: Option<(u64, String, bool)>,
     drafts: Arc<DraftBuffer>,
@@ -143,6 +145,7 @@ impl Page {
             section: Section::Transcript,
             pending_focus: None,
             intent: 0,
+            open_epoch: 0,
             opening: false,
             next_open: None,
             drafts: Arc::default(),
@@ -212,6 +215,7 @@ impl Page {
             self.enable_epoch += 1;
             if !enabled {
                 self.intent += 1;
+                self.open_epoch += 1;
                 self.set_active(false, cx);
                 self.cancel_analysis();
             }

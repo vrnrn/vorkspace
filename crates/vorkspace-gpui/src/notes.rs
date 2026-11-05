@@ -285,14 +285,34 @@ impl Notes {
                             notes.retain(|note| note.id != draft.id);
                             notes.insert(0, draft);
                         }
+                        let content_changed = this.selected.as_ref().is_some_and(|id| {
+                            let before = this.notes.iter().find(|note| &note.id == id);
+                            let after = notes.iter().find(|note| &note.id == id);
+                            match (before, after) {
+                                (Some(a), Some(b)) => {
+                                    a.title != b.title
+                                        || a.body != b.body
+                                        || a.source_cwd != b.source_cwd
+                                }
+                                _ => true,
+                            }
+                        });
                         this.notes = notes;
                         let next = this
                             .selected
                             .clone()
                             .filter(|id| this.notes.iter().any(|note| &note.id == id))
                             .or_else(|| this.notes.first().map(|note| note.id.clone()));
-                        if !this.dirty || next != this.selected || this.document.is_none() {
+                        if next != this.selected
+                            || this.document.is_none()
+                            || (!this.dirty && content_changed)
+                        {
                             this.load_selection(next, cx);
+                        } else if let Some(id) = &this.selected {
+                            let recording_id = this.recordings.get(id);
+                            this.recording.update(cx, |page, cx| {
+                                page.show_note(id, recording_id.map(String::as_str), cx)
+                            });
                         }
                         this.error = None;
                     }
@@ -423,10 +443,12 @@ impl Notes {
 
     fn load_selection(&mut self, id: Option<String>, cx: &mut Context<Self>) {
         let changed = self.selected != id;
-        self.confirm_delete = false;
-        self.project_open = false;
-        self.show_list = false;
-        self.detail_scroll = ScrollHandle::new();
+        if changed {
+            self.confirm_delete = false;
+            self.project_open = false;
+            self.show_list = false;
+            self.detail_scroll = ScrollHandle::new();
+        }
         self.selected = id;
         self.dirty = false;
         let note = self
@@ -1563,6 +1585,55 @@ mod tests {
                 assert_eq!(notes.body.read(cx).selection_utf16(), 11..13);
                 assert_eq!(notes.detail_scroll.offset(), position);
                 assert!(notes.dirty);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn refreshing_the_selected_note_preserves_navigation_and_document(cx: &mut TestAppContext) {
+        let store = store();
+        let saved = locked(&store)
+            .unwrap()
+            .upsert_note(&notes::NoteUpsert {
+                id: "reading".into(),
+                title: "Reading".into(),
+                body: "Keep this document".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (window, mut visual) = view(cx, &store);
+        let (scroll, document) = window
+            .update(&mut visual, |notes, _, cx| {
+                assert_eq!(notes.selected.as_deref(), Some(saved.id.as_str()));
+                notes.show_list = true;
+                notes
+                    .body
+                    .update(cx, |input, cx| input.select_utf16(5..9, cx));
+                let scroll = notes.detail_scroll.clone();
+                let document = notes.document.clone();
+                notes.refresh(cx);
+                (scroll, document)
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |notes, _, cx| {
+                let position = gpui::point(px(0.), px(-160.));
+                scroll.set_offset(position);
+                assert_eq!(
+                    notes.detail_scroll.offset(),
+                    position,
+                    "refresh retains the scroll owner"
+                );
+                assert!(
+                    notes.show_list,
+                    "background refresh must not close the narrow list"
+                );
+                assert_eq!(
+                    notes.document, document,
+                    "unchanged Markdown retains its selection owner"
+                );
+                assert_eq!(notes.body.read(cx).selection_utf16(), 5..9);
             })
             .unwrap();
     }

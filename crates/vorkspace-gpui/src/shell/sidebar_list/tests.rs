@@ -274,15 +274,7 @@ fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
         .update(visual, |shell, w, cx| {
             assert_eq!(
                 shell.workspace.sidebar_navigation_order,
-                [
-                    "automations",
-                    "github",
-                    "gitlab",
-                    "jira",
-                    "notes",
-                    "meetings",
-                    "todos"
-                ]
+                ["automations", "github", "gitlab", "jira", "notes", "todos"]
             );
             assert!(shell.workspace.sidebar_automations_visible);
             assert!(shell.workspace.sidebar_hidden_connectors.is_empty());
@@ -386,15 +378,7 @@ fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
                 );
                 assert_eq!(
                     shell.workspace.sidebar_navigation_order,
-                    [
-                        "automations",
-                        "github",
-                        "gitlab",
-                        "jira",
-                        "notes",
-                        "meetings",
-                        "todos"
-                    ]
+                    ["automations", "github", "gitlab", "jira", "notes", "todos"]
                 );
                 assert!(shell.workspace.sidebar_hidden_connectors.contains("github"));
             })
