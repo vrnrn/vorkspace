@@ -1621,6 +1621,15 @@ fn setup(cx: &mut TestAppContext) -> Setup {
 
 #[gpui::test]
 fn recovered_bot_input_sends_after_reopening_a_failed_agent_report(cx: &mut TestAppContext) {
+    send_after_recovery_choice(cx, true);
+}
+
+#[gpui::test]
+fn saved_bot_input_sends_after_reopening_a_failed_agent_report(cx: &mut TestAppContext) {
+    send_after_recovery_choice(cx, false);
+}
+
+fn send_after_recovery_choice(cx: &mut TestAppContext, recovered: bool) {
     cx.update(input::bind);
     let s = setup(cx);
     let chat = s
@@ -1644,8 +1653,8 @@ fn recovered_bot_input_sends_after_reopening_a_failed_agent_report(cx: &mut Test
     {
         let db = locked(&s.store).unwrap();
         db.configure_agent(s.session, "claude", &settings).unwrap();
-        let payload = json!({
-            "cwd": s.project, "text": "hi", "selectionStart": 2, "selectionEnd": 2,
+        let mut payload = json!({
+            "cwd": s.project, "text": "saved input", "selectionStart": 11, "selectionEnd": 11,
             "attachments": [], "mcpTags": [],
             "botSubmission": {"mode": null, "queue": false}
         });
@@ -1656,6 +1665,9 @@ fn recovered_bot_input_sends_after_reopening_a_failed_agent_report(cx: &mut Test
         let revision = db
             .save_composer_draft(s.session, revision, &payload)
             .unwrap();
+        payload["text"] = json!("recovered input");
+        payload["selectionStart"] = json!(15);
+        payload["selectionEnd"] = json!(15);
         db.save_composer_recovery(
             s.session,
             vorkspace_core::store::ComposerRecovery {
@@ -1676,18 +1688,36 @@ fn recovered_bot_input_sends_after_reopening_a_failed_agent_report(cx: &mut Test
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.simulate_resize(gpui::size(px(1300.), px(900.)));
     visual.run_until_parked();
-    for selector in ["composer-recover", "composer-use-saved"] {
-        let button = visual
-            .debug_bounds(selector)
-            .expect("recovered input choice");
-        visual.simulate_click(button.center(), Default::default());
-        visual.run_until_parked();
-    }
+    let selector = if recovered {
+        "composer-recover"
+    } else {
+        "composer-use-saved"
+    };
+    let expected = if recovered {
+        "recovered input"
+    } else {
+        "saved input"
+    };
+    let button = visual
+        .debug_bounds(selector)
+        .expect("recovered input choice");
+    visual.simulate_click(button.center(), Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("composer-recover").is_none());
+    assert!(visual.debug_bounds("composer-use-saved").is_none());
+    assert_eq!(
+        locked(&s.store)
+            .unwrap()
+            .composer_recoveries(s.session)
+            .unwrap()
+            .len(),
+        usize::from(recovered)
+    );
     s.window
         .update(visual, |_, window, cx| {
             s.manager.update(cx, |manager, cx| {
                 let chat = manager.chats[&s.id].clone();
-                assert_eq!(chat.read(cx).input.read(cx).content, "hi");
+                assert_eq!(chat.read(cx).input.read(cx).content, expected);
                 assert!(chat.read(cx).settings.usage_limit.is_some());
                 manager.focus_active(window, cx);
             });
@@ -1701,14 +1731,17 @@ fn recovered_bot_input_sends_after_reopening_a_failed_agent_report(cx: &mut Test
         assert_eq!(chat.bot_rows(cx), source);
         let outbox = &manager.roster.get(&s.id).unwrap().outbox;
         assert_eq!(outbox.len(), 1);
-        assert_eq!(outbox[0].id, "recovered-send");
-        assert_eq!(outbox[0].text, "hi");
+        assert_eq!(outbox[0].id == "recovered-send", recovered);
+        assert_eq!(outbox[0].text, expected);
     });
     let db = Store::open(&PathBuf::from(&s.project).join("native.sqlite")).unwrap();
     assert!(db.composer_recoveries(s.session).unwrap().is_empty());
     assert_eq!(db.load(s.session).unwrap().rows, source);
     let roster = Roster::load(&db).unwrap();
-    assert_eq!(roster.get(&s.id).unwrap().outbox[0].id, "recovered-send");
+    assert_eq!(
+        roster.get(&s.id).unwrap().outbox[0].id == "recovered-send",
+        recovered
+    );
 }
 
 #[gpui::test]

@@ -827,8 +827,9 @@ impl TranscriptView {
                 if matches!(row.body, Body::Tool { .. })
                     && activity.pinned.contains(&row.key.0)
                     && let Some(answer) = self
-                        .fold_targets
-                        .get(&self.messages[row.message].run)
+                        .messages
+                        .get(row.message)
+                        .and_then(|message| self.fold_targets.get(&message.run))
                         .copied()
                         .flatten()
                         .filter(|answer| row.key.0 < *answer)

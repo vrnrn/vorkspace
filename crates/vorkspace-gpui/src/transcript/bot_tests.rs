@@ -488,6 +488,19 @@ fn pinned_agent_report_preserves_saved_drafts(cx: &mut TestAppContext) {
                     .position(|row| row.key.0 == 2 && matches!(row.body, Body::Markdown(_)))
                     .unwrap();
                 assert!(report < answer);
+                let draft = view
+                    .rows
+                    .iter()
+                    .position(|row| matches!(row.body, Body::SavedDraft))
+                    .unwrap();
+                assert!(
+                    match at {
+                        0 => draft < report,
+                        2 => report < draft && draft < answer,
+                        _ => answer < draft,
+                    },
+                    "bot={bot}, at={at}, draft={draft}, report={report}, answer={answer}",
+                );
                 view.set_saved_draft(None, cx);
                 assert!(
                     !view
