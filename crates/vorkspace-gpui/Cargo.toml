@@ -28,8 +28,8 @@ unicode-segmentation = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 async-channel = "2"
 base64 = "0.22"
-# The terminal dock: PTY, VT parser and grid (as Zed's terminal uses).
-alacritty_terminal = "0.26"
+# Public libghostty-vt, built offline and linked statically.
+vorkspace-terminal = { path = "../vorkspace-terminal" }
 libc = "0.2"
 rquickjs = "0.14.0"
 # The vendored renderer's backdrop-blur marker for frosted popovers.

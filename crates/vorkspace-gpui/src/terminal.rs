@@ -1,35 +1,28 @@
-//! Port of TerminalView.tsx: a login shell on a PTY, emulated by
-//! alacritty_terminal and painted as a grid of cell-snapped text runs.
-use alacritty_terminal::{
-    event::{Event as TermEvent, EventListener, WindowSize},
-    event_loop::{EventLoop, EventLoopSender, Msg},
-    grid::{Dimensions, Scroll},
-    index::{Column, Point as GridPoint, Side},
-    selection::{Selection, SelectionType},
-    sync::FairMutex,
-    term::{
-        Config, Term, TermMode, cell::Flags, color::Colors, point_to_viewport, viewport_to_point,
-    },
-    tty,
-    vte::ansi::{Color as AnsiColor, CursorShape, CursorStyle as TermCursorStyle, NamedColor, Rgb},
-};
+//! A login shell on an owned PTY, emulated by the public libghostty-vt API
+//! and painted by GPUI as a grid of cell-snapped grapheme runs.
+mod pty;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Element, ElementId, Entity, EventEmitter, FocusHandle,
     Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hsla, InspectorElementId, KeyBinding,
-    KeyDownEvent, Keystroke, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, ScrollDelta,
-    ScrollWheelEvent, ShapedLine, SharedString, Size, StrikethroughStyle, Style, Task, TextAlign,
-    TextRun, UnderlineStyle, Window, actions, div, point, prelude::*, px, rgb, size,
+    KeyDownEvent, KeyUpEvent, Keystroke, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ScrollDelta, ScrollWheelEvent, ShapedLine, SharedString, Size, StrikethroughStyle, Style, Task,
+    TextAlign, TextRun, UnderlineStyle, Window, actions, div, point, prelude::*, px, rgb, size,
 };
+use pty::{Msg, Sender as EventLoopSender};
 use std::{
     borrow::Cow,
     cell::Cell,
     collections::HashMap,
     rc::Rc,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
+};
+use vorkspace_terminal::{
+    Cell as TermCell, Config, CursorShape, Key, KeyAction, Modes as TermMode, SelectionKind,
+    Terminal as Engine,
 };
 use vorkspace_ui::theme::*;
 
@@ -83,10 +76,10 @@ impl Listener {
         )
     }
 }
-impl EventListener for Listener {
+impl Listener {
     fn send_event(&self, event: TermEvent) {
         let event = match event {
-            TermEvent::Wakeup | TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {
+            TermEvent::Wakeup => {
                 // The terminal grid already owns the latest output. Queue
                 // one request to observe it, regardless of output rate.
                 if self.repaint_pending.swap(true, Ordering::AcqRel) {
@@ -105,16 +98,13 @@ struct GridSize {
     columns: usize,
     lines: usize,
 }
-impl Dimensions for GridSize {
-    fn total_lines(&self) -> usize {
-        self.lines
-    }
-    fn screen_lines(&self) -> usize {
-        self.lines
-    }
-    fn columns(&self) -> usize {
-        self.columns
-    }
+enum TermEvent {
+    Wakeup,
+    #[cfg(test)]
+    PtyWrite(String),
+    ClipboardStore(String),
+    ChildExit(std::process::ExitStatus),
+    Exit,
 }
 
 pub(crate) enum TerminalEvent {
@@ -130,7 +120,7 @@ struct Geometry {
 }
 
 pub(crate) struct Terminal {
-    term: Arc<FairMutex<Term<Listener>>>,
+    term: Arc<Mutex<Engine>>,
     sender: Option<EventLoopSender>,
     focus: FocusHandle,
     pub cwd: String,
@@ -142,6 +132,7 @@ pub(crate) struct Terminal {
     size: GridSize,
     geometry: Rc<Cell<Option<Geometry>>>,
     master_fd: i32,
+    master_owner: Option<Arc<std::fs::File>>,
     shell_pid: u32,
     selecting: bool,
     selection_pointer: Option<gpui::Point<gpui::Pixels>>,
@@ -159,27 +150,34 @@ impl Focusable for Terminal {
 }
 
 struct Spawned {
-    term: Arc<FairMutex<Term<Listener>>>,
+    term: Arc<Mutex<Engine>>,
     sender: Option<EventLoopSender>,
     master_fd: i32,
+    master_owner: Option<Arc<std::fs::File>>,
     shell_pid: u32,
     events: async_channel::Receiver<TermEvent>,
     repaint_pending: Arc<AtomicBool>,
 }
 /// Start the login shell on a PTY with TerminalView's environment. A failure
 /// is written into the grid, as TerminalView prints it.
-fn spawn(cwd: &str, size: GridSize, id: u64) -> Spawned {
+fn engine(size: GridSize) -> Arc<Mutex<Engine>> {
+    let config = Config {
+        scrollback_lines: SCROLLBACK,
+        scrollback_bytes: 8 * 1024 * 1024,
+        palette: std::array::from_fn(|i| indexed_rgb(i as u8)),
+        foreground: OSC_FOREGROUND,
+        background: OSC_BACKGROUND,
+        cursor: ACCENT,
+    };
+    Arc::new(Mutex::new(
+        Engine::new(size.columns as u16, size.lines as u16, &config)
+            .expect("allocate libghostty-vt terminal"),
+    ))
+}
+fn spawn(cwd: &str, size: GridSize, _id: u64) -> Spawned {
     let (listener, rx) = Listener::channel();
     let repaint_pending = listener.repaint_pending.clone();
-    let config = Config {
-        scrolling_history: SCROLLBACK,
-        default_cursor_style: TermCursorStyle {
-            shape: CursorShape::Beam,
-            blinking: true,
-        },
-        ..Config::default()
-    };
-    let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
+    let term = engine(size);
     let workdir = working_dir(cwd);
     let (program, args) = default_shell();
     let mut env = HashMap::new();
@@ -193,51 +191,26 @@ fn spawn(cwd: &str, size: GridSize, id: u64) -> Spawned {
     ] {
         env.insert(key.to_owned(), value);
     }
-    let options = tty::Options {
-        shell: Some(tty::Shell::new(program, args)),
-        working_directory: Some(workdir),
-        drain_on_exit: false,
-        env,
-    };
-    let window = WindowSize {
-        num_lines: size.lines as u16,
-        num_cols: size.columns as u16,
-        cell_width: 8,
-        cell_height: 16,
-    };
-    let mut master_fd = -1;
-    let mut shell_pid = 0;
-    let sender = match tty::new(&options, window, id) {
-        Ok(pty) => {
-            {
+    let (sender, master_owner, master_fd, shell_pid) =
+        match pty::Pty::spawn(&program, &args, &workdir, env, size, term.clone(), listener) {
+            Ok(pty) => {
                 use std::os::fd::AsRawFd;
-                master_fd = pty.file().as_raw_fd();
-                shell_pid = pty.child().id();
+                let fd = pty.master.as_raw_fd();
+                (Some(pty.sender), Some(pty.master), fd, pty.shell_pid)
             }
-            match EventLoop::new(term.clone(), listener, pty, false, false) {
-                Ok(event_loop) => {
-                    let sender = event_loop.channel();
-                    event_loop.spawn();
-                    Some(sender)
-                }
-                Err(error) => {
-                    write_note(&term, &format!("\x1b[31m{error}\x1b[0m"));
-                    None
-                }
+            Err(error) => {
+                write_note(
+                    &term,
+                    &format!("\x1b[31mCould not start the shell: {error}\x1b[0m"),
+                );
+                (None, None, -1, 0)
             }
-        }
-        Err(error) => {
-            write_note(
-                &term,
-                &format!("\x1b[31mCould not start the shell: {error}\x1b[0m"),
-            );
-            None
-        }
-    };
+        };
     Spawned {
         term,
         sender,
         master_fd,
+        master_owner,
         shell_pid,
         events: rx,
         repaint_pending,
@@ -246,15 +219,14 @@ fn spawn(cwd: &str, size: GridSize, id: u64) -> Spawned {
 
 fn detached(size: GridSize) -> Spawned {
     let (listener, rx) = Listener::channel();
-    let repaint_pending = listener.repaint_pending.clone();
-    let term = Term::new(Config::default(), &size, listener);
     Spawned {
-        term: Arc::new(FairMutex::new(term)),
+        term: engine(size),
         sender: None,
         master_fd: -1,
+        master_owner: None,
         shell_pid: 0,
         events: rx,
-        repaint_pending,
+        repaint_pending: listener.repaint_pending,
     }
 }
 
@@ -267,12 +239,7 @@ impl Terminal {
 
     #[cfg(test)]
     pub(crate) fn fixture_screen(&self) -> String {
-        self.term
-            .lock()
-            .grid()
-            .display_iter()
-            .map(|cell| cell.c)
-            .collect()
+        self.term.lock().unwrap().frame().unwrap().text()
     }
 
     /// Hidden terminals do not poll. Query at the explicit close boundary so
@@ -295,6 +262,7 @@ impl Terminal {
             term,
             sender,
             master_fd,
+            master_owner,
             shell_pid,
             events: rx,
             repaint_pending,
@@ -334,7 +302,8 @@ impl Terminal {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let Ok(Some((fd, pid))) = this.update(cx, |this, _| {
-                    (this.visible && !this.exited).then_some((this.master_fd, this.shell_pid))
+                    (this.visible && !this.exited)
+                        .then_some((this.master_owner.clone(), this.shell_pid))
                 }) else {
                     if this.update(cx, |_, _| ()).is_err() {
                         break;
@@ -343,7 +312,10 @@ impl Terminal {
                 };
                 let label = cx
                     .background_executor()
-                    .spawn(async move { foreground_label(fd, pid) })
+                    .spawn(async move {
+                        use std::os::fd::AsRawFd;
+                        fd.and_then(|fd| foreground_label(fd.as_raw_fd(), pid))
+                    })
                     .await;
                 if this
                     .update(cx, |this, cx| {
@@ -368,6 +340,7 @@ impl Terminal {
             size,
             geometry: Rc::default(),
             master_fd,
+            master_owner,
             shell_pid,
             selecting: false,
             selection_pointer: None,
@@ -381,38 +354,15 @@ impl Terminal {
 
     fn on_event(&mut self, event: TermEvent, cx: &mut Context<Self>) {
         match event {
-            TermEvent::Wakeup | TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {
+            TermEvent::Wakeup => {
                 if self.visible {
                     cx.notify();
                 }
             }
+            #[cfg(test)]
             TermEvent::PtyWrite(text) => self.write(text.into_bytes()),
-            TermEvent::ColorRequest(index, format) => {
-                let colors = *self.term.lock().colors();
-                self.write(format(color_rgb(index, &colors)).into_bytes());
-            }
-            TermEvent::TextAreaSizeRequest(format) => {
-                let cell = self
-                    .geometry
-                    .get()
-                    .map_or(size(px(8.), px(16.)), |g| g.cell);
-                let reply = format(WindowSize {
-                    num_lines: self.size.lines as u16,
-                    num_cols: self.size.columns as u16,
-                    cell_width: cell.width.as_f32() as u16,
-                    cell_height: cell.height.as_f32() as u16,
-                });
-                self.write(reply.into_bytes());
-            }
-            TermEvent::ClipboardStore(_, text) => {
+            TermEvent::ClipboardStore(text) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(text))
-            }
-            TermEvent::ClipboardLoad(_, format) => {
-                let text = cx
-                    .read_from_clipboard()
-                    .and_then(|item| item.text())
-                    .unwrap_or_default();
-                self.write(format(&text).into_bytes());
             }
             TermEvent::ChildExit(status) => {
                 let code = status.code().map(|c| format!(" ({c})")).unwrap_or_default();
@@ -420,7 +370,6 @@ impl Terminal {
                 self.finish(cx);
             }
             TermEvent::Exit => self.finish(cx),
-            TermEvent::Title(_) | TermEvent::ResetTitle | TermEvent::Bell => {}
         }
     }
     fn finish(&mut self, cx: &mut Context<Self>) {
@@ -441,17 +390,20 @@ impl Terminal {
         cx.emit(TerminalEvent::Changed);
     }
     fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
-        if let Some(sender) = &self.sender {
-            let _ = sender.send(Msg::Input(bytes.into()));
+        if let Some(sender) = &self.sender
+            && let Err(error) = sender.send(Msg::Input(bytes.into()))
+            && error.kind() == std::io::ErrorKind::WouldBlock
+        {
+            write_note(&self.term, "\r\n[terminal input queue is full]");
         }
     }
     /// Typing returns a scrolled-back view to the prompt.
     fn input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
         self.stop_selection();
         {
-            let mut term = self.term.lock();
-            term.scroll_display(Scroll::Bottom);
-            term.selection = None;
+            let mut term = self.term.lock().unwrap();
+            term.scroll_to_bottom();
+            term.clear_selection();
         }
         self.write(bytes);
         cx.notify();
@@ -459,25 +411,67 @@ impl Terminal {
     /// Fit the grid to the painted area; the PTY learns its new size.
     fn resize(&mut self, columns: usize, lines: usize, cell: Size<gpui::Pixels>) {
         let next = GridSize { columns, lines };
-        if next == self.size {
+        if next == self.size && self.geometry.get().is_some_and(|g| g.cell == cell) {
             return;
         }
+        let effects = {
+            let mut term = self.term.lock().unwrap();
+            if let Err(error) = term.resize(
+                columns as u16,
+                lines as u16,
+                cell.width.as_f32().max(1.) as u32,
+                cell.height.as_f32().max(1.) as u32,
+            ) {
+                log_terminal_error(&error);
+                return;
+            }
+            term.take_effects()
+        };
         self.size = next;
-        self.term.lock().resize(next);
+        for effect in effects {
+            if let vorkspace_terminal::Effect::PtyWrite(bytes) = effect {
+                self.write(bytes);
+            }
+        }
         if let Some(sender) = &self.sender {
-            let _ = sender.send(Msg::Resize(WindowSize {
-                num_lines: lines as u16,
-                num_cols: columns as u16,
+            let _ = sender.send(Msg::Resize {
+                size: next,
                 cell_width: cell.width.as_f32() as u16,
                 cell_height: cell.height.as_f32() as u16,
-            }));
+            });
         }
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let mode = *self.term.lock().mode();
-        if let Some(bytes) = key_bytes(&event.keystroke, mode) {
+        let bytes = encode_key(
+            &event.keystroke,
+            &mut self.term.lock().unwrap(),
+            if event.is_held {
+                KeyAction::Repeat
+            } else {
+                KeyAction::Press
+            },
+        );
+        if let Some(bytes) = bytes {
             cx.stop_propagation();
+            self.input(bytes, cx);
+        }
+    }
+    fn key_up(&mut self, event: &KeyUpEvent, cx: &mut Context<Self>) {
+        let bytes = encode_key(
+            &event.keystroke,
+            &mut self.term.lock().unwrap(),
+            KeyAction::Release,
+        );
+        if let Some(bytes) = bytes {
+            cx.stop_propagation();
+            self.write(bytes);
+        }
+    }
+    fn action_key(&mut self, spec: &str, cx: &mut Context<Self>) {
+        let key = Keystroke::parse(spec).expect("static terminal key");
+        let bytes = encode_key(&key, &mut self.term.lock().unwrap(), KeyAction::Press);
+        if let Some(bytes) = bytes {
             self.input(bytes, cx);
         }
     }
@@ -485,7 +479,8 @@ impl Terminal {
         if let Some(text) = self
             .term
             .lock()
-            .selection_to_string()
+            .unwrap()
+            .selection_text()
             .filter(|t| !t.is_empty())
         {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -495,7 +490,12 @@ impl Terminal {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        let bracketed = self.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
+        let bracketed = self
+            .term
+            .lock()
+            .unwrap()
+            .modes()
+            .contains(TermMode::BRACKETED_PASTE);
         let bytes = if bracketed {
             // A pasted end marker must not end the paste early.
             let text = text.replace("\x1b[201~", "");
@@ -506,57 +506,39 @@ impl Terminal {
         self.input(bytes, cx);
     }
     fn select_all(&mut self, cx: &mut Context<Self>) {
-        let mut term = self.term.lock();
-        let mut selection = Selection::new(
-            SelectionType::Simple,
-            GridPoint::new(term.topmost_line(), Column(0)),
-            Side::Left,
-        );
-        selection.update(
-            GridPoint::new(term.bottommost_line(), term.last_column()),
-            Side::Right,
-        );
-        term.selection = Some(selection);
-        drop(term);
+        if let Err(error) = self.term.lock().unwrap().select_all() {
+            log_terminal_error(&error);
+        }
         cx.notify();
     }
 
     /// The cell under a window position, and which half of it.
-    fn grid_point(&self, position: gpui::Point<gpui::Pixels>) -> Option<(GridPoint, Side)> {
+    fn grid_point(&self, position: gpui::Point<gpui::Pixels>) -> Option<(u16, u16, bool)> {
         let g = self.geometry.get()?;
         let x = ((position.x - g.origin.x) / g.cell.width).max(0.);
         let y = ((position.y - g.origin.y) / g.cell.height).max(0.);
         let column = (x as usize).min(self.size.columns.saturating_sub(1));
         let line = (y as usize).min(self.size.lines.saturating_sub(1));
-        let side = if x.fract() < 0.5 {
-            Side::Left
-        } else {
-            Side::Right
-        };
-        let offset = self.term.lock().grid().display_offset();
-        Some((
-            viewport_to_point(offset, GridPoint::new(line, Column(column))),
-            side,
-        ))
+        Some((column as u16, line as u16, x.fract() >= 0.5))
     }
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
-        let Some((at, side)) = self.grid_point(event.position) else {
+        let Some((column, row, right)) = self.grid_point(event.position) else {
             return;
         };
-        let mut term = self.term.lock();
-        match term.selection.as_mut() {
-            Some(selection) if event.modifiers.shift => selection.update(at, side),
-            _ => {
-                let ty = match event.click_count {
-                    2 => SelectionType::Semantic,
-                    3.. => SelectionType::Lines,
-                    _ => SelectionType::Simple,
-                };
-                term.selection = Some(Selection::new(ty, at, side));
-            }
+        let kind = match event.click_count {
+            2 => SelectionKind::Word,
+            3.. => SelectionKind::Line,
+            _ => SelectionKind::Simple,
+        };
+        if let Err(error) =
+            self.term
+                .lock()
+                .unwrap()
+                .select(column, row, right, kind, event.modifiers.shift)
+        {
+            log_terminal_error(&error);
         }
-        drop(term);
         self.selecting = true;
         self.selection_pointer = None;
         self.selection_scroll = Some(cx.spawn(async move |this, cx| {
@@ -610,19 +592,20 @@ impl Terminal {
             return true;
         };
         let changed = {
-            let mut term = self.term.lock();
-            if term.selection.is_none() {
-                return false;
-            }
-            let before = term.grid().display_offset();
-            term.scroll_display(Scroll::Delta(delta));
-            term.grid().display_offset() != before
+            let mut term = self.term.lock().unwrap();
+            let before = term.display_offset();
+            term.scroll(delta);
+            term.display_offset() != before
         };
         if changed {
-            if let Some((at, side)) = self.grid_point(position)
-                && let Some(selection) = self.term.lock().selection.as_mut()
-            {
-                selection.update(at, side);
+            if let Some((column, row, right)) = self.grid_point(position) {
+                let _ = self.term.lock().unwrap().select(
+                    column,
+                    row,
+                    right,
+                    SelectionKind::Simple,
+                    true,
+                );
             }
             cx.notify();
         }
@@ -637,10 +620,12 @@ impl Terminal {
             return;
         }
         self.selection_pointer = Some(event.position);
-        if let Some((at, side)) = self.grid_point(event.position) {
-            if let Some(selection) = self.term.lock().selection.as_mut() {
-                selection.update(at, side);
-            }
+        if let Some((column, row, right)) = self.grid_point(event.position) {
+            let _ =
+                self.term
+                    .lock()
+                    .unwrap()
+                    .select(column, row, right, SelectionKind::Simple, true);
             cx.notify();
         }
     }
@@ -655,7 +640,7 @@ impl Terminal {
         if lines == 0 {
             return;
         }
-        let mode = *self.term.lock().mode();
+        let mode = self.term.lock().unwrap().modes();
         // A full-screen program scrolls itself; the shell scrolls history.
         if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
             let key: &[u8] = match (lines > 0, mode.contains(TermMode::APP_CURSOR)) {
@@ -666,7 +651,7 @@ impl Terminal {
             };
             self.write(key.repeat(lines.unsigned_abs() as usize));
         } else {
-            self.term.lock().scroll_display(Scroll::Delta(lines));
+            self.term.lock().unwrap().scroll(lines);
             cx.notify();
         }
     }
@@ -675,14 +660,6 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         if let Some(sender) = self.sender.take() {
             let _ = sender.send(Msg::Shutdown);
-        }
-        // The hangup a closing shell expects, for it and its job.
-        if self.shell_pid > 1 && !self.exited {
-            let pid = self.shell_pid as i32;
-            unsafe {
-                libc::kill(pid, libc::SIGHUP);
-                libc::kill(-pid, libc::SIGHUP);
-            }
         }
     }
 }
@@ -697,11 +674,10 @@ impl Render for Terminal {
             .size_full()
             .cursor(gpui::CursorStyle::IBeam)
             .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
-            .on_action(cx.listener(|this, _: &SendTab, _, cx| this.input(b"\t".to_vec(), cx)))
-            .on_action(
-                cx.listener(|this, _: &SendBackTab, _, cx| this.input(b"\x1b[Z".to_vec(), cx)),
-            )
-            .on_action(cx.listener(|this, _: &SendEscape, _, cx| this.input(b"\x1b".to_vec(), cx)))
+            .on_key_up(cx.listener(|this, event, _, cx| this.key_up(event, cx)))
+            .on_action(cx.listener(|this, _: &SendTab, _, cx| this.action_key("tab", cx)))
+            .on_action(cx.listener(|this, _: &SendBackTab, _, cx| this.action_key("shift-tab", cx)))
+            .on_action(cx.listener(|this, _: &SendEscape, _, cx| this.action_key("escape", cx)))
             .on_action(cx.listener(|this, _: &Copy, _, cx| this.copy(cx)))
             .on_action(cx.listener(|this, _: &Paste, _, cx| this.paste(cx)))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
@@ -736,7 +712,7 @@ impl IntoElement for Grid {
     }
 }
 /// A cell to paint: column, glyph, pen, fill and whether it is wide.
-type Painting = (usize, char, Pen, Option<Hsla>, bool);
+type Painting = (usize, vorkspace_terminal::Text, Pen, Option<Hsla>, bool);
 #[derive(Clone, PartialEq)]
 struct Pen {
     fg: Hsla,
@@ -797,66 +773,64 @@ impl Element for Grid {
         });
         geometry.set(Some(Geometry { origin, cell }));
 
-        let term = term.lock();
-        let content = term.renderable_content();
-        let colors = content.colors;
-        let offset = content.display_offset;
-        let selection = content.selection;
-        let mut rows: Vec<Vec<Painting>> = vec![Vec::new(); lines];
-        for indexed in content.display_iter {
-            let cell = indexed.cell;
-            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                continue;
-            }
-            let Some(at) = point_to_viewport(offset, indexed.point) else {
-                continue;
-            };
-            if at.line >= lines {
-                continue;
-            }
-            let mut fg = color(cell.fg, colors, true);
-            let mut bg = match cell.bg {
-                AnsiColor::Named(NamedColor::Background) => None,
-                other => Some(color(other, colors, false)),
-            };
-            if cell.flags.contains(Flags::INVERSE) {
-                let back = bg.unwrap_or(rgb(CHAT).into());
-                bg = Some(fg);
-                fg = back;
-            }
-            if cell.flags.intersects(Flags::DIM) {
-                fg.a *= 0.66;
-            }
-            if selection.is_some_and(|s| s.contains(indexed.point)) {
-                bg = Some(selection_fill());
-            }
-            let c = if cell.flags.contains(Flags::HIDDEN) {
-                ' '
-            } else {
-                cell.c
-            };
-            rows[at.line].push((
-                at.column.0,
-                c,
-                Pen {
-                    fg,
-                    bold: cell.flags.contains(Flags::BOLD),
-                    italic: cell.flags.contains(Flags::ITALIC),
-                    underline: cell.flags.intersects(Flags::ALL_UNDERLINES),
-                    strike: cell.flags.contains(Flags::STRIKEOUT),
-                },
-                bg,
-                cell.flags.contains(Flags::WIDE_CHAR),
-            ));
+        let frame = {
+            let mut term = term.lock().unwrap();
+            let _ = term.set_default_colors(
+                color_hex(content(1.)),
+                color_hex(pane_fill()),
+                color_hex(accent_color()),
+            );
+            term.frame()
         }
-        let cursor_point = content.cursor.point;
-        let cursor_shape = content.cursor.shape;
-        let show_cursor = content.mode.contains(TermMode::SHOW_CURSOR);
-        drop(term);
+        .unwrap_or_else(|error| {
+            log_terminal_error(&error);
+            vorkspace_terminal::Frame::default()
+        });
+        let mut rows: Vec<Vec<Painting>> = vec![Vec::new(); lines];
+        for (row, cells) in frame.rows.iter().enumerate().take(lines) {
+            for cell in cells {
+                let mut fg: Hsla = rgb(cell.foreground).into();
+                let mut bg = cell.background_set.then(|| rgb(cell.background).into());
+                if cell.has(TermCell::INVERSE) {
+                    let back = bg.unwrap_or(rgb(frame.background).into());
+                    bg = Some(fg);
+                    fg = back;
+                }
+                if cell.has(TermCell::DIM) {
+                    fg.a *= 0.66;
+                }
+                if cell.selected {
+                    bg = Some(selection_fill());
+                }
+                let text = if cell.has(TermCell::HIDDEN) || cell.text.is_empty() {
+                    " ".into()
+                } else {
+                    cell.text.clone()
+                };
+                rows[row].push((
+                    cell.column,
+                    text,
+                    Pen {
+                        fg,
+                        bold: cell.has(TermCell::BOLD),
+                        italic: cell.has(TermCell::ITALIC),
+                        underline: cell.has(TermCell::UNDERLINE),
+                        strike: cell.has(TermCell::STRIKE),
+                    },
+                    bg,
+                    cell.width == 2,
+                ));
+            }
+        }
+        let cursor = frame.cursor;
 
         let mut painted = Painted {
             lines: Vec::new(),
-            rects: Vec::new(),
+            rects: if frame.background != color_hex(pane_fill()) {
+                vec![(bounds, rgb(frame.background).into())]
+            } else {
+                Vec::new()
+            },
             cursor: None,
             line_height,
         };
@@ -898,11 +872,11 @@ impl Element for Grid {
                     && (end == ix || !wide)
                     && cells[end].0 == column + (end - ix)
                 {
-                    text.push(cells[end].1);
+                    text.push_str(&cells[end].1);
                     end += 1;
                 }
                 if end == ix {
-                    text.push(cells[ix].1);
+                    text.push_str(&cells[ix].1);
                     end = ix + 1;
                 }
                 if !text.trim().is_empty() {
@@ -942,14 +916,12 @@ impl Element for Grid {
                 ix = end;
             }
         }
-        if show_cursor
-            && cursor_shape != CursorShape::Hidden
-            && let Some(at) = point_to_viewport(offset, cursor_point)
-            && at.line < lines
+        if let Some(cursor) = cursor.filter(|cursor| cursor.row < lines && cursor.column < columns)
         {
-            let x = origin.x + cell_width * at.column.0 as f32;
-            let y = origin.y + line_height * at.line as f32;
-            let accent: Hsla = accent_color();
+            let cursor_shape = cursor.shape;
+            let x = origin.x + cell_width * cursor.column as f32;
+            let y = origin.y + line_height * cursor.row as f32;
+            let accent: Hsla = rgb(cursor.color).into();
             let (bounds, hollow) = match (cursor_shape, self.focused) {
                 (CursorShape::Beam, _) => {
                     (Bounds::new(point(x, y), size(px(2.), line_height)), false)
@@ -1036,17 +1008,23 @@ fn cell_rect(
     )
 }
 
+fn color_hex(color: Hsla) -> u32 {
+    let c = color.to_rgb();
+    ((c.r * 255.).round() as u32) << 16
+        | ((c.g * 255.).round() as u32) << 8
+        | (c.b * 255.).round() as u32
+}
 fn fixed_font() -> Font {
     gpui::font(vorkspace_ui::fonts::FIXED_FONT)
 }
 fn selection_fill() -> Hsla {
     content(0.18)
 }
-fn write_note(term: &Arc<FairMutex<Term<Listener>>>, text: &str) {
-    let mut parser = alacritty_terminal::vte::ansi::Processor::<
-        alacritty_terminal::vte::ansi::StdSyncHandler,
-    >::new();
-    parser.advance(&mut *term.lock(), text.as_bytes());
+fn write_note(term: &Arc<Mutex<Engine>>, text: &str) {
+    term.lock().unwrap().write(text.as_bytes());
+}
+fn log_terminal_error(error: &std::io::Error) {
+    eprintln!("Terminal: {error}");
 }
 
 /// TerminalView's ANSI_DARK palette.
@@ -1072,74 +1050,19 @@ fn indexed_rgb(index: u8) -> u32 {
         }
     }
 }
-fn hex(rgb: Rgb) -> u32 {
-    ((rgb.r as u32) << 16) | ((rgb.g as u32) << 8) | rgb.b as u32
-}
-fn to_rgb(value: u32) -> Rgb {
-    Rgb {
-        r: (value >> 16) as u8,
-        g: (value >> 8) as u8,
-        b: value as u8,
-    }
-}
-/// Reply colour for an OSC 4/10/11/12 query: an app-set colour wins.
-fn color_rgb(index: usize, colors: &Colors) -> Rgb {
-    if let Some(rgb) = colors[index] {
-        return rgb;
-    }
-    to_rgb(match index {
-        0..=255 => indexed_rgb(index as u8),
-        256 => OSC_FOREGROUND,
-        257 => OSC_BACKGROUND,
-        258 => ACCENT,
-        _ => OSC_FOREGROUND,
-    })
-}
-fn color(value: AnsiColor, colors: &Colors, foreground: bool) -> Hsla {
-    let dim = |c: u32| {
-        let mut h: Hsla = rgb(c).into();
-        h.a *= 0.66;
-        h
-    };
-    match value {
-        AnsiColor::Spec(spec) => rgb(hex(spec)).into(),
-        AnsiColor::Indexed(index) => colors[index as usize]
-            .map_or_else(|| rgb(indexed_rgb(index)).into(), |c| rgb(hex(c)).into()),
-        AnsiColor::Named(name) => {
-            if let Some(c) = colors[name] {
-                return rgb(hex(c)).into();
-            }
-            match name {
-                NamedColor::Foreground | NamedColor::BrightForeground => content(1.),
-                NamedColor::DimForeground => content(0.66),
-                NamedColor::Background => {
-                    if foreground {
-                        rgb(CHAT).into()
-                    } else {
-                        gpui::transparent_black()
-                    }
-                }
-                NamedColor::Cursor => accent_color(),
-                NamedColor::DimBlack => dim(ANSI[0]),
-                NamedColor::DimRed => dim(ANSI[1]),
-                NamedColor::DimGreen => dim(ANSI[2]),
-                NamedColor::DimYellow => dim(ANSI[3]),
-                NamedColor::DimBlue => dim(ANSI[4]),
-                NamedColor::DimMagenta => dim(ANSI[5]),
-                NamedColor::DimCyan => dim(ANSI[6]),
-                NamedColor::DimWhite => dim(ANSI[7]),
-                other => rgb(ANSI[(other as usize).min(15)]).into(),
-            }
-        }
-    }
-}
-
 /// Bytes a keystroke sends, or None to leave it to the app's bindings.
 /// Includes terminalKeys.ts's macOS editing shortcuts.
-pub(crate) fn key_bytes(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u8>> {
+#[cfg(test)]
+fn key_bytes(keystroke: &Keystroke, term: &mut Engine) -> Option<Vec<u8>> {
+    encode_key(keystroke, term, KeyAction::Press)
+}
+fn encode_key(keystroke: &Keystroke, term: &mut Engine, action: KeyAction) -> Option<Vec<u8>> {
     let m = &keystroke.modifiers;
     let key = keystroke.key.as_str();
     if m.platform {
+        if matches!(action, KeyAction::Release) {
+            return None;
+        }
         if m.control || m.shift || m.alt {
             return None;
         }
@@ -1151,118 +1074,58 @@ pub(crate) fn key_bytes(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u8>
         };
     }
     if m.alt && !m.control && !m.shift {
+        if matches!(action, KeyAction::Release) && matches!(key, "left" | "right") {
+            return None;
+        }
         match key {
             "left" => return Some(b"\x1bb".to_vec()),
             "right" => return Some(b"\x1bf".to_vec()),
             _ => {}
         }
     }
-    let modifier = 1 + m.shift as u8 + 2 * m.alt as u8 + 4 * m.control as u8;
-    let app_cursor = mode.contains(TermMode::APP_CURSOR);
-    let cursor = |final_byte: char| {
-        Some(if modifier > 1 {
-            format!("\x1b[1;{modifier}{final_byte}").into_bytes()
-        } else if app_cursor {
-            format!("\x1bO{final_byte}").into_bytes()
-        } else {
-            format!("\x1b[{final_byte}").into_bytes()
-        })
-    };
-    let tilde = |code: u8| {
-        Some(if modifier > 1 {
-            format!("\x1b[{code};{modifier}~").into_bytes()
-        } else {
-            format!("\x1b[{code}~").into_bytes()
-        })
-    };
-    let function = |final_byte: char| {
-        Some(if modifier > 1 {
-            format!("\x1b[1;{modifier}{final_byte}").into_bytes()
-        } else {
-            format!("\x1bO{final_byte}").into_bytes()
-        })
-    };
-    let meta = |bytes: &[u8]| {
-        let mut out = Vec::with_capacity(bytes.len() + 1);
-        if m.alt {
-            out.push(0x1b);
-        }
-        out.extend_from_slice(bytes);
-        Some(out)
-    };
-    match key {
-        "up" => return cursor('A'),
-        "down" => return cursor('B'),
-        "right" => return cursor('C'),
-        "left" => return cursor('D'),
-        "home" => return cursor('H'),
-        "end" => return cursor('F'),
-        "insert" => return tilde(2),
-        "delete" => return tilde(3),
-        "pageup" => return tilde(5),
-        "pagedown" => return tilde(6),
-        "f1" => return function('P'),
-        "f2" => return function('Q'),
-        "f3" => return function('R'),
-        "f4" => return function('S'),
-        "f5" => return tilde(15),
-        "f6" => return tilde(17),
-        "f7" => return tilde(18),
-        "f8" => return tilde(19),
-        "f9" => return tilde(20),
-        "f10" => return tilde(21),
-        "f11" => return tilde(23),
-        "f12" => return tilde(24),
-        "enter" => return meta(b"\r"),
-        "escape" => return meta(b"\x1b"),
-        "tab" if m.shift => return Some(b"\x1b[Z".to_vec()),
-        "tab" => return meta(b"\t"),
-        "backspace" if m.control => return meta(b"\x08"),
-        "backspace" => return meta(b"\x7f"),
-        _ => {}
-    }
-    if m.control {
-        let ch = if key == "space" {
-            ' '
-        } else {
-            let mut chars = key.chars();
-            let ch = chars.next()?;
-            if chars.next().is_some() {
-                return None;
-            }
-            ch
-        };
-        let code = match ch.to_ascii_lowercase() {
-            c @ 'a'..='z' => c as u8 - b'a' + 1,
-            ' ' | '@' | '2' => 0,
-            '[' | '3' => 27,
-            '\\' | '4' => 28,
-            ']' | '5' => 29,
-            '^' | '6' => 30,
-            '_' | '-' | '/' | '7' => 31,
-            '8' => 127,
-            _ => return None,
-        };
-        return meta(&[code]);
-    }
-    // Option is Meta (`macOptionIsMeta`): the key itself, after ESC.
-    if m.alt {
-        let text = if key == "space" {
-            " ".to_owned()
-        } else if m.shift {
+    let fallback = if key == "space" {
+        " ".to_owned()
+    } else if key.chars().count() == 1 {
+        if m.shift {
             key.to_uppercase()
         } else {
             key.to_owned()
-        };
-        if text.chars().count() == 1 {
-            return meta(text.as_bytes());
         }
-    }
-    let text = keystroke.key_char.as_deref().or(match key {
-        "space" => Some(" "),
-        _ => None,
-    })?;
-    Some(text.as_bytes().to_vec())
+    } else {
+        String::new()
+    };
+    let text = if m.alt {
+        fallback.as_str()
+    } else {
+        keystroke.key_char.as_deref().unwrap_or(&fallback)
+    };
+    let text = if text
+        .chars()
+        .any(|ch| ch <= '\u{1f}' || ch == '\u{7f}' || ('\u{f700}'..='\u{f8ff}').contains(&ch))
+    {
+        fallback.as_str()
+    } else {
+        text
+    };
+    let codepoint = if key == "space" {
+        ' ' as u32
+    } else if key.chars().count() == 1 {
+        key.chars().next().unwrap() as u32
+    } else {
+        0
+    };
+    term.key(Key {
+        name: key,
+        text,
+        unshifted_codepoint: codepoint,
+        shift: m.shift,
+        control: m.control,
+        alt: m.alt,
+        action,
+    })
+    .map_err(|error| log_terminal_error(&error))
+    .ok()
+    .filter(|bytes| !bytes.is_empty())
 }
 
 fn default_title(cwd: &str) -> String {

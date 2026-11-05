@@ -10,7 +10,7 @@ The desktop is Rust. Provider CLIs run as supervised child processes. A small Ja
 
 ## Run locally
 
-You need macOS 26 or newer, a current stable Rust toolchain, Node.js 24 or newer, and Xcode with macOS 26 platform components. Install and sign in to at least one supported [provider CLI](docs/providers.md).
+You need macOS 26 or newer, a current stable Rust toolchain, Zig 0.17.x, Node.js 24 or newer, and Xcode with macOS 26 platform components. Install and sign in to at least one supported [provider CLI](docs/providers.md).
 
 ```sh
 npm run dev -- --cwd /path/to/project

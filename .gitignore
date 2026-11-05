@@ -19,6 +19,8 @@ coverage/
 *.dmg
 *.app/
 *.tar.gz
+!vendor/libghostty-vt/source.tar.gz
+!vendor/libghostty-vt/dependencies.tar.gz
 *.zip
 latest.json
 logs/

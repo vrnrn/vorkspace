@@ -1,0 +1,13 @@
+[package]
+name = "vorkspace-terminal"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+smol_str = "0.3"
+
+[build-dependencies]
+cc = "1"
+sha2 = "0.10"

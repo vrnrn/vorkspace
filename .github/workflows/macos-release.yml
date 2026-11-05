@@ -34,6 +34,9 @@ jobs:
           components: rustfmt, clippy
           targets: aarch64-apple-darwin
       - uses: taiki-e/install-action@nextest
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
       - name: Prepare unused version, build number, and release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

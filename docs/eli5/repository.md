@@ -4,6 +4,8 @@ On your Mac, vorkspace is two programs: the main app, and a small helper that ke
 
 `host` is the program that runs on a remote computer. It has its own saved conversations and agent processes, which can continue when your desktop disconnects.
 
+`crates/vorkspace-terminal` interprets terminal output using Ghostty's library. Its included source and build dependencies live in `vendor/libghostty-vt`; the packaged app needs no separate Ghostty installation.
+
 `vendor` holds our own copy of GPUI, the toolkit that draws the app. We change it directly and no longer follow the original project. It also holds a small repaired copy of `block`, a library GPUI's Mac code relies on.
 
 Code only depends on code below it, so a change low down cannot quietly depend on something built on top of it. A test checks this rule.

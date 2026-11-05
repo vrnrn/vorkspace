@@ -41,6 +41,10 @@ cp crates/vorkspace-gpui/assets/hugeicons.LICENSE \
   crates/vorkspace-gpui/assets/dark-plus.LICENSE \
   crates/vorkspace-editor/assets/native-editor.LICENSE.txt "$native_licenses/"
 cp crates/vorkspace-gpui/assets/material/LICENSE "$native_licenses/material-icons.LICENSE"
+# libghostty-vt and its Unicode implementation are linked into the executable.
+cp vendor/libghostty-vt/LICENSE "$native_licenses/ghostty-vt.LICENSE"
+cp vendor/libghostty-vt/UUCODE-LICENSE vendor/libghostty-vt/UNICODE-LICENSE \
+  vendor/libghostty-vt/BJOERN-HOEHRMANN-LICENSE "$native_licenses/"
 # Launch the binary itself: an exec'ing launcher changes the pid version, and macOS
 # then refuses the menu bar item. The app reads VorkspaceDataMode from Info.plist.
 native_executable="vorkspace-gpui"

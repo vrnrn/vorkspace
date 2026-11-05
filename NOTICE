@@ -93,3 +93,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+libghostty-vt
+Source: https://github.com/ghostty-org/ghostty
+The terminal dock and terminal tabs use Ghostty's public VT engine, linked
+statically. Source revision and dependency provenance are recorded in
+vendor/libghostty-vt/README.md. Ghostty, uucode, Unicode data and UTF-8 decoder
+license notices are in vendor/libghostty-vt/ and copied into app bundles.
