@@ -492,6 +492,92 @@ fn summary_picker_saves_effort_and_clears_it_when_changing_models(cx: &mut TestA
     assert!(visual.debug_bounds("summary-custom-model").is_some());
 }
 
+#[gpui::test]
+fn summary_model_selector_scrolls_and_reveals_keyboard_choices(cx: &mut TestAppContext) {
+    use vorkspace_core::provider::Kind;
+    use vorkspace_meetings::{Meetings, Settings};
+    let directory = tempfile::tempdir().unwrap();
+    let meetings = Meetings::open(directory.path()).unwrap();
+    meetings
+        .save_settings(&Settings {
+            provider: "codex".into(),
+            model: "model-0".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let window = window(Section::Notes, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.ctx.data_dir = Some(directory.path().into());
+            view.discovered_catalogs.insert(
+                (
+                    Kind::Codex,
+                    Default::default(),
+                    vorkspace_core::catalog::generation(Kind::Codex, &Default::default()),
+                ),
+                (0..30)
+                    .map(|n| catalog_model(&format!("model-{n}"), &format!("Model {n}")))
+                    .collect(),
+            );
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let click = |visual: &mut VisualTestContext, selector: &'static str| {
+        let point = visual.debug_bounds(selector).unwrap().center();
+        visual.simulate_click(point, Default::default());
+        visual.run_until_parked();
+    };
+    let visible = |visual: &mut VisualTestContext, selector: &'static str| {
+        let list = visual
+            .debug_bounds("settings-select-scroll-meeting-models")
+            .unwrap();
+        let row = visual.debug_bounds(selector).unwrap();
+        assert!(list.size.height <= px(310.));
+        assert!(
+            row.top() >= list.top() && row.bottom() <= list.bottom(),
+            "{selector}: row={row:?}, list={list:?}"
+        );
+    };
+    click(visual, "settings-select-meeting-models");
+    let list = visual
+        .debug_bounds("settings-select-scroll-meeting-models")
+        .unwrap();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: list.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-2000.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    visual.run_until_parked();
+    visible(visual, "settings-option-meeting-models-30");
+    visible(visual, "settings-option-meeting-models-31");
+    click(visual, "settings-option-meeting-models-31");
+    assert!(visual.debug_bounds("summary-custom-model").is_some());
+
+    // Reopening reveals the selected custom action; the last catalog model
+    // remains reachable just above it and can be saved normally.
+    click(visual, "settings-select-meeting-models");
+    visible(visual, "settings-option-meeting-models-31");
+    visible(visual, "settings-option-meeting-models-30");
+    click(visual, "settings-option-meeting-models-30");
+    click(visual, "save-meeting-settings");
+    assert_eq!(meetings.settings().unwrap().model, "model-29");
+
+    click(visual, "settings-select-meeting-models");
+    visible(visual, "settings-option-meeting-models-30");
+    visual.simulate_keystrokes("home");
+    visual.run_until_parked();
+    visible(visual, "settings-option-meeting-models-0");
+    visual.simulate_keystrokes("end up down");
+    visual.run_until_parked();
+    visible(visual, "settings-option-meeting-models-31");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("summary-custom-model").is_some());
+}
+
 /// Native screenshots use disposable data and never start recording or inference.
 #[test]
 #[ignore = "Requires Metal and VORKSPACE_SETTINGS_CAPTURE_DIR"]

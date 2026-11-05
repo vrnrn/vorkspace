@@ -11,6 +11,7 @@ use vorkspace_ui::theme::*;
 
 /// `text-[12px] leading-relaxed` and `text-[13px]` line boxes.
 const RELAXED_12: f32 = 19.5;
+const SELECT_ROW_HEIGHT: f32 = 28.;
 
 pub(super) use crate::controls::red;
 pub(super) fn accent(alpha: f32) -> Hsla {
@@ -567,6 +568,12 @@ impl SettingsView {
                         } else {
                             this.select_open = Some(id);
                             this.select_active = selected.unwrap_or(0);
+                            // Use list-relative row positions: a reopened popover
+                            // can be placed somewhere else or still be animating.
+                            this.select_scroll.set_offset(gpui::point(
+                                px(0.),
+                                px(-(this.select_active as f32) * SELECT_ROW_HEIGHT),
+                            ));
                             window.focus(&this.select_focus, cx);
                         }
                         cx.notify();
@@ -588,6 +595,8 @@ impl SettingsView {
                             .aria_label(text.clone())
                             .aria_selected(is_selected)
                             .w_full()
+                            .h(px(SELECT_ROW_HEIGHT))
+                            .flex_shrink_0()
                             .flex()
                             .items_center()
                             .gap_2()
@@ -656,9 +665,14 @@ impl SettingsView {
                     .child(
                         div()
                             .id(SharedString::from(format!("select-list-{id}")))
+                            .debug_selector(move || format!("settings-select-scroll-{id}"))
                             .role(Role::ListBox)
                             .aria_label(label)
                             .track_focus(&self.select_focus)
+                            .track_scroll(&self.select_scroll)
+                            .max_h(px(310.))
+                            .min_h_0()
+                            .overflow_y_scroll()
                             .flex()
                             .flex_col()
                             .on_key_down(cx.listener(
@@ -687,6 +701,20 @@ impl SettingsView {
                                             window.focus(&this.focus, cx);
                                         }
                                         _ => return,
+                                    }
+                                    if matches!(key, "down" | "up" | "home" | "end") {
+                                        let top = px(this.select_active as f32 * SELECT_ROW_HEIGHT);
+                                        let height = this
+                                            .select_scroll
+                                            .bounds()
+                                            .size
+                                            .height
+                                            .max(px(SELECT_ROW_HEIGHT));
+                                        let offset = this.select_scroll.offset();
+                                        let y = offset
+                                            .y
+                                            .clamp(-top, height - top - px(SELECT_ROW_HEIGHT));
+                                        this.select_scroll.set_offset(gpui::point(offset.x, y));
                                     }
                                     cx.stop_propagation();
                                     cx.notify();

@@ -216,6 +216,7 @@ pub(crate) struct SettingsView {
     slider_drag: Option<SliderKind>,
     select_open: Option<&'static str>,
     select_active: usize,
+    select_scroll: ScrollHandle,
     select_focus: FocusHandle,
     select_anchors: RefCell<HashMap<&'static str, AnchorSlot>>,
     /// Provider catalogs loaded for this page, so a provider without an open
@@ -418,6 +419,7 @@ impl SettingsView {
             slider_drag: None,
             select_open: None,
             select_active: 0,
+            select_scroll: ScrollHandle::new(),
             select_focus: cx.focus_handle(),
             select_anchors: Default::default(),
             discovered_catalogs: HashMap::new(),
