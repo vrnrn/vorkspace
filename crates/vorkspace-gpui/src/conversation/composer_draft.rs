@@ -376,6 +376,7 @@ impl Conversation {
                                 true,
                                 disabled,
                             )
+                            .debug_selector(|| "composer-recover".into())
                             .child("Restore recovered input")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.resolve_composer_recovery(true, cx)
@@ -388,6 +389,7 @@ impl Conversation {
                                 false,
                                 disabled,
                             )
+                            .debug_selector(|| "composer-use-saved".into())
                             .child("Use saved input")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.resolve_composer_recovery(false, cx)

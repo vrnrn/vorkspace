@@ -1620,6 +1620,98 @@ fn setup(cx: &mut TestAppContext) -> Setup {
 }
 
 #[gpui::test]
+fn recovered_bot_input_sends_after_reopening_a_failed_agent_report(cx: &mut TestAppContext) {
+    cx.update(input::bind);
+    let s = setup(cx);
+    let chat = s
+        .manager
+        .read_with(cx, |manager, _| manager.chats[&s.id].clone());
+    let mut failed = vorkspace_core::tool::ToolCall::new("agent", "Agent");
+    failed.state = vorkspace_core::tool::ToolState::Failed;
+    failed.panel = Some(vorkspace_core::tool::tasks::Panel::Agent(Default::default()));
+    chat.update(cx, |view, cx| {
+        view.bot_post("user", "Review this".into(), cx).unwrap();
+        view.bot_post("tool", serde_json::to_string(&failed).unwrap(), cx)
+            .unwrap();
+        view.bot_post("assistant", "The review failed.".into(), cx)
+            .unwrap();
+    });
+    cx.run_until_parked();
+    let source = chat.read_with(cx, |view, cx| view.bot_rows(cx).to_vec());
+    let mut settings = chat.read_with(cx, |view, _| view.settings.clone());
+    // Exercise admission and acknowledgement without starting a provider.
+    settings.usage_limit = Some(Default::default());
+    {
+        let db = locked(&s.store).unwrap();
+        db.configure_agent(s.session, "claude", &settings).unwrap();
+        let payload = json!({
+            "cwd": s.project, "text": "hi", "selectionStart": 2, "selectionEnd": 2,
+            "attachments": [], "mcpTags": [],
+            "botSubmission": {"mode": null, "queue": false}
+        });
+        let revision = db
+            .composer_draft(s.session)
+            .unwrap()
+            .map_or(0, |draft| draft.revision);
+        let revision = db
+            .save_composer_draft(s.session, revision, &payload)
+            .unwrap();
+        db.save_composer_recovery(
+            s.session,
+            vorkspace_core::store::ComposerRecovery {
+                owner: "recovered-send".into(),
+                revision,
+                payload,
+            },
+        )
+        .unwrap();
+    }
+    drop(chat);
+    s.manager.update(cx, |manager, cx| {
+        manager.settings = None;
+        manager.chats.remove(&s.id);
+        manager.ensure_chat(&s.id, cx);
+    });
+    cx.run_until_parked();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.simulate_resize(gpui::size(px(1300.), px(900.)));
+    visual.run_until_parked();
+    for selector in ["composer-recover", "composer-use-saved"] {
+        let button = visual
+            .debug_bounds(selector)
+            .expect("recovered input choice");
+        visual.simulate_click(button.center(), Default::default());
+        visual.run_until_parked();
+    }
+    s.window
+        .update(visual, |_, window, cx| {
+            s.manager.update(cx, |manager, cx| {
+                let chat = manager.chats[&s.id].clone();
+                assert_eq!(chat.read(cx).input.read(cx).content, "hi");
+                assert!(chat.read(cx).settings.usage_limit.is_some());
+                manager.focus_active(window, cx);
+            });
+        })
+        .unwrap();
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    s.manager.read_with(visual, |manager, cx| {
+        let chat = manager.chats[&s.id].read(cx);
+        assert!(chat.input.read(cx).content.is_empty());
+        assert_eq!(chat.bot_rows(cx), source);
+        let outbox = &manager.roster.get(&s.id).unwrap().outbox;
+        assert_eq!(outbox.len(), 1);
+        assert_eq!(outbox[0].id, "recovered-send");
+        assert_eq!(outbox[0].text, "hi");
+    });
+    let db = Store::open(&PathBuf::from(&s.project).join("native.sqlite")).unwrap();
+    assert!(db.composer_recoveries(s.session).unwrap().is_empty());
+    assert_eq!(db.load(s.session).unwrap().rows, source);
+    let roster = Roster::load(&db).unwrap();
+    assert_eq!(roster.get(&s.id).unwrap().outbox[0].id, "recovered-send");
+}
+
+#[gpui::test]
 fn image_draft_owner_lookup_covers_bot_and_channel_views(cx: &mut TestAppContext) {
     let s = setup(cx);
     let chat = s
