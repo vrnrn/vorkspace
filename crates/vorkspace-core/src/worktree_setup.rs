@@ -4,10 +4,13 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{Read, Seek, SeekFrom},
+    io::{self, Read, Seek, SeekFrom, Write},
     os::{
         fd::AsRawFd,
-        unix::process::{CommandExt, ExitStatusExt},
+        unix::{
+            fs::{MetadataExt, OpenOptionsExt},
+            process::{CommandExt, ExitStatusExt},
+        },
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -23,7 +26,6 @@ const POLL: Duration = Duration::from_millis(50);
 const OUTPUT_LIMIT: usize = 2000;
 const DUE: &str = "due";
 const RUNNING: &str = "running";
-const INTERRUPTED: &str = "interrupted";
 const NOTICE: &str = "notice";
 static COMMANDS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
@@ -44,13 +46,44 @@ fn marker(worktree: &Path) -> Option<PathBuf> {
     let directory = Path::new(link.strip_prefix("gitdir: ")?.trim());
     Some(worktree.join(directory).join("vorkspace-setup"))
 }
-fn read(marker: &Path) -> Option<(String, String)> {
-    let text = fs::read_to_string(marker).ok()?;
-    let (state, command) = text.split_once('\n')?;
-    Some((state.to_owned(), command.to_owned()))
+fn lock_file(marker: &Path) -> io::Result<File> {
+    File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(marker.with_extension("lock"))
 }
-fn write(marker: &Path, state: &str, command: &str) {
-    let _ = fs::write(marker, format!("{state}\n{command}"));
+
+fn try_lock(lock: &File) -> io::Result<bool> {
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    match error.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted => Ok(false),
+        _ => Err(error),
+    }
+}
+
+fn write(marker: &Path, state: &str, content: &str) -> io::Result<File> {
+    let parent = marker.parent().unwrap();
+    let directory = File::open(parent)?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    write!(file, "{state}\n{content}")?;
+    file.as_file().sync_all()?;
+    let file = file.persist(marker)?;
+    // Make the rename durable before a due command is allowed to start.
+    directory.sync_all()?;
+    Ok(file)
+}
+
+fn remove_marker(marker: &Path) -> io::Result<()> {
+    let directory = File::open(marker.parent().unwrap())?;
+    fs::remove_file(marker)?;
+    directory.sync_all()
 }
 
 /// Keeps the command chosen when the worktree was made, whatever changes later.
@@ -62,8 +95,14 @@ pub fn mark_due(projects: &[&Path], worktree: &Path) {
             commands.as_ref()?.get(&key).cloned()
         })
     };
-    if let (Some(command), Some(marker)) = (command, marker(worktree)) {
-        write(&marker, DUE, &command);
+    let (Some(command), Some(marker)) = (command, marker(worktree)) else {
+        return;
+    };
+    let Ok(lock) = lock_file(&marker) else {
+        return;
+    };
+    if try_lock(&lock).unwrap_or(false) && !marker.exists() {
+        let _ = write(&marker, DUE, &command);
     }
 }
 
@@ -75,51 +114,95 @@ pub fn is_due(worktree: &Path) -> bool {
 /// usable worktree, so the turn continues and can repair it. Two sessions sharing a
 /// worktree take turns on a lock, and an owner that died releases it, which is how
 /// a setup killed by a crash or quit is noticed.
-pub fn run_due(project: &Path, worktree: &Path, cancel: &AtomicBool) -> Option<String> {
-    let marker = marker(worktree)?;
-    let lock = File::create(marker.with_extension("lock")).ok()?;
-    while unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+pub fn run_due(project: &Path, worktree: &Path, cancel: &AtomicBool) -> io::Result<Option<Notice>> {
+    let Some(marker) = marker(worktree) else {
+        return Ok(None);
+    };
+    let lock = lock_file(&marker)?;
+    loop {
         if cancel.load(Ordering::Relaxed) {
-            return None;
+            return Ok(None);
+        }
+        if try_lock(&lock)? {
+            break;
         }
         std::thread::sleep(POLL);
     }
-    let (state, command) = read(&marker)?;
+    let mut file = match File::options()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&marker)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    let (state, command) = text.split_once('\n').unwrap_or_default();
     if state == NOTICE {
-        let _ = fs::remove_file(&marker);
-        return Some(command);
+        return Ok(Some(Notice {
+            marker,
+            file,
+            warning: command.to_owned(),
+        }));
     }
-    if state != DUE {
-        let _ = fs::remove_file(&marker);
-        return Some(format!(
-            "Worktree setup was interrupted and may be incomplete. Its command was: {command}"
-        ));
-    }
-    write(&marker, RUNNING, &command);
-    let result = run(&command, project, worktree, cancel, TIMEOUT);
-    match &result {
-        Err(Failure::Interrupted(_)) => write(&marker, INTERRUPTED, &command),
-        _ => {
-            let _ = fs::remove_file(&marker);
+    let warning = if command.is_empty() {
+        "Worktree setup status could not be read and setup may be incomplete.".to_owned()
+    } else if state == DUE {
+        write(&marker, RUNNING, command)?;
+        match run(command, project, worktree, cancel, TIMEOUT) {
+            Ok(()) => {
+                remove_marker(&marker)?;
+                return Ok(None);
+            }
+            Err(Failure::StoppedBeforeSpawn) => {
+                write(&marker, DUE, command)?;
+                return Ok(None);
+            }
+            Err(Failure::Notice(warning)) => warning,
         }
-    }
-    result.err().map(|failure| match failure {
-        Failure::Interrupted(reason) | Failure::Failed(reason) => reason,
-    })
+    } else {
+        format!("Worktree setup was interrupted and may be incomplete. Its command was: {command}")
+    };
+    let file = write(&marker, NOTICE, &warning)?;
+    Ok(Some(Notice {
+        marker,
+        file,
+        warning,
+    }))
 }
 
-/// Keep a warning until a prompt carries it. The turn can still end first, such as
-/// when the provider CLI is missing, and a native slash command has to reach its
-/// harness unchanged.
-pub fn hold_notice(worktree: &Path, warning: &str) {
-    if let Some(marker) = marker(worktree) {
-        write(&marker, NOTICE, warning);
-    }
+/// A pending warning. Holding the file open keeps its identity unique even if
+/// another session removes or replaces the marker before this turn completes.
+pub struct Notice {
+    marker: PathBuf,
+    file: File,
+    warning: String,
 }
-/// The warning is in a prompt now, so no later turn repeats it.
-pub fn clear_notice(worktree: &Path) {
-    if let Some(marker) = marker(worktree) {
-        let _ = fs::remove_file(marker);
+
+impl Notice {
+    pub fn warning(&self) -> &str {
+        &self.warning
+    }
+
+    /// A turn confirmed delivery. Clear only the marker that turn carried.
+    /// If the lock is busy, retain the notice for another turn to acknowledge.
+    pub fn acknowledge(self) -> io::Result<()> {
+        let lock = lock_file(&self.marker)?;
+        if !try_lock(&lock)? {
+            return Ok(());
+        }
+        let current = match fs::symlink_metadata(&self.marker) {
+            Ok(current) => current,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let delivered = self.file.metadata()?;
+        if current.dev() == delivered.dev() && current.ino() == delivered.ino() {
+            remove_marker(&self.marker)?;
+        }
+        Ok(())
     }
 }
 
@@ -136,9 +219,8 @@ fn tail(path: &Path, limit: usize) -> String {
 
 #[derive(Debug)]
 enum Failure {
-    /// It may have done part of its work, so it must not be silently forgotten.
-    Interrupted(String),
-    Failed(String),
+    StoppedBeforeSpawn,
+    Notice(String),
 }
 
 fn run(
@@ -148,12 +230,15 @@ fn run(
     cancel: &AtomicBool,
     timeout: Duration,
 ) -> Result<(), Failure> {
-    let failed = |reason: String| Failure::Failed(format!("Worktree setup {reason}"));
+    let failed = |reason: String| Failure::Notice(format!("Worktree setup {reason}"));
     let output = tempfile::NamedTempFile::new().map_err(|e| failed(e.to_string()))?;
     let log = output.reopen().map_err(|e| failed(e.to_string()))?;
     let errors = log.try_clone().map_err(|e| failed(e.to_string()))?;
     let mut process = Command::new("/bin/sh");
     crate::shell_env::apply_gui_env(&mut process);
+    if cancel.load(Ordering::Relaxed) {
+        return Err(Failure::StoppedBeforeSpawn);
+    }
     let mut child = process
         .args(["-c", command])
         .current_dir(worktree)
@@ -176,7 +261,7 @@ fn run(
         if stopped || started.elapsed() >= timeout {
             crate::process::terminate(&mut child);
             let _ = child.wait();
-            return Err(Failure::Interrupted(format!(
+            return Err(Failure::Notice(format!(
                 "Worktree setup {} and may be incomplete. Its command was: {command}",
                 if stopped { "was stopped" } else { "timed out" }
             )));
@@ -187,7 +272,7 @@ fn run(
         return Ok(());
     }
     if status.signal().is_some() {
-        return Err(Failure::Interrupted(format!(
+        return Err(Failure::Notice(format!(
             "Worktree setup was interrupted and may be incomplete. Its command was: {command}"
         )));
     }
@@ -220,7 +305,7 @@ mod tests {
         (dir, tree)
     }
     fn due(tree: &Path, command: &str) {
-        write(&marker(tree).unwrap(), DUE, command);
+        write(&marker(tree).unwrap(), DUE, command).unwrap();
     }
     fn stopped(value: bool) -> AtomicBool {
         AtomicBool::new(value)
@@ -232,8 +317,12 @@ mod tests {
         assert!(!is_due(&tree));
         due(&tree, "printf %s \"$VORKSPACE_PROJECT_PATH\" >> ran");
         assert!(is_due(&tree));
-        assert_eq!(run_due(dir.path(), &tree, &stopped(false)), None);
-        assert_eq!(run_due(dir.path(), &tree, &stopped(false)), None);
+        assert!(run_due(dir.path(), &tree, &stopped(false))
+            .unwrap()
+            .is_none());
+        assert!(run_due(dir.path(), &tree, &stopped(false))
+            .unwrap()
+            .is_none());
         assert!(!is_due(&tree));
         assert_eq!(
             fs::read_to_string(tree.join("ran")).unwrap(),
@@ -244,9 +333,24 @@ mod tests {
     #[test]
     fn a_failure_reaches_the_turn_and_is_not_retried() {
         let (dir, tree) = repository();
-        due(&tree, "echo cannot install >&2; exit 3");
-        let warning = run_due(dir.path(), &tree, &stopped(false)).unwrap();
-        assert!(warning.contains("cannot install"), "{warning}");
+        due(
+            &tree,
+            "echo ran >> attempts; echo cannot install >&2; exit 3",
+        );
+        let notice = run_due(dir.path(), &tree, &stopped(false))
+            .unwrap()
+            .unwrap();
+        assert!(
+            notice.warning().contains("cannot install"),
+            "{}",
+            notice.warning()
+        );
+        let pending = run_due(dir.path(), &tree, &stopped(false))
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.warning(), notice.warning());
+        assert_eq!(fs::read_to_string(tree.join("attempts")).unwrap(), "ran\n");
+        notice.acknowledge().unwrap();
         assert!(!is_due(&tree));
     }
 
@@ -259,38 +363,57 @@ mod tests {
     }
 
     #[test]
-    fn a_held_warning_lasts_until_a_prompt_carries_it() {
+    fn a_second_acknowledgment_cannot_remove_a_replacement_notice() {
         let (dir, tree) = repository();
-        hold_notice(&tree, "Worktree setup failed: no network");
+        let marker = marker(&tree).unwrap();
+        let warning = "Worktree setup failed: no network";
+        write(&marker, NOTICE, warning).unwrap();
+        let first = run_due(dir.path(), &tree, &stopped(false))
+            .unwrap()
+            .unwrap();
+        let second = run_due(dir.path(), &tree, &stopped(false))
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.warning(), warning);
+        assert_eq!(second.warning(), warning);
+        first.acknowledge().unwrap();
+        assert!(!is_due(&tree));
+
+        write(&marker, NOTICE, warning).unwrap();
+        second.acknowledge().unwrap();
         assert!(is_due(&tree));
-        let warning = run_due(dir.path(), &tree, &stopped(false)).unwrap();
-        assert_eq!(warning, "Worktree setup failed: no network");
-        hold_notice(&tree, &warning);
-        assert!(is_due(&tree), "this turn ended before reaching a prompt");
-        clear_notice(&tree);
-        assert_eq!(run_due(dir.path(), &tree, &stopped(false)), None);
+        let replacement = run_due(dir.path(), &tree, &stopped(false))
+            .unwrap()
+            .unwrap();
+        assert_eq!(replacement.warning(), warning);
+        replacement.acknowledge().unwrap();
+        assert!(!is_due(&tree));
     }
 
     #[test]
-    fn a_stopped_setup_is_reported_next_turn_rather_than_replayed() {
+    fn a_setup_stopped_before_spawn_stays_due() {
         let (dir, tree) = repository();
-        due(&tree, "touch started; sleep 30");
-        let warning = run_due(dir.path(), &tree, &stopped(true)).unwrap();
-        assert!(warning.contains("was stopped"), "{warning}");
-        assert!(is_due(&tree), "the next turn has to hear about it");
-        let _ = fs::remove_file(tree.join("started"));
-        let warning = run_due(dir.path(), &tree, &stopped(false)).unwrap();
-        assert!(warning.contains("may be incomplete"), "{warning}");
-        assert!(warning.contains("sleep 30"), "{warning}");
-        assert!(!tree.join("started").exists(), "not replayed");
+        due(&tree, "touch started");
+        assert!(run_due(dir.path(), &tree, &stopped(true))
+            .unwrap()
+            .is_none());
+        assert!(is_due(&tree));
+        assert!(!tree.join("started").exists());
+        assert!(run_due(dir.path(), &tree, &stopped(false))
+            .unwrap()
+            .is_none());
+        assert!(tree.join("started").exists());
         assert!(!is_due(&tree));
     }
 
     #[test]
     fn a_setup_whose_owner_died_counts_as_interrupted() {
         let (dir, tree) = repository();
-        write(&marker(&tree).unwrap(), RUNNING, "npm ci");
-        let warning = run_due(dir.path(), &tree, &stopped(false)).unwrap();
+        write(&marker(&tree).unwrap(), RUNNING, "npm ci").unwrap();
+        let notice = run_due(dir.path(), &tree, &stopped(false))
+            .unwrap()
+            .unwrap();
+        let warning = notice.warning();
         assert!(warning.contains("interrupted"), "{warning}");
         assert!(warning.contains("npm ci"), "{warning}");
     }
@@ -305,9 +428,7 @@ mod tests {
             &stopped(false),
             Duration::from_millis(100),
         );
-        assert!(
-            matches!(result, Err(Failure::Interrupted(reason)) if reason.contains("timed out"))
-        );
+        assert!(matches!(result, Err(Failure::Notice(reason)) if reason.contains("timed out")));
     }
 
     #[test]
@@ -320,13 +441,15 @@ mod tests {
             move || run_due(&project, &tree, &stopped(false))
         });
         let start = Instant::now();
-        while read(&marker(&tree).unwrap()).is_some_and(|(state, _)| state != RUNNING) {
+        let marker = marker(&tree).unwrap();
+        while !fs::read_to_string(&marker).unwrap().starts_with(RUNNING) {
             assert!(start.elapsed() < Duration::from_secs(10));
             std::thread::sleep(POLL);
         }
         std::thread::sleep(Duration::from_millis(200));
         crate::process::shutdown_all();
-        let warning = worker.join().unwrap().unwrap();
+        let notice = worker.join().unwrap().unwrap().unwrap();
+        let warning = notice.warning();
         assert!(warning.contains("interrupted"), "{warning}");
         assert!(is_due(&tree), "the next launch has to hear about it");
     }

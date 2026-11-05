@@ -61,47 +61,81 @@ pub fn default_root(main: &Path) -> PathBuf {
 /// so a Bot can never remove something the UI would warn about.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Assessment {
-    pub locked: bool,
+    pub locked: Option<bool>,
     pub dirty: Option<bool>,
-    pub unpushed: usize,
+    pub unpushed: Option<usize>,
     pub merged: bool,
     /// Ignored files that nothing would regenerate.
-    pub ignored: Vec<String>,
+    pub ignored: Option<Vec<String>>,
 }
 impl Assessment {
     /// Why removing this would lose work or override the user.
     pub fn blocker(&self) -> Option<String> {
-        if self.locked {
-            Some("it is locked".into())
-        } else if self.dirty != Some(false) {
-            Some(match self.dirty {
-                Some(_) => "it has uncommitted changes".into(),
-                None => "its status could not be read".into(),
-            })
-        } else if let Some(file) = self.ignored.first() {
-            Some(format!(
+        match self.locked {
+            Some(true) => return Some("it is locked".into()),
+            None => return Some("its Git lock status could not be verified".into()),
+            Some(false) => {}
+        }
+        match self.dirty {
+            Some(true) => return Some("it has uncommitted changes".into()),
+            None => return Some("its status could not be read".into()),
+            Some(false) => {}
+        }
+        let Some(ignored) = &self.ignored else {
+            return Some("its ignored files could not be checked".into());
+        };
+        if let Some(file) = ignored.first() {
+            return Some(format!(
                 "it has ignored files that may be irreplaceable, such as {file}"
-            ))
-        } else if self.merged || self.unpushed == 0 {
-            None
-        } else {
-            Some(format!(
-                "it has {} unmerged, unpublished commits",
-                self.unpushed
-            ))
+            ));
+        }
+        match self.unpushed {
+            None => Some("its unpublished commits could not be checked".into()),
+            Some(0) => None,
+            Some(_) if self.merged => None,
+            Some(count) => Some(format!("it has {count} unmerged, unpublished commits")),
         }
     }
     pub fn removable(&self) -> bool {
         self.blocker().is_none()
     }
+    pub fn safety_unknown(&self) -> bool {
+        self.locked.is_none()
+            || self.dirty.is_none()
+            || self.unpushed.is_none()
+            || self.ignored.is_none()
+    }
+    pub fn removes_merged_branch(&self) -> bool {
+        self.merged && !self.safety_unknown()
+    }
+    pub fn discard_blocker(&self, detached: bool) -> Option<&'static str> {
+        match self.locked {
+            Some(true) => Some("This worktree is locked. Unlock it in Git before deleting it."),
+            None => Some("Git could not verify that this worktree is unlocked."),
+            Some(false) if detached && !self.removable() => {
+                Some("Create a branch for this detached worktree before deleting it.")
+            }
+            Some(false) => None,
+        }
+    }
 }
 pub fn assess(cwd: &Path, tree: &crate::git::Worktree) -> Assessment {
-    let list = crate::git::git(cwd, &["worktree", "list", "--porcelain", "-z"]).unwrap_or_default();
-    let locked = list.split("\0\0").any(|block| {
-        block.starts_with(&format!("worktree {}\0", tree.path))
-            && block
-                .split('\0')
-                .any(|v| v == "locked" || v.starts_with("locked "))
+    let list = crate::git::git(cwd, &["worktree", "list", "--porcelain", "-z"]).ok();
+    let mut entries = list.iter().flat_map(|list| list.split("\0\0"));
+    let locked = entries.clone().find_map(|entry| {
+        let mut fields = entry.split('\0');
+        if fields.next()?.strip_prefix("worktree ")? != tree.path {
+            return None;
+        }
+        let head = fields.clone().find_map(|field| field.strip_prefix("HEAD "));
+        let branch = fields
+            .clone()
+            .find_map(|field| field.strip_prefix("branch refs/heads/"));
+        // A checkout after discovery invalidates the removal assessment.
+        if head != Some(tree.head.as_str()) || branch != tree.branch.as_deref() {
+            return None;
+        }
+        Some(fields.any(|field| field == "locked" || field.starts_with("locked ")))
     });
     let dirty = crate::git::git(
         Path::new(&tree.path),
@@ -114,18 +148,18 @@ pub fn assess(cwd: &Path, tree: &crate::git::Worktree) -> Assessment {
         &["rev-list", "--count", "HEAD", "--not", "--remotes"],
     )
     .ok()
-    .and_then(|s| s.trim().parse().ok())
-    .unwrap_or(0);
+    .and_then(|s| s.trim().parse().ok());
     // The first listed worktree is the main checkout.
-    let main = list
-        .split('\0')
-        .find_map(|field| field.strip_prefix("HEAD "))
-        .map(str::to_owned);
+    let main = entries.next().and_then(|entry| {
+        entry
+            .split('\0')
+            .find_map(|field| field.strip_prefix("HEAD "))
+    });
     let merged = main
         .into_iter()
-        .chain(["refs/remotes/origin/HEAD".to_owned()])
+        .chain(["refs/remotes/origin/HEAD"])
         .any(|target| {
-            crate::git::git(cwd, &["merge-base", "--is-ancestor", &tree.head, &target]).is_ok()
+            crate::git::git(cwd, &["merge-base", "--is-ancestor", &tree.head, target]).is_ok()
         });
     let ignored = crate::git::git(
         Path::new(&tree.path),
@@ -135,15 +169,19 @@ pub fn assess(cwd: &Path, tree: &crate::git::Worktree) -> Assessment {
             "--ignored",
             "--exclude-standard",
             "--directory",
+            "-z",
         ],
     )
-    .unwrap_or_default()
-    .lines()
-    .map(|entry| entry.trim_end_matches('/'))
-    .filter(|entry| !entry.split('/').any(|part| REGENERATED.contains(&part)))
-    .take(5)
-    .map(str::to_owned)
-    .collect();
+    .ok()
+    .map(|output| {
+        output
+            .split_terminator('\0')
+            .map(|entry| entry.trim_end_matches('/'))
+            .filter(|entry| !entry.split('/').any(|part| REGENERATED.contains(&part)))
+            .take(5)
+            .map(str::to_owned)
+            .collect()
+    });
     Assessment {
         locked,
         dirty,
@@ -153,6 +191,12 @@ pub fn assess(cwd: &Path, tree: &crate::git::Worktree) -> Assessment {
     }
 }
 pub fn check(cwd: &Path, path: &Path) -> Result<crate::git::Worktree, String> {
+    checked_assessment(cwd, path).map(|(tree, _)| tree)
+}
+fn checked_assessment(
+    cwd: &Path,
+    path: &Path,
+) -> Result<(crate::git::Worktree, Assessment), String> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let key = crate::files::path_key(&canonical.to_string_lossy());
     let tree = crate::git::snapshot(cwd)?
@@ -169,17 +213,13 @@ pub fn check(cwd: &Path, path: &Path) -> Result<crate::git::Worktree, String> {
         return Err("The main working copy cannot be deleted".into());
     }
     let assessment = assess(cwd, &tree);
-    if tree.branch.is_none() && !assessment.locked && !assessment.removable() {
-        return Err("Create a branch for this detached worktree before deleting it.".into());
+    if let Some(blocker) = assessment.discard_blocker(tree.branch.is_none()) {
+        return Err(blocker.into());
     }
-    if assessment.locked {
-        return Err("This worktree is locked. Unlock it in Git before deleting it.".into());
-    }
-    Ok(tree)
+    Ok((tree, assessment))
 }
 pub fn remove(cwd: &Path, path: &Path) -> Result<(), String> {
-    let tree = check(cwd, path)?;
-    let assessment = assess(cwd, &tree);
+    let (tree, assessment) = checked_assessment(cwd, path)?;
     crate::provider::discard_worktree(Path::new(&tree.path));
     crate::git::git(cwd, &["worktree", "remove", "--force", "--", &tree.path])?;
     remove_merged_branch(cwd, &tree, &assessment);
@@ -187,15 +227,18 @@ pub fn remove(cwd: &Path, path: &Path) -> Result<(), String> {
 }
 /// `-d` refuses anything Git doesn't consider merged, so this can only tidy.
 fn remove_merged_branch(cwd: &Path, tree: &crate::git::Worktree, assessment: &Assessment) {
-    if let Some(branch) = tree.branch.as_deref().filter(|_| assessment.merged) {
+    if let Some(branch) = tree
+        .branch
+        .as_deref()
+        .filter(|_| assessment.removes_merged_branch())
+    {
         let _ = crate::git::git(cwd, &["branch", "-d", "--", branch]);
     }
 }
 /// The app actions' removal. It refuses rather than discards, and Git's own check
 /// without `--force` catches anything written after this assessment.
 pub fn remove_if_safe(cwd: &Path, path: &Path) -> Result<(), String> {
-    let tree = check(cwd, path)?;
-    let assessment = assess(cwd, &tree);
+    let (tree, assessment) = checked_assessment(cwd, path)?;
     if let Some(blocker) = assessment.blocker() {
         return Err(format!(
             "This worktree was kept because {blocker}. Tell the user rather than removing it."
@@ -222,9 +265,9 @@ pub fn describe(
         if !remote && !tree.main {
             let assessment = assess(project, &tree);
             let sessions = sessions_using(&tree.path)?;
-            row["locked"] = assessment.locked.into();
+            row["locked"] = serde_json::json!(assessment.locked);
             row["dirty"] = serde_json::json!(assessment.dirty);
-            row["unpublishedCommits"] = assessment.unpushed.into();
+            row["unpublishedCommits"] = serde_json::json!(assessment.unpushed);
             row["merged"] = assessment.merged.into();
             row["removable"] = (assessment.removable() && sessions.is_empty()).into();
             row["sessions"] = serde_json::json!(sessions);
@@ -314,6 +357,41 @@ mod tests {
         assert!(refused.contains("unpublished"), "{refused}");
         assert!(path.join("unique").exists());
         remove(dir.path(), path).unwrap();
+        tidy(dir.path());
+    }
+    #[test]
+    fn unreadable_commit_history_blocks_safe_and_detached_removal() {
+        let dir = repo();
+        let git = |args: &[&str]| crate::git::git(dir.path(), args).unwrap();
+        let initial = git(&["rev-parse", "HEAD"]);
+        commit(dir.path(), "parent");
+        let parent = git(&["rev-parse", "HEAD"]);
+        let tree = crate::git::create_named_worktree(dir.path(), "unreadable-history").unwrap();
+        let path = Path::new(&tree.path);
+        commit(path, "tip");
+        git(&["reset", "--hard", initial.trim()]);
+        let (prefix, suffix) = parent.trim().split_at(2);
+        std::fs::remove_file(dir.path().join(".git/objects").join(prefix).join(suffix)).unwrap();
+
+        assert!(crate::git::git(path, &["status", "--porcelain"])
+            .unwrap()
+            .is_empty());
+        let rows = describe(dir.path(), |_| Ok(vec![])).unwrap();
+        assert!(rows[1]["unpublishedCommits"].is_null());
+        assert_eq!(rows[1]["removable"], false);
+        let error = remove_if_safe(dir.path(), path).unwrap_err();
+        assert!(
+            error.contains("unpublished commits could not be checked"),
+            "{error}"
+        );
+        assert!(path.exists());
+
+        crate::git::git(path, &["switch", "--detach"]).unwrap();
+        assert!(remove(dir.path(), path).unwrap_err().contains("detached"));
+        crate::git::git(path, &["switch", "unreadable-history"]).unwrap();
+        remove(dir.path(), path).unwrap();
+        assert!(!path.exists());
+        assert!(branch_exists(dir.path(), "unreadable-history"));
         tidy(dir.path());
     }
     #[test]
