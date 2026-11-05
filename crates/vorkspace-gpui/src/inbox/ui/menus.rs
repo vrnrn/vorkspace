@@ -223,22 +223,11 @@ impl Inbox {
                 if connected { "Manage" } else { "Connect" },
                 model::provider_label(provider)
             );
-            div()
-                .id(SharedString::from(format!("inbox-connect-{provider}")))
+            page::action(format!("inbox-connect-{provider}"), label.clone(), true)
                 .debug_selector(move || format!("inbox-connect-{provider}"))
-                .role(Role::Button)
-                .aria_label(label.clone())
                 .w_full()
-                .h(px(28.))
-                .px(px(10.))
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .rounded(px(6.))
-                .text_size(px(12.))
-                .text_color(content(0.7))
-                .cursor_pointer()
-                .hover(|s| s.bg(content(0.07)).text_color(content(1.)))
+                .justify_start()
+                .gap(px(8.))
                 .child(provider_mark(provider))
                 .child(label)
                 .on_click(
@@ -249,7 +238,7 @@ impl Inbox {
     }
 
     pub(super) fn connection_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut background = shell_fill();
+        let mut background = pane_fill();
         background.a = 0.9;
         let provider = self.connect_provider.clone().unwrap_or_default();
         let connected = self
@@ -278,15 +267,16 @@ impl Inbox {
             .flex()
             .items_center()
             .justify_center()
+            .p(px(16.))
             .bg(gpui::rgba(0x00000040))
             .child(
                 div()
                     .w(px(440.))
                     .max_w_full()
                     .p(px(24.))
-                    .rounded(px(16.))
+                    .rounded(px(page::CARD_CORNER))
                     .border_1()
-                    .border_color(content(0.1))
+                    .border_color(page::divider())
                     .bg(background)
                     .flex()
                     .flex_col()
@@ -297,14 +287,7 @@ impl Inbox {
                             .items_center()
                             .gap(px(8.))
                             .child(provider_mark(&provider))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_size(px(18.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(content(1.))
-                                    .child(title),
-                            )
+                            .child(page::title().flex_1().min_w_0().child(title))
                             .child(
                                 icon_button("inbox-close-connect", "Close connection", "close")
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -318,43 +301,28 @@ impl Inbox {
                                     })),
                             ),
                     )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .line_height(px(19.))
-                            .text_color(content(0.5))
-                            .child(hint),
-                    )
+                    .child(page::body().child(hint))
                     .when(provider != "github", |d| {
                         d.child(
-                            div()
-                                .px(px(10.))
-                                .py(px(8.))
-                                .rounded(px(6.))
+                            page::field_frame()
                                 .border_1()
-                                .border_color(content(0.1))
+                                .border_color(page::divider())
                                 .child(self.connect_url.clone()),
                         )
                     })
                     .when(provider == "jira", |d| {
                         d.child(
-                            div()
-                                .px(px(10.))
-                                .py(px(8.))
-                                .rounded(px(6.))
+                            page::field_frame()
                                 .border_1()
-                                .border_color(content(0.1))
+                                .border_color(page::divider())
                                 .child(self.connect_email.clone()),
                         )
                     })
                     .when(provider != "github", |d| {
                         d.child(
-                            div()
-                                .px(px(10.))
-                                .py(px(8.))
-                                .rounded(px(6.))
+                            page::field_frame()
                                 .border_1()
-                                .border_color(content(0.1))
+                                .border_color(page::divider())
                                 .child(self.connect_token.clone()),
                         )
                     })
@@ -362,15 +330,19 @@ impl Inbox {
                     .child(
                         div()
                             .flex()
+                            .flex_wrap()
                             .items_center()
                             .gap(px(8.))
                             .when(connected && provider != "github", |d| {
                                 d.child(
-                                    action("inbox-disconnect", "Disconnect")
-                                        .text_color(rgb(0xf87171))
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.connect(true, cx)),
-                                        ),
+                                    page::secondary(
+                                        "inbox-disconnect",
+                                        "Disconnect",
+                                        true,
+                                        self.connecting,
+                                    )
+                                    .child("Disconnect")
+                                    .on_click(cx.listener(|this, _, _, cx| this.connect(true, cx))),
                                 )
                             })
                             .when(provider == "github", |d| {
@@ -381,22 +353,18 @@ impl Inbox {
                                 )
                             })
                             .child(div().flex_1())
-                            .child(
-                                action(
-                                    "inbox-connect-submit",
-                                    if self.connecting {
-                                        "Connecting…"
-                                    } else if provider == "github" {
-                                        "Check again"
-                                    } else {
-                                        "Connect"
-                                    },
-                                )
-                                .bg(content(1.))
-                                .text_color(floating_fill())
-                                .when(self.connecting, |d| d.opacity(0.4))
-                                .on_click(cx.listener(|this, _, _, cx| this.connect(false, cx))),
-                            ),
+                            .child({
+                                let label = if self.connecting {
+                                    "Connecting…"
+                                } else if provider == "github" {
+                                    "Check again"
+                                } else {
+                                    "Connect"
+                                };
+                                page::primary("inbox-connect-submit", label, self.connecting)
+                                    .child(label)
+                                    .on_click(cx.listener(|this, _, _, cx| this.connect(false, cx)))
+                            }),
                     ),
             )
             .into_any_element()
@@ -491,50 +459,39 @@ impl Inbox {
             ]
             .into_iter()
             .map(|(name, label, description)| {
-                div()
-                    .id(format!("inbox-merge-{name}"))
-                    .role(Role::MenuItemRadio)
-                    .aria_label(label)
-                    .w_full()
-                    .px(px(8.))
-                    .py(px(8.))
-                    .rounded(px(8.))
-                    .flex()
-                    .items_start()
-                    .gap(px(8.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(content(0.08)))
-                    .child(div().mt(px(4.)).size(px(6.)).rounded_full().bg(
-                        if self.merge_action == name {
-                            accent_color()
-                        } else {
-                            content(0.2)
-                        },
-                    ))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(content(0.9))
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(2.))
-                                    .text_size(px(11.))
-                                    .line_height(px(15.))
-                                    .text_color(content(0.45))
-                                    .child(description),
-                            ),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.merge_action = name.into();
-                        this.action_menu = false;
-                        cx.notify();
-                    }))
+                page::row(
+                    format!("inbox-merge-{name}"),
+                    label,
+                    self.merge_action == name,
+                )
+                .role(Role::MenuItemRadio)
+                .aria_toggled(if self.merge_action == name {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .w_full()
+                .flex()
+                .items_start()
+                .gap(px(8.))
+                .child(div().mt(px(4.)).size(px(6.)).rounded_full().bg(
+                    if self.merge_action == name {
+                        accent_color()
+                    } else {
+                        content(0.2)
+                    },
+                ))
+                .child(
+                    div()
+                        .min_w_0()
+                        .child(page::label().font_weight(FontWeight::MEDIUM).child(label))
+                        .child(page::meta().child(description)),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.merge_action = name.into();
+                    this.action_menu = false;
+                    cx.notify();
+                }))
             }),
         )
         .into_any_element()
@@ -631,27 +588,14 @@ impl Inbox {
                     .flex()
                     .flex_col()
                     .gap(px(4.))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(content(1.))
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .line_height(px(17.))
-                            .text_color(content(0.55))
-                            .child(detail),
-                    ),
+                    .child(page::label().font_weight(FontWeight::MEDIUM).child(title))
+                    .child(page::meta().child(detail)),
             )
             .when_some(self.action_error.clone(), |d, text| {
                 d.child(
-                    div()
+                    page::meta()
                         .mt(px(8.))
-                        .text_size(px(11.))
-                        .text_color(rgb(0xf87171))
+                        .text_color(status(StatusColor::Danger, 1.))
                         .child(text),
                 )
             })
@@ -659,11 +603,12 @@ impl Inbox {
                 div()
                     .mt(px(12.))
                     .flex()
+                    .flex_wrap()
                     .justify_end()
                     .gap(px(8.))
                     .child(
-                        action("inbox-action-cancel", "Cancel")
-                            .when(self.acting, |d| d.opacity(0.4))
+                        page::secondary("inbox-action-cancel", "Cancel", false, self.acting)
+                            .child("Cancel")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if !this.acting {
                                     this.confirm_action = None;
@@ -673,9 +618,10 @@ impl Inbox {
                             })),
                     )
                     .child(
-                        action(
+                        action_enabled(
                             "inbox-action-confirm",
                             if self.acting { progress } else { label },
+                            !self.acting,
                         )
                         .font_weight(FontWeight::MEDIUM)
                         .bg(if action_name == "close" {
@@ -692,7 +638,6 @@ impl Inbox {
                         } else {
                             shell_fill()
                         })
-                        .when(self.acting, |d| d.opacity(0.6))
                         .on_click(cx.listener(|this, _, _, cx| this.run_action(cx))),
                     ),
             )

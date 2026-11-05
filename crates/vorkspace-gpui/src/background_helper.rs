@@ -6,7 +6,18 @@ use vorkspace_helper::{
     Action, AudioNotice, Command, DictationConfig, DictationPhase, DictationStatus, Notice,
 };
 // Keep the existing action identifiers for keybindings.
-gpui::actions!(clipboard, [Toggle, Settings, Composer, Quit, Reopen]);
+gpui::actions!(
+    clipboard,
+    [
+        Toggle,
+        Settings,
+        Composer,
+        NewMeeting,
+        OpenMeeting,
+        Quit,
+        Reopen
+    ]
+);
 
 struct BackgroundHelper(Entity<Service>);
 impl Global for BackgroundHelper {}
@@ -159,6 +170,8 @@ impl Service {
             }
             Notice::Action(Action::Settings) => cx.dispatch_action(&Settings),
             Notice::Action(Action::Composer) => cx.dispatch_action(&Composer),
+            Notice::Action(Action::NewMeeting) => cx.dispatch_action(&NewMeeting),
+            Notice::Action(Action::OpenMeeting) => cx.dispatch_action(&OpenMeeting),
             Notice::Action(Action::Quit) => {
                 self.stop_helper_on_quit = true;
                 cx.dispatch_action(&Quit);

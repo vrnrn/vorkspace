@@ -1,4 +1,4 @@
-//! Opaque HTML surfaces. The built-in Meetings view has its own scoped message handler.
+//! Opaque HTML surfaces for generated artifacts.
 use crate::native_view::invalidate_parent_cursor_rects;
 use gpui::{Context, Window, canvas, prelude::*};
 use objc2::{
@@ -10,8 +10,7 @@ use objc2_foundation::{NSObject, NSObjectProtocol};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_web_kit::{
     WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate, WKNavigationType,
-    WKScriptMessage, WKScriptMessageHandler, WKUserContentController, WKWebView,
-    WKWebViewConfiguration, WKWebsiteDataStore,
+    WKWebView, WKWebViewConfiguration, WKWebsiteDataStore,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
@@ -37,28 +36,14 @@ define_class!(
         }
     }
 );
-struct NavigationContext {
-    app: gpui::AsyncApp,
-    recovery_markup: RefCell<Option<Arc<str>>>,
-}
-
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "VorkspaceArtifactNavigation"]
     #[thread_kind=MainThreadOnly]
-    #[ivars=NavigationContext]
+    #[ivars=gpui::AsyncApp]
     struct NavigationGuard;
     unsafe impl NSObjectProtocol for NavigationGuard {}
     unsafe impl WKNavigationDelegate for NavigationGuard {
-        #[unsafe(method(webViewWebContentProcessDidTerminate:))]
-        unsafe fn content_terminated(&self, web: &WKWebView) {
-            if let Some(markup) = self.ivars().recovery_markup.borrow().as_ref() {
-                unsafe {
-                    web.loadHTMLString_baseURL(&NSString::from_str(markup), None);
-                }
-            }
-        }
-
         #[unsafe(method(webView:decidePolicyForNavigationAction:decisionHandler:))]
         unsafe fn decide(
             &self,
@@ -73,7 +58,7 @@ define_class!(
                     || url.to_string().starts_with("http://"))
             {
                 let url = url.to_string();
-                self.ivars().app.clone().update(|cx| cx.open_url(&url));
+                self.ivars().clone().update(|cx| cx.open_url(&url));
             }
             let allowed = url.is_none_or(|url| {
                 let s = url.to_string();
@@ -87,52 +72,11 @@ define_class!(
         }
     }
 );
-const MAX_MESSAGE_BYTES: usize = vorkspace_meetings::recording::MAX_TRANSCRIPT + 4096;
-
-pub(crate) type Reply = Rc<dyn Fn(Result<serde_json::Value, String>)>;
-pub(crate) type RequestHandler = Rc<dyn Fn(serde_json::Value, Reply)>;
-struct Bridge {
-    nonce: String,
-    handler: RequestHandler,
-}
-define_class!(
-    #[unsafe(super(NSObject))]
-    #[name="VorkspaceMeetingsMessageGuard"]
-    #[thread_kind=MainThreadOnly]
-    #[ivars=Rc<Bridge>]
-    struct MessageGuard;
-    unsafe impl NSObjectProtocol for MessageGuard {}
-    unsafe impl WKScriptMessageHandler for MessageGuard {
-        #[unsafe(method(userContentController:didReceiveScriptMessage:))]
-        unsafe fn receive(&self,_:&WKUserContentController,message:&WKScriptMessage){
-            if !unsafe{message.frameInfo().isMainFrame()}{return}
-            let Ok(body)=unsafe{message.body()}.downcast::<NSString>()else{return};
-            let body=body.to_string();
-            if body.len()>MAX_MESSAGE_BYTES{return}
-            let Ok(mut value)=serde_json::from_str::<serde_json::Value>(&body)else{return};
-            if value["nonce"].as_str()!=Some(&self.ivars().nonce){return}
-            let Some(id)=value["id"].as_str().filter(|id|id.len()<=80).map(str::to_owned)else{return};
-            let Some(web)=(unsafe{message.webView()})else{return};
-            value.as_object_mut().map(|value|value.remove("nonce"));
-            let reply:Reply=Rc::new(move|result|{
-                let data=match result{
-                    Ok(value)=>serde_json::json!({"kind":"vorkspace.reply","id":id,"result":value}),
-                    Err(error)=>serde_json::json!({"kind":"vorkspace.reply","id":id,"error":error}),
-                };
-                let script=format!("document.querySelector('iframe').contentWindow.postMessage({},'*')",data);
-                unsafe{web.evaluateJavaScript_completionHandler(&NSString::from_str(&script),None);}
-            });
-            (self.ivars().handler)(value,reply);
-        }
-    }
-);
 struct Hosted {
     clip: Retained<ArtifactClip>,
     web: Retained<WKWebView>,
     _guard: Retained<NavigationGuard>,
     markup: Arc<str>,
-    _messages: Option<Retained<MessageGuard>>,
-    theme: (gpui::Hsla, gpui::Hsla),
 }
 struct Markup {
     ink: gpui::Hsla,
@@ -140,7 +84,6 @@ struct Markup {
     html: Arc<str>,
 }
 pub(crate) struct Html {
-    bridge: Option<Rc<Bridge>>,
     body: String,
     interactive: bool,
     markup: Option<Markup>,
@@ -179,36 +122,6 @@ fn sandbox(body: &str) -> String {
         "<!doctype html><style>html,body,iframe{{margin:0;border:0;width:100%;height:100%;overflow:hidden;background:{background}}}</style><iframe sandbox=\"allow-scripts\" referrerpolicy=\"no-referrer\" srcdoc=\"{}\"></iframe>",
         escape(&source)
     )
-}
-
-fn meetings_sandbox(body: &str, nonce: &str) -> String {
-    let client = r#"<script>
-(()=>{
-let next=0;
-const generation=crypto.getRandomValues(new Uint32Array(4)).join('-'),pending=new Map();
-const request=(method,params={})=>new Promise((resolve,reject)=>{
-    const id=generation+':'+(++next);
-    const timeout=setTimeout(()=>{pending.delete(id);reject(new Error('The meeting request timed out.'))},method==='meetings.summarize'?16*60*1000:30*1000);
-    pending.set(id,{resolve,reject,timeout});
-    parent.postMessage({kind:'vorkspace.request',id,method,params},'*');
-});
-window.meetingsRequest=request;
-addEventListener('message',event=>{if(event.source!==parent)return;const data=event.data;
-if(data?.kind==='vorkspace.reply'){const item=pending.get(data.id);if(!item)return;pending.delete(data.id);clearTimeout(item.timeout);if(data.error)item.reject(new Error(data.error));else item.resolve(data.result)}
-if(data?.kind==='vorkspace.visibility'){dispatchEvent(new CustomEvent('vorkspace-visibility',{detail:data.visible}))}
-if(data?.kind==='vorkspace.theme'){const style=document.documentElement.style;style.setProperty('--foreground',data.foreground);style.setProperty('--accent',data.accent);style.setProperty('--link',data.accent);style.setProperty('--background',data.light?'#fafafa':'#141414');style.setProperty('--surface',data.light?'#eee':'#222');style.setProperty('--muted',data.light?'#737373':'#969696');style.setProperty('--border',data.light?'#d4d4d4':'#383838');style.colorScheme=data.light?'light':'dark'}
-});})();
-</script>"#;
-    let mut html = sandbox(&format!("{client}{body}"));
-    let nonce = serde_json::to_string(nonce).unwrap();
-    html.push_str(&format!(r#"<script>
-addEventListener('message',event=>{{const frame=document.querySelector('iframe');if(event.source!==frame.contentWindow||event.origin!=='null'||event.data?.kind!=='vorkspace.request')return;
-const data=event.data;if(typeof data.id!=='string'||data.id.length>80||typeof data.method!=='string')return;
-const encoded=JSON.stringify({{nonce:{nonce},id:data.id,method:data.method,params:data.params}});if(new TextEncoder().encode(encoded).length>{limit}){{frame.contentWindow.postMessage({{kind:'vorkspace.reply',id:data.id,error:'Meeting edit exceeds its size limit.'}},'*');return;}}
-window.webkit.messageHandlers.vorkspaceMeetings.postMessage(encoded);
-}});
-</script>"#,limit=MAX_MESSAGE_BYTES));
-    html
 }
 
 /// Pele draws `<pre class="mermaid">` and ```mermaid code blocks in the
@@ -258,40 +171,10 @@ fn uses_mermaid_class(body: &str) -> bool {
 impl Html {
     pub(crate) fn new(body: String) -> Self {
         Self {
-            bridge: None,
             body,
             interactive: true,
             markup: None,
             view: Rc::new(RefCell::new(None)),
-        }
-    }
-    pub(crate) fn meetings(handler: RequestHandler) -> Self {
-        let body = include_str!("../meetings/ui.html")
-            .replace(
-                "<!-- search-icon -->",
-                include_str!("../../assets/search.svg"),
-            )
-            .replace(
-                "<!-- delete-icon -->",
-                include_str!("../../assets/hugeicons/trash.svg"),
-            );
-        let mut html = Self::new(body);
-        html.bridge = Some(Rc::new(Bridge {
-            nonce: uuid::Uuid::new_v4().simple().to_string(),
-            handler,
-        }));
-        html
-    }
-    pub(crate) fn send_event(&self, value: serde_json::Value) {
-        if let Some(view) = self.view.borrow().as_ref() {
-            let script = format!(
-                "document.querySelector('iframe').contentWindow.postMessage({},'*')",
-                value
-            );
-            unsafe {
-                view.web
-                    .evaluateJavaScript_completionHandler(&NSString::from_str(&script), None);
-            }
         }
     }
     fn markup(&mut self) -> Arc<str> {
@@ -300,19 +183,12 @@ impl Html {
         if self
             .markup
             .as_ref()
-            .is_none_or(|m| self.bridge.is_none() && (m.ink != ink || m.accent != accent))
+            .is_none_or(|m| m.ink != ink || m.accent != accent)
         {
             self.markup = Some(Markup {
                 ink,
                 accent,
-                html: self
-                    .bridge
-                    .as_ref()
-                    .map_or_else(
-                        || sandbox(&self.body),
-                        |bridge| meetings_sandbox(&self.body, &bridge.nonce),
-                    )
-                    .into(),
+                html: sandbox(&self.body).into(),
             });
         }
         self.markup.as_ref().unwrap().html.clone()
@@ -323,9 +199,6 @@ impl Html {
         }
     }
     pub(crate) fn hide(&self) {
-        if self.bridge.is_some() {
-            self.send_event(serde_json::json!({"kind":"vorkspace.visibility","visible":false}));
-        }
         #[cfg(target_os = "macos")]
         if let Some(view) = self.view.borrow().as_ref()
             && !view.clip.isHidden()
@@ -342,11 +215,6 @@ impl gpui::Render for Html {
             let html = self.markup();
             let app = cx.to_async();
             let interactive = self.interactive;
-            let bridge = self.bridge.clone();
-            let theme = (
-                vorkspace_ui::theme::content(1.),
-                vorkspace_ui::theme::accent_color(),
-            );
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
@@ -396,8 +264,7 @@ impl gpui::Render for Html {
                         let Some(mtm) = MainThreadMarker::new() else {
                             return;
                         };
-                        // Generated artifacts get no handlers. Meetings
-                        // receive only their validated request bridge, never app IPC.
+                        // The artifact WebView has no script message handlers.
                         let hosted = unsafe {
                             let clip = ArtifactClip::alloc(mtm)
                                 .set_ivars(std::cell::Cell::new(interactive));
@@ -413,21 +280,12 @@ impl gpui::Render for Html {
                             config.setWebsiteDataStore(
                                 &WKWebsiteDataStore::nonPersistentDataStore(mtm),
                             );
-                            let messages=bridge.as_ref().map(|bridge|{
-                                let messages=MessageGuard::alloc(mtm).set_ivars(bridge.clone());
-                                let messages:Retained<MessageGuard>=msg_send![super(messages),init];
-                                config.userContentController().addScriptMessageHandler_name(ProtocolObject::from_ref(&*messages),&NSString::from_str("vorkspaceMeetings"));
-                                messages
-                            });
                             let web = WKWebView::initWithFrame_configuration(
                                 WKWebView::alloc(mtm),
                                 web_rect,
                                 &config,
                             );
-                            let guard = NavigationGuard::alloc(mtm).set_ivars(NavigationContext {
-                                app: app.clone(),
-                                recovery_markup: RefCell::new(bridge.as_ref().map(|_| html.clone())),
-                            });
+                            let guard = NavigationGuard::alloc(mtm).set_ivars(app.clone());
                             let guard: Retained<NavigationGuard> = msg_send![super(guard), init];
                             web.setNavigationDelegate(Some(ProtocolObject::from_ref(&*guard)));
                             web.loadHTMLString_baseURL(&NSString::from_str(&html), None);
@@ -437,17 +295,12 @@ impl gpui::Render for Html {
                                 web,
                                 _guard: guard,
                                 markup: html.clone(),
-                                _messages:messages,
-                                theme,
                             }
                         };
                         *view = Some(hosted);
                     }
                     if let Some(view) = view.as_mut() {
                         if !Arc::ptr_eq(&view.markup, &html) {
-                            if let Some(markup) = view._guard.ivars().recovery_markup.borrow_mut().as_mut() {
-                                *markup = html.clone();
-                            }
                             unsafe {
                                 view.web
                                     .loadHTMLString_baseURL(&NSString::from_str(&html), None);
@@ -470,13 +323,6 @@ impl gpui::Render for Html {
                                 None,
                             );
                         }
-                        if bridge.is_some() && view.theme!=theme {
-                            let color=|v:gpui::Hsla|{let c:gpui::Rgba=v.into();format!("rgba({},{},{},{})",(c.r*255.)as u8,(c.g*255.)as u8,(c.b*255.)as u8,c.a)};
-                            let data=serde_json::json!({"kind":"vorkspace.theme","foreground":color(theme.0),"accent":color(theme.1),"light":vorkspace_ui::theme::is_light()});
-                            let script=format!("document.querySelector('iframe').contentWindow.postMessage({},'*')",data);
-                            unsafe{view.web.evaluateJavaScript_completionHandler(&NSString::from_str(&script),None);}
-                            view.theme=theme;
-                        }
                         view.clip.ivars().set(interactive);
                         if view.clip.frame() != rect {
                             view.clip.setFrame(rect);
@@ -491,7 +337,6 @@ impl gpui::Render for Html {
                         }
                         if view.clip.isHidden() {
                             view.clip.setHidden(false);
-                            if bridge.is_some(){unsafe{view.web.evaluateJavaScript_completionHandler(&NSString::from_str("document.querySelector('iframe').contentWindow.postMessage({kind:'vorkspace.visibility',visible:true},'*')"),None);}}
                             cursor_rects_changed = true;
                         }
                         if cursor_rects_changed {
@@ -517,21 +362,13 @@ impl Drop for Html {
 mod tests {
     use super::*;
     #[test]
-    fn generated_artifacts_have_no_meetings_message_handler() {
-        let plain = sandbox("<p>Artifact</p>");
-        let meetings = meetings_sandbox("<p>Meetings</p>", "test-nonce");
-        assert!(!plain.contains("vorkspaceMeetings"));
-        assert!(!plain.contains("window.meetingsRequest"));
-        assert!(meetings.contains("event.source!==frame.contentWindow"));
-        assert!(meetings.contains("event.origin!=='null'"));
-    }
-    #[test]
     fn generated_markup_cannot_escape_the_opaque_iframe() {
         let html = sandbox("\"><script>window.top.postMessage('x','*')</script>");
         assert!(html.contains("sandbox=\"allow-scripts\""));
         assert!(!html.contains("allow-same-origin"));
         assert!(html.contains("connect-src 'none'"));
         assert!(html.contains("&lt;script&gt;"));
+        assert!(!html.contains("<script>"));
     }
     #[test]
     fn only_mermaid_documents_carry_pele() {

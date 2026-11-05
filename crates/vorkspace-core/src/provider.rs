@@ -46,6 +46,7 @@ pub fn forget_session(kind: Kind, provider_id: &str, account_id: &str, cwd: &Pat
 mod questions;
 mod rewind;
 mod tasks;
+mod text_output;
 pub use rewind::{rewind_last_turn, supports_rewind, RewindError};
 #[cfg(test)]
 mod text_tests;
@@ -162,6 +163,7 @@ struct Protocol {
     visible_question: Option<String>,
     async_question_items: std::collections::HashSet<String>,
     async_answers: HashMap<String, (Value, String, Value, crate::agent::Question)>,
+    restricted_output: Option<text_output::Output>,
 }
 impl Protocol {
     fn new(request: Request) -> Self {
@@ -201,9 +203,13 @@ impl Protocol {
             visible_question: None,
             async_question_items: Default::default(),
             async_answers: HashMap::new(),
+            restricted_output: None,
         }
     }
     fn text(&mut self, key: &str, text: &str, snapshot: bool, events: &mut Vec<Event>) {
+        if self.restricted_output.is_some() {
+            return;
+        }
         let already = self.emitted.entry(key.to_owned()).or_default();
         let text = if snapshot {
             snapshot_remainder(already, text)
@@ -297,6 +303,9 @@ impl Protocol {
         let mut activity_events = Vec::new();
         if self.activity(&v, &mut activity_events) {
             return Ok(activity_events);
+        }
+        if let Some(output) = &mut self.restricted_output {
+            output.receive(&v)?;
         }
         if let Some(events) = self.steer_response(&v) {
             return Ok(events);
@@ -1171,6 +1180,8 @@ pub fn run_text_with_timeout(
 }
 
 /// A background request that verifies Codex restrictions before delivering input.
+/// Return one completed final answer only after successful turn completion;
+/// streamed narration and reasoning never form the response.
 pub fn run_restricted_text(
     request: Request,
     cancel: Arc<AtomicBool>,
@@ -1271,8 +1282,8 @@ fn run_operation(
     let probe = matches!(operation, Operation::Catalog);
     let compact = matches!(operation, Operation::Compact);
     let command_probe = matches!(operation, Operation::Commands);
-    let restricted_codex =
-        matches!(operation, Operation::RestrictedText(_)) && request.kind == Kind::Codex;
+    let restricted_text = matches!(operation, Operation::RestrictedText(_));
+    let restricted_codex = restricted_text && request.kind == Kind::Codex;
     let text_timeout = match operation {
         Operation::Turn(timeout) | Operation::RestrictedText(timeout) => timeout,
         _ => DEFAULT_TEXT_TIMEOUT,
@@ -1343,6 +1354,9 @@ fn run_operation(
             }
         }
         Kind::Claude => {
+            if restricted_text {
+                command.args(["--system-prompt", text_output::INSTRUCTIONS]);
+            }
             command.args([
                 "--verbose",
                 "--input-format",
@@ -1448,7 +1462,12 @@ fn run_operation(
                 command.args(["--model", &model]);
             }
         }
-        kind if kind.is_pi() => pi::configure(&mut command, &request, probe || command_probe),
+        kind if kind.is_pi() => {
+            if restricted_text {
+                command.args(["--system-prompt", text_output::INSTRUCTIONS]);
+            }
+            pi::configure(&mut command, &request, probe || command_probe);
+        }
         _ => acp::configure(&request)?,
     }
     command
@@ -1495,6 +1514,9 @@ fn run_operation(
         pending.push(Event::SessionId(id));
     }
     let mut codex_setup = restricted_codex.then_some(codex_text::Setup::Initialize);
+    if restricted_text {
+        protocol.restricted_output = Some(text_output::Output::new(protocol.request.kind));
+    }
     let mut stop_confirmed = false;
     let result = (|| {
         protocol.probe = probe;
@@ -1724,6 +1746,9 @@ fn run_operation(
                 if interrupted {
                     stop_confirmed = true;
                     return Err("Stopped".into());
+                }
+                if let Some(output) = protocol.restricted_output.take() {
+                    emit(vec![Event::Text(output.finish()?)])?;
                 }
                 return Ok(protocol.catalog_result.take());
             }

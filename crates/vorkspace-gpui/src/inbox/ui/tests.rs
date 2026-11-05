@@ -51,12 +51,15 @@ fn draw(window: WindowHandle<Fixture>, cx: &mut TestAppContext) {
     cx.run_until_parked();
 }
 fn inbox_window(cx: &mut TestAppContext) -> WindowHandle<Inbox> {
+    inbox_window_at_width(cx, 1100.)
+}
+fn inbox_window_at_width(cx: &mut TestAppContext, width: f32) -> WindowHandle<Inbox> {
     cx.update(|cx| {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                     point(px(0.), px(0.)),
-                    size(px(1100.), px(700.)),
+                    size(px(width), px(700.)),
                 ))),
                 ..Default::default()
             },
@@ -79,6 +82,57 @@ fn inbox_window(cx: &mut TestAppContext) -> WindowHandle<Inbox> {
         .unwrap()
     })
 }
+
+#[gpui::test]
+fn narrow_navigation_preserves_the_open_item_and_comment_draft(cx: &mut TestAppContext) {
+    let window = inbox_window_at_width(cx, 720.);
+    let key = window
+        .update(cx, |inbox, _, cx| {
+            let item = Item {
+                provider: "github".into(),
+                kind: "issue".into(),
+                number: 42,
+                title: "Draft fixture".into(),
+                state: "open".into(),
+                ..Default::default()
+            };
+            let key = item.key();
+            inbox.snapshot.items = vec![item];
+            inbox.selected = Some(key.clone());
+            inbox.details = Some(Details::default());
+            inbox.narrow_detail = true;
+            inbox
+                .comment
+                .update(cx, |input, cx| input.set_text("Unsent comment".into(), cx));
+            cx.notify();
+            key
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("connector-list").is_none());
+    let back = visual.debug_bounds("inbox-back").unwrap().center();
+    visual.simulate_click(back, Default::default());
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("connector-list").is_some());
+    assert!(visual.debug_bounds("inbox-back").is_none());
+    let selector = Box::leak(format!("inbox-item-{key}").into_boxed_str());
+    let row = visual.debug_bounds(selector).unwrap().center();
+    visual.simulate_click(row, Default::default());
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("inbox-back").is_some());
+    window
+        .update(visual, |inbox, _, cx| {
+            assert_eq!(inbox.selected.as_deref(), Some(key.as_str()));
+            assert_eq!(inbox.comment.read(cx).content.as_ref(), "Unsent comment");
+            assert!(inbox.details.is_some());
+        })
+        .unwrap();
+}
+
 #[gpui::test]
 fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_observer(
     cx: &mut TestAppContext,

@@ -1,4 +1,6 @@
 //! Shared native control behavior; callers retain their surface-specific styling.
+pub(crate) mod page;
+
 use gpui::{
     Context, Div, ElementId, IntoElement, Render, Role, SharedString, Stateful, Window, div,
     prelude::*, px,

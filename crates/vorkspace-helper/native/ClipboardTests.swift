@@ -99,14 +99,14 @@ extension ClipboardMenu {
         assert(search.isHidden && scroll.isHidden && empty.isHidden && preview.isHidden)
         assert(panel.frame.width == 220 && panel.frame.height == 94)
         let buttons = panel.contentView!.subviews.compactMap { $0 as? NSButton }.filter { !$0.isHidden }
-        assert(buttons.map { $0.title } == ["Settings…", "Quick Composer", "Quit vorkspace"])
+        assert(buttons.map { $0.title } == ["New meeting", "Settings…", "Quit vorkspace"])
         assert(panel.contentView!.subviews.filter { $0 is NSBox }.allSatisfy { $0.isHidden })
         let button = buttons[0] as! MenuButton
         let event = NSEvent.enterExitEvent(with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil)!
         button.mouseEntered(with: event)
         assert(button.layer?.backgroundColor == menuHighlight.cgColor && table.selectedRow == -1)
         assert(button.cell!.titleRect(forBounds: button.bounds).minX >= 8)
-        assert(search.focusRingType == .none)
+        assert(search.focusRingType == .none && !search.isBordered && !search.drawsBackground)
         button.mouseExited(with: event)
         assert(button.layer?.backgroundColor == nil)
         end(message: "", enabled: true)
@@ -115,6 +115,31 @@ extension ClipboardMenu {
         assert(!visible && entries.isEmpty && pending.isEmpty && timer == nil)
         showPreview(1, at: 400)
         assert(preview.isHidden)
+    }
+    fileprivate func verifyMeetingFooter() {
+        let buttons = panel.contentView!.subviews.compactMap { $0 as? NSButton }
+        assert(buttons.map { $0.title } == ["Clear history", "New meeting", "Settings…", "Quit vorkspace"])
+        let meeting = buttons[1]
+        footer(meeting)
+        setRecordingRun("fixture-run")
+        assert(meeting.title == "Stop recording")
+        assert(meeting.image != nil && meeting.contentTintColor == .systemRed)
+        footer(meeting)
+        setRecordingRun(nil)
+        assert(meeting.title == "New meeting" && meeting.image == nil)
+        footer(meeting)
+    }
+    fileprivate func verifySearchTypingFromIdle() {
+        visible = true
+        defer { hide() }
+        panel.makeFirstResponder(table)
+        panel.makeKeyAndOrderFront(nil)
+        assert(panel.firstResponder === table && search.layer?.backgroundColor == nil)
+        let key = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, characters: "h", charactersIgnoringModifiers: "h",
+            isARepeat: false, keyCode: 4)!
+        assert(localEvent(key) == nil)
+        assert(search.currentEditor()?.string == "h" && search.layer?.backgroundColor != nil)
     }
 }
 private func verifyPlacement() {
@@ -142,6 +167,16 @@ private func verifyPlacement() {
         menu.verifyStatusClickDismissal()
         menu.verifyPreviewLifecycle()
         menu.verifyNarrowLayout()
+        menu.verifySearchTypingFromIdle()
+        var actions: [String] = []
+        withUnsafeMutablePointer(to: &actions) { pointer in
+            let footerMenu = ClipboardMenu(callback: { context, action, _, text in
+                let events = context!.assumingMemoryBound(to: [String].self)
+                events.pointee.append("\(action):\(text.map { String(cString: $0) } ?? "")")
+            }, context: UnsafeMutableRawPointer(pointer))
+            footerMenu.verifyMeetingFooter()
+        }
+        assert(actions == ["4:", "8:fixture-run", "4:"])
         print("Native clipboard preview lifecycle passed")
     }
 }

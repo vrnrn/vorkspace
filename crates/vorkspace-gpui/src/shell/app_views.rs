@@ -24,15 +24,15 @@ impl Shell {
         if self.active_app_view == Some(AppView::Notes)
             && let Some(notes) = &self.notes
         {
-            notes.update(cx, |notes, cx| notes.flush(cx));
+            notes.update(cx, |notes, cx| {
+                notes.flush(cx);
+                notes.set_active(false, cx);
+            });
         }
         if let Some(id) = self.active_terminal_tab.take()
             && let Some(terminal) = self.terminal_tabs.get(&id)
         {
             terminal.update(cx, |terminal, _| terminal.visible = false);
-        }
-        if let Some(page) = &self.meetings {
-            page.update(cx, |page, cx| page.set_active(false, cx));
         }
         self.active_app_view = None;
         self.invalidate_chrome(cx);
@@ -94,7 +94,6 @@ impl Shell {
     pub(super) fn app_view_body(&self) -> Option<AnyElement> {
         match self.active_app_view? {
             AppView::Notes => self.notes.clone().map(IntoElement::into_any_element),
-            AppView::Meetings => self.meetings.clone().map(IntoElement::into_any_element),
             AppView::Inbox => None,
             AppView::Connector(provider) => self
                 .connector_pages
@@ -114,7 +113,6 @@ impl Shell {
         }
         let focus = match self.active_app_view {
             Some(AppView::Notes) => self.notes.as_ref().map(|view| view.focus_handle(cx)),
-            Some(AppView::Meetings) => self.meetings.as_ref().map(|view| view.focus_handle(cx)),
             Some(AppView::Inbox) => None,
             Some(AppView::Connector(provider)) => self
                 .connector_pages
@@ -131,26 +129,6 @@ impl Shell {
         }
         true
     }
-    pub(super) fn open_meetings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.workspace.preferences.meetings {
-            self.open_settings(crate::settings::Section::Meetings, window, cx);
-            return;
-        }
-        self.prepare_app_view(window, cx);
-        let page = self
-            .meetings
-            .get_or_insert_with(|| cx.new(|cx| crate::meetings::Page::new(self.store.clone(), cx)))
-            .clone();
-        page.update(cx, |page, _| {
-            page.configure_context(
-                &self.workspace.project,
-                &self.workspace.preferences.hidden_providers,
-            );
-        });
-        self.show_app_view(AppView::Meetings, window, cx);
-        page.update(cx, |page, cx| page.set_active(true, cx));
-    }
-
     pub(super) fn open_notes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.workspace.preferences.notes {
             self.open_settings(crate::settings::Section::Notes, window, cx);
@@ -176,6 +154,8 @@ impl Shell {
             notes.update(cx, |notes, cx| {
                 notes.set_appearances(self.workspace.project_appearance.clone(), cx);
                 notes.set_context(cwd, projects, cx);
+                notes.configure_recording(&self.workspace.preferences.hidden_providers, cx);
+                notes.set_active(true, cx);
                 notes.refresh(cx);
             });
         }

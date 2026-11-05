@@ -202,8 +202,8 @@ impl Shell {
             return;
         }
         self.navigation_revision += 1;
-        if let Some(page) = &self.meetings {
-            page.update(cx, |page, cx| page.set_active(false, cx));
+        if let Some(notes) = &self.notes {
+            notes.update(cx, |notes, cx| notes.set_active(false, cx));
         }
         let context = self.settings_context(cx);
         let prefs = self.workspace.preferences.clone();
@@ -335,11 +335,9 @@ impl Shell {
                 }
                 SettingsEvent::Changed(prefs) => {
                     window.set_ui_scale(prefs.interface_scale(), cx);
-                    for (enabled, view) in [
-                        (prefs.notes, AppView::Notes),
-                        (prefs.meetings, AppView::Meetings),
-                        (prefs.todos, AppView::Todos),
-                    ] {
+                    for (enabled, view) in
+                        [(prefs.notes, AppView::Notes), (prefs.todos, AppView::Todos)]
+                    {
                         if !enabled {
                             let tab = TitleTab::App(view);
                             this.workspace.title_order.retain(|entry| *entry != tab);
@@ -349,8 +347,8 @@ impl Shell {
                             }
                         }
                     }
-                    if let Some(page) = &this.meetings {
-                        page.update(cx, |page, cx| page.set_enabled(prefs.meetings, cx));
+                    if let Some(notes) = &this.notes {
+                        notes.update(cx, |notes, cx| notes.set_enabled(prefs.notes, cx));
                     }
                     this.workspace.preferences = *prefs.clone();
                     this.apply_preferences(cx);

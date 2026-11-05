@@ -1,50 +1,81 @@
-//! The built-in Meetings document view. Only this bundled page can call its commands.
+//! Recording documents embedded in Notes.
+mod analysis;
 pub(crate) mod capture;
+mod document;
+mod live;
+mod note;
+mod view;
 pub(crate) use capture::stop_active;
 
-use crate::native_view::html::{Html, Reply};
-use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, Render, Window, div, prelude::*,
+use crate::{
+    controls::page,
+    input::{self, Input},
+    markdown,
 };
-use serde_json::{Value, json};
-use std::{
-    path::PathBuf,
-    rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
-use vorkspace_core::{
-    accounts::Profile,
-    provider::{self, Kind},
-};
-use vorkspace_meetings::Meetings;
+use document::{Action, Document, DraftBuffer, Field, Section};
+use gpui::{AppContext, Context, Entity, EventEmitter, Focusable, Subscription, Task, Window};
+use live::Live;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use vorkspace_meetings::{Meetings, recording::CaptureSource};
 use vorkspace_runtime::runtime::{Database, locked};
-use vorkspace_ui::theme::*;
 
 pub(crate) struct Page {
+    note_store: Option<Database>,
+    note_ids: HashMap<String, String>,
     meetings: Result<Meetings, String>,
     cwd: String,
     hidden: Vec<String>,
-    html: Entity<Html>,
-    focus: FocusHandle,
-    jobs: Vec<Arc<AtomicBool>>,
+    transcript: Entity<Input>,
+    summary: Entity<Input>,
+    preview: Option<Entity<markdown::Document>>,
     enabled: bool,
     enable_epoch: u64,
+    active: bool,
+    error: Option<String>,
+    notice: Option<String>,
+    document: Option<Document>,
+    section: Section,
+    pending_focus: Option<Field>,
+    intent: u64,
+    opening: bool,
+    next_open: Option<(u64, String, bool)>,
+    drafts: Arc<DraftBuffer>,
+    draft_timer: Option<Task<()>>,
+    draft_prefix: String,
+    draft_sequence: u32,
+    saving: bool,
+    after_save: Option<(u64, Action)>,
+    discarding: bool,
+    confirm_delete: bool,
+    deleting: bool,
+    preparing: Option<String>,
+    source_overrides: HashMap<String, CaptureSource>,
+    source_anchor: crate::popover::AnchorSlot,
+    source_open: bool,
+    live: Option<Live>,
+    poller: Option<Task<()>>,
+    analysis: Option<analysis::Analysis>,
+    _subscriptions: Vec<Subscription>,
 }
 
-impl Focusable for Page {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus.clone()
-    }
+pub(crate) enum Event {
+    Changed,
+    Attached {
+        note_id: String,
+        recording_id: String,
+    },
+    Deleted(String),
+    SummaryReady(String),
 }
+impl EventEmitter<Event> for Page {}
 
 impl Drop for Page {
     fn drop(&mut self) {
-        for cancel in &self.jobs {
-            cancel.store(true, Ordering::Release);
+        self.cancel_analysis();
+        if let Ok(meetings) = &self.meetings
+            && let Err(error) = self.drafts.flush(meetings)
+        {
+            eprintln!("Could not checkpoint meeting draft on close: {error}");
         }
     }
 }
@@ -56,31 +87,103 @@ impl Page {
             .and_then(|store| store.data_dir().map(PathBuf::from))
             .ok_or_else(|| "Meeting storage is unavailable.".to_owned())
             .and_then(|root| Meetings::open(&root));
-        let weak = cx.entity().downgrade();
-        let app = cx.to_async();
-        let html = cx.new(|_| {
-            Html::meetings(Rc::new(move |value, reply| {
-                let fallback = reply.clone();
-                if weak
-                    .update(&mut app.clone(), |page, cx| {
-                        page.request(value, reply, cx);
-                    })
-                    .is_err()
-                {
-                    fallback(Err("The Meetings view was closed.".into()));
-                }
-            }))
-        });
+        let mut page = Self::with_meetings(meetings, cx);
+        page.note_store = Some(store);
+        page
+    }
+
+    fn with_meetings(meetings: Result<Meetings, String>, cx: &mut Context<Self>) -> Self {
+        let transcript = Self::editor(
+            "Meeting transcript",
+            "transcript.txt",
+            vorkspace_meetings::recording::MAX_TRANSCRIPT,
+            cx,
+        );
+        let summary = Self::editor("Summary Markdown", "summary.md", 64 * 1024, cx);
+        let subscriptions = vec![
+            cx.subscribe(&transcript, |this, _, _: &input::Changed, cx| {
+                this.edit(Field::Transcript, cx)
+            }),
+            cx.subscribe(&summary, |this, _, _: &input::Changed, cx| {
+                this.edit(Field::Summary, cx)
+            }),
+            cx.subscribe(&transcript, |this, _, event: &input::Rejected, cx| {
+                this.fail(event.0.into(), cx)
+            }),
+            cx.subscribe(&summary, |this, _, event: &input::Rejected, cx| {
+                this.fail(event.0.into(), cx)
+            }),
+            cx.on_app_quit(|this, cx| {
+                let meetings = this.meetings.clone();
+                let drafts = this.drafts.clone();
+                cx.background_executor().spawn(async move {
+                    if let Ok(meetings) = meetings
+                        && let Err(error) = drafts.flush(&meetings)
+                    {
+                        eprintln!("Could not checkpoint meeting draft on quit: {error}");
+                    }
+                })
+            }),
+        ];
         Self {
+            note_store: None,
+            note_ids: HashMap::new(),
             meetings,
             cwd: String::new(),
             hidden: Vec::new(),
-            html,
-            focus: cx.focus_handle(),
-            jobs: Vec::new(),
+            transcript,
+            summary,
+            preview: None,
             enabled: true,
             enable_epoch: 0,
+            active: false,
+            error: None,
+            notice: None,
+            document: None,
+            section: Section::Transcript,
+            pending_focus: None,
+            intent: 0,
+            opening: false,
+            next_open: None,
+            drafts: Arc::default(),
+            draft_timer: None,
+            draft_prefix: uuid::Uuid::new_v4().simple().to_string()[..24].to_owned(),
+            draft_sequence: 0,
+            saving: false,
+            after_save: None,
+            discarding: false,
+            confirm_delete: false,
+            deleting: false,
+            preparing: None,
+            source_overrides: HashMap::new(),
+            source_anchor: crate::popover::AnchorSlot::default(),
+            source_open: false,
+            live: None,
+            poller: None,
+            analysis: None,
+            _subscriptions: subscriptions,
         }
+    }
+
+    fn editor(
+        label: &'static str,
+        path: &str,
+        max_bytes: usize,
+        cx: &mut Context<Self>,
+    ) -> Entity<Input> {
+        cx.new(|cx| {
+            let mut input = Input::document_editor(label, path, max_bytes, cx);
+            input.set_font_size(page::BODY_SIZE);
+            input.set_line_height(page::BODY_LINE);
+            input
+        })
+    }
+
+    fn selected_source(&self, doc: &Document) -> CaptureSource {
+        self.source_overrides
+            .get(doc.id())
+            .copied()
+            .unwrap_or(doc.state.source)
     }
 
     pub(crate) fn configure_context(&mut self, cwd: &str, hidden: &[String]) {
@@ -89,175 +192,101 @@ impl Page {
     }
 
     pub(crate) fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
-        if !active {
-            self.html.read(cx).hide();
+        if self.active == active {
+            return;
+        }
+        self.active = active;
+        if active {
+            cx.emit(Event::Changed);
+            self.start_polling(cx);
+        } else {
+            self.poller = None;
+            self.source_open = false;
         }
         cx.notify();
     }
 
     pub(crate) fn set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        if self.enabled == enabled {
+        if self.enabled != enabled {
+            self.enabled = enabled;
+            self.enable_epoch += 1;
+            if !enabled {
+                self.intent += 1;
+                self.set_active(false, cx);
+                self.cancel_analysis();
+            }
+            self.sync_read_only(cx);
+            cx.notify();
+        }
+    }
+
+    fn storage(&mut self, cx: &mut Context<Self>) -> Option<Meetings> {
+        if !self.enabled {
+            return None;
+        }
+        match self.meetings.clone() {
+            Ok(meetings) => Some(meetings),
+            Err(error) => {
+                self.fail(error, cx);
+                None
+            }
+        }
+    }
+
+    fn fail(&mut self, error: String, cx: &mut Context<Self>) {
+        self.error = Some(error);
+        cx.notify();
+    }
+
+    fn input(&self, field: Field) -> &Entity<Input> {
+        match field {
+            Field::Transcript => &self.transcript,
+            Field::Summary => &self.summary,
+        }
+    }
+
+    /// Notes calls this only while this recording's editor is visible. The
+    /// focus transfer happens at that owning render boundary, without a delayed
+    /// callback that could reclaim focus after Notes changes its selection.
+    pub(crate) fn focus_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.active || !self.enabled {
             return;
         }
-        self.enabled = enabled;
-        self.enable_epoch += 1;
-        if !enabled {
-            self.set_active(false, cx);
-            for cancel in &self.jobs {
-                cancel.store(true, Ordering::Release);
-            }
+        if self
+            .document
+            .as_ref()
+            .is_some_and(|doc| doc.state.phase.active() || doc.awaiting_transcript)
+        {
+            return;
         }
-    }
-
-    fn request(&mut self, mut value: Value, reply: Reply, cx: &mut Context<Self>) {
-        if !self.enabled {
-            return reply(Err("Meetings is turned off.".into()));
-        }
-        let meetings = match &self.meetings {
-            Ok(meetings) => meetings.clone(),
-            Err(error) => return reply(Err(error.clone())),
+        let Some(field) = self.pending_focus.take() else {
+            return;
         };
-        let params = value.get_mut("params").map(Value::take).unwrap_or_default();
-        let id = params["id"].as_str().unwrap_or_default();
-        match value["method"].as_str() {
-            Some("audio.current") => reply(Ok(json!(capture::current(cx)))),
-            Some("audio.stop") => reply(capture::stop(id, cx)),
-            Some("audio.status") => reply(capture::status(
-                id,
-                params["after"].as_u64().unwrap_or(0),
-                meetings.directory,
-                cx,
-            )),
-            Some("meetings.start") => {
-                let enable_epoch = self.enable_epoch;
-                let directory = meetings.directory.clone();
-                let prepare = cx
-                    .background_executor()
-                    .spawn(async move { meetings.prepare("") });
-                cx.spawn(async move |this, cx| {
-                    let result = match prepare.await {
-                        Ok(id) => this
-                            .update(cx, |page, cx| {
-                                if page.enable_epoch != enable_epoch {
-                                    return Err("Recording start was canceled because Meetings was turned off.".into());
-                                }
-                                capture::start(id, directory, cx)
-                            })
-                            .unwrap_or_else(|_| Err("The Meetings view was closed.".into())),
-                        Err(error) => Err(error),
-                    };
-                    reply(result);
-                })
-                .detach();
-            }
-            Some("meetings.summarize") => self.summarize(meetings, id.to_owned(), reply, cx),
-            Some("meetings.delete") if capture::current(cx).is_some_and(|state| state.id == id) => {
-                reply(Err("Stop recording before deleting this meeting.".into()));
-            }
-            Some(
-                method
-                @ ("meetings.list" | "meetings.read" | "meetings.update" | "meetings.delete"),
-            ) => {
-                let method = method.to_owned();
-                let work = cx.background_executor().spawn(async move {
-                    match method.as_str() {
-                        "meetings.list" => meetings.list(),
-                        "meetings.read" => meetings.read(params["id"].as_str().unwrap_or_default()),
-                        "meetings.delete" => {
-                            let revision = params["revision"]
-                                .as_u64()
-                                .ok_or("Missing meeting revision")?;
-                            meetings.delete(params["id"].as_str().unwrap_or_default(), revision)?;
-                            Ok(Value::Null)
-                        }
-                        _ => meetings.update(&params),
-                    }
-                });
-                cx.spawn(async move |_, _| reply(work.await)).detach();
-            }
-            _ => reply(Err("Unknown Meetings command.".into())),
+        if matches!(
+            (field, self.section),
+            (Field::Transcript, Section::Transcript) | (Field::Summary, Section::Source)
+        ) {
+            window.focus(&self.input(field).focus_handle(cx), cx);
         }
     }
 
-    fn summarize(&mut self, meetings: Meetings, id: String, reply: Reply, cx: &mut Context<Self>) {
-        self.jobs.retain(|job| Arc::strong_count(job) > 1);
-        if self.jobs.len() >= 4 {
-            return reply(Err("Meeting summaries are busy. Try again shortly.".into()));
-        }
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.jobs.push(cancel.clone());
-        let timeout = cancel.clone();
-        let deadline = cx.spawn(async move |_, cx| {
-            cx.background_executor()
-                .timer(Duration::from_secs(900))
-                .await;
-            timeout.store(true, Ordering::Release);
-        });
-        let cwd = self.cwd.clone();
-        let profiles: Vec<(Kind, Profile)> = Kind::ALL
-            .into_iter()
-            .filter(|kind| {
-                provider::supports_text_only(*kind) && !self.hidden.iter().any(|id| id == kind.id())
-            })
-            .map(|kind| {
-                let profile = crate::accounts::get(cx)
-                    .map(|center| center.read(cx).selected(kind, &cwd))
-                    .unwrap_or_default();
-                (kind, profile)
-            })
-            .collect();
-        let work = cx.background_executor().spawn(async move {
-            let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
-            meetings.summarize(&id, &cancel, |settings, prompt| {
-                if cancel.load(Ordering::Acquire) {
-                    return Err("Meeting summary canceled.".into());
-                }
-                let (kind, account) = profiles
-                    .iter()
-                    .find(|(kind, _)| kind.id() == settings.provider)
-                    .ok_or("This provider is unavailable in Vorkspace.")?;
-                let binary = provider::resolve(*kind)
-                    .ok_or("Connect the selected AI provider in Settings first.")?;
-                provider::run_restricted_text(
-                    provider::Request {
-                        kind: *kind,
-                        binary,
-                        cwd: scratch.path().into(),
-                        prompt,
-                        provider_id: None,
-                        model: Some(settings.model.clone()),
-                        settings: vorkspace_core::agent::Settings {
-                            account: account.clone(),
-                            ..Default::default()
-                        },
-                    },
-                    cancel.clone(),
-                    Duration::from_secs(180),
-                )
-                .and_then(|text| {
-                    if cancel.load(Ordering::Acquire) {
-                        Err("Meeting summary canceled.".into())
-                    } else {
-                        Ok(text)
-                    }
-                })
-            })
-        });
-        cx.spawn(async move |_, _| {
-            let result = work.await;
-            drop(deadline);
-            reply(result);
-        })
-        .detach();
+    fn editable(&self) -> bool {
+        self.enabled
+            && !self.deleting
+            && !self.discarding
+            && self
+                .document
+                .as_ref()
+                .is_some_and(|doc| self.preparing.as_deref() != Some(doc.id()) && doc.editable())
     }
-}
 
-impl Render for Page {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .track_focus(&self.focus)
-            .bg(pane_fill())
-            .child(self.html.clone())
+    fn sync_read_only(&self, cx: &mut Context<Self>) {
+        let read_only = !self.editable();
+        for input in [&self.transcript, &self.summary] {
+            input.update(cx, |input, cx| {
+                input.set_read_only(read_only);
+                cx.notify();
+            });
+        }
     }
 }

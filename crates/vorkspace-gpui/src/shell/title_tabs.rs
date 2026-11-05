@@ -166,7 +166,6 @@ impl Shell {
                     self.open_connector(*provider, window, cx)
                 }
                 app_views::AppView::Notes => self.open_notes(window, cx),
-                app_views::AppView::Meetings => self.open_meetings(window, cx),
                 app_views::AppView::Automations => self.open_automations(window, cx),
                 app_views::AppView::Todos => self.open_todos(window, cx),
             },

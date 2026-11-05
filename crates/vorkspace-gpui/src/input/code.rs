@@ -21,6 +21,7 @@ pub(super) struct Code {
     hovered_change: Option<usize>,
     can_stage: bool,
     suppress_completion: bool,
+    document_bytes: Option<usize>,
     diff: bool,
     deleted_rows: Vec<(
         f32,
@@ -61,6 +62,7 @@ impl Code {
             hovered_change: None,
             can_stage: false,
             suppress_completion: false,
+            document_bytes: None,
             diff: false,
             deleted_rows: Vec::new(),
             path: String::new(),
@@ -173,6 +175,24 @@ impl Input {
         input.secondary_submit = true;
         input
     }
+    /// A wrapped editor for Markdown and other documents stored outside the
+    /// file editor. Its format owns the byte budget for the whole document.
+    pub(crate) fn document_editor(
+        label: &'static str,
+        path: &str,
+        max_bytes: usize,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        use vorkspace_core::files::document::MAX_TEXT_BYTES;
+        let mut input = Self::editor(cx);
+        let code = input.code.as_mut().unwrap();
+        code.document_bytes = Some(max_bytes.min(MAX_TEXT_BYTES));
+        code.path = path.into();
+        code.wrap = true;
+        input.label = label.into();
+        input
+    }
+
     pub(crate) fn set_editor_diff(&mut self, diff: bool, can_stage: bool) {
         if let Some(code) = &mut self.code {
             code.can_stage = can_stage;
@@ -653,7 +673,15 @@ impl Input {
         cx: &mut Context<Self>,
     ) -> bool {
         use vorkspace_core::files::document::{MAX_LINE_BYTES, MAX_TEXT_BYTES};
-        if self.content.len() - range.len() + text.len() > MAX_TEXT_BYTES {
+        let bytes = self.content.len() - range.len() + text.len();
+        if let Some(max_bytes) = self.code.as_ref().and_then(|code| code.document_bytes) {
+            if bytes > max_bytes {
+                cx.emit(Rejected("Edit exceeds this document's size limit."));
+                return false;
+            }
+            return true;
+        }
+        if bytes > MAX_TEXT_BYTES {
             cx.emit(Rejected("Edit exceeds the 2 MB file limit."));
             return false;
         }

@@ -36,7 +36,7 @@ impl SettingsView {
             })
             .collect();
         let mut rows = vec![
-            self.row(Some("vox-enabled"),true,"Vox",Some("Open Vox at the Mac’s notch with Control Option Space or the microphone above Subscriptions. Uses your signed-in Codex account. Off by default.".into()),vec![self.toggle("vox-enabled","Enable Vox",p.vox_enabled,false,cx,|this,on,cx|this.update(cx,|p|p.vox_enabled=on))]),
+            self.row(Some("vox-enabled"),true,"Vox",Some("Open Vox at the Mac’s notch with Control Option Space. Uses your signed-in Codex account. Off by default.".into()),vec![self.toggle("vox-enabled","Enable Vox",p.vox_enabled,false,cx,|this,on,cx|this.update(cx,|p|p.vox_enabled=on))]),
             self.row(Some("vox-silent"),false,"Silent replies",Some("Expand selectable reply text below the notch while keeping spoken audio muted.".into()),vec![self.toggle("vox-silent","Silent replies",p.vox_silent,false,cx,|this,on,cx|this.update(cx,|p|p.vox_silent=on))]),
             self.row(Some("vox-microphone"),false,"Microphone",Some("Applies to the next call. Devices appear after microphone access is granted. If a selected device disappears, Vox stops instead of switching inputs.".into()),microphone_buttons),
             self.row(Some("vox-conversation"),false,"Conversation",Some("Vox resumes the same conversation across calls. Start fresh clears its conversation identity and keeps its memory.".into()),vec![secondary_button("vox-reset","Start fresh",false,false).child("Start fresh").on_click(cx.listener(|_,_,window,cx|{

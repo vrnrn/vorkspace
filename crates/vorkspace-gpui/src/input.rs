@@ -329,6 +329,7 @@ impl Input {
         let mut input = Self::commit_message(cx);
         input.label = "Comment".into();
         input.placeholder = "Leave a comment (⌘↩)".into();
+        input.placeholder_alpha = Some(0.6);
         input.height = 40.;
         input.min_height = 40.;
         input.max_height = 144.;
@@ -339,6 +340,7 @@ impl Input {
         let mut input = Self::commit_message(cx);
         input.label = "Instructions".into();
         input.placeholder = "Tell the agent what to do when this automation runs…".into();
+        input.placeholder_alpha = Some(0.6);
         input.font_size = 14.;
         input.line_height = 22.;
         input.height = 88.;

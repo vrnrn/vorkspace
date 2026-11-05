@@ -140,6 +140,7 @@ mod tests {
             marker: None,
             gap: 0.,
             word_start: 0,
+            infer_file_links: true,
         };
         mark_row(&mut row, "café", true);
         assert_eq!(row_text(&row), "Find café here");

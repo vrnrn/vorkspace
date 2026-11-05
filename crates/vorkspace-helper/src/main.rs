@@ -3,6 +3,7 @@
 mod dictation;
 mod dictation_panel;
 mod history;
+mod meeting_panel;
 #[cfg(not(test))]
 mod menu;
 mod native;
@@ -134,6 +135,24 @@ pub(crate) fn action(action: Action, cx: &mut App) {
     run(Some(step), cx);
 }
 
+#[cfg(not(test))]
+pub(crate) fn open_meeting(cx: &mut App) {
+    action(Action::OpenMeeting, cx);
+}
+
+/// The app routes menu intents; the recorder revalidates the active take.
+/// Clipboard presentation never owns or directly controls audio state.
+#[cfg(not(test))]
+fn meeting_menu_action(run: Option<String>, cx: &mut App) {
+    if let Some(run) = run {
+        if transcription::active_run(cx) == Some(run.as_str()) {
+            transcription::finish(cx);
+        }
+    } else if !transcription::active(cx) {
+        action(Action::NewMeeting, cx);
+    }
+}
+
 fn report_error(cx: &mut App) {
     let error = service::get(cx).and_then(|service| service.read(cx).error.clone());
     let helper = cx.global_mut::<Helper>();
@@ -184,8 +203,15 @@ pub(crate) fn toggle(status_click: bool, cx: &mut App) {
             )
         });
     if let Some(service) = service::get(cx) {
+        let recording_run = transcription::active_run(cx).map(str::to_owned);
         service.update(cx, |service, cx| {
-            service.toggle_menu(anchor, status_click, cx)
+            service.toggle_menu(
+                anchor,
+                status_click,
+                recording_run.as_deref(),
+                meeting_menu_action,
+                cx,
+            )
         });
     }
 }
@@ -244,8 +270,8 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             audio_finished(cx);
         }
         Event::Command(Command::StartAudio(request)) => transcription::start(request, cx),
-        Event::Command(Command::FinishAudio { id, owner }) => {
-            transcription::finish_owned(&id, &owner, cx)
+        Event::Command(Command::FinishAudio { id, owner, run }) => {
+            transcription::finish_owned(&id, &owner, &run, cx)
         }
         Event::Command(Command::SetUpDictation) => dictation::setup(cx),
         Event::Command(Command::CancelDictation) => dictation::cancel(cx),

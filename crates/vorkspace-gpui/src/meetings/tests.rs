@@ -1,0 +1,507 @@
+use super::*;
+use gpui::{Entity, TestAppContext};
+use std::sync::atomic::AtomicBool;
+use tempfile::TempDir;
+use vorkspace_meetings::recording::{CaptureSource, Owner, Phase};
+
+fn storage() -> (TempDir, Meetings) {
+    let root = tempfile::tempdir().unwrap();
+    let meetings = Meetings::open(root.path()).unwrap();
+    (root, meetings)
+}
+
+fn recorded(meetings: &Meetings, title: &str) -> String {
+    let id = meetings.prepare(title).unwrap();
+    let mut owner = Owner::create(&meetings.directory, &id).unwrap();
+    owner.phase(Phase::Recording, None).unwrap();
+    owner
+        .append(
+            "microphone",
+            0,
+            1000,
+            "Review the release checklist.".into(),
+        )
+        .unwrap();
+    owner
+        .append(
+            "system",
+            1100,
+            2000,
+            "Taylor will publish the draft tomorrow.".into(),
+        )
+        .unwrap();
+    owner.phase(Phase::Stopped, None).unwrap();
+    id
+}
+
+fn summarized(meetings: &Meetings, id: &str) -> Snapshot {
+    meetings
+        .save_settings(&vorkspace_meetings::Settings {
+            provider: "codex".into(),
+            model: "fixture".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    decode(meetings.summarize(id, &AtomicBool::new(false), |_, _| Ok(
+        "## Summary\n\nThe team reviewed the **release checklist**.\n\n## Action items\n\n- Taylor will publish the draft tomorrow.\n- Verify the build with `cargo test`.\n\n```sh\ncargo test --workspace\n```".into()
+    )).unwrap()).unwrap()
+}
+
+fn page(meetings: &Meetings, id: &str, cx: &mut TestAppContext) -> Entity<Page> {
+    let doc = DraftBuffer::default().open(meetings, id, None).unwrap();
+    let meetings = meetings.clone();
+    let page = cx.new(|cx| Page::with_meetings(Ok(meetings), cx));
+    page.update(cx, |page, cx| page.install(Some(doc), cx));
+    page
+}
+
+fn type_into(
+    page: &Entity<Page>,
+    field: Field,
+    text: &str,
+    selection: std::ops::Range<usize>,
+    cx: &mut TestAppContext,
+) {
+    page.update(cx, |page, cx| {
+        page.input(field).update(cx, |input, cx| {
+            input.set_text(text.into(), cx);
+            input.select_utf16(selection, cx);
+        })
+    });
+}
+
+fn events(
+    page: &Entity<Page>,
+    cx: &mut TestAppContext,
+) -> std::rc::Rc<std::cell::RefCell<Vec<&'static str>>> {
+    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let output = events.clone();
+    page.update(cx, |page, cx| {
+        let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
+            output.borrow_mut().push(match event {
+                Event::Changed => "changed",
+                Event::Attached { .. } => "attached",
+                Event::Deleted(_) => "deleted",
+                Event::SummaryReady(_) => "summary",
+            });
+        });
+        page._subscriptions.push(subscription);
+    });
+    events
+}
+
+#[gpui::test]
+fn a_durable_native_draft_reopens_with_its_section_and_utf16_selection(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let original = summarized(&meetings, &id);
+    let first = page(&meetings, &id, cx);
+    first.update(cx, |page, cx| {
+        page.navigate(Action::Section(Section::Source), cx)
+    });
+    type_into(&first, Field::Summary, "a🦊b edited summary", 1..3, cx);
+    first.read_with(cx, |page, _| assert!(page.drafts.has_pending()));
+
+    let read_only = page(&meetings, &id, cx);
+    read_only.read_with(cx, |page, cx| {
+        assert!(!page.editable());
+        assert_eq!(
+            page.input(Field::Summary).read(cx).content.as_ref(),
+            original.meeting.summary.as_ref().unwrap().text
+        );
+    });
+    // GPUI drops released entities at the end of an app update. Close the
+    // view before the next synchronous open attempts to claim its edit lease.
+    cx.update(|_| drop(first));
+    let reopened = page(&meetings, &id, cx);
+    reopened.read_with(cx, |page, cx| {
+        let doc = page.document.as_ref().unwrap();
+        assert!(doc.editable());
+        assert_eq!(page.section, Section::Source);
+        assert_eq!(page.pending_focus, Some(Field::Summary));
+        assert_eq!(page.input(Field::Summary).read(cx).selection_utf16(), 1..3);
+        assert_eq!(doc.text(Field::Summary), "a🦊b edited summary");
+        assert_eq!(
+            doc.saved.as_ref().unwrap().meeting.revision,
+            original.meeting.revision
+        );
+    });
+}
+
+#[gpui::test]
+fn a_save_receipt_keeps_newer_native_input_and_its_selection(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let page = page(&meetings, &id, cx);
+    type_into(&page, Field::Transcript, "First revision", 2..2, cx);
+
+    // Commit the captured draft but delay publishing the save result.
+    let (version, submitted, saved) = page.update(cx, |page, _| {
+        let doc = page.document.as_ref().unwrap();
+        let version = doc.version.clone().unwrap();
+        page.drafts.flush(&meetings).unwrap();
+        let saved = decode(meetings.save_draft(&id, &version).unwrap()).unwrap();
+        page.saving = true;
+        (version, doc.draft.clone().unwrap(), saved)
+    });
+    type_into(&page, Field::Transcript, "A🦊 new revision", 1..3, cx);
+    page.update(cx, |page, cx| {
+        // Also exercise the receipt's durable rebase before the UI sees it.
+        page.drafts.flush(&meetings).unwrap();
+        page.complete_save(&id, version, submitted, Ok(Some(saved)), cx);
+        let doc = page.document.as_ref().unwrap();
+        assert_eq!(doc.text(Field::Transcript), "A🦊 new revision");
+        assert_eq!(doc.saved.as_ref().unwrap().transcript, "First revision");
+        assert!(doc.dirty());
+        assert!(!doc.conflict());
+        assert_eq!(
+            page.input(Field::Transcript).read(cx).selection_utf16(),
+            1..3
+        );
+        let persisted: Snapshot = decode(meetings.open_document(&id).unwrap()).unwrap();
+        let draft = persisted.draft.unwrap();
+        assert_eq!(draft.revision, persisted.meeting.revision);
+        assert_eq!(draft.transcript.as_deref(), Some("A🦊 new revision"));
+    });
+}
+
+#[gpui::test]
+fn a_stale_open_cannot_replace_input_or_take_its_lease(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let selected = recorded(&meetings, "Planning");
+    let destination = recorded(&meetings, "Review");
+    let page = page(&meetings, &selected, cx);
+    let pending_open = DraftBuffer::default()
+        .open(&meetings, &destination, None)
+        .unwrap();
+    let epoch = page.read_with(cx, |page, _| page.intent);
+    type_into(&page, Field::Transcript, "Planning edits", 8..8, cx);
+    page.update(cx, |page, cx| {
+        page.complete_open(epoch, true, Ok(pending_open), cx);
+        let doc = page.document.as_ref().unwrap();
+        assert_eq!(doc.id(), selected);
+        assert_eq!(doc.text(Field::Transcript), "Planning edits");
+        assert!(meetings.try_edit(&selected).unwrap().is_none());
+        assert!(meetings.try_edit(&destination).unwrap().is_some());
+    });
+}
+
+#[gpui::test]
+fn a_delayed_summary_does_not_replace_a_later_saved_revision(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let old_result = summarized(&meetings, &id);
+    meetings
+        .update(&json!({
+            "id": id, "revision": old_result.meeting.revision, "summary": "Manually edited summary"
+        }))
+        .unwrap();
+    let page = page(&meetings, &id, cx);
+    page.update(cx, |page, cx| {
+        let preview = page.preview.clone().unwrap();
+        page.complete_analysis(page.intent, old_result, cx);
+        assert_eq!(
+            page.document.as_ref().unwrap().text(Field::Summary),
+            "Manually edited summary"
+        );
+        assert_eq!(page.preview.as_ref(), Some(&preview));
+    });
+}
+
+#[gpui::test]
+fn returning_to_note_text_keeps_a_finished_summary_without_stealing_navigation(
+    cx: &mut TestAppContext,
+) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let page = page(&meetings, &id, cx);
+    let intent = page.read_with(cx, |page, _| page.intent);
+    let summary = summarized(&meetings, &id);
+    let revision = summary.meeting.revision;
+    let events = events(&page, cx);
+    page.update(cx, |page, cx| {
+        page.hide_note_content(cx);
+        assert_ne!(page.intent, intent);
+        page.complete_analysis(intent, summary, cx);
+        let doc = page.document.as_ref().unwrap();
+        assert_eq!(doc.saved.as_ref().unwrap().meeting.revision, revision);
+        assert!(doc.text(Field::Summary).contains("release checklist"));
+        assert!(page.preview.is_some());
+        assert_eq!(page.section, Section::Transcript);
+        assert_eq!(page.pending_focus, None);
+    });
+    assert_eq!(events.borrow().as_slice(), ["changed"]);
+    let durable: Snapshot = decode(meetings.read(&id).unwrap()).unwrap();
+    assert_eq!(durable.meeting.revision, revision);
+    assert!(durable.meeting.summary.is_some());
+}
+
+#[gpui::test]
+fn finishing_an_unselected_recording_refreshes_notes_without_changing_the_open_document(
+    cx: &mut TestAppContext,
+) {
+    let (_root, meetings) = storage();
+    let selected = recorded(&meetings, "Selected note");
+    let finished = recorded(&meetings, "Other recording");
+    let snapshot: Snapshot = decode(meetings.read(&finished).unwrap()).unwrap();
+    let page = page(&meetings, &selected, cx);
+    let events = events(&page, cx);
+    page.update(cx, |page, cx| {
+        let lease = page.document.as_ref().unwrap().lease.clone().unwrap();
+        page.observe_live(
+            State {
+                phase: Phase::Recording,
+                ..snapshot.state.clone()
+            },
+            cx,
+        );
+        page.finish_live(snapshot.state, cx);
+        let doc = page.document.as_ref().unwrap();
+        assert_eq!(doc.id(), selected);
+        assert!(Arc::ptr_eq(doc.lease.as_ref().unwrap(), &lease));
+        assert!(!doc.awaiting_transcript);
+        assert!(!page.opening);
+        assert_eq!(page.live.as_ref().unwrap().state.id, finished);
+        assert_eq!(page.live.as_ref().unwrap().state.phase, Phase::Stopped);
+    });
+    assert_eq!(events.borrow().as_slice(), ["changed"]);
+}
+
+#[gpui::test]
+fn deleting_a_recording_leaves_the_next_note_to_the_notes_owner(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let selected = recorded(&meetings, "Deleted note");
+    let other = recorded(&meetings, "Unrelated note");
+    let page = page(&meetings, &selected, cx);
+    let events = events(&page, cx);
+    page.update(cx, |page, cx| {
+        page.note_ids
+            .insert("deleted-note".into(), selected.clone());
+        page.confirm_delete = true;
+        page.delete(cx);
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+        assert!(page.document.is_none());
+        assert!(page.next_open.is_none());
+        assert!(!page.opening && !page.deleting);
+    });
+    assert_eq!(events.borrow().as_slice(), ["deleted"]);
+    assert!(meetings.read(&selected).is_err());
+    let retained: Snapshot = decode(meetings.read(&other).unwrap()).unwrap();
+    assert_eq!(retained.meeting.id, other);
+    assert_eq!(retained.meeting.title, "Unrelated note");
+}
+
+#[gpui::test]
+fn an_unrecorded_note_can_be_deleted_before_its_first_saved_snapshot(cx: &mut TestAppContext) {
+    for materialized in [false, true] {
+        let (_root, meetings) = storage();
+        let page = cx.new(|cx| Page::with_meetings(Ok(meetings.clone()), cx));
+        let events = events(&page, cx);
+        let id = page.update(cx, |page, cx| {
+            page.show_note("unsaved-note", None, cx);
+            let doc = page.document.as_ref().unwrap();
+            assert!(doc.saved.is_none() && doc.unrecorded() && doc.editable());
+            let id = doc.id().to_owned();
+            if materialized {
+                doc.lease
+                    .as_ref()
+                    .unwrap()
+                    .materialize(&meetings, &id)
+                    .unwrap();
+                assert!(meetings.read(&id).is_ok());
+            } else {
+                assert!(meetings.read(&id).is_err());
+            }
+            page.confirm_delete = true;
+            page.delete(cx);
+            id
+        });
+        cx.run_until_parked();
+        page.read_with(cx, |page, _| {
+            assert!(page.document.is_none());
+            assert!(!page.deleting && !page.opening);
+        });
+        assert_eq!(events.borrow().as_slice(), ["deleted"]);
+        assert!(meetings.read(&id).is_err());
+    }
+}
+
+#[gpui::test]
+fn legacy_title_drafts_survive_without_focusing_a_removed_title_editor(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let snapshot: Snapshot = decode(meetings.read(&id).unwrap()).unwrap();
+    let write = DraftWrite::from_params(json!({
+        "id": id,
+        "version": "0123456789abcdef0123456789abcdef",
+        "expected": null,
+        "draft": {
+            "revision": snapshot.meeting.revision,
+            "title": "Legacy title edit",
+            "view": "transcript",
+            "title_focused": true,
+            "start": 2,
+            "end": 5
+        }
+    }))
+    .unwrap();
+    meetings.checkpoint_draft(&write).unwrap();
+    let page = page(&meetings, &id, cx);
+    page.read_with(cx, |page, cx| {
+        let doc = page.document.as_ref().unwrap();
+        assert_eq!(
+            doc.draft.as_ref().unwrap().title.as_deref(),
+            Some("Legacy title edit")
+        );
+        assert!(doc.dirty() && doc.has_content());
+        assert_eq!(page.pending_focus, Some(Field::Transcript));
+        assert_eq!(page.transcript.read(cx).selection_utf16(), 0..0);
+        assert_eq!(doc.text(Field::Transcript), snapshot.transcript);
+    });
+    type_into(&page, Field::Transcript, "New transcript edit", 2..4, cx);
+    page.update(cx, |page, _| page.drafts.flush(&meetings).unwrap());
+    let reopened: Snapshot = decode(meetings.open_document(&id).unwrap()).unwrap();
+    let draft = reopened.draft.unwrap();
+    assert_eq!(draft.title.as_deref(), Some("Legacy title edit"));
+    assert_eq!(draft.transcript.as_deref(), Some("New transcript edit"));
+    assert!(!draft.title_focused);
+}
+
+#[gpui::test]
+fn sharing_uses_the_selected_recording_text_and_waits_for_final_transcripts(
+    cx: &mut TestAppContext,
+) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let saved = summarized(&meetings, &id);
+    let page = page(&meetings, &id, cx);
+    page.update(cx, |page, cx| {
+        page.note_section(false, cx);
+        assert_eq!(
+            page.selected_text(),
+            Some(saved.meeting.summary.as_ref().unwrap().text.as_str())
+        );
+        page.note_section(true, cx);
+        assert_eq!(page.selected_text(), Some(saved.transcript.as_str()));
+        page.observe_live(
+            State::starting(id, "next-take".into(), CaptureSource::Microphone),
+            cx,
+        );
+        assert_eq!(page.selected_text(), None);
+    });
+}
+
+#[gpui::test]
+fn document_editors_keep_the_storage_byte_limits_and_accept_long_lines(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let page = page(&meetings, &id, cx);
+    page.update(cx, |page, cx| {
+        let long_line = "🦊".repeat(6000);
+        page.transcript.update(cx, |input, cx| {
+            input.set_text(long_line.clone(), cx);
+            input.replace_bytes(0..0, "a", 1, cx);
+            assert_eq!(input.content.as_ref(), format!("a{long_line}"));
+        });
+        page.summary.update(cx, |input, cx| {
+            input.set_text("s".repeat(64 * 1024), cx);
+            input.replace_bytes(0..0, "a", 1, cx);
+            assert_eq!(input.content.len(), 64 * 1024);
+            assert!(input.content.starts_with('s'));
+        });
+    });
+}
+
+#[gpui::test]
+fn hiding_notes_and_reselecting_the_same_note_preserve_its_recording_draft(
+    cx: &mut TestAppContext,
+) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let saved = summarized(&meetings, &id);
+    let page = page(&meetings, &id, cx);
+    page.update(cx, |page, cx| {
+        page.navigate(Action::Section(Section::Source), cx)
+    });
+    type_into(&page, Field::Summary, "a🦊b unsaved summary", 1..3, cx);
+    page.update(cx, |page, cx| {
+        let doc = page.document.as_ref().unwrap();
+        let lease = doc.lease.clone().unwrap();
+        let version = doc.version.clone();
+        let preview = page.preview.clone();
+        page.set_active(false, cx);
+        page.set_active(true, cx);
+        page.show_note("selected-note", Some(&id), cx);
+
+        let doc = page.document.as_ref().unwrap();
+        assert!(page.active);
+        assert!(!page.saving && !page.opening);
+        assert!(Arc::ptr_eq(doc.lease.as_ref().unwrap(), &lease));
+        assert_eq!(doc.version, version);
+        assert_eq!(doc.text(Field::Summary), "a🦊b unsaved summary");
+        assert_eq!(page.section, Section::Source);
+        assert_eq!(page.input(Field::Summary).read(cx).selection_utf16(), 1..3);
+        assert_eq!(page.preview, preview);
+        let current: Snapshot = decode(meetings.read(&id).unwrap()).unwrap();
+        assert_eq!(current.meeting.revision, saved.meeting.revision);
+    });
+}
+
+#[gpui::test]
+fn a_blank_note_recording_never_materializes_until_there_is_content(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let page = cx.new(|cx| Page::with_meetings(Ok(meetings.clone()), cx));
+    let id = page.update(cx, |page, cx| {
+        page.show_note("new-note", None, cx);
+        let doc = page.document.as_ref().unwrap();
+        assert!(page.editable() && doc.unrecorded());
+        assert_eq!(page.transcript.read(cx).content.as_ref(), "");
+        doc.id().to_owned()
+    });
+    assert!(meetings.read(&id).is_err());
+
+    type_into(&page, Field::Transcript, "  ", 2..2, cx);
+    page.update(cx, |page, _| page.drafts.flush(&meetings).unwrap());
+    assert!(meetings.read(&id).is_err());
+    assert_eq!(meetings.list().unwrap(), json!([]));
+
+    type_into(&page, Field::Transcript, "Planning", 8..8, cx);
+    page.update(cx, |page, _| page.drafts.flush(&meetings).unwrap());
+    let saved: Snapshot = decode(meetings.open_document(&id).unwrap()).unwrap();
+    assert!(saved.meeting.title.is_empty());
+    assert_eq!(saved.draft.unwrap().transcript.as_deref(), Some("Planning"));
+    assert!(meetings.try_edit(&id).unwrap().is_none());
+}
+
+#[gpui::test]
+fn a_resumed_run_keeps_the_corrected_document_and_read_only_baseline(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let prior: Snapshot = decode(meetings.read(&id).unwrap()).unwrap();
+    meetings
+        .update(&json!({
+            "id": id,
+            "revision": prior.meeting.revision,
+            "transcript": "Corrected discussion"
+        }))
+        .unwrap();
+    let page = page(&meetings, &id, cx);
+    page.update(cx, |page, cx| {
+        let lease = page.document.as_ref().unwrap().lease.clone().unwrap();
+        page.observe_live(
+            State::starting(id.clone(), "fixture-take".into(), CaptureSource::Microphone),
+            cx,
+        );
+        let doc = page.document.as_ref().unwrap();
+        assert_eq!(doc.id(), id);
+        assert!(!page.editable());
+        assert_eq!(doc.text(Field::Transcript), "Corrected discussion");
+        assert!(Arc::ptr_eq(doc.lease.as_ref().unwrap(), &lease));
+        assert_eq!(
+            page.live.as_ref().unwrap().prefix.as_deref(),
+            Some("Corrected discussion")
+        );
+    });
+}

@@ -248,22 +248,14 @@ impl SettingsView {
                                     }),
                             )
                             .child(
-                                div()
-                                    .h(px(28.))
-                                    .max_w(px(208.))
-                                    .min_w_0()
-                                    .flex_1()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(content(0.1))
-                                    .px_2()
-                                    .child(icon("search-01", 14.))
-                                    .child(
-                                        div().min_w_0().flex_1().child(self.skill_filter.clone()),
-                                    ),
+                                crate::controls::page::search_frame(
+                                    &self.skill_filter.focus_handle(cx),
+                                )
+                                .max_w(px(208.))
+                                .min_w_0()
+                                .flex_1()
+                                .child(icon("search-01", 14.))
+                                .child(div().min_w_0().flex_1().child(self.skill_filter.clone())),
                             )
                             .child(
                                 icon_action(

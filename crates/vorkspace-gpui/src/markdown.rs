@@ -1,6 +1,8 @@
 //! GPUI port of AgentMarkdown.tsx and its .agent-markdown CSS.
+mod document;
 mod search;
 use crate::syntax::HighlightedDocument;
+pub(crate) use document::{Document, document_row};
 use gpui::Window;
 use gpui::{
     AnyElement, App, ClickEvent, Div, FontStyle, FontWeight, HighlightStyle, InteractiveText,
@@ -43,6 +45,13 @@ fn activate_link(event: &ClickEvent, selection: Option<&Selection>) -> bool {
     event.click_count() == 1
         && !event.modifiers().shift
         && !selection.is_some_and(|selection| selection.has_selection())
+        && match event {
+            ClickEvent::Mouse(mouse) => {
+                let delta = mouse.up.position - mouse.down.position;
+                delta.x.abs().max(delta.y.abs()) < px(3.)
+            }
+            _ => true,
+        }
 }
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
@@ -185,6 +194,7 @@ pub(crate) struct MarkdownRow {
     pub marker: Option<String>,
     pub gap: f32,
     pub word_start: usize,
+    pub infer_file_links: bool,
 }
 
 pub(crate) fn rows(block: &Block) -> Vec<MarkdownRow> {
@@ -208,6 +218,7 @@ fn flatten(
             marker: None,
             gap,
             word_start: 0,
+            infer_file_links: true,
         })
     };
     match block {
@@ -400,9 +411,20 @@ fn inline_selected(
     word_base: usize,
     font_size: f32,
     selection: Option<Selection>,
+    infer_file_links: bool,
 ) -> AnyElement {
     if runs.iter().any(|r| r.style.code) {
-        return rich_inline(runs, id, tone, fade, now, word_base, font_size, selection);
+        return rich_inline(
+            runs,
+            id,
+            tone,
+            fade,
+            now,
+            word_base,
+            font_size,
+            selection,
+            infer_file_links,
+        );
     }
     let mut word = word_base;
     let mut text = String::new();
@@ -524,6 +546,7 @@ fn rich_inline(
     mut word: usize,
     font_size: f32,
     selection: Option<Selection>,
+    infer_file_links: bool,
 ) -> AnyElement {
     let mut children = Vec::new();
     let mut offset = 0;
@@ -531,7 +554,7 @@ fn rich_inline(
         let style = &run.style;
         if style.code {
             let text = run.text.clone();
-            let file = is_file_chip(&text) || style.link.is_some();
+            let file = code_link(run, infer_file_links).is_some();
             let styled = StyledText::new(text.clone());
             let layout = styled.layout().clone();
             let selected = selection.as_ref().map(|s| {
@@ -568,7 +591,7 @@ fn rich_inline(
                     .line_height(px(24.))
                     .text_color(content(1.))
                     .when(file, |d| {
-                        let path = style.link.clone().unwrap_or_else(|| text.clone());
+                        let path = code_link(run, infer_file_links).unwrap().to_owned();
                         let menu_path = path.clone();
                         d.cursor(gpui::CursorStyle::PointingHand)
                             .hover(|s| s.bg(content(0.13)))
@@ -694,6 +717,12 @@ fn is_file_chip(text: &str) -> bool {
             .next()
             .is_some_and(|name| name.contains('.'))
 }
+fn code_link(run: &InlineRun, infer_file_links: bool) -> Option<&str> {
+    run.style
+        .link
+        .as_deref()
+        .or_else(|| (infer_file_links && is_file_chip(&run.text)).then_some(run.text.as_str()))
+}
 /// Bind preview links to their document, independent of the focused pane.
 pub(crate) fn resolve_file_links(row: &mut MarkdownRow, base: &str) {
     fn resolve(runs: &mut [InlineRun], base: &str) {
@@ -795,6 +824,7 @@ pub(crate) fn body_selected(
                     _ => 16.,
                 },
                 selection,
+                row.infer_file_links,
             ))
             .into_any_element()
         }
@@ -898,6 +928,7 @@ pub(crate) fn body_selected(
                                         selection.as_ref().map(|selection| {
                                             selection.offset(table_offset(&row.part, ix, col))
                                         }),
+                                        row.infer_file_links,
                                     ))
                             }))
                     })),

@@ -15,20 +15,13 @@ struct SearchHeader {
     input: Entity<Input>,
 }
 impl Render for SearchHeader {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .h(px(44.))
-            .mx(px(-4.))
-            .mt(px(-4.))
-            .mb(px(4.))
-            .px(px(12.))
-            .border_b_1()
-            .border_color(content(0.1))
-            .flex()
-            .items_center()
-            .gap(px(10.))
-            .child(icon("search", 14.).text_color(content(0.45)))
-            .child(div().flex_1().min_w_0().child(self.input.clone()))
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        page::toolbar().mx(px(-4.)).mt(px(-4.)).mb(px(4.)).child(
+            page::search_frame(&self.input.focus_handle(cx))
+                .flex_1()
+                .child(icon("search", page::ICON_SIZE))
+                .child(div().flex_1().min_w_0().child(self.input.clone())),
+        )
     }
 }
 
@@ -62,7 +55,7 @@ impl TriggerMenu {
             let color = match kind {
                 "jira" => rgb(0x2684ff).into(),
                 "gitlab" => rgb(0xfc6d26).into(),
-                _ => content(if ready { 0.8 } else { 0.35 }),
+                _ => content(if ready { 0.8 } else { 0.4 }),
             };
             let action = MenuAction::new(kind, label).icon(mark).icon_color(color);
             let action = if kind == "gitlab" {
@@ -92,8 +85,14 @@ impl TriggerMenu {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input =
-            cx.new(|cx| Input::field("Search triggers", "Search triggers", content(0.35), cx));
+        let input = cx.new(|cx| {
+            Input::field(
+                "Search triggers",
+                "Search triggers",
+                page::secondary_ink(),
+                cx,
+            )
+        });
         let search = cx.new(|_| SearchHeader {
             input: input.clone(),
         });
@@ -101,7 +100,7 @@ impl TriggerMenu {
         let menu = cx.new(|cx| {
             Menu::new("Choose automation trigger", items, window, cx)
                 .width(250.)
-                .row_metrics(36., 14.)
+                .row_metrics(page::TOOLBAR_HEIGHT, page::LABEL_SIZE)
                 .search_navigation()
                 .submenu_width(220.)
         });

@@ -1,62 +1,48 @@
 use super::*;
+use crate::controls::page;
 use crate::popover::{Align, Anchor, popover};
 use gpui::{
     AnyElement, ClipboardItem, CursorStyle, Div, FontWeight, Hsla, MouseButton, Pixels, Role,
     SharedString, Stateful, Window, canvas, div, list, prelude::*, px, rgb,
 };
 
+fn detail_inset(window: &Window) -> Pixels {
+    page::detail_padding(page::narrow(window))
+}
+
 fn action(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Stateful<Div> {
+    action_enabled(id, label, true)
+}
+fn action_enabled(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    enabled: bool,
+) -> Stateful<Div> {
     let id: SharedString = id.into();
     let label = label.into();
-    crate::controls::button(id.clone(), label.clone(), true)
+    page::action(id.clone(), label.clone(), enabled)
         .debug_selector(move || id.to_string())
-        .h(px(28.))
-        .px(px(10.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap(px(6.))
-        .rounded(px(6.))
-        .text_size(px(12.))
-        .text_color(content(0.7))
-        .cursor_pointer()
-        .hover(|s| s.bg(content(0.07)).text_color(content(1.)))
-        .child(label)
+        .max_w_full()
+        .child(div().min_w_0().truncate().child(label))
 }
-fn icon_action(id: impl Into<SharedString>, label: &str, name: &'static str) -> Stateful<Div> {
-    icon_action_ink(id, label, name, content(0.7))
+fn icon_button(id: &'static str, label: &'static str, name: &'static str) -> Stateful<Div> {
+    page::icon_action(id, label, true).child(action_icon(name, page::secondary_ink()))
 }
-fn icon_action_ink(
+fn icon_action(
     id: impl Into<SharedString>,
     label: &str,
     name: &'static str,
-    ink: Hsla,
+    enabled: bool,
 ) -> Stateful<Div> {
     let id: SharedString = id.into();
-    crate::controls::button(id.clone(), label.to_owned(), true)
+    page::action(id.clone(), label.to_owned(), enabled)
         .debug_selector(move || id.to_string())
-        .h(px(28.))
-        .px(px(10.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap(px(6.))
-        .rounded(px(6.))
-        .text_size(px(12.))
-        .text_color(content(0.7))
-        .cursor_pointer()
-        .hover(move |s| {
-            if ink == shell_fill() {
-                s.bg(shell_fill().opacity(0.1)).text_color(ink)
-            } else {
-                s.bg(content(0.07)).text_color(content(1.))
-            }
-        })
-        .child(action_icon(name, ink))
-        .child(label.to_owned())
+        .max_w_full()
+        .child(action_icon(name, page::secondary_ink()))
+        .child(div().min_w_0().truncate().child(label.to_owned()))
 }
 fn action_icon(name: &'static str, ink: Hsla) -> gpui::Svg {
-    icon(name, 14.).text_color(ink)
+    icon(name, page::ICON_SIZE).text_color(ink)
 }
 fn relative_time(iso: &str) -> String {
     if model::timestamp_ms(iso) == 0 {
@@ -131,14 +117,12 @@ pub(super) struct SummaryRows {
     keys: Vec<SharedString>,
 }
 fn timeline_event(name: &str, action: &str, time: &str) -> Div {
-    div()
+    page::meta()
         .h(px(20.))
         .min_w_0()
         .flex()
         .items_center()
         .gap(px(6.))
-        .text_size(px(12.))
-        .text_color(content(0.5))
         .child(
             div()
                 .min_w_0()
@@ -163,21 +147,16 @@ fn menu_row(
 ) -> Stateful<Div> {
     let id: SharedString = id.into();
     let label = label.into();
-    div()
-        .id(id.clone())
+    page::action(id.clone(), label.clone(), true)
         .debug_selector(move || id.to_string())
         .role(Role::MenuItemCheckBox)
-        .aria_label(label.clone())
-        .h(px(28.))
-        .px(px(8.))
-        .flex()
-        .items_center()
+        .aria_toggled(if checked {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .justify_start()
         .gap(px(8.))
-        .rounded(px(6.))
-        .text_size(px(12.))
-        .text_color(content(0.8))
-        .cursor_pointer()
-        .hover(|s| s.bg(content(0.06)))
         .child(
             div()
                 .size(px(14.))
@@ -186,25 +165,18 @@ fn menu_row(
         .child(div().flex_1().min_w_0().truncate().child(label))
 }
 fn caption(text: impl Into<SharedString>) -> Div {
-    div()
+    page::meta()
         .px(px(8.))
-        .pt(px(10.))
+        .pt(px(8.))
         .pb(px(4.))
-        .text_size(px(10.))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(content(0.4))
         .child(text.into())
 }
 fn message(text: impl Into<SharedString>) -> Div {
-    div()
-        .p(px(12.))
-        .text_size(px(12.))
-        .line_height(px(19.))
-        .text_color(content(0.5))
-        .child(text.into())
+    page::meta().p(px(12.)).child(text.into())
 }
 fn error(text: impl Into<SharedString>) -> Div {
-    message(text).text_color(rgb(0xf87171))
+    message(text).text_color(status(StatusColor::Danger, 1.))
 }
 fn provider_mark(provider: &str) -> gpui::Svg {
     let (path, color) = match provider {
@@ -212,14 +184,14 @@ fn provider_mark(provider: &str) -> gpui::Svg {
         "gitlab" => ("inbox-gitlab", rgb(0xfc6d26).into()),
         _ => ("inbox-github", content(0.8)),
     };
-    icon(path, 14.).text_color(color)
+    icon(path, page::ICON_SIZE).text_color(color)
 }
 fn status_color(item: &Item) -> Hsla {
     match item.status() {
-        "Merged" => rgb(0xa78bfa).into(),
-        "Closed" => rgb(0xf87171).into(),
-        "Draft" => content(0.4),
-        _ => rgb(0x4ade80).into(),
+        "Merged" => rgb(if is_light() { 0x7146b8 } else { 0xa78bfa }).into(),
+        "Closed" => status(StatusColor::Danger, 1.),
+        "Draft" => page::secondary_ink(),
+        _ => status(StatusColor::Success, 1.),
     }
 }
 fn status_icon(item: &Item) -> &'static str {
@@ -284,17 +256,14 @@ fn label_badge(label: &model::Label, compact: bool) -> Div {
     let color = u32::from_str_radix(label.color.trim().trim_start_matches('#'), 16)
         .ok()
         .filter(|_| label.color.trim().trim_start_matches('#').len() == 6);
-    div()
+    page::meta()
         .max_w(px(if compact { 80. } else { 200. }))
-        .rounded(px(3.))
-        .px(px(6.))
-        .py(px(1.))
+        .rounded(px(page::CORNER))
+        .px(px(4.))
         .flex()
         .items_center()
         .gap(px(4.))
         .bg(content(0.08))
-        .text_size(px(if compact { 10. } else { 11. }))
-        .text_color(content(0.5))
         .when_some(color, |d, color| {
             d.child(div().size(px(6.)).rounded_full().bg(rgb(color)))
         })
@@ -317,7 +286,7 @@ impl Inbox {
         )
     }
 
-    fn list_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn list_view(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
         let provider = model::provider_label(&self.state.source);
         let connected = self
             .snapshot
@@ -325,25 +294,11 @@ impl Inbox {
             .get(&self.state.source)
             .is_some_and(|status| status.connected);
         let items = self.visible_items(cx);
-        let tools = div()
-            .h(px(36.))
-            .px(px(8.))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .gap(px(1.))
-            .border_b_1()
-            .border_color(content(0.07))
+        let tools = page::toolbar()
             .child(
-                div()
+                page::search_frame(&self.search.focus_handle(cx))
                     .flex_1()
-                    .min_w_0()
-                    .h(px(28.))
-                    .px(px(6.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(icon("search", 12.))
+                    .child(action_icon("search", page::secondary_ink()))
                     .child(self.search.clone()),
             )
             .when(connected, |d| {
@@ -387,29 +342,35 @@ impl Inbox {
                     this.load_detail(false, cx);
                 })),
             );
-        let empty = if !self.state.connectors.enabled(&self.state.source) {
-            format!("{provider} is disabled. Enable it in Settings → Connectors.")
-        } else if let Some(error) = self.snapshot.errors.get(&self.state.source) {
-            format!("{provider}: {error}. Check Settings → Connectors or refresh.")
-        } else if self.loading && items.is_empty() {
-            format!("Loading {provider}…")
-        } else if !connected {
-            format!("Connect {provider} in Settings → Connectors.")
-        } else if self.projects.is_empty() && !model::is_tracker(&self.state.source) {
-            format!("Open a project to see {provider} items.")
-        } else if self.filters_active() || !self.search.read(cx).content.is_empty() {
-            format!("No {provider} items match these filters.")
-        } else {
-            format!(
-                "No {provider} issues{}.",
-                if model::is_tracker(&self.state.source) {
-                    ""
-                } else if self.state.source == "gitlab" {
-                    " or merge requests"
-                } else {
-                    " or pull requests"
-                }
+        let (empty_title, empty_detail) = if !self.state.connectors.enabled(&self.state.source) {
+            (
+                format!("{provider} is disabled"),
+                "Enable it in Settings → Connectors.".into(),
             )
+        } else if let Some(error) = self.snapshot.errors.get(&self.state.source) {
+            (
+                format!("Could not load {provider}"),
+                format!("{error}. Check Settings → Connectors or refresh."),
+            )
+        } else if self.loading && items.is_empty() {
+            (format!("Loading {provider}…"), String::new())
+        } else if !connected {
+            (
+                format!("Connect {provider}"),
+                "Open Settings → Connectors to connect your account.".into(),
+            )
+        } else if self.projects.is_empty() && !model::is_tracker(&self.state.source) {
+            (
+                String::from("No projects open"),
+                format!("Open a project to see its {provider} items."),
+            )
+        } else if self.filters_active() || !self.search.read(cx).content.is_empty() {
+            (
+                format!("No matching {provider} items"),
+                "Try a different search or clear your filters.".into(),
+            )
+        } else {
+            (format!("No {provider} items"), String::new())
         };
         let rows = items
             .into_iter()
@@ -436,25 +397,16 @@ impl Inbox {
                     project_name(std::path::Path::new(&item.project_path))
                 };
                 let attention = attention_label(&item.attention_reason);
-                div()
-                    .id(SharedString::from(format!("inbox-item-{key}")))
-                    .role(Role::Button)
-                    .aria_label(item.title.clone())
-                    .px(px(10.))
-                    .py(px(8.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(content(0.))
-                    .cursor_pointer()
-                    .when(active, |d| d.bg(content(0.1)))
-                    .when(!active, |d| d.hover(|s| s.bg(content(0.05))))
+                let row_id = format!("inbox-item-{key}");
+                page::row(row_id.clone(), item.title.clone(), active)
+                    .debug_selector(move || row_id.clone())
+                    .role(Role::ListBoxOption)
+                    .aria_selected(active)
                     .child(
-                        div()
+                        page::meta()
                             .flex()
                             .items_center()
-                            .gap(px(6.))
-                            .text_size(px(11.))
-                            .text_color(content(0.5))
+                            .gap(px(4.))
                             .child(provider_mark(&item.provider))
                             .child(icon(status_icon(&item), 12.).text_color(status_color(&item)))
                             .child(div().min_w_0().flex_1().truncate().child(format!(
@@ -480,23 +432,16 @@ impl Inbox {
                                         .child(sessions.to_string()),
                                 )
                             })
-                            .child(
-                                div()
-                                    .text_color(content(0.45))
-                                    .child(relative_time(&item.updated_at)),
-                            )
+                            .child(relative_time(&item.updated_at))
                             .when(unread, |d| {
                                 d.child(div().size(px(6.)).rounded_full().bg(accent_color()))
                             }),
                     )
                     .child(
-                        div()
+                        page::label()
                             .mt(px(4.))
                             .truncate()
-                            .text_size(px(13.))
-                            .line_height(px(18.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(content(1.))
                             .child(item.title.clone()),
                     )
                     .child(
@@ -506,14 +451,12 @@ impl Inbox {
                             .items_center()
                             .gap(px(8.))
                             .child(
-                                div()
+                                page::meta()
                                     .min_w_0()
                                     .flex_1()
                                     .flex()
                                     .items_center()
-                                    .gap(px(6.))
-                                    .text_size(px(11.))
-                                    .text_color(content(0.45))
+                                    .gap(px(4.))
                                     .when(!tracker && !item.project_path.is_empty(), |d| {
                                         d.child(self.project_mark(&item.project_path, 12.))
                                     })
@@ -526,16 +469,27 @@ impl Inbox {
                                     .map(|label| label_badge(label, true)),
                             ),
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| this.select(key.clone(), cx)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.narrow_detail = true;
+                        this.select(key.clone(), cx);
+                        if page::narrow(window) {
+                            window.focus(&this.focus, cx);
+                            cx.notify();
+                        }
+                    }))
             })
             .collect::<Vec<_>>();
         div()
             .relative()
-            .w(px(self.state.list_width.clamp(240., 420.)))
+            .when(narrow, |d| d.w_full())
+            .when(!narrow, |d| {
+                d.w(px(self
+                    .state
+                    .list_width
+                    .clamp(page::LIST_MIN, page::LIST_MAX)))
+            })
             .h_full()
             .flex_shrink_0()
-            .border_r_1()
-            .border_color(content(0.07))
             .flex()
             .flex_col()
             .child(tools)
@@ -549,34 +503,50 @@ impl Inbox {
                     .min_h_0()
                     .flex_1()
                     .overflow_y_scroll()
-                    .p(px(6.))
+                    .p(px(4.))
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
-                    .when(rows.is_empty(), |d| d.child(message(empty)))
+                    .gap(px(4.))
+                    .when(rows.is_empty(), |d| {
+                        d.child(page::empty(
+                            provider_mark(&self.state.source)
+                                .size(px(24.))
+                                .text_color(page::secondary_ink()),
+                            empty_title,
+                            empty_detail,
+                        ))
+                    })
                     .children(rows),
             )
-            .child(
-                div()
-                    .id("inbox-list-resize")
-                    .role(Role::Splitter)
-                    .aria_label("Resize connector list")
-                    .absolute()
-                    .right(px(-3.))
-                    .top_0()
-                    .bottom_0()
-                    .w(px(6.))
-                    .cursor(CursorStyle::ResizeLeftRight)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                            this.resize_start =
-                                Some((f32::from(event.position.x), this.state.list_width));
-                            cx.stop_propagation();
-                        }),
-                    ),
-            )
+            .when(!narrow, |d| {
+                d.child(
+                    div()
+                        .id("inbox-list-resize")
+                        .role(Role::Splitter)
+                        .aria_label("Resize connector list")
+                        .absolute()
+                        .right(px(-3.))
+                        .top_0()
+                        .bottom_0()
+                        .w(px(6.))
+                        .cursor(CursorStyle::ResizeLeftRight)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                                this.resize_start =
+                                    Some((f32::from(event.position.x), this.state.list_width));
+                                cx.stop_propagation();
+                            }),
+                        ),
+                )
+            })
             .into_any_element()
+    }
+
+    fn back_to_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.narrow_detail = false;
+        window.focus(&self.search.focus_handle(cx), cx);
+        cx.notify();
     }
     fn related_sessions(&self, item: &Item) -> Vec<Session> {
         let work_item = item.work_item();
@@ -597,12 +567,12 @@ impl Inbox {
 
 impl gpui::Render for Inbox {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.focus_comment {
+        let narrow = page::narrow(window);
+        let showing_detail = narrow && self.narrow_detail && self.item().is_some();
+        if self.focus_comment && (!narrow || showing_detail) {
             self.focus_comment = false;
             window.focus(&self.comment.focus_handle(cx), cx);
         }
-        let list = self.list_view(cx);
-        let detail = self.detail_view(window, cx);
         div()
             .id("inbox-view")
             .role(Role::Group)
@@ -612,7 +582,7 @@ impl gpui::Render for Inbox {
             .size_full()
             .flex()
             .flex_col()
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
                     if this.connect_provider.is_some() && !this.connecting {
                         this.connect_provider = None;
@@ -627,6 +597,8 @@ impl gpui::Render for Inbox {
                         this.connections_open = false;
                         this.project_picker = false;
                         this.action_menu = false;
+                    } else if page::narrow(window) && this.narrow_detail && this.item().is_some() {
+                        this.back_to_list(window, cx);
                     } else {
                         cx.emit(Event::Close);
                     }
@@ -637,9 +609,10 @@ impl gpui::Render for Inbox {
             .on_mouse_move(
                 cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
                     if let Some((start, width)) = this.resize_start {
-                        let max = (f32::from(window.viewport_size().width) * 0.5).clamp(240., 420.);
-                        this.state.list_width =
-                            (width + f32::from(event.position.x) - start).clamp(240., max);
+                        let max = (f32::from(window.viewport_size().width) * 0.5)
+                            .clamp(page::LIST_MIN, page::LIST_MAX);
+                        this.state.list_width = (width + f32::from(event.position.x) - start)
+                            .clamp(page::LIST_MIN, max);
                         cx.notify();
                     }
                 }),
@@ -669,8 +642,38 @@ impl gpui::Render for Inbox {
                     .min_h_0()
                     .min_w_0()
                     .flex()
-                    .child(list)
-                    .child(div().flex_1().min_w_0().min_h_0().child(detail)),
+                    .when(!narrow || !showing_detail, |d| {
+                        d.child(self.list_view(narrow, cx))
+                    })
+                    .when(!narrow || showing_detail, |d| {
+                        d.child(
+                            page::detail_pane(!narrow)
+                                .when(narrow, |d| {
+                                    d.child(
+                                        page::toolbar().child(
+                                            icon_action(
+                                                "inbox-back",
+                                                "Back to items",
+                                                "arrow-left",
+                                                true,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.back_to_list(window, cx);
+                                                }),
+                                            ),
+                                        ),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .min_w_0()
+                                        .child(self.detail_view(window, cx)),
+                                ),
+                        )
+                    }),
             )
             .when_some(self.error.clone(), |d, text| d.child(error(text)))
             .when(self.filters_open, |d| d.child(self.filters_menu(cx)))
@@ -688,6 +691,8 @@ impl gpui::Render for Inbox {
 
 mod detail;
 mod menus;
+#[cfg(test)]
+mod screenshots;
 mod summary;
 #[cfg(test)]
 mod tests;

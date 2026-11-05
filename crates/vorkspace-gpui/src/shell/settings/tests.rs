@@ -407,13 +407,13 @@ fn agents_are_refused_while_work_would_be_lost(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn disabling_meetings_retains_its_document_view(cx: &mut TestAppContext) {
+fn disabling_notes_retains_its_document_view(cx: &mut TestAppContext) {
     let (window, _, _) = window(cx);
     let (page_id, settings, prefs) = window
         .update(cx, |shell, w, cx| {
-            shell.open_meetings(w, cx);
-            let page_id = shell.meetings.as_ref().unwrap().entity_id();
-            shell.open_settings(Section::Meetings, w, cx);
+            shell.open_notes(w, cx);
+            let page_id = shell.notes.as_ref().unwrap().entity_id();
+            shell.open_settings(Section::Notes, w, cx);
             (
                 page_id,
                 shell.settings.clone().unwrap(),
@@ -424,21 +424,21 @@ fn disabling_meetings_retains_its_document_view(cx: &mut TestAppContext) {
 
     for enabled in [false, true] {
         let mut prefs = prefs.clone();
-        prefs.meetings = enabled;
+        prefs.notes = enabled;
         settings.update(cx, |_, cx| cx.emit(SettingsEvent::Changed(Box::new(prefs))));
         window
             .update(cx, |shell, _, _| {
-                assert_eq!(shell.workspace.preferences.meetings, enabled);
-                assert_eq!(shell.meetings.as_ref().unwrap().entity_id(), page_id);
+                assert_eq!(shell.workspace.preferences.notes, enabled);
+                assert_eq!(shell.notes.as_ref().unwrap().entity_id(), page_id);
             })
             .unwrap();
     }
 
     window
         .update(cx, |shell, w, cx| {
-            shell.open_meetings(w, cx);
-            assert_eq!(shell.active_app_view, Some(AppView::Meetings));
-            assert_eq!(shell.meetings.as_ref().unwrap().entity_id(), page_id);
+            shell.open_notes(w, cx);
+            assert_eq!(shell.active_app_view, Some(AppView::Notes));
+            assert_eq!(shell.notes.as_ref().unwrap().entity_id(), page_id);
         })
         .unwrap();
 }

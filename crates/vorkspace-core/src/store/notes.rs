@@ -1,11 +1,21 @@
 //! Desktop-compatible note persistence, deliberately separate from session handles.
 use super::Store;
 use crate::notes::{Note, NoteImageAsset, NoteUpsert, MAX_BODY};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::path::{Component, Path, PathBuf};
 const TITLE_MAX: usize = 200;
 const TAG_MAX: usize = 48;
 const TAGS_MAX: usize = 20;
+
+/// A recording retains its note identity after deletion so recovery never
+/// imports it into a new note. A live link may precede its first saved note.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoteRecording {
+    pub note_id: String,
+    pub recording_id: String,
+    pub deleted: bool,
+}
+
 fn now_millis() -> i64 {
     crate::time::now_ms().min(i64::MAX as u64) as i64
 }
@@ -68,6 +78,92 @@ pub fn ensure_notes_table(conn: &Connection) -> rusqlite::Result<()> {
     )?;
     if artifact_kind_present == 0 {
         conn.execute("ALTER TABLE notes ADD COLUMN artifact_kind TEXT", [])?;
+    }
+    // History writers prepare this schema before publishing guards. Adding
+    // recording tables later would invalidate an active conversation's guard.
+    ensure_note_recordings_table(conn)
+}
+
+fn ensure_note_recordings_table(conn: &Connection) -> rusqlite::Result<()> {
+    // There is deliberately no foreign key to notes: reservation precedes
+    // capture, and deletion preserves the link as a durable tombstone.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS note_recordings (
+           note_id TEXT PRIMARY KEY NOT NULL,
+           recording_id TEXT NOT NULL UNIQUE,
+           deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
+         );
+         CREATE TRIGGER IF NOT EXISTS note_recordings_note_deleted
+           AFTER DELETE ON notes WHEN OLD.content_kind = 'note'
+           BEGIN
+             UPDATE note_recordings SET deleted = 1 WHERE note_id = OLD.id AND deleted = 0;
+           END;
+         CREATE TRIGGER IF NOT EXISTS note_recordings_note_inserted
+           BEFORE INSERT ON notes
+           WHEN EXISTS (SELECT 1 FROM note_recordings
+                        WHERE note_id = NEW.id AND deleted = 1)
+           BEGIN
+             SELECT RAISE(ABORT, 'This recording note was deleted');
+           END;
+         CREATE TRIGGER IF NOT EXISTS note_recordings_note_updated
+           BEFORE UPDATE ON notes
+           WHEN EXISTS (SELECT 1 FROM note_recordings
+                        WHERE note_id = NEW.id AND deleted = 1)
+           BEGIN
+             SELECT RAISE(ABORT, 'This recording note was deleted');
+           END;",
+    )
+}
+
+fn read_note_recording(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteRecording> {
+    Ok(NoteRecording {
+        note_id: row.get(0)?,
+        recording_id: row.get(1)?,
+        deleted: row.get(2)?,
+    })
+}
+
+fn attach_note_recording(
+    conn: &Connection,
+    note_id: &str,
+    recording_id: &str,
+) -> Result<(), String> {
+    let existing_kind: Option<String> = conn
+        .query_row(
+            "SELECT content_kind FROM notes WHERE id = ?1",
+            [note_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if existing_kind.is_some_and(|kind| kind != "note") {
+        return Err("Only notes can have recordings".into());
+    }
+    let links = conn
+        .prepare(
+            "SELECT note_id, recording_id, deleted FROM note_recordings
+             WHERE note_id = ?1 OR recording_id = ?2",
+        )
+        .map_err(|e| e.to_string())?
+        .query_map(params![note_id, recording_id], read_note_recording)
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    if links.iter().any(|link| link.deleted) {
+        return Err("This recording note was deleted".into());
+    }
+    if links.iter().any(|link| link.note_id != note_id) {
+        return Err("Recording already belongs to another note".into());
+    }
+    if links.iter().any(|link| link.recording_id != recording_id) {
+        return Err("Note already has a recording".into());
+    }
+    if links.is_empty() {
+        conn.execute(
+            "INSERT INTO note_recordings (note_id, recording_id) VALUES (?1, ?2)",
+            params![note_id, recording_id],
+        )
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -345,7 +441,110 @@ fn valid_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn valid_recording_id(id: &str) -> Result<(), String> {
+    if id.len() != 32 || !id.bytes().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("Invalid recording ID".into());
+    }
+    Ok(())
+}
+
 impl Store {
+    /// Durable links, including deletion tombstones and unsaved reservations.
+    /// Reading older databases never creates or migrates their schema.
+    pub fn note_recordings(&self) -> Result<Vec<NoteRecording>, String> {
+        if !super::shared::has_table(&self.conn, "note_recordings")? {
+            return Ok(Vec::new());
+        }
+        self.conn
+            .prepare(
+                "SELECT note_id, recording_id, deleted FROM note_recordings
+                 ORDER BY note_id ASC",
+            )
+            .map_err(|e| e.to_string())?
+            .query_map([], read_note_recording)
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Reserve the identity before capture starts, even when the note is still
+    /// ephemeral. An existing or deleted identity cannot be transferred.
+    pub fn attach_note_recording(&self, note_id: &str, recording_id: &str) -> Result<(), String> {
+        valid_id(note_id)?;
+        valid_recording_id(recording_id)?;
+        if self.shared.is_some() {
+            self.shared_writable()?;
+        }
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        ensure_notes_table(&tx).map_err(|e| e.to_string())?;
+        attach_note_recording(&tx, note_id, recording_id)?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// Materialize a visible recording document exactly once. Recordings keep
+    /// their transcript and summary; the note stores only user-authored text.
+    pub fn import_recording_note(
+        &self,
+        recording_id: &str,
+        title: &str,
+        created_at: i64,
+    ) -> Result<Option<Note>, String> {
+        valid_recording_id(recording_id)?;
+        if self.shared.is_some() {
+            self.shared_writable()?;
+        }
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        ensure_notes_table(&tx).map_err(|e| e.to_string())?;
+        let link = tx
+            .query_row(
+                "SELECT note_id, recording_id, deleted FROM note_recordings
+                 WHERE recording_id = ?1",
+                [recording_id],
+                read_note_recording,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if link.as_ref().is_some_and(|link| link.deleted) {
+            tx.commit().map_err(|e| e.to_string())?;
+            return Ok(None);
+        }
+        let note_id = link
+            .map(|link| link.note_id)
+            .unwrap_or_else(|| format!("meeting-{recording_id}"));
+        valid_id(&note_id)?;
+        attach_note_recording(&tx, &note_id, recording_id)?;
+        let note =
+            if let Some(note) = get_content(&tx, &note_id, "note").map_err(|e| e.to_string())? {
+                note
+            } else {
+                let title = normalize_title(title);
+                let slug = unique_slug(&tx, &title).map_err(|e| e.to_string())?;
+                tx.execute(
+                    "INSERT INTO notes (id, slug, title, body, tags_json, created_at,
+                                    updated_at, slug_pending, content_kind)
+                 VALUES (?1, ?2, ?3, '', '[]', ?4, ?4, 0, 'note')",
+                    params![note_id, slug, title, created_at],
+                )
+                .map_err(|e| e.to_string())?;
+                Note {
+                    id: note_id,
+                    slug,
+                    title,
+                    body: String::new(),
+                    tags: Vec::new(),
+                    source_session_id: None,
+                    source_cwd: None,
+                    slug_pending: false,
+                    created_at,
+                    updated_at: created_at,
+                }
+            };
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(Some(note))
+    }
+
     /// Full-fidelity desktop notes. Artifacts in the same table are excluded.
     pub fn list_notes(&self) -> Result<Vec<Note>, String> {
         let mut notes = if super::shared::has_table(&self.conn, "notes")? {
@@ -446,20 +645,31 @@ impl Store {
         if self.shared.is_some() {
             self.shared_writable()?;
         }
-        if super::shared::has_table(&self.conn, "notes")? {
-            ensure_notes_table(&self.conn).map_err(|e| e.to_string())?;
-            delete_note(&self.conn, id).map_err(|e| e.to_string())?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        // Reservations have no note row yet, so the delete trigger alone is
+        // insufficient. Keep this mutation in the same transaction as deletion.
+        if super::shared::has_table(&tx, "note_recordings")? {
+            tx.execute(
+                "UPDATE note_recordings SET deleted = 1 WHERE note_id = ?1 AND deleted = 0",
+                [id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if super::shared::has_table(&tx, "notes")? {
+            ensure_notes_table(&tx).map_err(|e| e.to_string())?;
+            delete_note(&tx, id).map_err(|e| e.to_string())?;
         }
         if self.shared.is_none() {
             if let Some(id) = id.strip_prefix("gpui-note-") {
-                self.conn
-                    .execute(
-                        "DELETE FROM native_settings WHERE key=?1",
-                        [format!("note:{id}")],
-                    )
-                    .map_err(|e| e.to_string())?;
+                tx.execute(
+                    "DELETE FROM native_settings WHERE key=?1",
+                    [format!("note:{id}")],
+                )
+                .map_err(|e| e.to_string())?;
             }
         }
+        tx.commit().map_err(|e| e.to_string())?;
         // A deleted row stays deleted even if best-effort asset cleanup fails.
         if let Some(root) = self.data_dir() {
             let _ = std::fs::remove_dir_all(root.join("note-assets").join(id));

@@ -157,7 +157,7 @@ impl InboxDocument {
                         .w_full()
                         .max_w(px(576.))
                         .max_h(px(448.))
-                        .rounded(px(10.))
+                        .rounded(px(crate::controls::page::CARD_CORNER))
                         .border_1()
                         .border_color(content(0.1))
                         .object_fit(gpui::ObjectFit::Contain)
@@ -171,7 +171,7 @@ impl InboxDocument {
                         .w_full()
                         .max_w(px(576.))
                         .h(px(128.))
-                        .rounded(px(10.))
+                        .rounded(px(crate::controls::page::CARD_CORNER))
                         .border_1()
                         .border_color(content(0.1))
                         .bg(content(0.06))
@@ -196,7 +196,7 @@ impl InboxDocument {
                         .w_full()
                         .min_w_0()
                         .overflow_x_scroll()
-                        .rounded(px(10.))
+                        .rounded(px(crate::controls::page::CARD_CORNER))
                         .border_1()
                         .border_color(content(0.1))
                         .bg(content(0.03))
@@ -224,31 +224,7 @@ impl InboxDocument {
                         .into_any_element(),
                     _ => markdown::body(row, id, Tone::Normal, None, Instant::now()),
                 };
-                div()
-                    .w_full()
-                    .pt(px(row.gap))
-                    .min_w_0()
-                    .flex()
-                    .gap_2()
-                    .pl(px(
-                        row.indent.saturating_sub(usize::from(row.marker.is_some())) as f32 * 16.,
-                    ))
-                    .when(row.quote > 0, |d| {
-                        d.border_l_2().border_color(content(0.16)).pl_3()
-                    })
-                    .when_some(row.marker.clone(), |d, marker| {
-                        d.child(
-                            div()
-                                .min_w(px(16.))
-                                .flex_shrink_0()
-                                .text_size(px(14.))
-                                .line_height(px(24.))
-                                .text_color(content(0.78))
-                                .child(marker),
-                        )
-                    })
-                    .child(div().flex_1().min_w_0().child(body))
-                    .into_any_element()
+                markdown::document_row(row, body).into_any_element()
             }
         }
     }

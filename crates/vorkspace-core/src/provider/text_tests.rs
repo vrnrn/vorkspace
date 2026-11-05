@@ -41,6 +41,8 @@ for line in sys.stdin:
             assert value['params']['environments'] == []
             assert value['params']['model'] == 'summary-model'
             assert value['params']['config']['mcp_servers'] == {{'configured-mcp':{{'enabled':False}}}}
+            assert 'Return only the finished meeting-note content' in value['params']['baseInstructions']
+            assert 'Omit model reasoning, work steps, and progress commentary' in value['params']['developerInstructions']
             assert 'transcript fixture' not in line
         else:
             assert 'Do not call tools' in value['params']['developerInstructions']
@@ -64,11 +66,27 @@ for line in sys.stdin:
         assert len(value['params']['input']) == 1
         if mode == 'cancel':
             time.sleep(10)
-        elif mode in ('slow', 'summary'):
+        elif mode == 'slow' or mode.startswith('summary'):
             if mode == 'slow':
                 time.sleep(0.25)
-            send({{'method':'item/agentMessage/delta','params':{{'itemId':'answer','delta':'Meeting summary'}}}})
-            send({{'method':'turn/completed','params':{{'turn':{{'status':'completed'}}}}}})
+            send({{'method':'item/agentMessage/delta','params':{{'itemId':'progress','delta':'I will prepare the notes.'}}}})
+            send({{'method':'item/completed','params':{{'item':{{'type':'agentMessage','id':'progress','phase':'commentary','text':'I will prepare the notes.'}}}}}})
+            send({{'method':'item/reasoning/textDelta','params':{{'itemId':'reasoning','delta':'Private model reasoning'}}}})
+            if mode == 'summary-unphased':
+                send({{'method':'item/completed','params':{{'item':{{'type':'agentMessage','id':'legacy-progress','phase':None,'text':'Earlier unknown-phase message'}}}}}})
+            if mode == 'summary-foreign':
+                send({{'method':'item/completed','params':{{'threadId':'foreign-thread','item':{{'type':'agentMessage','id':'foreign-answer','phase':'final_answer','text':'Foreign answer'}}}}}})
+                send({{'method':'turn/completed','params':{{'threadId':'foreign-thread','turn':{{'status':'completed'}}}}}})
+            if mode not in ('summary-missing', 'summary-foreign'):
+                text = '  ' if mode == 'summary-empty' else 'Meeting summary'
+                phase = None if mode == 'summary-unphased' else 'final_answer'
+                send({{'method':'item/agentMessage/delta','params':{{'itemId':'answer','delta':text}}}})
+                send({{'method':'item/completed','params':{{'item':{{'type':'agentMessage','id':'answer','phase':phase,'text':text}}}}}})
+            if mode == 'summary-error':
+                send({{'method':'error','params':{{'willRetry':False,'error':{{'message':'Stream failed after final'}}}}}})
+            else:
+                status = 'failed' if mode == 'summary-failed' else 'interrupted' if mode == 'summary-interrupted' else 'completed'
+                send({{'method':'turn/completed','params':{{'turn':{{'status':status,'error':{{'message':'Turn failed after final'}} if status == 'failed' else None}}}}}})
         elif mode == 'tool':
             send({{'method':'item/started','params':{{'item':{{'type':'commandExecution','id':'tool','command':'never execute'}}}}}})
         else:
@@ -168,6 +186,41 @@ fn codex_summary_sends_transcript_only_after_verifying_the_selected_accounts_thr
 }
 
 #[test]
+fn codex_summary_accepts_only_the_last_completed_unphased_message_for_legacy_models() {
+    let (_dir, request) = meeting_fixture("summary-unphased");
+    assert_eq!(
+        run_restricted_text(
+            request,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap(),
+        "Meeting summary"
+    );
+}
+
+#[test]
+fn codex_summary_rejects_missing_empty_or_unsuccessful_final_output() {
+    for (mode, expected) in [
+        ("summary-missing", "no completed final response"),
+        ("summary-foreign", "no completed final response"),
+        ("summary-empty", "empty final response"),
+        ("summary-failed", "Turn failed after final"),
+        ("summary-error", "Stream failed after final"),
+        ("summary-interrupted", "no completed final response"),
+    ] {
+        let (_dir, request) = meeting_fixture(mode);
+        let error = run_restricted_text(
+            request,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert!(error.contains(expected), "{mode}: {error}");
+    }
+}
+
+#[test]
 fn codex_summary_keeps_transcript_local_when_restrictions_cannot_be_verified() {
     for (mode, expected) in [
         ("old", "require Codex CLI"),
@@ -185,5 +238,80 @@ fn codex_summary_keeps_transcript_local_when_restrictions_cannot_be_verified() {
         .unwrap_err();
         assert!(error.contains(expected), "{mode}: {error}");
         assert!(!dir.path().join("transcript-sent").exists());
+    }
+}
+
+fn alternative_meeting_fixture(kind: Kind, fail: bool) -> (tempfile::TempDir, Request) {
+    let (dir, mut request) = fixture("unused");
+    request.kind = kind;
+    request.prompt = "transcript fixture".into();
+    let script = format!(
+        r#"#!/usr/bin/env python3
+import json, sys
+kind = {kind:?}
+fail = {fail}
+assert '--system-prompt' in sys.argv
+assert 'Return only the finished meeting-note content' in sys.argv[sys.argv.index('--system-prompt') + 1]
+notes = '## Summary\nFinal meeting notes'
+def send(value):
+    print(json.dumps(value), flush=True)
+if kind == 'claude':
+    assert sys.argv[sys.argv.index('--tools') + 1] == ''
+else:
+    assert all(flag in sys.argv for flag in ('--no-session', '--no-tools', '--no-extensions', '--no-skills'))
+for line in sys.stdin:
+    value = json.loads(line)
+    if kind == 'claude':
+        if value.get('type') == 'control_request':
+            send({{'type':'control_response','response':{{'request_id':'native-init'}}}})
+        elif value.get('type') == 'user':
+            send({{'type':'stream_event','event':{{'type':'content_block_delta','delta':{{'type':'thinking_delta','thinking':'Private reasoning'}}}}}})
+            send({{'type':'assistant','message':{{'content':[{{'type':'text','text':'I will prepare the notes.'}}]}}}})
+            send({{'type':'assistant','message':{{'content':[{{'type':'text','text':notes}}]}}}})
+            send({{'type':'result','is_error':fail,'result':'Meeting generation failed' if fail else notes}})
+    elif value.get('type') == 'get_state':
+        send({{'type':'response','id':value['id'],'success':True,'data':{{'sessionId':'isolated-meeting'}}}})
+    elif value.get('type') == 'set_fast_mode':
+        send({{'type':'response','id':value['id'],'success':True}})
+    elif value.get('type') == 'prompt':
+        send({{'type':'response','id':value['id'],'command':'prompt','success':True}})
+        send({{'type':'message_start','message':{{'role':'assistant'}}}})
+        send({{'type':'message_update','assistantMessageEvent':{{'type':'text_delta','delta':'I will prepare the notes.'}}}})
+        send({{'type':'message_update','assistantMessageEvent':{{'type':'thinking_delta','delta':'Private reasoning'}}}})
+        send({{'type':'message_end','message':{{'role':'assistant','stopReason':'stop','content':[
+            {{'type':'thinking','thinking':'Private reasoning'}},{{'type':'text','text':notes}}]}}}})
+        if fail:
+            send({{'type':'message_end','message':{{'role':'assistant','stopReason':'error','errorMessage':'Meeting generation failed'}}}})
+        send({{'type':'agent_end'}})
+    elif value.get('type') == 'get_session_stats':
+        send({{'type':'response','id':value['id'],'success':True,'data':{{}}}})
+"#,
+        kind = kind.id(),
+        fail = if fail { "True" } else { "False" },
+    );
+    std::fs::write(&request.binary, script).unwrap();
+    (dir, request)
+}
+
+#[test]
+fn all_alternative_summary_providers_publish_only_a_successful_completed_answer() {
+    for kind in [Kind::Claude, Kind::Pi, Kind::Omp] {
+        for fail in [false, true] {
+            let (_dir, request) = alternative_meeting_fixture(kind, fail);
+            let result = run_restricted_text(
+                request,
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(5),
+            );
+            if fail {
+                assert!(
+                    result.unwrap_err().contains("Meeting generation failed"),
+                    "{}",
+                    kind.label()
+                );
+            } else {
+                assert_eq!(result.unwrap(), "## Summary\nFinal meeting notes");
+            }
+        }
     }
 }

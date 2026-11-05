@@ -117,6 +117,17 @@ pub(crate) fn clear(cx: &mut App) {
         s.update(cx, |s, cx| s.clear(cx));
     }
 }
+
+pub(crate) fn meeting_recording_changed(run: Option<&str>, cx: &mut App) {
+    #[cfg(not(test))]
+    if let Some(service) = get(cx)
+        && let Some((menu, _)) = &service.read(cx).menu
+    {
+        menu.set_recording_run(run);
+    }
+    #[cfg(test)]
+    let _ = (run, cx);
+}
 /// Native speech publishes exactly one complete, confirmed utterance per turn.
 /// This bypasses pasteboard polling without overwriting an unrelated user copy.
 pub(crate) fn history_epoch(cx: &App) -> Option<u64> {
@@ -154,6 +165,8 @@ impl Service {
         &mut self,
         anchor: objc2_foundation::NSRect,
         status_click: bool,
+        recording_run: Option<&str>,
+        meeting_action: fn(Option<String>, &mut App),
         cx: &mut Context<Self>,
     ) {
         if self.menu.is_none() {
@@ -170,7 +183,8 @@ impl Service {
                             s.sync_menu();
                         }
                         menu::Event::Settings => crate::action(Action::Settings, cx),
-                        menu::Event::Composer => crate::action(Action::Composer, cx),
+                        menu::Event::NewMeeting => meeting_action(None, cx),
+                        menu::Event::StopRecording(run) => meeting_action(Some(run), cx),
                         menu::Event::Quit => crate::action(Action::Quit, cx),
                         menu::Event::Closed => s.query.clear(),
                     });
@@ -185,6 +199,7 @@ impl Service {
         }
         if !menu.visible() {
             self.query.clear();
+            menu.set_recording_run(recording_run);
             menu.sync(&self.history, &self.query, self.enabled);
         }
         menu.toggle(anchor, status_click);

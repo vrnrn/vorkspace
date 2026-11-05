@@ -41,43 +41,30 @@ pub(super) fn events(kind: &str) -> Vec<(String, String)> {
     })
 }
 fn section(label: &'static str) -> gpui::Div {
-    div()
-        .px(px(4.))
-        .text_size(px(12.))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(content(0.5))
+    page::label()
+        .font_weight(gpui::FontWeight::SEMIBOLD)
         .child(label)
 }
 fn settings_row(label: &'static str, hint: &'static str, control: impl IntoElement) -> gpui::Div {
     div()
-        .min_h(px(54.))
-        .px(px(16.))
-        .py(px(10.))
+        .px(px(12.))
+        .py(px(8.))
         .border_b_1()
-        .border_color(content(0.07))
+        .border_color(page::divider())
         .flex()
+        .flex_wrap()
         .items_center()
         .justify_between()
-        .gap(px(16.))
+        .gap(px(8.))
         .child(
             div()
-                .flex_1()
+                .flex_grow(1.)
+                .flex_basis(px(192.))
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(2.))
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(content(0.75))
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(content(0.4))
-                        .child(hint),
-                ),
+                .child(page::label().child(label))
+                .child(page::meta().child(hint)),
         )
         .child(control)
 }
@@ -92,21 +79,16 @@ impl Automations {
     ) -> gpui::Stateful<gpui::Div> {
         let anchor = AnchorSlot::default();
         let captured = anchor.clone();
-        div()
-            .id(id)
-            .role(Role::Button)
-            .aria_label(label.clone())
+        let enabled = !matches!(field, Choice::Conversation)
+            || self
+                .editor
+                .as_ref()
+                .is_none_or(|editor| editor.draft.workspace_mode != "worktree");
+        page::secondary(id, label.clone(), false, !enabled)
             .relative()
-            .h(px(28.))
-            .px(px(8.))
-            .rounded(px(6.))
-            .bg(content(0.1))
-            .flex()
-            .items_center()
-            .gap(px(4.))
-            .text_size(px(12.))
-            .text_color(content(1.))
-            .hover(|s| s.bg(content(0.14)))
+            .min_w_0()
+            .max_w_full()
+            .flex_shrink_1()
             .child(anchor.probe())
             .when(matches!(field, Choice::Access), |d| {
                 let mode = self
@@ -121,11 +103,11 @@ impl Automations {
                         "full-access" => "shield",
                         _ => "sparkles",
                     },
-                    14.,
+                    page::ICON_SIZE,
                 ))
             })
-            .child(label)
-            .child(icon("chevron-down", 12.).text_color(content(0.45)))
+            .child(div().min_w_0().truncate().child(label))
+            .child(icon("chevron-down", page::ICON_SIZE).text_color(page::secondary_ink()))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if matches!(field, Choice::Conversation)
                     && this
@@ -238,10 +220,10 @@ impl Automations {
         {
             return div().into_any_element();
         }
-        div()
+        page::meta()
             .p(px(8.))
             .border_b_1()
-            .border_color(content(0.08))
+            .border_color(page::divider())
             .flex()
             .flex_col()
             .gap(px(4.))
@@ -250,13 +232,12 @@ impl Automations {
                     .iter()
                     .enumerate()
                     .map(|(index, control)| {
-                        div()
+                        page::meta()
                             .flex()
+                            .flex_wrap()
                             .items_center()
                             .justify_between()
-                            .gap(px(12.))
-                            .text_size(px(12.))
-                            .text_color(content(0.7))
+                            .gap(px(8.))
                             .child(control.name.clone())
                             .child(self.select_control(
                                 ("automation-model-menu-setting", index),
@@ -280,16 +261,15 @@ impl Automations {
             .as_ref()
             .and_then(|e| e.fields.iter().find(|f| f.id == trigger.id));
         let id = trigger.id.clone();
-        let mut sentence = div()
+        let mut sentence = page::label()
             .flex_1()
             .min_w_0()
             .flex()
             .flex_wrap()
             .items_center()
-            .gap_x(px(6.))
+            .gap_x(px(8.))
             .gap_y(px(4.))
-            .text_size(px(13.))
-            .text_color(content(0.7));
+            .text_color(page::secondary_ink());
         if trigger.kind == "time" {
             let prefix = match trigger.schedule_kind.as_str() {
                 "hourly" => "Every hour at",
@@ -303,23 +283,22 @@ impl Automations {
             // The schedule reads as one sentence. Keep frequency editable
             // without adding an extra pill to the sentence.
             sentence = sentence.child(
-                div()
-                    .id(("trigger-frequency", index))
-                    .relative()
-                    .role(Role::Button)
-                    .aria_label(format!("Schedule: {prefix}"))
-                    .rounded(px(3.))
-                    .hover(|s| s.bg(content(0.05)))
-                    .child(frequency_anchor.probe())
-                    .child(prefix)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.choice = Some(ChoiceMenu {
-                            field: Choice::Schedule(schedule_id.clone()),
-                            options: events("time"),
-                            anchor: captured.clone(),
-                        });
-                        cx.notify();
-                    })),
+                page::action(
+                    ("trigger-frequency", index),
+                    format!("Schedule: {prefix}"),
+                    true,
+                )
+                .relative()
+                .child(frequency_anchor.probe())
+                .child(prefix)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.choice = Some(ChoiceMenu {
+                        field: Choice::Schedule(schedule_id.clone()),
+                        options: events("time"),
+                        anchor: captured.clone(),
+                    });
+                    cx.notify();
+                })),
             );
             if trigger.schedule_kind == "weekly" {
                 sentence = sentence
@@ -379,15 +358,10 @@ impl Automations {
                 ));
             }
             sentence = sentence
-                .child(div().text_color(content(0.45)).child(gmt_offset()))
-                .child(
-                    div()
-                        .ml(px(4.))
-                        .text_color(content(0.35))
-                        .child(next_run_preview(
-                            preview_trigger.next_at(vorkspace_core::time::now_ms() as i64),
-                        )),
-                );
+                .child(page::meta().child(gmt_offset()))
+                .child(page::meta().child(next_run_preview(
+                    preview_trigger.next_at(vorkspace_core::time::now_ms() as i64),
+                )));
         } else {
             sentence = sentence
                 .child(self.select_control(
@@ -402,8 +376,8 @@ impl Automations {
                 sentence = sentence.child(
                     div()
                         .w(px(80.))
-                        .h(px(28.))
-                        .rounded(px(6.))
+                        .h(px(page::CONTROL_HEIGHT))
+                        .rounded(px(page::CORNER))
                         .bg(content(0.1))
                         .px(px(8.))
                         .flex()
@@ -413,170 +387,147 @@ impl Automations {
             }
         }
         let row = div()
-            .group("automation-trigger")
-            .min_h(px(40.))
+            .min_h(px(page::TOOLBAR_HEIGHT))
             .py(px(4.))
             .flex()
             .items_center()
-            .gap(px(10.))
-            .child(trigger_mark(&trigger.kind, 14.))
+            .gap(px(8.))
+            .child(trigger_mark(&trigger.kind, page::ICON_SIZE))
             .child(sentence)
             .child(
-                div()
-                    .id(SharedString::from(format!("remove-trigger-{id}")))
-                    .role(Role::Button)
-                    .aria_label("Remove trigger")
-                    .size(px(28.))
-                    .flex_shrink_0()
-                    .rounded(px(6.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(content(0.35))
-                    .opacity(0.)
-                    .group_hover("automation-trigger", |s| s.opacity(1.))
-                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                    .child(icon("close", 14.))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(editor) = &mut this.editor {
-                            editor
-                                .draft
-                                .triggers
-                                .get_or_insert_with(Vec::new)
-                                .retain(|t| t.id != id);
-                            editor.dirty = true;
-                        }
-                        this.rebuild_trigger_fields(cx);
-                        cx.notify();
-                    })),
+                page::icon_action(
+                    SharedString::from(format!("remove-trigger-{id}")),
+                    "Remove trigger",
+                    true,
+                )
+                .child(icon("close", page::ICON_SIZE))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(editor) = &mut this.editor {
+                        editor
+                            .draft
+                            .triggers
+                            .get_or_insert_with(Vec::new)
+                            .retain(|t| t.id != id);
+                        editor.dirty = true;
+                    }
+                    this.rebuild_trigger_fields(cx);
+                    cx.notify();
+                })),
             );
         let mut result = div().child(row);
         if trigger.kind != "time"
             && let Some(fields) = fields
         {
             result = result.child(
-                div()
+                page::meta()
                     .pl(px(24.))
                     .pb(px(8.))
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap(px(8.))
-                    .text_size(px(11.))
-                    .text_color(content(0.4))
                     .child("Repositories")
-                    .child(div().flex_1().max_w(px(340.)).child(fields.repos.clone())),
+                    .child(
+                        page::field_frame()
+                            .flex_grow(1.)
+                            .flex_basis(px(120.))
+                            .max_w(px(340.))
+                            .child(fields.repos.clone()),
+                    ),
             );
         }
         result.into_any_element()
     }
-    pub(super) fn render_editor(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_editor(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
         let editor = self.editor.as_ref().expect("editor");
         let draft = &editor.draft;
         let valid = !editor.name.read(cx).content.trim().is_empty()
             && !editor.prompt.read(cx).content.trim().is_empty()
             && !draft.cwd.trim().is_empty();
-        let mut actions = div().flex_shrink_0().flex().items_center().gap(px(8.));
+        let mut actions = div()
+            .id("automation-editor-actions")
+            .max_w_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(4.));
         if !editor.saved || editor.dirty {
+            let label = if editor.saved { "Reset" } else { "Cancel" };
             actions = actions.child(
-                button(
-                    "automation-reset",
-                    if editor.saved && editor.dirty {
-                        "Reset"
-                    } else {
-                        "Cancel"
-                    },
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(id) = this.selected.clone() {
-                        this.select(id, cx);
-                    } else {
-                        this.show_gallery(cx);
-                    }
-                })),
+                page::secondary("automation-reset", label, false, false)
+                    .child(label)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(id) = this.selected.clone() {
+                            this.select(id, cx);
+                        } else {
+                            this.show_gallery(cx);
+                        }
+                    })),
             );
         }
         if editor.saved {
+            let label = if self.running {
+                "Starting…"
+            } else {
+                "Run now"
+            };
             actions = actions.child(
-                button(
-                    "automation-run",
-                    if self.running {
-                        "Starting…"
-                    } else {
-                        "Run now"
-                    },
-                )
-                .child(icon("queue-play", 13.))
-                .on_click(cx.listener(|this, _, _, cx| this.run(cx))),
+                page::secondary("automation-run", label, false, self.running)
+                    .child(icon("queue-play", page::ICON_SIZE))
+                    .child(label)
+                    .on_click(cx.listener(|this, _, _, cx| this.run(cx))),
             );
         }
         let disabled = !valid || self.saving || (editor.saved && !editor.dirty);
+        let label = if self.saving {
+            "Saving…"
+        } else if editor.saved {
+            "Save"
+        } else {
+            "Create"
+        };
         actions = actions.child(
-            button(
-                "automation-save",
-                if self.saving {
-                    "Saving…"
-                } else if editor.saved {
-                    "Save"
-                } else {
-                    "Create"
-                },
-            )
-            .h(px(26.))
-            .bg(content(1.))
-            .text_color(shell_fill())
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .when(disabled, |d| d.opacity(0.4))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if !disabled {
-                    this.save(cx);
-                }
-            })),
+            page::primary("automation-save", label, disabled)
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !disabled {
+                        this.save(cx);
+                    }
+                })),
         );
         let header = div()
             .flex_shrink_0()
             .border_b_1()
-            .border_color(content(0.07))
+            .border_color(page::divider())
             .child(
-                div()
-                    .w_full()
-                    .max_w(px(1024.))
-                    .mx_auto()
-                    .px(px(32.))
-                    .pt(px(20.))
+                detail_frame(narrow)
+                    .pb(px(8.))
                     .flex()
                     .flex_col()
-                    .gap(px(10.))
+                    .gap(px(8.))
                     .child(
                         div()
                             .flex()
-                            .items_start()
-                            .gap(px(24.))
+                            .flex_wrap()
+                            .items_center()
+                            .gap(px(8.))
                             .child(
-                                div()
-                                    .flex_1()
+                                page::title()
+                                    .flex_grow(1.)
+                                    .flex_basis(px(200.))
                                     .min_w_0()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child(editor.name.clone()),
-                                    ),
+                                    .child(editor.name.clone()),
                             )
                             .child(actions),
                     )
                     .child(
-                        div()
+                        page::meta()
                             .min_w_0()
-                            .overflow_hidden()
                             .flex()
+                            .flex_wrap()
                             .items_center()
                             .gap(px(8.))
-                            .text_size(px(12.))
-                            .text_color(content(0.5))
                             .child(toggle("automation-enabled", draft.enabled).on_click(
                                 cx.listener(|this, _, _, cx| {
                                     if let Some(e) = &mut this.editor {
@@ -587,45 +538,39 @@ impl Automations {
                                 }),
                             ))
                             .child(if draft.enabled { "Active" } else { "Inactive" })
-                            .child(div().ml(px(8.)).h(px(12.)).w(px(1.)).bg(content(0.15)))
                             .child(
-                                div()
-                                    .id("automation-project")
-                                    .relative()
-                                    .min_w_0()
-                                    .role(Role::Button)
-                                    .aria_label("Choose automation project")
-                                    .px(px(8.))
-                                    .h(px(26.))
-                                    .rounded(px(6.))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .text_size(px(12.))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(content(0.9))
-                                    .hover(|s| s.bg(content(0.05)))
-                                    .child(self.project_anchor.probe())
-                                    .child(self.project_mark(&draft.cwd, 14.))
-                                    .child(div().min_w_0().truncate().child(
-                                        if draft.cwd.is_empty() {
-                                            "Choose project".into()
-                                        } else {
-                                            self.project_label(&draft.cwd)
-                                        },
-                                    ))
-                                    .child(icon("chevron-down", 12.).text_color(content(0.45)))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.choose_project(window, cx)
-                                    })),
+                                page::action(
+                                    "automation-project",
+                                    "Choose automation project",
+                                    true,
+                                )
+                                .relative()
+                                .min_w_0()
+                                .max_w_full()
+                                .flex_shrink_1()
+                                .child(self.project_anchor.probe())
+                                .child(self.project_mark(&draft.cwd, page::ICON_SIZE))
+                                .child(div().min_w_0().truncate().child(if draft.cwd.is_empty() {
+                                    "Choose project".into()
+                                } else {
+                                    self.project_label(&draft.cwd)
+                                }))
+                                .child(
+                                    icon("chevron-down", page::ICON_SIZE)
+                                        .text_color(page::secondary_ink()),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| this.choose_project(window, cx),
+                                )),
                             )
                             .when(editor.saved, |d| {
                                 d.child(
-                                    icon_button(
+                                    page::icon_action(
                                         "automation-delete-menu",
                                         "Delete automation",
-                                        "trash",
+                                        true,
                                     )
+                                    .child(icon("trash", page::ICON_SIZE))
                                     .on_click(cx.listener(
                                         |this, _, _, cx| {
                                             this.confirm_delete = !this.confirm_delete;
@@ -635,32 +580,15 @@ impl Automations {
                                 )
                             }),
                     )
-                    .child(if editor.saved {
-                        div().h(px(36.)).flex().gap(px(16.)).children(
+                    .when(editor.saved, |d| {
+                        d.child(div().flex().flex_wrap().gap(px(4.)).children(
                             [("Settings", false), ("Run history", true)].map(|(label, history)| {
-                                div()
-                                    .id(if history {
-                                        "automation-history-tab"
-                                    } else {
-                                        "automation-settings-tab"
-                                    })
-                                    .role(Role::Tab)
-                                    .aria_label(label)
-                                    .h_full()
-                                    .flex()
-                                    .items_center()
-                                    .border_b_2()
-                                    .border_color(if self.history == history {
-                                        content(0.8)
-                                    } else {
-                                        content(0.)
-                                    })
-                                    .text_size(px(12.))
-                                    .text_color(content(if self.history == history {
-                                        0.9
-                                    } else {
-                                        0.5
-                                    }))
+                                let id = if history {
+                                    "automation-history-tab"
+                                } else {
+                                    "automation-settings-tab"
+                                };
+                                page::tab(id, label, self.history == history)
                                     .child(label)
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.history = history;
@@ -668,15 +596,13 @@ impl Automations {
                                         cx.notify();
                                     }))
                             }),
-                        )
-                    } else {
-                        div().h(px(20.))
+                        ))
                     }),
             );
         let panel = if self.history && editor.saved {
-            self.render_history(cx)
+            self.render_history(narrow, cx)
         } else {
-            self.render_settings(cx)
+            self.render_settings(narrow, cx)
         };
         div()
             .flex_1()
@@ -686,33 +612,35 @@ impl Automations {
             .child(header)
             .when(self.confirm_delete, |d| {
                 d.child(
-                    div()
-                        .mx(px(32.))
+                    page::label()
+                        .id("automation-delete-confirmation")
+                        .role(Role::Alert)
+                        .mx(page::detail_padding(narrow))
                         .mt(px(12.))
                         .p(px(12.))
-                        .rounded(px(8.))
+                        .rounded(px(page::CARD_CORNER))
                         .border_1()
                         .border_color(gpui::rgba(0xf8717140))
                         .flex()
+                        .flex_wrap()
                         .items_center()
                         .gap(px(12.))
-                        .text_size(px(12.))
                         .child(
                             div()
                                 .flex_1()
                                 .child("Delete this automation and its run history?"),
                         )
                         .child(
-                            button("cancel-delete-automation", "Cancel").on_click(cx.listener(
-                                |this, _, _, cx| {
+                            page::secondary("cancel-delete-automation", "Cancel", false, false)
+                                .child("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
                                     this.confirm_delete = false;
                                     cx.notify();
-                                },
-                            )),
+                                })),
                         )
                         .child(
-                            button("confirm-delete-automation", "Delete")
-                                .text_color(rgb(0xfca5a5))
+                            page::secondary("confirm-delete-automation", "Delete", true, false)
+                                .child("Delete")
                                 .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
                         ),
                 )
@@ -720,45 +648,35 @@ impl Automations {
             .child(panel)
             .into_any_element()
     }
-    fn render_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_settings(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
         let editor = self.editor.as_ref().expect("editor");
         let draft = &editor.draft;
         let triggers = draft.triggers.clone().unwrap_or_default();
         let triggers_section = div().child(section("Triggers")).child(
             div()
-                .mt(px(12.))
-                .rounded(px(6.))
+                .mt(px(8.))
+                .rounded(px(page::CARD_CORNER))
                 .border_1()
-                .border_color(content(0.1))
+                .border_color(page::divider())
                 .when(!triggers.is_empty(), |d| {
                     d.child(
-                        div().px(px(12.)).py(px(6.)).children(
+                        div().px(px(8.)).py(px(4.)).children(
                             triggers
                                 .iter()
                                 .enumerate()
                                 .map(|(i, t)| self.render_trigger(t, i, cx)),
                         ),
                     )
-                    .child(div().h(px(1.)).bg(content(0.08)))
+                    .child(div().h(px(1.)).bg(page::divider()))
                 })
                 .child(
-                    div()
-                        .id("automation-add-trigger")
+                    page::action("automation-add-trigger", "Add Trigger", triggers.len() < 20)
                         .relative()
-                        .role(Role::Button)
-                        .aria_label("Add Trigger")
-                        .h(px(48.))
-                        .px(px(12.))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .text_size(px(13.))
-                        .text_color(content(0.55))
-                        .hover(|s| s.bg(content(0.04)).text_color(content(1.)))
+                        .m(px(8.))
+                        .justify_start()
                         .child(self.trigger_anchor.probe())
-                        .child(icon("plus", 14.))
+                        .child(icon("plus", page::ICON_SIZE))
                         .child("Add Trigger")
-                        .when(triggers.len() >= 20, |d| d.opacity(0.4))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_trigger_menu(window, cx);
                         })),
@@ -796,70 +714,55 @@ impl Automations {
             .items_center()
             .gap(px(4.))
             .child(
-                div()
-                    .id("automation-model")
+                page::secondary("automation-model", "Choose automation model", false, false)
                     .relative()
-                    .role(Role::Button)
-                    .aria_label("Choose automation model")
-                    .px(px(6.))
-                    .h(px(26.))
-                    .rounded(px(6.))
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .text_size(px(11.))
-                    .text_color(content(1.))
-                    .bg(content(0.1))
-                    .hover(|s| s.bg(content(0.14)))
+                    .min_w_0()
+                    .max_w_full()
+                    .flex_shrink_1()
                     .child(self.model_anchor.probe())
-                    .child(provider_icon(kind.id(), 16.))
-                    .child(cached_model_name(kind, model.as_deref()))
+                    .child(provider_icon(kind.id(), page::ICON_SIZE))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(cached_model_name(kind, model.as_deref())),
+                    )
                     .when_some(effort_label, |d, effort| {
-                        d.child(div().text_color(content(0.5)).child(effort))
+                        d.child(page::meta().child(effort))
                     })
-                    .child(icon("chevron-down", 12.).text_color(content(0.5)))
+                    .child(icon("chevron-down", page::ICON_SIZE).text_color(page::secondary_ink()))
                     .on_click(cx.listener(|this, _, window, cx| this.choose_model(window, cx))),
             );
         for (index, control) in self.model_controls.iter().enumerate().filter(|_| beside) {
-            controls = controls.child(
-                self.select_control(
-                    ("automation-model-setting", index),
-                    control_label(control, draft),
-                    Choice::ModelSetting(control.id.clone()),
-                    control.choices.clone(),
-                    cx,
-                )
-                .h(px(26.))
-                .px(px(6.))
-                .text_size(px(11.)),
-            );
-        }
-        controls = controls.child(
-            self.select_control(
-                "automation-access",
-                access.into(),
-                Choice::Access,
-                options(&[
-                    ("supervised", "Supervised"),
-                    ("auto-accept-edits", "Auto-accept edits"),
-                    ("auto", "Auto"),
-                    ("full-access", "Full access"),
-                ]),
+            controls = controls.child(self.select_control(
+                ("automation-model-setting", index),
+                control_label(control, draft),
+                Choice::ModelSetting(control.id.clone()),
+                control.choices.clone(),
                 cx,
-            )
-            .h(px(26.))
-            .px(px(6.))
-            .text_size(px(11.)),
-        );
+            ));
+        }
+        controls = controls.child(self.select_control(
+            "automation-access",
+            access.into(),
+            Choice::Access,
+            options(&[
+                ("supervised", "Supervised"),
+                ("auto-accept-edits", "Auto-accept edits"),
+                ("auto", "Auto"),
+                ("full-access", "Full access"),
+            ]),
+            cx,
+        ));
         let instructions = div()
             .child(section("Instructions"))
             .child(
                 div()
                     .relative()
-                    .mt(px(12.))
-                    .rounded(px(6.))
+                    .mt(px(8.))
+                    .rounded(px(page::CARD_CORNER))
                     .border_1()
-                    .border_color(content(0.1))
+                    .border_color(page::divider())
                     .bg(content(0.03))
                     .child(editor.completion.read(cx).composer_probe())
                     .child(
@@ -871,11 +774,8 @@ impl Automations {
                     .child(controls),
             )
             .child(
-                div()
+                page::meta()
                     .mt(px(8.))
-                    .px(px(4.))
-                    .text_size(px(11.))
-                    .text_color(content(0.35))
                     .child("Skills, @file references, and built-in commands work here."),
             );
         let mut folder_options = vec![(String::new(), "No folder".into())];
@@ -909,31 +809,29 @@ impl Automations {
             options(&[("current", "Current"), ("worktree", "Fresh worktree")]),
             cx,
         );
-        let conversation = self
-            .select_control(
-                "automation-conversation",
-                if draft.reuse_session {
-                    "Continue last"
-                } else {
-                    "Start fresh"
-                }
-                .into(),
-                Choice::Conversation,
-                if draft.workspace_mode == "worktree" {
-                    vec![("fresh".into(), "Start fresh".into())]
-                } else {
-                    options(&[("fresh", "Start fresh"), ("reuse", "Continue last")])
-                },
-                cx,
-            )
-            .when(draft.workspace_mode == "worktree", |d| d.opacity(0.5));
+        let conversation = self.select_control(
+            "automation-conversation",
+            if draft.reuse_session {
+                "Continue last"
+            } else {
+                "Start fresh"
+            }
+            .into(),
+            Choice::Conversation,
+            if draft.workspace_mode == "worktree" {
+                vec![("fresh".into(), "Start fresh".into())]
+            } else {
+                options(&[("fresh", "Start fresh"), ("reuse", "Continue last")])
+            },
+            cx,
+        );
         let session = div().child(section("Session")).child(
             div()
-                .mt(px(12.))
-                .rounded(px(6.))
+                .mt(px(8.))
+                .rounded(px(page::CARD_CORNER))
                 .overflow_hidden()
                 .border_1()
-                .border_color(content(0.1))
+                .border_color(page::divider())
                 .child(settings_row(
                     "Working copy",
                     "This repo, or a fresh worktree",
@@ -972,37 +870,24 @@ impl Automations {
             .map(|(_, label)| label.clone())
             .unwrap_or_else(|| format!("{} minutes", draft.missed_run_grace_minutes));
         let advanced = div()
-            .rounded(px(6.))
+            .rounded(px(page::CARD_CORNER))
             .border_1()
-            .border_color(content(0.1))
+            .border_color(page::divider())
             .child(
-                div()
-                    .id("automation-advanced")
-                    .role(Role::Button)
-                    .aria_label("Advanced")
-                    .min_h(px(56.))
-                    .px(px(16.))
+                crate::controls::button("automation-advanced", "Advanced", true)
+                    .p(px(12.))
                     .flex()
                     .items_center()
-                    .gap(px(12.))
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(content(0.05)))
                     .child(
                         div()
                             .flex_1()
                             .flex()
                             .flex_col()
-                            .gap(px(3.))
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .text_color(content(0.75))
-                                    .child("Advanced"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(content(0.4))
-                                    .child("Catch-up window for missed runs"),
-                            ),
+                            .child(page::label().child("Advanced"))
+                            .child(page::meta().child("Catch-up window for missed runs")),
                     )
                     .child(icon(
                         if self.advanced {
@@ -1010,7 +895,7 @@ impl Automations {
                         } else {
                             "chevron-down"
                         },
-                        14.,
+                        page::ICON_SIZE,
                     ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.advanced = !this.advanced;
@@ -1018,34 +903,33 @@ impl Automations {
                     })),
             )
             .when(self.advanced, |d| {
-                d.child(settings_row(
-                    "Missed-run grace",
-                    "Catch up if a scheduled run was missed",
-                    self.select_control(
-                        "automation-grace",
-                        grace,
-                        Choice::Grace,
-                        grace_options,
-                        cx,
-                    ),
-                ))
+                d.child(
+                    settings_row(
+                        "Missed-run grace",
+                        "Catch up if a scheduled run was missed",
+                        self.select_control(
+                            "automation-grace",
+                            grace,
+                            Choice::Grace,
+                            grace_options,
+                            cx,
+                        ),
+                    )
+                    .border_b_0()
+                    .border_t_1(),
+                )
             });
         div()
             .id("automation-settings-scroll")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&self.settings_scroll)
             .child(
-                div()
-                    .w_full()
-                    .max_w(px(1024.))
-                    .mx_auto()
-                    .px(px(32.))
-                    .pt(px(20.))
-                    .pb(px(40.))
+                detail_frame(narrow)
                     .flex()
                     .flex_col()
-                    .gap(px(32.))
+                    .gap(px(24.))
                     .child(triggers_section)
                     .child(instructions)
                     .child(session)
@@ -1053,38 +937,41 @@ impl Automations {
             )
             .into_any_element()
     }
-    fn render_history(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_history(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
+        let triggered_width = px(140.);
+        let status_width = px(96.);
+        let duration_width = px(56.);
         let mut table = div()
-            .mt(px(12.))
-            .rounded(px(6.))
+            .mt(px(8.))
+            .rounded(px(page::CARD_CORNER))
             .overflow_hidden()
             .border_1()
-            .border_color(content(0.1));
+            .border_color(page::divider());
         if self.runs.is_empty() {
             table = table.child(
-                div()
-                    .px(px(16.))
-                    .py(px(64.))
-                    .text_center()
-                    .text_size(px(12.))
-                    .text_color(content(0.4))
-                    .child("This automation has not run yet."),
+                page::empty(
+                    icon("clock", 24.),
+                    "No runs yet",
+                    "Scheduled and manual runs appear here.",
+                )
+                .h_auto()
+                .py(px(24.)),
             );
         } else {
-            table = table.child(
-                div()
-                    .h(px(40.))
-                    .px(px(16.))
-                    .flex()
-                    .items_center()
-                    .gap(px(16.))
-                    .text_size(px(11.))
-                    .text_color(content(0.4))
-                    .child(div().flex_1().child("Trigger"))
-                    .child(div().w(px(152.)).child("Triggered"))
-                    .child(div().w(px(108.)).child("Status"))
-                    .child(div().w(px(56.)).text_right().child("Duration")),
-            );
+            table = table.when(!narrow, |d| {
+                d.child(
+                    page::meta()
+                        .h(px(page::TOOLBAR_HEIGHT))
+                        .px(px(12.))
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .child(div().flex_1().min_w_0().truncate().child("Trigger"))
+                        .child(div().w(triggered_width).child("Triggered"))
+                        .child(div().w(status_width).child("Status"))
+                        .child(div().w(duration_width).text_right().child("Duration")),
+                )
+            });
             for (index, run) in self.runs.iter().take(100).enumerate() {
                 let session = run.session_id.clone();
                 let trigger = if run.trigger == "manual" {
@@ -1102,115 +989,97 @@ impl Automations {
                         .map(|t| format!("Scheduled · {}", t.label()))
                         .unwrap_or_else(|| "Scheduled".into())
                 };
-                let (label, color, fill): (&str, gpui::Hsla, gpui::Hsla) = match run.status.as_str()
-                {
-                    "succeeded" => (
-                        "Succeeded",
-                        rgb(0x34d399).into(),
-                        rgb(0x10b981).alpha(0.12).into(),
-                    ),
-                    "failed" => (
-                        "Failed",
-                        rgb(0xfb7185).into(),
-                        rgb(0xf43f5e).alpha(0.12).into(),
-                    ),
-                    "skipped" => (
-                        "Skipped",
-                        rgb(0xfbbf24).into(),
-                        rgb(0xf59e0b).alpha(0.12).into(),
-                    ),
-                    "cancelled" => ("Cancelled", content(0.5), content(0.08)),
-                    "running" => (
-                        "Running",
-                        rgb(0x60a5fa).into(),
-                        rgb(0x3b82f6).alpha(0.12).into(),
-                    ),
-                    _ => (
-                        "Pending",
-                        rgb(0x60a5fa).into(),
-                        rgb(0x3b82f6).alpha(0.12).into(),
-                    ),
+                let (label, semantic) = match run.status.as_str() {
+                    "succeeded" => ("Succeeded", Some(StatusColor::Success)),
+                    "failed" => ("Failed", Some(StatusColor::Danger)),
+                    "skipped" => ("Skipped", Some(StatusColor::Warning)),
+                    "cancelled" => ("Cancelled", None),
+                    "running" => ("Running", None),
+                    _ => ("Pending", None),
                 };
-                table = table.child(
-                    div()
-                        .id(("automation-run", index))
-                        .role(Role::Button)
-                        .aria_label(format!("{trigger}, {label}"))
-                        .h(px(44.))
-                        .px(px(16.))
-                        .border_t_1()
-                        .border_color(content(0.08))
-                        .flex()
-                        .items_center()
-                        .gap(px(16.))
-                        .text_size(px(13.))
-                        .when(session.is_some(), |d| d.hover(|s| s.bg(content(0.05))))
-                        .child(div().flex_1().min_w_0().truncate().child(trigger))
-                        .child(div().w(px(152.)).text_color(content(0.7)).child(at(
-                            if run.scheduled_for == 0 {
-                                run.created_at
-                            } else {
-                                run.scheduled_for
+                let color = semantic.map_or(page::secondary_ink(), |role| status(role, 1.));
+                let fill = semantic.map_or(content(0.08), |role| status(role, 0.12));
+                let badge = page::meta()
+                    .h(px(20.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .rounded(px(page::CORNER))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(color)
+                    .bg(fill)
+                    .when(run.status == "running", |d| {
+                        d.child(icon("loader", 12.).text_color(color).with_animation(
+                            SharedString::from(format!("automation-run-spinner-{index}")),
+                            gpui::Animation::new(std::time::Duration::from_secs(1)).repeat(),
+                            |icon, delta| {
+                                icon.with_transformation(gpui::Transformation::rotate(
+                                    gpui::percentage(delta),
+                                ))
                             },
-                        )))
-                        .child(
-                            div().w(px(108.)).flex().items_center().child(
-                                div()
-                                    .h(px(20.))
-                                    .max_w_full()
-                                    .flex_shrink_0()
-                                    .px(px(8.))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.))
-                                    .rounded_full()
-                                    .text_size(px(11.))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(color)
-                                    .bg(fill)
-                                    .when(run.status == "running", |d| {
-                                        d.child(
-                                            icon("loader", 10.).text_color(color).with_animation(
-                                                SharedString::from(format!(
-                                                    "automation-run-spinner-{index}"
-                                                )),
-                                                gpui::Animation::new(
-                                                    std::time::Duration::from_secs(1),
-                                                )
-                                                .repeat(),
-                                                |icon, delta| {
-                                                    icon.with_transformation(
-                                                        gpui::Transformation::rotate(
-                                                            gpui::percentage(delta),
-                                                        ),
-                                                    )
-                                                },
-                                            ),
-                                        )
-                                    })
-                                    .child(label),
-                            ),
-                        )
-                        .child(
-                            div()
-                                .w(px(56.))
-                                .text_right()
-                                .text_color(content(0.55))
-                                .child(duration(run)),
-                        )
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            if let Some(id) = &session {
-                                cx.emit(Event::OpenSession(id.clone()));
-                            }
-                        })),
+                        ))
+                    })
+                    .child(label);
+                let metadata = page::meta()
+                    .flex()
+                    .items_center()
+                    .when(narrow, |d| d.flex_wrap().gap(px(8.)))
+                    .when(!narrow, |d| d.gap(px(12.)))
+                    .child(div().when(!narrow, |d| d.w(triggered_width)).child(at(
+                        if run.scheduled_for == 0 {
+                            run.created_at
+                        } else {
+                            run.scheduled_for
+                        },
+                    )))
+                    .child(
+                        div()
+                            .when(!narrow, |d| d.w(status_width))
+                            .flex()
+                            .items_center()
+                            .child(badge),
+                    )
+                    .child(
+                        div()
+                            .when(!narrow, |d| d.w(duration_width).text_right())
+                            .child(duration(run)),
+                    );
+                table = table.child(
+                    crate::controls::button(
+                        ("automation-run", index),
+                        format!("{trigger}, {label}"),
+                        session.is_some(),
+                    )
+                    .px(px(12.))
+                    .py(px(8.))
+                    .border_t_1()
+                    .border_color(page::divider())
+                    .flex()
+                    .when(narrow, |d| d.flex_col().items_start().gap(px(4.)))
+                    .when(!narrow, |d| d.items_center().gap(px(12.)))
+                    .when(session.is_some(), |d| {
+                        d.cursor_pointer().hover(|s| s.bg(content(0.05)))
+                    })
+                    .child(
+                        page::label()
+                            .min_w_0()
+                            .when(!narrow, |d| d.flex_1().truncate())
+                            .child(trigger),
+                    )
+                    .child(metadata)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        if let Some(id) = &session {
+                            cx.emit(Event::OpenSession(id.clone()));
+                        }
+                    })),
                 );
                 if let Some(error) = &run.error {
                     table = table.child(
-                        div()
-                            .px(px(16.))
+                        page::meta()
+                            .px(px(12.))
                             .pb(px(8.))
-                            .text_size(px(11.))
-                            .text_color(content(0.5))
+                            .text_color(status(StatusColor::Danger, 1.))
                             .child(error.clone()),
                     );
                 }
@@ -1221,14 +1090,9 @@ impl Automations {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&self.history_scroll)
             .child(
-                div()
-                    .w_full()
-                    .max_w(px(1024.))
-                    .mx_auto()
-                    .px(px(32.))
-                    .pt(px(20.))
-                    .pb(px(40.))
+                detail_frame(narrow)
                     .child(section("Run history"))
                     .child(table),
             )

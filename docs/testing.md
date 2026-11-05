@@ -14,7 +14,7 @@ bash scripts/desktop/bundle-native-macos.sh native-dev target "$(node -p 'JSON.p
 
 Tooling checks also guard the repository itself. `module-cycles.test.mjs` keeps top-level modules depending in one direction, and `docs.test.mjs` fails if a document names an `npm run` script or `-p` crate that doesn't exist, or if a guide loses its plain-English companion.
 
-The clipboard helper's lifecycle tests start the real binary with their own sockets, so they never touch a running app. They do hold ⌘⇧C briefly if nothing else has it, and they report it as taken if something does.
+The clipboard lifecycle tests start `vorkspace-helper` with private sockets, so they stay separate from a running app. They hold ⌘⇧C briefly if the shortcut is available and report it as taken otherwise.
 
 For the real SSH transport, build a host package and run the disposable loopback test:
 

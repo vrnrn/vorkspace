@@ -2,7 +2,13 @@ import AppKit
 import AVFoundation
 import Speech
 
-private struct MeetingConfiguration: Decodable { let id: String; let microphone: String; let rules: [DictationWord] }
+private struct MeetingConfiguration: Decodable {
+    let id: String
+    let run: String
+    let captureSystem: Bool
+    let microphone: String
+    let rules: [DictationWord]
+}
 @MainActor private final class MeetingDestination: DictationDestination {
     var onInvalidated: (() -> Void)?
     var valid = true
@@ -23,25 +29,26 @@ private func awaitPermission(_ request: (@escaping @Sendable (Bool) -> Void) -> 
     for await _ in results { break }
 }
 
-/// One parent owns the language reservation and both channel lifecycles. It
-/// publishes Stop only after both analyzers and native audio sources have closed.
+/// One parent owns the language reservation and every requested audio channel.
+/// Stop publishes after the analyzers and native audio sources have closed.
 @MainActor private final class MeetingController {
     static let shared = MeetingController()
     private var active: Task<Void, Never>?
     private var turns = [SpeechTurn]()
     private var id = ""
+    private var run = ""
     private var stopped = false
     private var failure: Error?
     private var ready = Set<String>()
     private var callback: (@convention(c) (UnsafePointer<CChar>) -> Void)?
     func emit(_ values: [String: Any]) {
-        var values = values; values["id"] = id
+        var values = values; values["id"] = id; values["run"] = run
         guard let data = try? JSONSerialization.data(withJSONObject: values), let text = String(data: data, encoding: .utf8) else { return }
         text.withCString { callback?($0) }
     }
     func start(_ config: MeetingConfiguration, _ callback: @escaping @convention(c) (UnsafePointer<CChar>) -> Void) {
         guard active == nil else { return }
-        self.callback = callback; id = config.id; stopped = false; failure = nil; ready = []
+        self.callback = callback; id = config.id; run = config.run; stopped = false; failure = nil; ready = []
         emit(["phase": "starting"])
         active = Task { [self] in
             var locale: Locale?
@@ -63,14 +70,16 @@ private func awaitPermission(_ request: (@escaping @Sendable (Bool) -> Void) -> 
                 guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
                     throw DictationError("Allow Microphone for vorkspace helper in System Settings.")
                 }
-                if !CGPreflightScreenCaptureAccess() {
-                    await awaitPermission { complete in
-                        Task.detached { complete(CGRequestScreenCaptureAccess()) }
+                if config.captureSystem {
+                    if !CGPreflightScreenCaptureAccess() {
+                        await awaitPermission { complete in
+                            Task.detached { complete(CGRequestScreenCaptureAccess()) }
+                        }
                     }
-                }
-                guard !self.stopped else { throw CancellationError() }
-                guard CGPreflightScreenCaptureAccess() else {
-                    throw DictationError("Allow Screen & System Audio Recording for vorkspace helper in System Settings, then record again.")
+                    guard !self.stopped else { throw CancellationError() }
+                    guard CGPreflightScreenCaptureAccess() else {
+                        throw DictationError("Allow Screen & System Audio Recording for vorkspace helper in System Settings, then record again.")
+                    }
                 }
                 reserved = try await AssetInventory.reserve(locale: supported)
                 guard reserved else { throw DictationError("macOS could not reserve the speech language.") }
@@ -80,23 +89,31 @@ private func awaitPermission(_ request: (@escaping @Sendable (Bool) -> Void) -> 
                 let microphone = SpeechTurn(target: MeetingDestination(), locale: supported, words: words, durationLimit: nil, reservesLocale: false) {
                     try SpeechCapture(microphone: config.microphone, format: $0, clockOrigin: origin)
                 }
-                let system = SpeechTurn(target: MeetingDestination(), locale: supported, words: words, durationLimit: nil, reservesLocale: false) {
-                    SystemSpeechCapture(format: $0, origin: origin)
-                }
-                self.turns = [microphone, system]
-                for (source, turn) in [("microphone", microphone), ("system", system)] {
-                    turn.onReady = { [weak self] in
-                        guard let self, !self.stopped else { return }
-                        self.ready.insert(source)
-                        if self.ready.count == 2 { self.emit(["phase": "recording"]) }
+                var channels = [("microphone", microphone)]
+                if config.captureSystem {
+                    let system = SpeechTurn(target: MeetingDestination(), locale: supported, words: words, durationLimit: nil, reservesLocale: false) {
+                        SystemSpeechCapture(format: $0, origin: origin)
                     }
-                    turn.onCancelled = { [weak self] in self?.cancel() }
+                    channels.append(("system", system))
+                }
+                let channelCount = channels.count
+                self.turns = channels.map { $0.1 }
+                for (source, turn) in channels {
+                    turn.onReady = { [weak self] in
+                        guard let self, self.run == config.run, !self.stopped else { return }
+                        self.ready.insert(source)
+                        if self.ready.count == channelCount { self.emit(["phase": "recording"]) }
+                    }
+                    turn.onCancelled = { [weak self] in
+                        guard let self, self.run == config.run else { return }
+                        self.cancel()
+                    }
                     turn.onResult = { [weak self] text, final, range in
-                        guard let self, self.failure == nil else { return }
+                        guard let self, self.run == config.run, self.failure == nil else { return }
                         let start = range.start.seconds * 1000
                         let end = CMTimeRangeGetEnd(range).seconds * 1000
                         guard text.utf8.count <= 64 * 1024, start.isFinite, end.isFinite,
-                              start >= 0, end >= start, end <= Double(Int64.max) else {
+                              start >= 0, end >= start, end < Double(Int64.max) else {
                             throw DictationError("Speech recognition returned an invalid meeting segment.")
                         }
                         self.emit(["source": source, "text": text, "final": final,
@@ -126,10 +143,10 @@ private func awaitPermission(_ request: (@escaping @Sendable (Bool) -> Void) -> 
         }
     }
     func finish() {
-        guard active != nil else { return }
+        guard active != nil, !stopped else { return }
         stopped = true
         emit(["phase": "finishing"])
-        if ready.count < 2 { cancel() }
+        if turns.isEmpty || ready.count < turns.count { cancel() }
         else { for turn in turns { turn.finish() } }
     }
     func cancel() {

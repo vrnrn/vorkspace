@@ -291,7 +291,7 @@ impl ProjectSearch {
             .child(icon(path, 14.))
     }
 
-    fn filter(input: Entity<Input>) -> AnyElement {
+    fn filter(input: Entity<Input>, cx: &App) -> AnyElement {
         div()
             .w_full()
             .min_w_0()
@@ -299,8 +299,9 @@ impl ProjectSearch {
             .flex()
             .rounded(px(6.))
             .border_1()
-            .border_color(content(0.1))
-            .bg(content(0.05))
+            .border_color(content(0.))
+            .track_focus(&input.focus_handle(cx))
+            .focus(|style| style.bg(content(0.05)))
             .px_2()
             .py(px(6.))
             .child(div().min_w_0().flex_1().child(input))
@@ -527,8 +528,9 @@ impl Render for ProjectSearch {
                             .gap_1()
                             .rounded(px(6.))
                             .border_1()
-                            .border_color(content(0.1))
-                            .bg(content(0.05))
+                            .border_color(content(0.))
+                            .track_focus(&self.query.focus_handle(cx))
+                            .focus(|style| style.bg(content(0.05)))
                             .pl_2()
                             .pr_1()
                             .child(
@@ -581,8 +583,8 @@ impl Render for ProjectSearch {
                                 )),
                             ),
                     )
-                    .child(Self::filter(self.include.clone()))
-                    .child(Self::filter(self.exclude.clone())),
+                    .child(Self::filter(self.include.clone(), cx))
+                    .child(Self::filter(self.exclude.clone(), cx)),
             )
             .child(
                 div()

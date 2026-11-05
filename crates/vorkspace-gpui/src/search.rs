@@ -1,9 +1,12 @@
-//! Native SearchView.tsx, including its compact rows and dotted empty state.
-use crate::input::{self, Input};
+//! Native search using the shared compact page layout.
+use crate::{
+    controls::page,
+    input::{self, Input},
+};
 use gpui::{
-    AnyElement, App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle,
     MouseButton, MouseMoveEvent, Pixels, Point, Render, Role, ScrollHandle, StyledText,
-    Subscription, Task, Window, canvas, div, fill, img, point, prelude::*, px, relative, size,
+    Subscription, Task, Window, div, img, point, prelude::*, px, relative,
 };
 use std::{
     collections::HashMap,
@@ -82,7 +85,8 @@ impl SearchView {
         sources: Sources,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| Input::field("Search", "Search everything...", content(0.4), cx));
+        let input =
+            cx.new(|cx| Input::field("Search", "Search everything…", page::secondary_ink(), cx));
         let changed = cx.subscribe(&input, |this, _, _: &input::Changed, cx| {
             this.query = this.input.read(cx).content.trim().to_owned();
             this.active = 0;
@@ -379,96 +383,14 @@ impl SearchView {
     }
 }
 fn empty_state() -> AnyElement {
-    div()
-        .flex_1()
-        .min_h_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .px_6()
-                .pb(px(96.))
-                .child(
-                    div()
-                        .relative()
-                        .w(px(288.))
-                        .h(px(192.))
-                        .mb_2()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            canvas(
-                                |_, _, _| (),
-                                |bounds, _, window, _| {
-                                    for row in 0..19 {
-                                        for col in 0..27 {
-                                            let x = (col as f32 - 13.) * 10.;
-                                            let y = (row as f32 - 9.) * 10.;
-                                            let radius =
-                                                ((x / 144.).powi(2) + (y / 96.).powi(2)).sqrt();
-                                            let alpha =
-                                                0.14 * ((0.76 - radius) / 0.58).clamp(0., 1.);
-                                            window.paint_quad(
-                                                fill(
-                                                    Bounds::new(
-                                                        bounds.center()
-                                                            + point(px(x - 1.5), px(y - 1.5)),
-                                                        size(px(3.), px(3.)),
-                                                    ),
-                                                    content(alpha),
-                                                )
-                                                .corner_radii(px(1.5)),
-                                            );
-                                        }
-                                    }
-                                },
-                            )
-                            .absolute()
-                            .size_full(),
-                        )
-                        .child(
-                            div()
-                                .size(px(56.))
-                                .rounded(px(16.))
-                                .relative()
-                                .child(
-                                    canvas(
-                                        |_, _, _| (),
-                                        |bounds, _, window, _| {
-                                            let quad = fill(bounds, content(0.06));
-                                            let quad = quad.border_color(
-                                                gpui_apple::metal_renderer::backdrop_blur_marker(
-                                                    4. * window.scale_factor(),
-                                                ),
-                                            );
-                                            window.paint_quad(quad.corner_radii(px(16.)));
-                                        },
-                                    )
-                                    .absolute()
-                                    .size_full(),
-                                )
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(icon("search", 24.).text_color(content(0.5))),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .line_height(px(19.5))
-                        .max_w(px(320.))
-                        .text_center()
-                        .text_color(content(0.45))
-                        .child("Find files, conversations, messages, and projects."),
-                ),
-        )
-        .into_any_element()
+    page::empty(
+        icon("search", 24.),
+        "Search your workspace",
+        "Find files, conversations, messages, and projects.",
+    )
+    .flex_1()
+    .min_h_0()
+    .into_any_element()
 }
 impl Render for SearchView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -511,61 +433,55 @@ impl Render for SearchView {
                         )
                     }),
                 );
-                div()
-                    .id(("app-search-row", ix))
-                    .debug_selector(move || format!("app-search-row-{ix}"))
-                    .role(Role::ListItem)
-                    .aria_selected(self.active == ix)
-                    .aria_label(format!("{} {}", hit.title, hit.meta))
-                    .h(px(32.))
-                    .w_full()
-                    .flex_shrink_0()
-                    .rounded_md()
-                    .px_2()
-                    .flex()
-                    .gap_2()
-                    .items_center()
-                    .text_size(px(13.))
-                    .when(self.active == ix, |d| {
-                        d.bg(content(if content(1.).l < 0.5 { 0.06 } else { 0.10 }))
-                    })
-                    .child(
-                        div()
-                            .size(px(16.))
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(mark),
-                    )
-                    .child(div().min_w_0().flex_1().truncate().child(text))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .max_w(relative(0.45))
-                            .truncate()
-                            .font_family("monospace")
-                            .text_size(px(11.))
-                            .text_color(content(0.4))
-                            .child(hit.meta.clone()),
-                    )
-                    .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                        if this.pointer.is_some_and(|old| old != event.position)
-                            && this.active != ix
-                        {
-                            this.active = ix;
-                            cx.notify();
-                        }
-                        this.pointer = Some(event.position);
-                    }))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, _, cx| this.pick(ix, cx)))
-                    .into_any_element()
+                page::row(
+                    ("app-search-row", ix),
+                    format!("{} {}", hit.title, hit.meta),
+                    self.active == ix,
+                )
+                .debug_selector(move || format!("app-search-row-{ix}"))
+                .role(Role::ListItem)
+                .aria_selected(self.active == ix)
+                .h(px(36.))
+                .py_0()
+                .w_full()
+                .flex_shrink_0()
+                .flex()
+                .gap_2()
+                .items_center()
+                .text_size(px(page::LABEL_SIZE))
+                .line_height(px(page::LABEL_LINE))
+                .child(
+                    div()
+                        .size(px(16.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(mark),
+                )
+                .child(div().min_w_0().flex_1().truncate().child(text))
+                .child(
+                    div()
+                        .min_w_0()
+                        .max_w(relative(0.45))
+                        .truncate()
+                        .text_size(px(page::META_SIZE))
+                        .text_color(page::secondary_ink())
+                        .child(hit.meta.clone()),
+                )
+                .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                    if this.pointer.is_some_and(|old| old != event.position) && this.active != ix {
+                        this.active = ix;
+                        cx.notify();
+                    }
+                    this.pointer = Some(event.position);
+                }))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, _, cx| this.pick(ix, cx)))
+                .into_any_element()
             })
             .collect();
         let loading = self.sessions_loading || self.files_loading;
-        let stroke = content(0.07);
-        let selection = if content(1.).l < 0.5 { 0.06 } else { 0.10 };
         div()
             .id("app-search")
             .key_context("Workspace")
@@ -598,27 +514,13 @@ impl Render for SearchView {
                 }),
             )
             .child(
-                div()
+                page::toolbar()
                     .id("app-search-header")
                     .debug_selector(|| "app-search-header".into())
-                    .h(px(36.))
-                    .px(px(8.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(1.))
-                    .border_b_1()
-                    .border_color(stroke)
                     .child(
-                        div()
+                        page::search_frame(&self.input.focus_handle(cx))
                             .flex_1()
-                            .min_w_0()
-                            .h(px(28.))
-                            .px(px(6.))
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(icon("search", 12.).text_color(content(0.5)))
+                            .child(icon("search", page::ICON_SIZE))
                             .child(div().flex_1().min_w_0().child(self.input.clone())),
                     )
                     .when(loading, |d| {
@@ -630,37 +532,19 @@ impl Render for SearchView {
                     }),
             )
             .child(
-                div()
+                page::toolbar()
                     .id("app-search-scopes")
                     .debug_selector(|| "app-search-scopes".into())
-                    .h(px(36.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(1.))
-                    .px(px(8.))
-                    .border_b_1()
-                    .border_color(stroke)
+                    .role(Role::TabList)
+                    .aria_label("Search scopes")
                     .children(
                         Scope::ALL
                             .into_iter()
                             .enumerate()
                             .map(|(ix, (scope, label))| {
-                                div()
-                                    .id(("app-search-scope", ix))
+                                page::tab(("app-search-scope", ix), label, self.scope == scope)
                                     .debug_selector(move || format!("app-search-scope-{ix}"))
-                                    .role(Role::Button)
-                                    .aria_label(label)
                                     .child(label)
-                                    .aria_selected(self.scope == scope)
-                                    .rounded_md()
-                                    .px_2()
-                                    .py_1()
-                                    .text_size(px(12.))
-                                    .line_height(px(18.))
-                                    .bg(content(if self.scope == scope { selection } else { 0. }))
-                                    .text_color(content(if self.scope == scope { 1. } else { 0.5 }))
-                                    .hover(|s| s.bg(content(0.05)).text_color(content(1.)))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.select_scope(scope, cx);
                                     }))
@@ -684,8 +568,8 @@ impl Render for SearchView {
                             div()
                                 .px_2p5()
                                 .py_1()
-                                .text_size(px(11.))
-                                .text_color(content(0.45))
+                                .text_size(px(page::META_SIZE))
+                                .text_color(page::secondary_ink())
                                 .child("Results limited to the first matches"),
                         )
                     })
@@ -695,8 +579,8 @@ impl Render for SearchView {
                             div()
                                 .p(px(12.))
                                 .text_size(px(12.))
-                                .line_height(px(19.))
-                                .text_color(content(0.5))
+                                .line_height(px(page::META_LINE))
+                                .text_color(page::secondary_ink())
                                 .child(self.error.clone().unwrap_or_else(|| "No results".into())),
                         )
                     })
@@ -707,3 +591,6 @@ impl Render for SearchView {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod screenshots;

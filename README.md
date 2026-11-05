@@ -16,7 +16,7 @@ You need macOS 26 or newer, a current stable Rust toolchain, Node.js 24 or newer
 npm run dev -- --cwd /path/to/project
 ```
 
-This builds the app, its helper in the fast-rebuilding `native-dev` profile, runs them from `target/native-dev/`, and leaves `/Applications` alone. It opens your normal desktop data, so add `--dev-data` for an isolated launch. Type `r` then Enter in the terminal to rebuild and restart.
+This builds the app and its helper in the fast-rebuilding `native-dev` profile, runs them from `target/native-dev/`, and leaves `/Applications` alone. It opens your normal desktop data, so add `--dev-data` for an isolated launch. Type `r` then Enter in the terminal to rebuild and restart.
 
 To test, install `cargo-nextest` once, then run the full check:
 
@@ -36,7 +36,7 @@ npm run check
 - SSH connections to a Node host that owns remote processes and durable sessions.
 - Optional Vox calls controlled by Rust with a private WebRTC audio page; microphone access starts only with a call.
 - Optional [dictation](docs/dictation.md) with Apple’s on-device speech engine, custom words and a native notch; its background helper survives application Quit.
-- [Meetings](docs/meetings.md) transcribes microphone and system audio and can turn a transcript into AI notes. Built-in features are managed from [Connectors settings](docs/inbox.md).
+- [Recording in Notes](docs/meetings.md) captures microphone and system audio, keeps the transcript with the note, and can generate a separate AI summary. Built-in features are managed from [Connectors settings](docs/inbox.md).
 - macOS app packaging with optional Sparkle signing and update configuration.
 
 vorkspace requires macOS 26 or newer. Remote hosts can run on macOS or Linux.
