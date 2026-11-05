@@ -161,7 +161,6 @@ fn run_turn_using(
     // SessionReview's recorded turn: its project and id, once the baseline is taken.
     let mut checkpoint: Option<(String, String)> = None;
     let mut created_worktree = None;
-    let mut setup_warning = None;
     let mut context = locked(&store)
         .ok()
         .and_then(|s| s.context_usage(summary.id).ok().flatten())
@@ -318,7 +317,8 @@ fn run_turn_using(
         if vorkspace_core::worktree_management::is_being_removed(&working) {
             return Err("This worktree is being removed.".into());
         }
-        if vorkspace_core::worktree_setup::is_due(std::path::Path::new(&working)) {
+        let setup_notice = if vorkspace_core::worktree_setup::is_due(std::path::Path::new(&working))
+        {
             publish(
                 &tx,
                 &cancel,
@@ -329,21 +329,19 @@ fn run_turn_using(
                     ..Default::default()
                 },
             )?;
-            setup_warning = vorkspace_core::worktree_setup::run_due(
+            let notice = vorkspace_core::worktree_setup::run_due(
                 std::path::Path::new(&summary.cwd),
                 std::path::Path::new(&working),
                 &cancel,
-            );
-            if let Some(warning) = &setup_warning {
-                vorkspace_core::worktree_setup::hold_notice(
-                    std::path::Path::new(&working),
-                    warning,
-                );
-            }
+            )
+            .map_err(|error| format!("Could not prepare worktree setup: {error}"))?;
             if cancel.load(Ordering::Relaxed) {
                 return Err("Stopped".into());
             }
-        }
+            notice
+        } else {
+            None
+        };
         if let Some(source) = settings.pending_provider_switch.take() {
             let root = locked(&store)?.data_dir().map(std::path::Path::to_path_buf);
             let prepared = handoff::prepare(
@@ -392,6 +390,7 @@ fn run_turn_using(
             && provider::native_prompt(kind, &prompt)
                 .trim_start()
                 .starts_with('/');
+        let setup_notice = setup_notice.filter(|_| !raw_native_command);
         let prompt = if raw_native_command {
             prompt
         } else {
@@ -407,20 +406,6 @@ fn run_turn_using(
                 &mut bot_fingerprint,
                 &store,
             )?
-        };
-        // A failed setup leaves a usable worktree, so the agent hears about it and
-        // can repair it instead of the turn stopping.
-        let prompt = match setup_warning.take() {
-            Some(_) if raw_native_command => prompt,
-            Some(warning) => {
-                vorkspace_core::worktree_setup::clear_notice(std::path::Path::new(
-                    settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd),
-                ));
-                format!(
-                    "<vorkspace_context>\nVorkspace adds this context, not the user. {warning}\n</vorkspace_context>\n\n{prompt}"
-                )
-            }
-            None => prompt,
         };
         let cwd = settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd);
         if settings.bot.is_none()
@@ -467,6 +452,13 @@ fn run_turn_using(
             prompt = format!(
                 "You have vorkspace app access for this project. Use the CLI: {} app ACTION --json JSON. Supported actions: models.list {{}}, sessions.list {{}}, sessions.read {{sessionId}}, sessions.start {{prompt,harness?,model?,title?,draft?,reveal?}}, sessions.send/draft {{sessionId,prompt}}, sessions.stop {{sessionId}}, folders.list {{}}, folders.move {{sessionId,folderId?,newFolderName?}}, notes.list {{}}, notes.read {{id}}, notes.write {{id?,title,body}}, worktrees.list {{}}. Scope is this thread's project. App credentials are in the environment; never print them. Respect the user’s request and selected access policy.\n\n{prompt}",
                 shlex_quote(&cli.to_string_lossy())
+            );
+        }
+        if let Some(notice) = &setup_notice {
+            // Keep command output out of the composer and note token parsers.
+            let warning = notice.warning();
+            prompt = format!(
+                "<vorkspace_context>\nVorkspace adds this context, not the user. {warning}\n</vorkspace_context>\n\n{prompt}"
             );
         }
         // Every foreground session receives an independent visual capability.
@@ -844,6 +836,11 @@ fn run_turn_using(
         });
         if result.is_ok() {
             provider_completion_confirmed = true;
+        }
+        // Provider readiness has different meanings across transports. A
+        // confirmed turn proves the prompt was carried, even if the UI closed.
+        if provider_completion_confirmed && let Some(notice) = setup_notice {
+            let _ = notice.acknowledge();
         }
         if result.is_ok()
             && let Some(fingerprint) = &bot_fingerprint

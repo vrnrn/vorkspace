@@ -631,18 +631,31 @@ impl SettingsView {
                             .child("All uncommitted and untracked changes here are discarded."),
                     );
                 }
+                if tree.assessment.safety_unknown() {
+                    consequences = consequences.child(
+                        div()
+                            .text_color(gpui::rgb(0xfbbf24))
+                            .child("Deleting this worktree can discard files or changes Git could not inspect."),
+                    );
+                }
                 consequences = consequences.child(match &tree.tree.branch {
-                    Some(branch) if tree.assessment.merged => {
+                    Some(branch) if tree.assessment.removes_merged_branch() => {
                         format!("The {branch} branch is fully merged, so it's removed too.")
                     }
                     Some(branch) => format!("The {branch} branch and its commits are kept."),
-                    None => "This worktree has no branch, and nothing in it is unique.".into(),
+                    None if tree.assessment.removable() => {
+                        "This worktree has no branch, and nothing in it is unique.".into()
+                    }
+                    None => {
+                        "Git could not verify that this detached worktree is safe to remove.".into()
+                    }
                 });
-                if tree.assessment.unpushed > 0 && !tree.assessment.merged {
-                    consequences = consequences.child(format!(
-                        "{} unpublished commits stay on the branch.",
-                        tree.assessment.unpushed
-                    ));
+                if let Some(count) = tree.assessment.unpushed.filter(|count| *count > 0)
+                    && tree.tree.branch.is_some()
+                    && !tree.assessment.removes_merged_branch()
+                {
+                    consequences = consequences
+                        .child(format!("{count} unpublished commits stay on the branch."));
                 }
                 rows.push(consequences.into_any_element());
                 if count > 0 {

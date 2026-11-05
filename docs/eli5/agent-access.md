@@ -48,4 +48,6 @@ When someone is no longer useful, the parent uses `minions.fire` to retire them.
 
 If a direct task fails, later work waits. The parent can inspect what happened, then retry or discard that task. A retry starts a new attempt; it does not assume the earlier attempt did nothing.
 
-Bots give delegated work that edits files its own worktree, then clean up. When work is finished they archive its sessions and remove the worktree, but only if nothing would be lost. A worktree with uncommitted or unmerged work, private ignored files like `.env`, an open terminal, or a live session is left alone, and the Bot tells you instead. There's no way for a Bot to force it.
+Bots give delegated work that edits files its own worktree. When the work is finished, they archive its sessions and can remove the worktree after its safety checks pass. The Bot keeps it and tells you if Git cannot check it, or if it contains unique work or private ignored files such as `.env`. An open terminal or unarchived session also blocks cleanup. The worktree list can show that a check is unknown.
+
+If setup fails or gets interrupted, the app keeps passing the warning to agents until a turn carrying it finishes. A warning can reach more than one turn if sessions overlap or a turn ends early.

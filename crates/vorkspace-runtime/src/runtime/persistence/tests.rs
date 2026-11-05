@@ -353,11 +353,65 @@ fn the_first_turn_in_a_new_worktree_runs_its_setup() {
 
 #[test]
 fn a_setup_failure_outlives_a_turn_that_never_reached_the_agent() {
+    use std::os::unix::fs::PermissionsExt;
+
     let (cwd, _, repo) = first_turn_with_setup("echo no network >&2; exit 3");
     let cwd = std::path::Path::new(&cwd);
     assert!(vorkspace_core::worktree_setup::is_due(cwd));
-    let warning = vorkspace_core::worktree_setup::run_due(&repo, cwd, &AtomicBool::new(false));
-    assert!(warning.unwrap().contains("no network"));
+
+    let binary = repo.join("mock-provider");
+    std::fs::write(&binary, r#"#!/usr/bin/env python3
+import json, sys
+for line in sys.stdin:
+    value = json.loads(line)
+    if value.get('id') == 1:
+        print(json.dumps({'id': 1, 'result': {}}), flush=True)
+    elif value.get('id') == 2:
+        print(json.dumps({'id': 2, 'result': {'thread': {'id': 'setup-notice-test'}}}), flush=True)
+    elif value.get('id') == 3:
+        assert value['method'] == 'turn/start'
+        assert 'Worktree setup failed: no network' in value['params']['input'][0]['text']
+        print(json.dumps({'method': 'turn/completed', 'params': {'turn': {'status': 'completed'}}}), flush=True)
+        break
+"#).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let turn = |attachments| {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
+        let (tx, rx) = async_channel::unbounded();
+        let (_control, controls) = std::sync::mpsc::channel();
+        run_turn_using(
+            TurnInput {
+                summary,
+                prompt: "Continue in this worktree".into(),
+                settings: Settings {
+                    worktree_cwd: Some(cwd.to_str().unwrap().into()),
+                    text_only: true,
+                    attachments,
+                    ..Default::default()
+                },
+            },
+            controls,
+            Arc::new(Mutex::new(store)),
+            Arc::new(AtomicBool::new(false)),
+            tx,
+            |_| Some(binary.clone()),
+        );
+        loop {
+            let update = rx.try_recv().unwrap();
+            if update.finished {
+                break update.status;
+            }
+        }
+    };
+
+    let status = turn(vec![repo.join("removed-attachment.txt")]);
+    assert!(status.contains("removed-attachment.txt"), "{status}");
+    assert!(vorkspace_core::worktree_setup::is_due(cwd));
+
+    assert_eq!(turn(vec![]), "Ready");
+    assert!(!vorkspace_core::worktree_setup::is_due(cwd));
     tidy(&repo);
 }
 

@@ -107,8 +107,10 @@ impl SettingsView {
                         } else {
                             "Status unavailable"
                         };
-                        let blocked = tree.assessment.locked
-                            || (t.branch.is_none() && !tree.assessment.removable());
+                        let blocked = tree
+                            .assessment
+                            .discard_blocker(t.branch.is_none())
+                            .is_some();
                         div()
                             .p_4()
                             .flex()
@@ -171,18 +173,18 @@ impl SettingsView {
                                             .child(format!(
                                                 "{count} {} in this worktree · {status}{}{}",
                                                 if count == 1 { "session" } else { "sessions" },
-                                                if tree.assessment.unpushed > 0 {
-                                                    format!(
-                                                        " · {} unpublished commits",
-                                                        tree.assessment.unpushed
-                                                    )
+                                                if let Some(commits) = tree.assessment.unpushed.filter(|count| *count > 0) {
+                                                    format!(" · {commits} unpublished commits")
                                                 } else {
                                                     String::new()
                                                 },
-                                                if tree.assessment.locked { " · Locked" } else { "" }
+                                                if tree.assessment.locked == Some(true) { " · Locked" } else { "" }
                                             ))
                                             .when_some(self.worktree_sizes.get(&t.path), |row, size| {
                                                 row.child(format!("{:.1} GB on disk", *size as f64 / 1e9))
+                                            })
+                                            .when(tree.assessment.safety_unknown(), |row| {
+                                                row.child("Removal safety could not be verified")
                                             })
                                             .when(tree.assessment.removable() && count == 0, |row| {
                                                 row.child("Safe to remove: nothing here would be lost")
