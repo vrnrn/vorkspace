@@ -822,14 +822,17 @@ impl TranscriptView {
             let mut parked: HashMap<usize, Vec<UiRow>> = HashMap::new();
             let mut ordered = Vec::new();
             for row in self.rows.drain(display_start..) {
-                let answer = self
-                    .fold_targets
-                    .get(&self.messages[row.message].run)
-                    .copied()
-                    .flatten();
-                if activity.pinned.contains(&row.key.0)
-                    && matches!(row.body, Body::Tool { .. })
-                    && let Some(answer) = answer.filter(|answer| row.key.0 < *answer)
+                // Pending messages and saved drafts have no history message.
+                // Resolve a run only for the tool rows that can be pinned.
+                if matches!(row.body, Body::Tool { .. })
+                    && activity.pinned.contains(&row.key.0)
+                    && let Some(answer) = self
+                        .messages
+                        .get(row.message)
+                        .and_then(|message| self.fold_targets.get(&message.run))
+                        .copied()
+                        .flatten()
+                        .filter(|answer| row.key.0 < *answer)
                 {
                     pinned_answers.insert(row.key.0, answer);
                     parked.entry(answer).or_default().push(row);

@@ -362,6 +362,159 @@ fn bot_continuation_search_and_pinned_reports_use_their_own_run(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn bot_pinned_agent_report_preserves_pending_messages(cx: &mut TestAppContext) {
+    vorkspace_ui::clock::use_test_clock(cx);
+    for (state, streaming) in [
+        (ToolState::Running, true),
+        (ToolState::Completed, true),
+        (ToolState::Failed, false),
+        (ToolState::Cancelled, false),
+    ] {
+        let mut call = ToolCall::new("agent", "Agent");
+        call.state = state;
+        call.panel = Some(Panel::Agent(Default::default()));
+        let source = vec![
+            row("user", "Start the review"),
+            row("tool", &serde_json::to_string(&call).unwrap()),
+            row("assistant", "Review status."),
+        ];
+        for pending_first in [false, true] {
+            let view = cx.new(|_| TranscriptView::new());
+            view.update(cx, |view, cx| {
+                view.bot_mode("cat", 0xe86b5f, "BotCat");
+                view.smooth_reveal = false;
+                view.streaming(streaming, cx);
+                if !pending_first {
+                    view.patch(0, source.clone(), cx);
+                }
+                view.set_pending(
+                    vec![PendingMessage {
+                        id: "retry".into(),
+                        text: "hi".into(),
+                        error: None,
+                        sent_at: Some(2_000),
+                        attachments: Vec::new(),
+                        peer: None,
+                    }],
+                    cx,
+                );
+                if pending_first {
+                    view.patch(0, source.clone(), cx);
+                }
+                assert_eq!(view.source, source);
+                let pending = view
+                    .rows
+                    .iter()
+                    .position(|row| matches!(row.body, Body::Pending(0)))
+                    .unwrap();
+                let report = view
+                    .rows
+                    .iter()
+                    .position(|row| row.key.0 == 1 && matches!(row.body, Body::Tool { .. }))
+                    .unwrap();
+                let answer = view
+                    .rows
+                    .iter()
+                    .position(|row| row.key.0 == 2 && matches!(row.body, Body::Markdown(_)))
+                    .unwrap();
+                assert!(report < answer);
+                // Live turns group queued input above their work; settled
+                // history puts it below the answer.
+                assert!(
+                    if streaming {
+                        pending < report
+                    } else {
+                        answer < pending
+                    },
+                    "state={:?}, pending_first={pending_first}",
+                    call.state,
+                );
+                view.set_pending(Vec::new(), cx);
+                assert!(
+                    !view
+                        .rows
+                        .iter()
+                        .any(|row| matches!(row.body, Body::Pending(_)))
+                );
+                assert_eq!(view.source, source);
+            });
+        }
+    }
+}
+
+#[gpui::test]
+fn pinned_agent_report_preserves_saved_drafts(cx: &mut TestAppContext) {
+    vorkspace_ui::clock::use_test_clock(cx);
+    let mut failed = ToolCall::new("agent", "Agent");
+    failed.state = ToolState::Failed;
+    failed.panel = Some(Panel::Agent(Default::default()));
+    let source = vec![
+        row("user", "Start the review"),
+        row("tool", &serde_json::to_string(&failed).unwrap()),
+        row("assistant", "The review failed."),
+    ];
+    for bot in [false, true] {
+        for at in [0, 2, source.len()] {
+            let view = cx.new(|_| TranscriptView::new());
+            view.update(cx, |view, cx| {
+                if bot {
+                    view.bot_mode("cat", 0xe86b5f, "BotCat");
+                }
+                view.patch(0, source.clone(), cx);
+                let draft = vorkspace_core::follow_up::Message {
+                    id: "saved-draft".into(),
+                    text: "Keep this draft".into(),
+                    at,
+                    ..Default::default()
+                };
+                view.set_saved_draft(Some(draft.clone()), cx);
+                assert_eq!(view.saved_draft.as_ref(), Some(&draft));
+                assert_eq!(view.source, source);
+                assert_eq!(
+                    view.rows
+                        .iter()
+                        .filter(|row| matches!(row.body, Body::SavedDraft))
+                        .count(),
+                    1
+                );
+                let report = view
+                    .rows
+                    .iter()
+                    .position(|row| row.key.0 == 1 && matches!(row.body, Body::Tool { .. }))
+                    .unwrap();
+                let answer = view
+                    .rows
+                    .iter()
+                    .position(|row| row.key.0 == 2 && matches!(row.body, Body::Markdown(_)))
+                    .unwrap();
+                assert!(report < answer);
+                let draft = view
+                    .rows
+                    .iter()
+                    .position(|row| matches!(row.body, Body::SavedDraft))
+                    .unwrap();
+                assert!(
+                    match at {
+                        0 => draft < report,
+                        2 => report < draft && draft < answer,
+                        _ => answer < draft,
+                    },
+                    "bot={bot}, at={at}, draft={draft}, report={report}, answer={answer}",
+                );
+                view.set_saved_draft(None, cx);
+                assert!(
+                    !view
+                        .rows
+                        .iter()
+                        .any(|row| matches!(row.body, Body::SavedDraft))
+                );
+                assert_eq!(view.source, source);
+            });
+        }
+    }
+}
+
+#[gpui::test]
 fn snapshot_patches_replace_changed_rows_and_remove_a_stale_tail(cx: &mut gpui::TestAppContext) {
     let row = |role: &str, text: &str| vorkspace_core::transcript::Row {
         role: role.into(),

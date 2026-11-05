@@ -376,6 +376,7 @@ impl Conversation {
                                 true,
                                 disabled,
                             )
+                            .debug_selector(|| "composer-recover".into())
                             .child("Restore recovered input")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.resolve_composer_recovery(true, cx)
@@ -388,6 +389,7 @@ impl Conversation {
                                 false,
                                 disabled,
                             )
+                            .debug_selector(|| "composer-use-saved".into())
                             .child("Use saved input")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.resolve_composer_recovery(false, cx)
@@ -448,7 +450,7 @@ impl Conversation {
         self.composer_draft.resolving = true;
         let work=cx.background_executor().spawn(async move{
             let mut state=writer.lock().unwrap_or_else(|e|e.into_inner());
-            let (draft,remaining)={
+            let draft={
                 let store=locked(&state.store)?;
                 let latest=store.composer_draft(state.id)?;
                 let retain_submission = choice.payload["botSubmission"].is_object()
@@ -463,12 +465,15 @@ impl Conversation {
                 if !retain_submission {
                     store.clear_composer_recovery(state.id,&choice.owner)?;
                 }
-                ((payload,revision),store.composer_recoveries(state.id)?)
+                (payload,revision)
             };
             state.base=draft.0.clone();state.revision=draft.1;state.loaded=true;
             state.deleted=state.base["text"].as_str()==Some("") && state.base["attachments"].as_array().is_some_and(Vec::is_empty);
             if state.generation==generation{state.pending=None;}
-            state.recoveries=remaining;
+            // The durable submission receipt survives until acknowledgement,
+            // but this view has already resolved its recovery choice. Reloading
+            // receipts here would offer the same choice again and erase edits.
+            state.recoveries.retain(|record| record.owner != choice.owner);
             Ok::<_,String>(draft.0)
         });
         cx.spawn(async move |this, cx| {
