@@ -43,6 +43,8 @@ In Notes, **Preview** and **Source** display and edit authored note text. An att
 
 `notes.rs` owns note navigation, titles, tags and authored text; the embedded recording page owns capture state, transcript and summary drafts, edit leases and revision checks. SQLite keeps note content and the durable `note_recordings` relation, while recording files retain transcript and summary authority. Refresh and migration preserve user edits, and deletion tombstones prevent an old recording from recreating a deleted note. An untouched blank note or unnamed empty capture does not create a saved note.
 
+The first dropped image materializes a new note with its image reference; failed imports leave an untouched draft unsaved. Recording-note deletion validates the capture owner and revision, then commits the note deletion and its tombstone before removing files. UI callbacks only update presentation. Notes loading retries file cleanup for tombstoned recordings, including interruption between the database commit and file removal.
+
 Recording summaries contain the provider's completed final response after successful generation. Their renderer does not fetch images, interpret raw HTML, infer local file actions, or open arbitrary link schemes. HTTP, HTTPS and email links remain available. Authored Notes text and Inbox retain their existing attachment and project-link capabilities. Provider, model and prompt settings live in **Settings → Connectors → Notes**, whose Notes toggle also controls recording availability.
 
 See [the plain-English companion](eli5/native-pages.md) for the visible behavior.

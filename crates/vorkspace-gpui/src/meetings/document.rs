@@ -863,12 +863,30 @@ impl Page {
         self.sync_read_only(cx);
         let drafts = self.drafts.clone();
         let deleting_id = id.clone();
+        let note_store = self.note_store.clone();
         let work = cx.background_executor().spawn(async move {
             let _lease = lease;
             let _writer = drafts.writer.lock().unwrap();
-            meetings.delete(&deleting_id, revision)?;
-            drafts.clear(&deleting_id);
-            Ok(())
+            let mut committed = false;
+            let result = meetings.delete_with_commit(&deleting_id, Some(revision), || {
+                if let Some(store) = note_store {
+                    let store = vorkspace_runtime::runtime::locked(&store)?;
+                    let link = store
+                        .note_recordings()?
+                        .into_iter()
+                        .find(|link| link.recording_id == deleting_id)
+                        .ok_or("Recording is no longer attached to a note")?;
+                    store.delete_note(&link.note_id)?;
+                }
+                committed = true;
+                Ok(())
+            });
+            if committed {
+                drafts.clear(&deleting_id);
+                Ok(result.err())
+            } else {
+                result.map(|()| None)
+            }
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -876,9 +894,14 @@ impl Page {
                 this.deleting = false;
                 this.confirm_delete = false;
                 match result {
-                    Ok(()) => {
+                    Ok(cleanup_error) => {
                         this.emit_note_deleted(&id, cx);
                         this.install(None, cx);
+                        if let Some(error) = cleanup_error {
+                            this.notice = Some(format!(
+                                "Note deleted. Recording cleanup will retry: {error}"
+                            ));
+                        }
                     }
                     Err(error) => this.fail(error, cx),
                 }

@@ -10,4 +10,6 @@ In a note, **Preview** shows your written text and **Source** edits it. An attac
 
 Summaries and authored note text use the same native formatting, and you can select and copy their text. Summaries save the finished response after the provider succeeds. They cannot load hidden images or open files on your Mac. Your authored notes and connector items keep their normal attachment features. In **Settings → Connectors → Notes**, you can choose the summary provider, model and prompt, or turn Notes and recording controls off while keeping saved data.
 
+A note can start with a dropped image. A failed image import leaves a blank draft unsaved. Deleting a recorded note saves the deletion before cleaning up its recording files, so closing the window cannot leave a broken note behind. If cleanup is interrupted, opening Notes retries it without bringing the note back.
+
 The [technical guide](../native-pages.md) records the shared sizes and implementation boundaries.

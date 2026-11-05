@@ -4,23 +4,33 @@ use super::*;
 type Loaded = (Vec<Note>, HashMap<String, String>);
 
 pub(super) fn load(store: &Database) -> Result<Loaded, String> {
-    let (root, known) = {
+    let (root, known, deleted) = {
         let store = locked(store)?;
         let ids: HashSet<_> = store
             .list_notes()?
             .into_iter()
             .map(|note| note.id)
             .collect();
-        let known: HashSet<_> = store
-            .note_recordings()?
+        let links = store.note_recordings()?;
+        let deleted: Vec<_> = links
+            .iter()
+            .filter(|link| link.deleted)
+            .map(|link| link.recording_id.clone())
+            .collect();
+        let known: HashSet<_> = links
             .into_iter()
             .filter(|link| link.deleted || ids.contains(&link.note_id))
             .map(|link| link.recording_id)
             .collect();
-        (store.data_dir().map(PathBuf::from), known)
+        (store.data_dir().map(PathBuf::from), known, deleted)
     };
     if let Some(root) = root {
         let meetings = vorkspace_meetings::Meetings::open(&root)?;
+        for id in deleted {
+            // SQLite is the durable deletion authority. A crash or file error
+            // after its commit leaves cleanup to the next load, never import.
+            let _ = meetings.delete_with_commit(&id, None, || Ok(()));
+        }
         let rows = meetings.list()?;
         for row in rows.as_array().into_iter().flatten() {
             let Some(id) = row["meeting"]["id"].as_str() else {
@@ -157,6 +167,7 @@ impl Notes {
             && note.body.trim().is_empty()
             && note.tags.is_empty()
             && !self.recordings.contains_key(&note.id)
+            && self.image_note.as_ref() != Some(&note.id)
         {
             self.notes.retain(|saved| saved.id != note.id);
             self.ephemeral.remove(&note.id);
@@ -181,6 +192,73 @@ mod tests {
         ));
         let meetings = Meetings::open(root.path()).unwrap();
         (root, store, meetings)
+    }
+
+    #[test]
+    fn deletion_commit_failure_keeps_the_note_and_recording_recoverable() {
+        let (root, store, meetings) = fixture();
+        let id = "0123456789abcdef0123456789abcdef";
+        meetings.prepare_document(id).unwrap();
+        let note = locked(&store)
+            .unwrap()
+            .import_recording_note(id, "Planning", 1)
+            .unwrap()
+            .unwrap();
+        let connection = rusqlite::Connection::open(root.path().join("notes.db")).unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_delete BEFORE DELETE ON notes BEGIN SELECT RAISE(ABORT, 'injected failure'); END;").unwrap();
+        let result =
+            meetings.delete_with_commit(id, Some(0), || locked(&store)?.delete_note(&note.id));
+        assert!(result.unwrap_err().contains("injected failure"));
+        assert!(meetings.read(id).is_ok());
+        assert!(
+            locked(&store)
+                .unwrap()
+                .get_note(&note.id)
+                .unwrap()
+                .is_some()
+        );
+        assert!(!locked(&store).unwrap().note_recordings().unwrap()[0].deleted);
+        connection
+            .execute_batch("DROP TRIGGER reject_delete")
+            .unwrap();
+        meetings
+            .delete_with_commit(id, Some(0), || locked(&store)?.delete_note(&note.id))
+            .unwrap();
+        assert!(load(&store).unwrap().0.is_empty());
+        assert!(meetings.read(id).is_err());
+    }
+
+    #[test]
+    fn deletion_recovers_after_the_database_commit_without_a_view_callback() {
+        let (root, store, meetings) = fixture();
+        let id = "0123456789abcdef0123456789abcdef";
+        meetings.prepare_document(id).unwrap();
+        let note = locked(&store)
+            .unwrap()
+            .import_recording_note(id, "Planning", 1)
+            .unwrap()
+            .unwrap();
+        let result = meetings.delete_with_commit(id, Some(0), || {
+            locked(&store)?.delete_note(&note.id)?;
+            Err("interrupted after commit".into())
+        });
+        assert!(result.is_err());
+        assert!(
+            meetings.read(id).is_ok(),
+            "no files removed before the interruption"
+        );
+        drop(store);
+        let reopened = Arc::new(Mutex::new(
+            Store::open(&root.path().join("notes.db")).unwrap(),
+        ));
+        for _ in 0..2 {
+            let (notes, links) = load(&reopened).unwrap();
+            assert!(notes.is_empty());
+            assert!(links.is_empty());
+            assert!(meetings.read(id).is_err());
+            assert!(!root.path().join("recordings").join(id).exists());
+            assert!(locked(&reopened).unwrap().note_recordings().unwrap()[0].deleted);
+        }
     }
 
     #[test]

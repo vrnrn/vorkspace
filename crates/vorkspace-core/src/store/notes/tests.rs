@@ -19,6 +19,37 @@ fn schema_version(store: &Store) -> i64 {
 }
 
 #[test]
+fn image_import_materializes_only_new_drafts_and_rejects_failed_or_deleted_notes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("notes.db");
+    let image = root.path().join("first.svg");
+    std::fs::write(&image, "<svg/>").unwrap();
+    let store = Store::open(&path).unwrap();
+    let draft = input("image-first", "", "");
+    assert!(store
+        .save_note_image(&draft.id, &root.path().join("absent.svg"), Some(&draft))
+        .is_err());
+    assert!(store.get_note(&draft.id).unwrap().is_none());
+    let asset = store
+        .save_note_image(&draft.id, &image, Some(&draft))
+        .unwrap();
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(
+        reopened.get_note(&draft.id).unwrap().unwrap().body,
+        crate::notes::image_markdown(&asset)
+    );
+    store.delete_note(&draft.id).unwrap();
+    assert!(store.save_note_image(&draft.id, &image, None).is_err());
+    let draft = input("deleted-recording", "", "");
+    store.attach_note_recording(&draft.id, RECORDING_A).unwrap();
+    store.delete_note(&draft.id).unwrap();
+    assert!(store
+        .save_note_image(&draft.id, &image, Some(&draft))
+        .is_err());
+    assert!(store.get_note(&draft.id).unwrap().is_none());
+}
+
+#[test]
 fn desktop_note_crud_keeps_source_tags_and_project_moves() {
     let store = store();
     let session = store.create("codex", "/project").unwrap();

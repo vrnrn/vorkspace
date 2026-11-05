@@ -56,7 +56,7 @@ pub(crate) struct Notes {
     loading: bool,
     error: Option<String>,
     debounce: Option<Task<()>>,
-    image_busy: bool,
+    image_note: Option<String>,
     image_drag: bool,
     list_width: f32,
     list_scroll: ScrollHandle,
@@ -115,7 +115,7 @@ impl Notes {
                             this.show_recording = true;
                         }
                     }
-                    crate::meetings::Event::Deleted(id) => this.delete_saved_note(id, cx),
+                    crate::meetings::Event::Deleted(id) => this.forget_note(id, cx),
                     crate::meetings::Event::Changed => this.refresh(cx),
                     crate::meetings::Event::SummaryReady(id) => {
                         if this
@@ -180,7 +180,7 @@ impl Notes {
             loading: true,
             error: None,
             debounce: None,
-            image_busy: false,
+            image_note: None,
             image_drag: false,
             list_width: page::LIST_WIDTH,
             list_scroll: ScrollHandle::new(),
@@ -249,6 +249,9 @@ impl Notes {
     }
 
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.image_note.is_some() {
+            return;
+        }
         self.flush(cx);
         if self.dirty {
             return;
@@ -542,6 +545,9 @@ impl Notes {
         let Some(id) = self.selected.clone() else {
             return;
         };
+        if self.image_note.as_ref() == Some(&id) {
+            return;
+        }
         if !self.confirm_delete {
             self.confirm_delete = true;
             cx.notify();
@@ -562,18 +568,22 @@ impl Notes {
         }
         let result = locked(&self.store).and_then(|store| store.delete_note(id));
         match result {
-            Ok(()) => {
-                self.revision = self.revision.wrapping_add(1);
-                self.notes.retain(|note| note.id != id);
-                self.modes.remove(id);
-                self.ephemeral.remove(id);
-                self.recordings.remove(id);
-                if selected {
-                    self.dirty = false;
-                    self.load_selection(self.notes.first().map(|note| note.id.clone()), cx);
-                }
-            }
+            Ok(()) => self.forget_note(id, cx),
             Err(error) => self.error = Some(error),
+        }
+        cx.notify();
+    }
+
+    fn forget_note(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.revision = self.revision.wrapping_add(1);
+        self.notes.retain(|note| note.id != id);
+        self.modes.remove(id);
+        self.ephemeral.remove(id);
+        self.recordings.remove(id);
+        if self.selected.as_deref() == Some(id) {
+            self.debounce = None;
+            self.dirty = false;
+            self.load_selection(self.notes.first().map(|note| note.id.clone()), cx);
         }
         cx.notify();
     }
@@ -632,7 +642,7 @@ impl Notes {
     }
 
     fn add_images(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        if paths.is_empty() || self.image_busy {
+        if paths.is_empty() || self.image_note.is_some() {
             return;
         }
         let Some(id) = self.selected.clone() else {
@@ -645,14 +655,19 @@ impl Notes {
             length..length
         };
         let store = self.store.clone();
-        self.image_busy = true;
+        let draft = self
+            .draft(cx)
+            .filter(|note| self.ephemeral.contains(&note.id))
+            .map(|note| note.upsert(false));
+        self.image_note = Some(id.clone());
+        self.revision = self.revision.wrapping_add(1);
         self.image_drag = false;
         let work = cx.background_executor().spawn(async move {
             let store = locked(&store)?;
             let mut images = Vec::new();
             let mut failure = None;
             for path in paths {
-                match store.save_note_image(&id, &path) {
+                match store.save_note_image(&id, &path, draft.as_ref()) {
                     Ok(image) => images.push(image),
                     Err(error) => failure = Some(error),
                 }
@@ -667,9 +682,10 @@ impl Notes {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.image_busy = false;
+                this.image_note = None;
                 match result {
                     Ok((id, images)) => {
+                        this.ephemeral.remove(&id);
                         let block = images
                             .iter()
                             .map(notes::image_markdown)
@@ -851,8 +867,8 @@ impl Notes {
         } else {
             !note.body.trim().is_empty()
         };
-        let can_delete =
-            !attached || (recording_ready && self.recording.read(cx).can_delete_note());
+        let can_delete = self.image_note.as_ref() != Some(&note.id)
+            && (!attached || (recording_ready && self.recording.read(cx).can_delete_note()));
         let project = page::action("note-move-project", "Move note to project", true)
             .relative()
             .min_w_0()
@@ -1110,7 +1126,7 @@ impl Notes {
             .when(!self.source, |d| {
                 d.when_some(self.document.clone(), |d, preview| d.child(preview))
             })
-            .when(self.image_drag || self.image_busy, |d| {
+            .when(self.image_drag || self.image_note.is_some(), |d| {
                 d.child(
                     div()
                         .absolute()
@@ -1122,7 +1138,7 @@ impl Notes {
                         .justify_center()
                         .text_size(px(12.))
                         .text_color(content(0.7))
-                        .child(if self.image_busy {
+                        .child(if self.image_note.is_some() {
                             "Adding images…"
                         } else {
                             "Drop images here"
@@ -1587,6 +1603,55 @@ mod tests {
                 assert!(notes.dirty);
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_new_note_can_start_with_an_image_and_reopen(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("notes.db");
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            vorkspace_core::store::Store::open(&path).unwrap(),
+        ));
+        let image = root.path().join("first.svg");
+        std::fs::write(
+            &image,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>"#,
+        )
+        .unwrap();
+        let (window, mut visual) = view(cx, &store);
+        let id = window
+            .update(&mut visual, |notes, window, cx| {
+                notes.create(window, cx);
+                let id = notes.selected.clone().unwrap();
+                assert!(locked(&store).unwrap().get_note(&id).unwrap().is_none());
+                notes.add_images(vec![image], cx);
+                notes.create(window, cx);
+                assert!(
+                    notes.notes.iter().any(|note| note.id == id),
+                    "pending image belongs to its original draft"
+                );
+                id
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |notes, _, cx| {
+                assert!(notes.error.is_none(), "{:?}", notes.error);
+                assert!(!notes.ephemeral.contains(&id));
+                notes.select(id.clone(), cx);
+                notes.flush(cx);
+            })
+            .unwrap();
+        let reopened = vorkspace_core::store::Store::open(&path).unwrap();
+        let saved = reopened.get_note(&id).unwrap().unwrap();
+        assert_eq!(saved.body.matches("![").count(), 1);
+        assert!(saved.body.contains("/note-assets/"));
+        assert_eq!(
+            std::fs::read_dir(root.path().join("note-assets").join(id))
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     #[gpui::test]

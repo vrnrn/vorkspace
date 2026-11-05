@@ -744,12 +744,18 @@ impl Store {
         Ok(())
     }
 
-    pub fn save_note_image(&self, note_id: &str, source: &Path) -> Result<NoteImageAsset, String> {
+    pub fn save_note_image(
+        &self,
+        note_id: &str,
+        source: &Path,
+        new_note: Option<&NoteUpsert>,
+    ) -> Result<NoteImageAsset, String> {
         valid_id(note_id)?;
         if self.shared.is_some() {
             self.shared_writable()?;
         }
-        if self.get_note(note_id)?.is_none() {
+        let missing = self.get_note(note_id)?.is_none();
+        if missing && new_note.is_none_or(|note| note.id != note_id) {
             return Err("Note no longer exists".into());
         }
         let source = source.canonicalize().map_err(|e| e.to_string())?;
@@ -798,11 +804,44 @@ impl Store {
         let root = self.data_dir().ok_or("Note image storage is unavailable")?;
         let directory = root.join("note-assets").join(note_id);
         std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
-        std::fs::copy(source, directory.join(&filename)).map_err(|e| e.to_string())?;
-        Ok(NoteImageAsset {
+        let destination = directory.join(&filename);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut output = options.open(&destination).map_err(|e| e.to_string())?;
+        let copied = (|| -> std::io::Result<()> {
+            std::io::copy(&mut std::fs::File::open(source)?, &mut output)?;
+            output.sync_all()?;
+            std::fs::File::open(&directory)?.sync_all()
+        })();
+        if let Err(error) = copied {
+            let _ = std::fs::remove_file(&destination);
+            return Err(error.to_string());
+        }
+        let image = NoteImageAsset {
             name,
             markdown_path: format!("/note-assets/{note_id}/{filename}"),
-        })
+        };
+        if missing {
+            // The first image is content. Publish its reference with the new
+            // note so a dropped view cannot leave an empty saved note behind.
+            // Only an explicitly new draft may create a row; ordinary imports
+            // still reject deleted notes, and recording tombstones reject both.
+            let mut note = new_note.unwrap().clone();
+            if !note.body.is_empty() && !note.body.ends_with("\n\n") {
+                note.body.push_str("\n\n");
+            }
+            note.body.push_str(&crate::notes::image_markdown(&image));
+            if let Err(error) = self.upsert_note(&note) {
+                let _ = std::fs::remove_file(destination);
+                return Err(error);
+            }
+        }
+        Ok(image)
     }
 
     pub fn note_image_path(&self, asset: &str) -> Result<PathBuf, String> {

@@ -396,6 +396,18 @@ impl Meetings {
         value(meeting)
     }
     pub fn delete(&self, id: &str, expected_revision: u64) -> Result<(), String> {
+        self.delete_with_commit(id, Some(expected_revision), || Ok(()))
+    }
+
+    /// Validate capture ownership and revision before committing the owner's
+    /// durable deletion. File removal follows that commit and is retryable.
+    /// `None` is reserved for cleanup authorized by an existing tombstone.
+    pub fn delete_with_commit(
+        &self,
+        id: &str,
+        expected_revision: Option<u64>,
+        commit: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
         use rustix::fs::{AtFlags, OFlags};
         use std::{io::ErrorKind, os::unix::ffi::OsStrExt};
 
@@ -406,12 +418,27 @@ impl Meetings {
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.to_string()),
         };
+        let remove_document = || {
+            if let Some(documents) = open(directory::Directory::open(
+                &self.directory.join("meetings"),
+                false,
+            ))? {
+                documents
+                    .unlink(
+                        metadata.file_name().ok_or("Invalid meeting filename")?,
+                        AtFlags::empty(),
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+            self.remove_draft(id)
+        };
         let Some(recordings) = open(directory::Directory::open(
             &self.directory.join("recordings"),
             false,
         ))?
         else {
-            return Ok(());
+            commit()?;
+            return remove_document();
         };
         let retired = format!(".deleted-{id}");
         let retired = OsStr::new(&retired);
@@ -420,9 +447,13 @@ impl Meetings {
             if live.is_some() {
                 return Err("Meeting deletion found both a live and retired recording.".into());
             }
+            commit()?;
             dir
         } else {
-            let Some(dir) = live else { return Ok(()) };
+            let Some(dir) = live else {
+                commit()?;
+                return remove_document();
+            };
             let owner = dir
                 .file(OsStr::new("owner.lock"), OFlags::RDWR)
                 .map_err(|error| error.to_string())?;
@@ -434,13 +465,17 @@ impl Meetings {
                     error.to_string()
                 });
             }
-            let mut meeting = self.metadata(id)?;
-            meeting.adopt_sequence(recording::read(&self.directory, id)?.sequence())?;
-            if meeting.revision != expected_revision {
-                return Err(
-                    "This meeting changed. Review the latest version before deleting it.".into(),
-                );
+            if let Some(expected_revision) = expected_revision {
+                let mut meeting = self.metadata(id)?;
+                meeting.adopt_sequence(recording::read(&self.directory, id)?.sequence())?;
+                if meeting.revision != expected_revision {
+                    return Err(
+                        "This meeting changed. Review the latest version before deleting it."
+                            .into(),
+                    );
+                }
             }
+            commit()?;
             // Retire the recording root before removing either data file. Its
             // reserved name makes cleanup retryable without republishing it.
             recordings
@@ -448,18 +483,7 @@ impl Meetings {
                 .map_err(|error| error.to_string())?;
             dir
         };
-        if let Some(documents) = open(directory::Directory::open(
-            &self.directory.join("meetings"),
-            false,
-        ))? {
-            documents
-                .unlink(
-                    metadata.file_name().ok_or("Invalid meeting filename")?,
-                    AtFlags::empty(),
-                )
-                .map_err(|error| error.to_string())?;
-        }
-        self.remove_draft(id)?;
+        remove_document()?;
         for entry in dir.entries().map_err(|error| error.to_string())? {
             let entry = entry.map_err(|error| error.to_string())?;
             let name = entry.file_name().to_bytes();
