@@ -1,12 +1,19 @@
 use super::*;
-use alacritty_terminal::index::Line;
 use gpui::{AppContext, Modifiers};
 
 fn key(spec: &str) -> Keystroke {
     Keystroke::parse(spec).unwrap()
 }
 fn bytes(spec: &str) -> Option<Vec<u8>> {
-    key_bytes(&key(spec), TermMode::empty())
+    key_bytes(
+        &key(spec),
+        &mut engine(GridSize {
+            columns: 80,
+            lines: 24,
+        })
+        .lock()
+        .unwrap(),
+    )
 }
 
 #[test]
@@ -14,14 +21,11 @@ fn output_bursts_queue_one_repaint_and_preserve_ordered_effects() {
     let (listener, events) = Listener::channel();
     for _ in 0..10_000 {
         listener.send_event(TermEvent::Wakeup);
-        listener.send_event(TermEvent::MouseCursorDirty);
-        listener.send_event(TermEvent::CursorBlinkingChange);
+        listener.send_event(TermEvent::Wakeup);
+        listener.send_event(TermEvent::Wakeup);
     }
     listener.send_event(TermEvent::PtyWrite("reply".into()));
-    listener.send_event(TermEvent::ClipboardStore(
-        alacritty_terminal::term::ClipboardType::Clipboard,
-        "clipboard".into(),
-    ));
+    listener.send_event(TermEvent::ClipboardStore("clipboard".into()));
     listener.send_event(TermEvent::Exit);
     assert_eq!(
         events.len(),
@@ -31,7 +35,7 @@ fn output_bursts_queue_one_repaint_and_preserve_ordered_effects() {
     assert!(matches!(events.try_recv(), Ok(TermEvent::Wakeup)));
     assert!(matches!(events.try_recv(), Ok(TermEvent::PtyWrite(text)) if text == "reply"));
     assert!(
-        matches!(events.try_recv(), Ok(TermEvent::ClipboardStore(_, text)) if text == "clipboard")
+        matches!(events.try_recv(), Ok(TermEvent::ClipboardStore(text)) if text == "clipboard")
     );
     assert!(matches!(events.try_recv(), Ok(TermEvent::Exit)));
     assert!(events.is_empty());
@@ -57,13 +61,7 @@ fn background_terminal_output_keeps_grid_and_effects_without_repaints(
         terminal.visible = false;
         write_note(&terminal.term, "background output");
         terminal.on_event(TermEvent::Wakeup, cx);
-        terminal.on_event(
-            TermEvent::ClipboardStore(
-                alacritty_terminal::term::ClipboardType::Clipboard,
-                "kept".into(),
-            ),
-            cx,
-        );
+        terminal.on_event(TermEvent::ClipboardStore("kept".into()), cx);
     });
     cx.run_until_parked();
     assert_eq!(notifications.get(), 0);
@@ -72,13 +70,7 @@ fn background_terminal_output_keeps_grid_and_effects_without_repaints(
         Some("kept".into())
     );
     terminal.update(cx, |terminal, cx| {
-        let text: String = terminal
-            .term
-            .lock()
-            .grid()
-            .display_iter()
-            .map(|cell| cell.c)
-            .collect();
+        let text = terminal.fixture_screen();
         assert!(text.contains("background output"));
         terminal.visible = true;
         terminal.on_event(TermEvent::Wakeup, cx);
@@ -102,19 +94,20 @@ fn dragging_at_edges_extends_selection_through_history(cx: &mut gpui::TestAppCon
             .collect::<Vec<_>>()
             .join("\r\n");
         write_note(&terminal.term, &output);
-        terminal.term.lock().selection = Some(Selection::new(
-            SelectionType::Simple,
-            GridPoint::new(Line(3), Column(6)),
-            Side::Right,
-        ));
+        terminal
+            .term
+            .lock()
+            .unwrap()
+            .select(6, 3, true, SelectionKind::Simple, false)
+            .unwrap();
         terminal.selecting = true;
         // Holding a click alone must not scroll.
         assert!(terminal.scroll_selection(cx));
-        assert_eq!(terminal.term.lock().grid().display_offset(), 0);
+        assert_eq!(terminal.term.lock().unwrap().display_offset(), 0);
         terminal.selection_pointer = Some(point(px(0.), px(0.)));
         assert!(terminal.scroll_selection(cx));
-        assert_eq!(terminal.term.lock().grid().display_offset(), 1);
-        let text = terminal.term.lock().selection_to_string().unwrap();
+        assert_eq!(terminal.term.lock().unwrap().display_offset(), 1);
+        let text = terminal.term.lock().unwrap().selection_text().unwrap();
         assert!(text.contains("line-25"), "{text}");
         assert!(text.contains("line-29"), "{text}");
         // A second tick at the same pointer position must keep extending.
@@ -123,17 +116,18 @@ fn dragging_at_edges_extends_selection_through_history(cx: &mut gpui::TestAppCon
             terminal
                 .term
                 .lock()
-                .selection_to_string()
+                .unwrap()
+                .selection_text()
                 .unwrap()
                 .contains("line-24")
         );
         terminal.selection_pointer = Some(point(px(0.), px(32.)));
         terminal.scroll_selection(cx);
-        assert_eq!(terminal.term.lock().grid().display_offset(), 2);
+        assert_eq!(terminal.term.lock().unwrap().display_offset(), 2);
         // Dragging past the bottom returns toward the live screen.
         terminal.selection_pointer = Some(point(px(0.), px(80.)));
         terminal.scroll_selection(cx);
-        assert_eq!(terminal.term.lock().grid().display_offset(), 0);
+        assert_eq!(terminal.term.lock().unwrap().display_offset(), 0);
         terminal.stop_selection();
         assert!(!terminal.scroll_selection(cx));
     });
@@ -144,8 +138,13 @@ fn keys_encode_like_xterm_with_the_macos_editing_shortcuts() {
     assert_eq!(bytes("enter"), Some(b"\r".to_vec()));
     assert_eq!(bytes("backspace"), Some(b"\x7f".to_vec()));
     assert_eq!(bytes("up"), Some(b"\x1b[A".to_vec()));
+    let app_cursor = engine(GridSize {
+        columns: 80,
+        lines: 24,
+    });
+    app_cursor.lock().unwrap().write(b"\x1b[?1h");
     assert_eq!(
-        key_bytes(&key("up"), TermMode::APP_CURSOR),
+        key_bytes(&key("up"), &mut app_cursor.lock().unwrap()),
         Some(b"\x1bOA".to_vec())
     );
     assert_eq!(bytes("shift-right"), Some(b"\x1b[1;2C".to_vec()));
@@ -170,7 +169,10 @@ fn keys_encode_like_xterm_with_the_macos_editing_shortcuts() {
         key: "a".into(),
         key_char: Some("a".into()),
     };
-    assert_eq!(key_bytes(&typed, TermMode::empty()), Some(b"a".to_vec()));
+    assert_eq!(
+        key_bytes(&typed, &mut app_cursor.lock().unwrap()),
+        Some(b"a".to_vec())
+    );
 }
 
 #[test]
@@ -200,9 +202,23 @@ fn colours_follow_the_dark_palette_and_xterm_cube() {
     assert_eq!(indexed_rgb(196), 0xff0000);
     assert_eq!(indexed_rgb(232), 0x080808);
     assert_eq!(indexed_rgb(255), 0xeeeeee);
-    let colors = Colors::default();
-    assert_eq!(hex(color_rgb(257, &colors)), OSC_BACKGROUND);
-    assert_eq!(hex(color_rgb(258, &colors)), ACCENT);
+    let term = engine(GridSize {
+        columns: 20,
+        lines: 4,
+    });
+    let mut term = term.lock().unwrap();
+    term.write(b"\x1b]11;?\x07\x1b]12;?\x07");
+    let replies = term
+        .take_effects()
+        .into_iter()
+        .filter_map(|effect| match effect {
+            vorkspace_terminal::Effect::PtyWrite(bytes) => {
+                Some(String::from_utf8_lossy(&bytes).into_owned())
+            }
+            _ => None,
+        })
+        .collect::<String>();
+    assert!(replies.contains("rgb:1717/1717/1717"), "{replies:?}");
 }
 
 #[test]
@@ -216,18 +232,7 @@ fn a_login_shell_runs_and_its_output_reaches_the_grid() {
     let sender = spawned.sender.expect("the shell started");
     assert!(spawned.shell_pid > 1);
     let _ = sender.send(Msg::Input(Cow::Borrowed(b"printf 'bot%scode\\n' -\r")));
-    let screen = || {
-        let term = spawned.term.lock();
-        let grid = term.grid();
-        (0..grid.screen_lines())
-            .map(|line| {
-                (0..grid.columns())
-                    .map(|c| grid[Line(line as i32)][Column(c)].c)
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    let screen = || spawned.term.lock().unwrap().frame().unwrap().text();
     let mut seen = false;
     for _ in 0..250 {
         std::thread::sleep(Duration::from_millis(20));
@@ -237,7 +242,7 @@ fn a_login_shell_runs_and_its_output_reaches_the_grid() {
         }
     }
     assert!(seen, "{}", screen());
-    assert_eq!(spawned.term.lock().columns(), 60);
+    assert_eq!(spawned.term.lock().unwrap().frame().unwrap().columns, 60);
     // The shell owns the foreground while it waits at a prompt.
     assert_eq!(foreground_label(spawned.master_fd, spawned.shell_pid), None);
     let _ = sender.send(Msg::Input(Cow::Borrowed(b"exit\r")));
@@ -250,4 +255,272 @@ fn a_login_shell_runs_and_its_output_reaches_the_grid() {
         }
     }
     assert!(exited);
+}
+
+fn command_pty(
+    command: &str,
+    size: GridSize,
+) -> (
+    pty::Pty,
+    Arc<Mutex<Engine>>,
+    async_channel::Receiver<TermEvent>,
+) {
+    let term = engine(size);
+    let (listener, events) = Listener::channel();
+    let pty = pty::Pty::spawn(
+        "/bin/sh",
+        &["-c".into(), command.into()],
+        &std::env::temp_dir(),
+        HashMap::new(),
+        size,
+        term.clone(),
+        listener,
+    )
+    .unwrap();
+    (pty, term, events)
+}
+fn wait_for_exit(events: &async_channel::Receiver<TermEvent>) -> std::process::ExitStatus {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        while let Ok(event) = events.try_recv() {
+            if let TermEvent::ChildExit(status) = event {
+                return status;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("PTY child did not exit");
+}
+
+#[test]
+fn pty_drains_final_output_before_publishing_child_exit() {
+    let (_pty, term, events) = command_pty(
+        "printf '\\033[31mfinal-output\\033[0m'; exit 7",
+        GridSize {
+            columns: 40,
+            lines: 4,
+        },
+    );
+    assert_eq!(wait_for_exit(&events).code(), Some(7));
+    let frame = term.lock().unwrap().frame().unwrap();
+    assert!(frame.text().contains("final-output"));
+    assert_eq!(frame.rows[0][0].foreground, ANSI[1]);
+}
+
+#[test]
+fn pty_resize_precedes_subsequent_input() {
+    let size = GridSize {
+        columns: 40,
+        lines: 4,
+    };
+    let (pty, term, events) = command_pty("read ignored; stty size", size);
+    let next = GridSize {
+        columns: 42,
+        lines: 7,
+    };
+    term.lock().unwrap().resize(42, 7, 8, 16).unwrap();
+    pty.sender
+        .send(Msg::Resize {
+            size: next,
+            cell_width: 8,
+            cell_height: 16,
+        })
+        .unwrap();
+    pty.sender
+        .send(Msg::Input(Cow::Borrowed(b"continue\r")))
+        .unwrap();
+    assert!(wait_for_exit(&events).success());
+    assert!(
+        term.lock()
+            .unwrap()
+            .frame()
+            .unwrap()
+            .text()
+            .contains("7 42")
+    );
+}
+
+#[test]
+fn pty_close_interrupts_a_full_input_queue_and_reaps_an_uncooperative_shell() {
+    use std::os::unix::process::ExitStatusExt;
+    let (pty, term, events) = command_pty(
+        "trap '' HUP; printf ready; while :; do :; done",
+        GridSize {
+            columns: 40,
+            lines: 4,
+        },
+    );
+    // The marker establishes that the child installed its hangup policy.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut ready = false;
+    while std::time::Instant::now() < deadline {
+        if matches!(events.try_recv(), Ok(TermEvent::Wakeup)) {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(ready, "shell did not become ready");
+    pty.sender
+        .send(Msg::Input(Cow::Owned(vec![b'x'; 4 * 1024 * 1024])))
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut echo_seen = false;
+    while std::time::Instant::now() < deadline {
+        if term.lock().unwrap().frame().unwrap().text().contains("xxx") {
+            echo_seen = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        echo_seen,
+        "the PTY accepted and echoed part of the large paste"
+    );
+    pty.sender.send(Msg::Shutdown).unwrap();
+    assert_eq!(wait_for_exit(&events).signal(), Some(libc::SIGKILL));
+    assert_eq!(
+        unsafe { libc::kill(pty.shell_pid as i32, 0) },
+        -1,
+        "the child was reaped"
+    );
+}
+
+#[test]
+fn closing_the_login_shell_also_kills_an_attached_job_that_ignores_hangup() {
+    shutdown_attached_job(false, false);
+}
+
+#[test]
+fn closing_the_login_shell_also_kills_a_background_job_that_ignores_hangup() {
+    shutdown_attached_job(true, false);
+}
+
+#[test]
+fn normal_shell_exit_cleans_up_attached_background_jobs() {
+    shutdown_attached_job(true, true);
+}
+
+fn shutdown_attached_job(background: bool, normal_exit: bool) {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let size = GridSize {
+        columns: 120,
+        lines: 6,
+    };
+    let term = engine(size);
+    let (listener, events) = Listener::channel();
+    let directory = tempfile::tempdir().unwrap();
+    let pid_file = directory.path().join("job.pid");
+    let pty = pty::Pty::spawn(
+        "/bin/sh",
+        &["-i".into()],
+        &std::env::temp_dir(),
+        HashMap::from([(
+            "VORKSPACE_TEST_JOB_PID".into(),
+            pid_file.to_string_lossy().into_owned(),
+        )]),
+        size,
+        term.clone(),
+        listener,
+    )
+    .unwrap();
+    let command = format!(
+        "/bin/sh -c 'trap \"\" HUP; printf %s $$ > \"$VORKSPACE_TEST_JOB_PID\"; printf \"job%sready\" -; while :; do :; done'{}\r",
+        if background { " &" } else { "" }
+    );
+    pty.sender
+        .send(Msg::Input(Cow::Owned(command.into_bytes())))
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut ready = false;
+    while std::time::Instant::now() < deadline {
+        if term
+            .lock()
+            .unwrap()
+            .frame()
+            .unwrap()
+            .text()
+            .contains("job-ready")
+        {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(ready, "the attached job installed its hangup policy");
+    let group = std::fs::read_to_string(pid_file)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+    struct Cleanup(i32, i32);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            unsafe {
+                if libc::getsid(self.0) == self.1 {
+                    libc::kill(-self.0, libc::SIGKILL);
+                }
+            }
+        }
+    }
+    let _cleanup = Cleanup(group, pty.shell_pid as i32);
+    assert!(group > 1 && group != pty.shell_pid as i32);
+    assert_eq!(unsafe { libc::getsid(group) }, pty.shell_pid as i32);
+    assert_eq!(unsafe { libc::getpgid(group) }, group);
+    if background {
+        assert_ne!(unsafe { libc::tcgetpgrp(pty.master.as_raw_fd()) }, group);
+    }
+    let queue = unsafe { libc::kqueue() };
+    assert!(queue >= 0);
+    let queue = unsafe { std::fs::File::from_raw_fd(queue) };
+    let change = libc::kevent {
+        ident: group as usize,
+        filter: libc::EVFILT_PROC,
+        flags: libc::EV_ADD | libc::EV_ONESHOT,
+        fflags: libc::NOTE_EXIT,
+        data: 0,
+        udata: std::ptr::null_mut(),
+    };
+    assert_eq!(
+        unsafe {
+            libc::kevent(
+                queue.as_raw_fd(),
+                &change,
+                1,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        },
+        0
+    );
+    if normal_exit {
+        pty.sender
+            .send(Msg::Input(Cow::Borrowed(b"exit\r")))
+            .unwrap();
+    } else {
+        pty.sender.send(Msg::Shutdown).unwrap();
+    }
+    let _ = wait_for_exit(&events);
+    let mut exited: libc::kevent = unsafe { std::mem::zeroed() };
+    let timeout = libc::timespec {
+        tv_sec: 5,
+        tv_nsec: 0,
+    };
+    assert_eq!(
+        unsafe {
+            libc::kevent(
+                queue.as_raw_fd(),
+                std::ptr::null(),
+                0,
+                &mut exited,
+                1,
+                &timeout,
+            )
+        },
+        1,
+        "the attached job group must exit too"
+    );
+    let exited_pid = exited.ident;
+    assert_eq!(exited_pid, group as usize);
+    assert!(exited.fflags & libc::NOTE_EXIT != 0);
 }

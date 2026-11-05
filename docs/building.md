@@ -6,6 +6,7 @@ The root Cargo workspace owns the desktop app, its background helper, and the sh
 
 - macOS 26 or newer. The native deployment target and both app bundles require 26.0.
 - Current stable Rust. The repository does not pin a toolchain.
+- Zig 0.17.x to compile the bundled libghostty-vt terminal engine. Cargo builds and links it statically; the installed app does not require Zig.
 - Node.js 24 or newer.
 - Xcode with macOS 26 or newer platform components, for Metal and for `xcrun swiftc`, which compiles the clipboard panel and native speech bridge.
 - [`cargo-nextest`](https://nexte.st) to run Rust tests: `cargo install --locked cargo-nextest`.

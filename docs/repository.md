@@ -9,6 +9,7 @@ The desktop is a Rust workspace that runs as the app plus a small helper process
 | `crates/vorkspace-ui/` | UI foundation: preferences, theme and palettes, the animation clock, motion, and small shared marks |
 | `crates/vorkspace-runtime/` | Session execution, remote session binding, and persistence coalescing |
 | `crates/vorkspace-editor/` | Editor analysis (bounded QuickJS) and native syntax (tree-sitter grammars) |
+| `crates/vorkspace-terminal/` | Safe Rust owner and public C adapter for the statically linked libghostty-vt terminal engine |
 | `crates/vorkspace-model/` | Plain data models: pane layout, Markdown elements, Git graph and checkout cache |
 | `crates/vorkspace-helper/` | Background clipboard and dictation, native meeting capture, and helper IPC |
 | `crates/vorkspace-meetings/` | Shared transcript storage, editable meeting documents, and summary generation |
@@ -23,6 +24,7 @@ The desktop is a Rust workspace that runs as the app plus a small helper process
 | `scripts/assets/` | Icon generation tools, run by hand when an upstream icon set changes |
 | `crates/vorkspace-gpui/fixtures/` | Visual SDK sample programs embedded as development fixtures |
 | `vendor/` | The project's own GPUI fork for macOS: framework, Metal renderer, and platform layer. Also a patched `block` crate, which that layer's dependencies need to keep compiling. It no longer tracks upstream, so fix GPUI problems here directly |
+| `vendor/libghostty-vt/` | Checksummed Ghostty VT source and offline Zig packages, pinned provenance and bundled license notices |
 | `licenses/` | Third-party license texts included in the app bundle |
 | `docs/` and `docs/eli5/` | Technical guides and matching plain-English companions |
 
