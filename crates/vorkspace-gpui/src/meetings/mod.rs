@@ -40,7 +40,8 @@ pub(crate) struct Page {
     // Loading follows document identity and edits, independent of the shown tab.
     open_epoch: u64,
     opening: bool,
-    next_open: Option<(u64, String, bool)>,
+    next_open: Option<document::PendingOpen>,
+    pending_note: Option<note::PendingNote>,
     drafts: Arc<DraftBuffer>,
     draft_timer: Option<Task<()>>,
     draft_prefix: String,
@@ -148,6 +149,7 @@ impl Page {
             open_epoch: 0,
             opening: false,
             next_open: None,
+            pending_note: None,
             drafts: Arc::default(),
             draft_timer: None,
             draft_prefix: uuid::Uuid::new_v4().simple().to_string()[..24].to_owned(),

@@ -174,10 +174,10 @@ fn a_stale_open_cannot_replace_input_or_take_its_lease(cx: &mut TestAppContext) 
     let pending_open = DraftBuffer::default()
         .open(&meetings, &destination, None)
         .unwrap();
-    let epoch = page.read_with(cx, |page, _| page.open_epoch);
+    let (epoch, intent) = page.read_with(cx, |page, _| (page.open_epoch, page.intent));
     type_into(&page, Field::Transcript, "Planning edits", 8..8, cx);
     page.update(cx, |page, cx| {
-        page.complete_open(epoch, true, Ok(pending_open), cx);
+        page.complete_open(epoch, intent, true, Ok(pending_open), cx);
         let doc = page.document.as_ref().unwrap();
         assert_eq!(doc.id(), selected);
         assert_eq!(doc.text(Field::Transcript), "Planning edits");
@@ -196,8 +196,9 @@ fn returning_to_authored_text_does_not_cancel_a_recording_open(cx: &mut TestAppC
         page.note_ids.insert("note".into(), id.clone());
         page.opening = true;
         let epoch = page.open_epoch;
+        let intent = page.intent;
         page.hide_note_content(cx);
-        page.complete_open(epoch, true, Ok(pending), cx);
+        page.complete_open(epoch, intent, true, Ok(pending), cx);
         assert!(page.is_for_note("note"));
         assert!(
             page.document
@@ -222,12 +223,98 @@ fn returning_to_the_loaded_note_supersedes_another_pending_open(cx: &mut TestApp
     page.update(cx, |page, cx| {
         page.opening = true;
         let epoch = page.open_epoch;
+        let intent = page.intent;
         page.show_note("planning-note", Some(&id), cx);
-        page.complete_open(epoch, true, Ok(pending), cx);
+        page.complete_open(epoch, intent, true, Ok(pending), cx);
         assert!(page.is_for_note("planning-note"));
         assert!(page.next_open.is_none());
         assert!(meetings.try_edit(&other).unwrap().is_some());
     });
+}
+
+#[gpui::test]
+fn a_newer_tab_choice_survives_direct_and_queued_opens_with_a_saved_draft(cx: &mut TestAppContext) {
+    for queued in [false, true] {
+        for saved_draft in [false, true] {
+            let (_root, meetings) = storage();
+            let id = recorded(&meetings, "Planning");
+            let snapshot = summarized(&meetings, &id);
+            if saved_draft {
+                let write = DraftWrite::from_params(json!({
+                    "id": id, "version": "0123456789abcdef0123456789abcdef", "expected": null,
+                    "draft": { "revision": snapshot.meeting.revision, "summary": "Saved summary draft",
+                        "view": "summary", "title_focused": false, "start": 0, "end": 0 }
+                })).unwrap();
+                meetings.checkpoint_draft(&write).unwrap();
+            }
+            let page = cx.new(|cx| Page::with_meetings(Ok(meetings.clone()), cx));
+            page.update(cx, |page, cx| {
+                page.opening = queued;
+                page.show_note("planning", Some(&id), cx);
+                page.note_section(false, cx);
+                assert_eq!(page.section, Section::Summary);
+                if queued {
+                    // A prior request releases the slot after the tab choice.
+                    page.opening = false;
+                    page.open_next(cx);
+                }
+            });
+            cx.run_until_parked();
+            page.read_with(cx, |page, _| {
+                assert!(page.is_for_note("planning"));
+                assert_eq!(page.section, Section::Summary);
+                assert!(page.pending_focus.is_none());
+                if saved_draft {
+                    assert_eq!(
+                        page.document.as_ref().unwrap().text(Field::Summary),
+                        "Saved summary draft"
+                    );
+                }
+            });
+            cx.update(|_| drop(page));
+        }
+    }
+}
+
+#[gpui::test]
+fn note_selection_during_discard_or_deletion_replays_the_latest_identity_and_tab(
+    cx: &mut TestAppContext,
+) {
+    for discard in [false, true] {
+        let (_root, meetings) = storage();
+        let first = recorded(&meetings, "First");
+        let second = recorded(&meetings, "Second");
+        let third = recorded(&meetings, "Third");
+        summarized(&meetings, &third);
+        let page = page(&meetings, &first, cx);
+        if discard {
+            type_into(&page, Field::Transcript, "Discard these edits", 0..0, cx);
+        }
+        page.update(cx, |page, cx| {
+            if discard {
+                page.discard(cx);
+                assert!(page.discarding);
+            } else {
+                page.confirm_delete = true;
+                page.delete(cx);
+                assert!(page.deleting);
+            }
+            page.show_note("second", Some(&second), cx);
+            page.show_note("third", Some(&third), cx);
+            page.note_section(false, cx);
+            assert_eq!(page.section, Section::Summary);
+            page.show_note("third", Some(&third), cx);
+        });
+        cx.run_until_parked();
+        page.read_with(cx, |page, _| {
+            assert!(page.is_for_note("third"));
+            assert_eq!(page.section, Section::Summary);
+            assert!(page.pending_note.is_none());
+            assert!(!page.deleting && !page.discarding && !page.opening);
+        });
+        assert_eq!(meetings.read(&first).is_ok(), discard);
+        cx.update(|_| drop(page));
+    }
 }
 
 #[gpui::test]

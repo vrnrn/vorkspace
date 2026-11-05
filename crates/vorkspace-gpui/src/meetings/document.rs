@@ -29,6 +29,13 @@ pub(super) enum Section {
     Source,
 }
 
+pub(super) struct PendingOpen {
+    epoch: u64,
+    intent: u64,
+    id: String,
+    retry: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Field {
     Transcript,
@@ -507,7 +514,12 @@ impl Page {
         {
             return;
         }
-        self.next_open = Some((self.open_epoch, id, true));
+        self.next_open = Some(PendingOpen {
+            epoch: self.open_epoch,
+            intent: self.intent,
+            id,
+            retry: true,
+        });
         self.open_next(cx);
     }
 
@@ -515,7 +527,13 @@ impl Page {
         if self.opening {
             return;
         }
-        let Some((epoch, id, retry)) = self.next_open.take() else {
+        let Some(PendingOpen {
+            epoch,
+            intent,
+            id,
+            retry,
+        }) = self.next_open.take()
+        else {
             return;
         };
         if epoch != self.open_epoch {
@@ -538,7 +556,7 @@ impl Page {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.complete_open(epoch, retry, result, cx);
+                this.complete_open(epoch, intent, retry, result, cx);
                 this.open_next(cx);
                 if !this.opening
                     && let Some(doc) = &this.document
@@ -557,6 +575,7 @@ impl Page {
     fn complete_open(
         &mut self,
         epoch: u64,
+        intent: u64,
         retry: bool,
         result: Result<Document, String>,
         cx: &mut Context<Self>,
@@ -574,7 +593,12 @@ impl Page {
                         .is_some_and(|live| live.state.id == doc.id() && !live.state.phase.active())
                 {
                     if retry {
-                        self.next_open = Some((epoch, doc.id().to_owned(), false));
+                        self.next_open = Some(PendingOpen {
+                            epoch,
+                            intent,
+                            id: doc.id().to_owned(),
+                            retry: false,
+                        });
                     } else {
                         self.fail(
                             "Recording state changed. Select the meeting to reload it.".into(),
@@ -595,7 +619,13 @@ impl Page {
                             capture_error = live.state.error.clone();
                         }
                     }
+                    // Defaults and saved draft views apply only until a newer
+                    // explicit tab choice. Keep that choice even for queued opens.
+                    let view = (self.section, self.pending_focus);
                     self.install(Some(doc), cx);
+                    if self.intent != intent {
+                        (self.section, self.pending_focus) = view;
+                    }
                     if let Some(error) = capture_error {
                         self.fail(error, cx);
                     }
@@ -827,6 +857,7 @@ impl Page {
                     Err(error) => this.fail(error, cx),
                 }
                 this.sync_read_only(cx);
+                this.resume_note_selection(cx);
                 cx.notify();
             });
         })
@@ -906,6 +937,7 @@ impl Page {
                     Err(error) => this.fail(error, cx),
                 }
                 this.sync_read_only(cx);
+                this.resume_note_selection(cx);
                 cx.notify();
             });
         })

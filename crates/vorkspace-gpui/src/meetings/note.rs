@@ -9,6 +9,12 @@ use gpui::{AnyElement, Context, div, prelude::*, px};
 use vorkspace_runtime::runtime::locked;
 use vorkspace_ui::theme::{StatusColor, content, icon, status};
 
+pub(super) struct PendingNote {
+    note_id: String,
+    recording_id: Option<String>,
+    section: Option<Section>,
+}
+
 impl Page {
     pub(crate) fn show_note(
         &mut self,
@@ -16,6 +22,21 @@ impl Page {
         recording_id: Option<&str>,
         cx: &mut Context<Self>,
     ) {
+        if self.deleting || self.discarding {
+            if self.pending_note.as_ref().is_some_and(|pending| {
+                pending.note_id == note_id && pending.recording_id.as_deref() == recording_id
+            }) {
+                return;
+            }
+            // Notes has already selected this identity. Retain the latest
+            // request while the current document finishes its durable operation.
+            self.pending_note = Some(PendingNote {
+                note_id: note_id.into(),
+                recording_id: recording_id.map(str::to_owned),
+                section: None,
+            });
+            return;
+        }
         let id = recording_id.map(str::to_owned).unwrap_or_else(|| {
             self.note_ids
                 .entry(note_id.into())
@@ -43,6 +64,18 @@ impl Page {
         self.note_ids
             .get(note_id)
             .is_some_and(|id| self.document.as_ref().is_some_and(|doc| doc.id() == id))
+    }
+
+    pub(super) fn resume_note_selection(&mut self, cx: &mut Context<Self>) {
+        if let Some(pending) = self.pending_note.take() {
+            self.show_note(&pending.note_id, pending.recording_id.as_deref(), cx);
+            if let Some(section) = pending.section {
+                // This choice belongs to the pending note even if the visible
+                // section already matches and navigate would otherwise no-op.
+                self.intent += 1;
+                self.note_section(section == Section::Transcript, cx);
+            }
+        }
     }
 
     pub(crate) fn transcript_selected(&self) -> bool {
@@ -95,14 +128,20 @@ impl Page {
     }
 
     pub(crate) fn note_section(&mut self, transcript: bool, cx: &mut Context<Self>) {
-        self.navigate(
-            Action::Section(if transcript {
-                Section::Transcript
-            } else {
-                Section::Summary
-            }),
-            cx,
-        );
+        let section = if transcript {
+            Section::Transcript
+        } else {
+            Section::Summary
+        };
+        if let Some(pending) = &mut self.pending_note {
+            pending.section = Some(section);
+            self.section = section;
+            self.pending_focus = None;
+            self.intent += 1;
+            cx.notify();
+            return;
+        }
+        self.navigate(Action::Section(section), cx);
     }
 
     pub(crate) fn can_delete_note(&self) -> bool {
