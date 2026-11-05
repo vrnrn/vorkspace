@@ -238,7 +238,6 @@ int vorkspace_vt_frame(Vt *v, VtFrame *out, VtPaintCell paint, void *userdata) {
   uint8_t *text = local;
   size_t capacity = sizeof(local);
   uint32_t y = 0;
-  bool inverse_screen = mode(v, GHOSTTY_MODE_REVERSE_COLORS);
   while (ghostty_render_state_row_iterator_next(v->row)) {
     ghostty_render_state_row_get(v->row, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &v->cells);
     uint32_t x = 0;
@@ -270,7 +269,7 @@ int vorkspace_vt_frame(Vt *v, VtFrame *out, VtPaintCell paint, void *userdata) {
       VtCell cell = { .row = y, .column = column, .width = wide == GHOSTTY_CELL_WIDE_WIDE ? 2 : 1,
         .foreground = hex(fg), .background = hex(bg), .foreground_set = fg_set,
         .background_set = bg_set, .selected = selected,
-        .flags = style.flags ^ (inverse_screen ? GHOSTTY_STYLE_FLAG_INVERSE : 0) };
+        .flags = style.flags };
       paint(userdata, &cell, text, buffer.len);
     }
     y++;

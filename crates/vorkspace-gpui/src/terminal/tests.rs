@@ -388,6 +388,20 @@ fn pty_close_interrupts_a_full_input_queue_and_reaps_an_uncooperative_shell() {
 
 #[test]
 fn closing_the_login_shell_also_kills_an_attached_job_that_ignores_hangup() {
+    shutdown_attached_job(false, false);
+}
+
+#[test]
+fn closing_the_login_shell_also_kills_a_background_job_that_ignores_hangup() {
+    shutdown_attached_job(true, false);
+}
+
+#[test]
+fn normal_shell_exit_cleans_up_attached_background_jobs() {
+    shutdown_attached_job(true, true);
+}
+
+fn shutdown_attached_job(background: bool, normal_exit: bool) {
     use std::os::fd::{AsRawFd, FromRawFd};
     let size = GridSize {
         columns: 120,
@@ -395,20 +409,27 @@ fn closing_the_login_shell_also_kills_an_attached_job_that_ignores_hangup() {
     };
     let term = engine(size);
     let (listener, events) = Listener::channel();
+    let directory = tempfile::tempdir().unwrap();
+    let pid_file = directory.path().join("job.pid");
     let pty = pty::Pty::spawn(
         "/bin/sh",
         &["-i".into()],
         &std::env::temp_dir(),
-        HashMap::new(),
+        HashMap::from([(
+            "VORKSPACE_TEST_JOB_PID".into(),
+            pid_file.to_string_lossy().into_owned(),
+        )]),
         size,
         term.clone(),
         listener,
     )
     .unwrap();
+    let command = format!(
+        "/bin/sh -c 'trap \"\" HUP; printf %s $$ > \"$VORKSPACE_TEST_JOB_PID\"; printf \"job%sready\" -; while :; do :; done'{}\r",
+        if background { " &" } else { "" }
+    );
     pty.sender
-        .send(Msg::Input(Cow::Borrowed(
-            b"/bin/sh -c 'trap \"\" HUP; printf \"job%sready\" -; while :; do :; done'\r",
-        )))
+        .send(Msg::Input(Cow::Owned(command.into_bytes())))
         .unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let mut ready = false;
@@ -426,10 +447,28 @@ fn closing_the_login_shell_also_kills_an_attached_job_that_ignores_hangup() {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(ready, "the foreground job installed its hangup policy");
-    let group = unsafe { libc::tcgetpgrp(pty.master.as_raw_fd()) };
+    assert!(ready, "the attached job installed its hangup policy");
+    let group = std::fs::read_to_string(pid_file)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+    struct Cleanup(i32, i32);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            unsafe {
+                if libc::getsid(self.0) == self.1 {
+                    libc::kill(-self.0, libc::SIGKILL);
+                }
+            }
+        }
+    }
+    let _cleanup = Cleanup(group, pty.shell_pid as i32);
     assert!(group > 1 && group != pty.shell_pid as i32);
     assert_eq!(unsafe { libc::getsid(group) }, pty.shell_pid as i32);
+    assert_eq!(unsafe { libc::getpgid(group) }, group);
+    if background {
+        assert_ne!(unsafe { libc::tcgetpgrp(pty.master.as_raw_fd()) }, group);
+    }
     let queue = unsafe { libc::kqueue() };
     assert!(queue >= 0);
     let queue = unsafe { std::fs::File::from_raw_fd(queue) };
@@ -454,7 +493,13 @@ fn closing_the_login_shell_also_kills_an_attached_job_that_ignores_hangup() {
         },
         0
     );
-    pty.sender.send(Msg::Shutdown).unwrap();
+    if normal_exit {
+        pty.sender
+            .send(Msg::Input(Cow::Borrowed(b"exit\r")))
+            .unwrap();
+    } else {
+        pty.sender.send(Msg::Shutdown).unwrap();
+    }
     let _ = wait_for_exit(&events);
     let mut exited: libc::kevent = unsafe { std::mem::zeroed() };
     let timeout = libc::timespec {
@@ -473,7 +518,7 @@ fn closing_the_login_shell_also_kills_an_attached_job_that_ignores_hangup() {
             )
         },
         1,
-        "the attached foreground group must exit too"
+        "the attached job group must exit too"
     );
     let exited_pid = exited.ident;
     assert_eq!(exited_pid, group as usize);

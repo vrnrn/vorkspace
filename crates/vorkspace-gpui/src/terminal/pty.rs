@@ -2,7 +2,7 @@
 use super::{GridSize, Listener, TermEvent};
 use std::{
     borrow::Cow,
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs::File,
     io::{self, Read, Write},
     os::{
@@ -74,13 +74,19 @@ impl Drop for Control {
     }
 }
 fn reserve_bytes(budget: &AtomicUsize, bytes: usize) -> bool {
-    budget
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-            current
-                .checked_add(bytes)
-                .filter(|next| *next <= MAX_QUEUED_BYTES)
-        })
-        .is_ok()
+    let mut current = budget.load(Ordering::Acquire);
+    loop {
+        let Some(next) = current
+            .checked_add(bytes)
+            .filter(|next| *next <= MAX_QUEUED_BYTES)
+        else {
+            return false;
+        };
+        match budget.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
 }
 impl Sender {
     pub fn send(&self, message: Msg) -> io::Result<()> {
@@ -406,6 +412,42 @@ fn child_has_exited(pid: i32) -> io::Result<bool> {
         }
     }
 }
+fn signal_session_jobs(session: i32, signal: i32) {
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if count <= 0 {
+        return;
+    }
+    // Slack covers processes born between the size query and enumeration.
+    // Enumerate again for escalation, while the unreaped shell pins the SID.
+    let mut pids = vec![0i32; count as usize + 64];
+    let count = unsafe {
+        libc::proc_listallpids(
+            pids.as_mut_ptr().cast(),
+            std::mem::size_of_val(pids.as_slice()) as i32,
+        )
+    };
+    pids.truncate(count.max(0) as usize);
+    let mut signaled = HashSet::new();
+    for member in pids {
+        if member <= 1 || unsafe { libc::getsid(member) } != session {
+            continue;
+        }
+        let group = unsafe { libc::getpgid(member) };
+        // Use a live member, not the group leader: a job may outlive its
+        // leader. A transferred descendant belongs to another session.
+        if group > 1
+            && !signaled.contains(&group)
+            && unsafe { libc::getsid(member) } == session
+            && unsafe { libc::getpgid(member) } == group
+        {
+            unsafe {
+                libc::kill(-group, signal);
+            }
+            signaled.insert(group);
+        }
+    }
+}
+
 fn terminate(child: &mut Child, fd: i32) -> Option<std::process::ExitStatus> {
     // Observe without reaping: a zombie still pins its PID and private
     // session while attached jobs pass their final ownership checks.
@@ -413,12 +455,9 @@ fn terminate(child: &mut Child, fd: i32) -> Option<std::process::ExitStatus> {
     if child_has_exited(pid).is_err() {
         return child.try_wait().ok().flatten();
     }
-    let original_foreground = unsafe { libc::tcgetpgrp(fd) };
+    signal_session_jobs(pid, libc::SIGHUP);
     unsafe {
         libc::tcflush(fd, libc::TCIOFLUSH);
-        if original_foreground > 1 && libc::getsid(original_foreground) == pid {
-            libc::kill(-original_foreground, libc::SIGHUP);
-        }
         libc::kill(-pid, libc::SIGHUP);
         libc::kill(pid, libc::SIGHUP);
     }
@@ -431,17 +470,9 @@ fn terminate(child: &mut Child, fd: i32) -> Option<std::process::ExitStatus> {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    // Re-validate even after the wait: foreground ownership can change
-    // during shutdown. The original group can remain in our session after
-    // the dead login shell detaches its controlling terminal.
-    let foreground = unsafe { libc::tcgetpgrp(fd) };
-    for group in [original_foreground, foreground] {
-        if group > 1 && unsafe { libc::getsid(group) } == pid {
-            unsafe {
-                libc::kill(-group, libc::SIGKILL);
-            }
-        }
-    }
+    // Re-enumerate and revalidate after the wait: job membership may change
+    // during shutdown or outlive the controlling terminal's foreground link.
+    signal_session_jobs(pid, libc::SIGKILL);
     unsafe {
         libc::kill(-pid, libc::SIGKILL);
     }
@@ -485,7 +516,6 @@ impl Worker {
         let fd = master.as_raw_fd();
         let mut pending: VecDeque<Cow<'static, [u8]>> = VecDeque::new();
         let mut written = 0;
-        let mut exited = None;
         let mut eof = false;
         let mut exit_at = None;
         let mut buf = [0u8; 16 * 1024];
@@ -528,13 +558,12 @@ impl Worker {
             if closing.load(Ordering::Acquire) {
                 break;
             }
-            if exited.is_none() {
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        exited = Some(status);
+            if exit_at.is_none() {
+                match child_has_exited(child.id() as i32) {
+                    Ok(true) => {
                         exit_at = Some(Instant::now());
                     }
-                    Ok(None) => {}
+                    Ok(false) => {}
                     Err(_) => {
                         eof = true;
                     }
@@ -647,9 +676,9 @@ impl Worker {
                 break;
             }
         }
-        if exited.is_none() {
-            exited = terminate(&mut child, fd);
-        }
+        // Keep the shell unreaped through final output drain and job cleanup,
+        // including normal exit. Its PID pins the session against reuse.
+        let exited = terminate(&mut child, fd);
         if let Some(status) = exited {
             listener.send_event(TermEvent::ChildExit(status));
         } else {

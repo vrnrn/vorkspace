@@ -18,6 +18,33 @@ fn terminal(cols: u16, rows: u16) -> Terminal {
 }
 
 #[test]
+fn screen_reverse_colors_and_cell_inverse_are_applied_once() {
+    let mut t = terminal(12, 2);
+    t.write(b"a\x1b[7mb\x1b[0;38;2;1;2;3;48;2;4;5;6mc\x1b[7md\x1b[0m");
+    for reverse in [false, true, false] {
+        t.write(if reverse { b"\x1b[?5h" } else { b"\x1b[?5l" });
+        let frame = t.frame().unwrap();
+        let defaults = if reverse {
+            (0x171717, 0xeeeeee)
+        } else {
+            (0xeeeeee, 0x171717)
+        };
+        assert_eq!((frame.foreground, frame.background), defaults);
+        for (column, inverse, colors) in [
+            (0, false, defaults),
+            (1, true, defaults),
+            (2, false, (0x010203, 0x040506)),
+            (3, true, (0x010203, 0x040506)),
+            (4, false, defaults),
+        ] {
+            let cell = &frame.rows[0][column];
+            assert_eq!(cell.has(Cell::INVERSE), inverse);
+            assert_eq!((cell.foreground, cell.background), colors);
+        }
+    }
+}
+
+#[test]
 fn streaming_utf8_styles_queries_and_resizing() {
     let mut t = terminal(20, 4);
     let text = "a\u{301} 界 👩‍💻";

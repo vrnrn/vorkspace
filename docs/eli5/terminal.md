@@ -1,6 +1,6 @@
 # Native terminal, simply
 
-Each terminal tab or dock has its own shell. Switching away hides it while commands keep running and their output stays available. Closing it ends its shell and any attached job. Reopening the app creates a fresh shell in the saved starting folder.
+Each terminal tab or dock has its own shell. Switching away hides it while commands keep running and their output stays available. Closing it ends its shell and attached foreground or background jobs, including jobs that ignore the initial hangup. Programs that deliberately started a separate session remain independent. Reopening the app creates a fresh shell in the saved starting folder.
 
 Ghostty interprets the shell's output and remembers the screen and previous lines. Vorkspace draws that screen with its own native interface and updates ordinary text and cursor colors when you change the theme. An idle hidden terminal waits for work instead of waking on a timer. It shows text, colors, selection and the cursor; inline terminal images are not supported.
 
