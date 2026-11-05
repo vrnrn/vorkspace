@@ -169,6 +169,7 @@ impl Shell {
             return rail
                 .child(crate::settings::nav(
                     section,
+                    &settings.read(cx).visible_sections(),
                     move |section, _, cx| {
                         let _ = select.update(cx, |this, cx| this.select_settings(section, cx));
                     },

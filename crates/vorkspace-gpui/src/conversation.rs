@@ -660,7 +660,7 @@ pub(crate) fn preferred_effort(provider: &str, cx: &gpui::App) -> Option<String>
     cx.try_global::<vorkspace_ui::preferences::Preferences>()
         .and_then(|prefs| prefs.provider_efforts.get(provider).cloned())
 }
-fn effort_name(value: &str) -> String {
+pub(crate) fn effort_name(value: &str) -> String {
     match value {
         "default" => "Default",
         "none" => "None",

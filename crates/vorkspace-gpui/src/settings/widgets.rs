@@ -95,6 +95,25 @@ impl SettingsView {
         id.is_some() && self.revealed.as_deref() == id
     }
 
+    /// A settings card without a redundant section heading on single-group pages.
+    pub(super) fn card(&self, id: Option<&'static str>, children: Vec<AnyElement>) -> Div {
+        div()
+            .relative()
+            .when_some(id, |d, id| d.child(self.reveal_probe(id)))
+            .overflow_hidden()
+            .rounded_xl()
+            .border_1()
+            .border_color(if self.flashing(id) {
+                accent(0.6)
+            } else {
+                content(0.1)
+            })
+            .bg(content(0.03))
+            .flex()
+            .flex_col()
+            .children(children)
+    }
+
     /// Group: a titled card. `first` drops the `pt-8` the CSS `first:` does.
     pub(super) fn group(
         &self,
@@ -105,7 +124,6 @@ impl SettingsView {
         action: Option<AnyElement>,
         children: Vec<AnyElement>,
     ) -> AnyElement {
-        let flash = self.flashing(id);
         div()
             .relative()
             .when(!first, |d| d.pt_8())
@@ -144,15 +162,8 @@ impl SettingsView {
                     }),
             )
             .child(
-                div()
-                    .overflow_hidden()
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(if flash { accent(0.6) } else { content(0.1) })
-                    .bg(content(0.03))
-                    .flex()
-                    .flex_col()
-                    .children(children),
+                self.card(None, children)
+                    .when(self.flashing(id), |d| d.border_color(accent(0.6))),
             )
             .into_any_element()
     }
@@ -179,6 +190,10 @@ impl SettingsView {
                     | "tab-animations"
                     | "sidebar-right"
                     | "notes"
+                    | "todos"
+                    | "vox-enabled"
+                    | "vox-silent"
+                    | "bot-minions"
                     | "quick-composer"
                     | "clipboard-history"
                     | "dictation-enabled"
@@ -201,11 +216,18 @@ impl SettingsView {
             )
         });
         let stacked = narrow && !toggle_only;
+        let compact = description.is_none() && !stacked;
         div()
             .debug_selector(|| format!("settings-row-{}", id.unwrap_or("anonymous")))
             .relative()
             .flex()
-            .items_start()
+            .map(|d| {
+                if compact {
+                    d.items_center()
+                } else {
+                    d.items_start()
+                }
+            })
             .map(|d| {
                 if stacked {
                     d.flex_col().gap_3()

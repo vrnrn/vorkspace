@@ -89,7 +89,7 @@ impl SettingsView {
                 Some("sidebar-right"),
                 false,
                 "Switch sidebar to right side",
-                Some("Show Sessions, Explorer and Changes at the window's right edge instead of beside the project rail.".into()),
+                Some("Place Sessions, Explorer, and Changes at the right edge.".into()),
                 vec![self.toggle(
                     "sidebar-right",
                     "Switch sidebar to right side",
@@ -115,20 +115,25 @@ impl SettingsView {
             ),
         ];
         {
-            workspace.push(self.row(
-                Some("bot-menu-bar-icon"),
-                false,
-                "Menu bar icon",
-                Some("Open your clipboard history from the macOS menu bar.".into()),
-                vec![self.toggle(
-                    "bot-menu-bar-icon",
-                    "Menu bar icon",
-                    p.bot_menu_bar_icon,
+            workspace.push(
+                self.row(
+                    Some("bot-menu-bar-icon"),
                     false,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.bot_menu_bar_icon = on),
-                )],
-            ));
+                    "Menu bar icon",
+                    Some(
+                        "Access clipboard history and recording controls from the macOS menu bar."
+                            .into(),
+                    ),
+                    vec![self.toggle(
+                        "bot-menu-bar-icon",
+                        "Menu bar icon",
+                        p.bot_menu_bar_icon,
+                        false,
+                        cx,
+                        |this, on, cx| this.update(cx, |p| p.bot_menu_bar_icon = on),
+                    )],
+                ),
+            );
             workspace.push(self.row(
                 Some("quick-composer"),
                 false,
@@ -165,7 +170,7 @@ impl SettingsView {
                             .text_color(content(0.45))
                             .child(version),
                     ),
-                Some("View release notes and check for agent updates.".into()),
+                Some("View release notes and check for updates.".into()),
                 vec![
                     div()
                         .flex()

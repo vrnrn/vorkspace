@@ -224,3 +224,73 @@ fn jql_validation_rejects_stale_edits_mode_changes_and_errors_before_publishing(
         "a disabled connector cannot accept a late validation"
     );
 }
+
+#[gpui::test]
+fn disabled_plugins_hide_links_navigation_and_search_and_cannot_reopen(cx: &mut TestAppContext) {
+    let window = window(cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("open-github-settings").is_some());
+    window
+        .update(visual, |view, _, cx| {
+            view.select_section(Section::Github, cx);
+            let mut context = view.ctx.clone();
+            for source in ["github", "gitlab", "jira"] {
+                context.inbox_connectors.set(source, false).unwrap();
+            }
+            view.set_context(context, cx);
+            assert_eq!(view.section, Section::Connectors);
+            view.update(cx, |prefs| {
+                prefs.notes = false;
+                prefs.todos = false;
+            });
+            for section in [
+                Section::Github,
+                Section::Gitlab,
+                Section::Jira,
+                Section::Notes,
+                Section::Todos,
+            ] {
+                assert!(!view.visible_sections().contains(&section));
+                view.search_query = section.label().into();
+                assert!(
+                    view.search_results()
+                        .iter()
+                        .all(|result| result.section != section)
+                );
+                view.select_section(section, cx);
+                assert_eq!(view.section, Section::Connectors);
+            }
+        })
+        .unwrap();
+    visual.run_until_parked();
+    for selector in [
+        "open-github-settings",
+        "open-gitlab-settings",
+        "open-jira-settings",
+        "open-notes-settings",
+        "open-todos-settings",
+    ] {
+        assert!(visual.debug_bounds(selector).is_none());
+    }
+    window
+        .update(visual, |view, _, cx| {
+            let mut context = view.ctx.clone();
+            context.inbox_connectors.set("github", true).unwrap();
+            view.set_context(context, cx);
+            view.update(cx, |prefs| prefs.notes = true);
+            assert!(view.visible_sections().contains(&Section::Github));
+            assert!(view.visible_sections().contains(&Section::Notes));
+            view.search_query = "notes".into();
+            assert!(
+                view.search_results()
+                    .iter()
+                    .any(|result| result.section == Section::Notes)
+            );
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("open-github-settings").is_some());
+    assert!(visual.debug_bounds("open-notes-settings").is_some());
+}

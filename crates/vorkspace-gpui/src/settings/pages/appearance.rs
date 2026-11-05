@@ -94,7 +94,7 @@ impl SettingsView {
         let mut theme = vec![self.row(
             Some("theme"),
             true,
-            "Theme",
+            "Appearance",
             Some("System follows the OS appearance.".into()),
             vec![self.segmented(
                 "theme",
@@ -246,11 +246,7 @@ impl SettingsView {
             None,
             false,
             "Translucency",
-            Some(if light {
-                "Translucency is available in dark mode.".into()
-            } else {
-                "How much of the desktop shows through vorkspace.".into()
-            }),
+            light.then(|| "Available in dark mode.".into()),
             None,
             translucency,
         ));
@@ -270,7 +266,7 @@ impl SettingsView {
                 Some("collapsed-project-rail"),
                 true,
                 "Collapsed project rail",
-                Some("Keep project navigation available as a compact icon rail, or hide the rail completely.".into()),
+                Some("Show project icons or hide navigation when collapsed.".into()),
                 vec![self.segmented(
                     "collapsed-project-rail",
                     "Collapsed project rail",
@@ -303,7 +299,7 @@ impl SettingsView {
                 Some("show-excluded-files"),
                 false,
                 "Show excluded files",
-                Some("Show files and folders Git excludes, such as build output and dependencies, in the explorer.".into()),
+                Some("Include files ignored by Git in Explorer.".into()),
                 vec![self.toggle(
                     "show-excluded-files",
                     "Show excluded files",

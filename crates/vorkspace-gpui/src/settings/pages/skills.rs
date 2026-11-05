@@ -215,7 +215,7 @@ impl SettingsView {
             .map(|d| if preview_open { d.px_4() } else { d.px_8() })
             .child(page_header(
                 "Skills",
-                "Discover and manage file skills from project, personal, and harness folders.",
+                super::super::Section::Skills.description(),
             ))
             .child(
                 div()

@@ -31,6 +31,7 @@ const SUMMARY_OUTPUT_INSTRUCTIONS: &str = "Return only the requested meeting-not
 pub struct Settings {
     pub provider: String,
     pub model: String,
+    pub effort: Option<String>,
     pub prompt: String,
 }
 impl Default for Settings {
@@ -38,6 +39,7 @@ impl Default for Settings {
         Self {
             provider: String::new(),
             model: String::new(),
+            effort: None,
             prompt: DEFAULT_PROMPT.into(),
         }
     }
@@ -669,6 +671,9 @@ impl Meetings {
             || settings.prompt.len() > 16 * 1024
             || settings.model.len() > 200
             || settings.provider.len() > 80
+            || settings.effort.as_ref().is_some_and(|effort| {
+                effort.is_empty() || effort.len() > 80 || effort.chars().any(char::is_control)
+            })
         {
             return Err("Invalid meeting summary settings".into());
         }
@@ -790,6 +795,7 @@ mod tests {
             &Settings {
                 provider: "codex".into(),
                 model: "fixture".into(),
+                effort: None,
                 prompt: DEFAULT_PROMPT.into(),
             },
         )
@@ -1319,13 +1325,36 @@ mod tests {
     }
 
     #[test]
-    fn summary_round_trip_preserves_original_and_uses_selected_model() {
+    fn old_summary_settings_load_without_an_effort_override() {
+        let root = tempfile::tempdir().unwrap();
+        let service = Meetings::open(root.path()).unwrap();
+        atomic_json(
+            &service.directory.join("settings.json"),
+            &json!({
+                "provider": "codex", "model": "existing-model", "prompt": "My summary format"
+            }),
+        )
+        .unwrap();
+        let settings = service.settings().unwrap();
+        assert_eq!(settings.effort, None);
+        assert_eq!(settings.model, "existing-model");
+        assert_eq!(settings.prompt, "My summary format");
+    }
+
+    #[test]
+    fn summary_round_trip_preserves_original_and_uses_selected_model_and_effort() {
         let dir = tempfile::tempdir().unwrap();
-        let (service, id) = saved(dir.path());
-        let before = recording::read(dir.path(), &id).unwrap().segments;
+        let data = dir.path().join("meetings");
+        let (service, id) = saved(&data);
+        let mut settings = service.settings().unwrap();
+        settings.effort = Some("high".into());
+        service.save_settings(&settings).unwrap();
+        let service = Meetings::open(dir.path()).unwrap();
+        let before = recording::read(&data, &id).unwrap().segments;
         let result = service
             .summarize(&id, &AtomicBool::new(false), |settings, prompt| {
                 assert_eq!(settings.model, "fixture");
+                assert_eq!(settings.effort.as_deref(), Some("high"));
                 assert!(prompt.contains("Sam owns"));
                 Ok("## Action items\n- Sam: ship Friday.".into())
             })
@@ -1334,7 +1363,7 @@ mod tests {
             result["meeting"]["summary"]["text"],
             "## Action items\n- Sam: ship Friday."
         );
-        assert_eq!(recording::read(dir.path(), &id).unwrap().segments, before);
+        assert_eq!(recording::read(&data, &id).unwrap().segments, before);
         let changed = service
             .update(&json!({"id":id,"revision":1,"title":"Renamed"}))
             .unwrap();
@@ -1350,7 +1379,7 @@ mod tests {
         assert_eq!(edited["summary"]["text"], corrected);
         let reopened = service.read(&id).unwrap();
         assert_eq!(reopened["meeting"]["summary"]["text"], corrected);
-        assert_eq!(recording::read(dir.path(), &id).unwrap().segments, before);
+        assert_eq!(recording::read(&data, &id).unwrap().segments, before);
     }
     #[test]
     fn custom_notes_prompt_keeps_mandatory_final_content_rules_without_rewriting_settings() {

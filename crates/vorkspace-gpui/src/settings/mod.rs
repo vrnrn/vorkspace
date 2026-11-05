@@ -226,7 +226,7 @@ pub(crate) struct SettingsView {
             vorkspace_core::accounts::Profile,
             u64,
         ),
-        Vec<(String, String)>,
+        Vec<vorkspace_core::catalog::Model>,
     >,
     catalogs_loading: Vec<(
         vorkspace_core::provider::Kind,
@@ -361,7 +361,7 @@ impl SettingsView {
                 cx.notify();
             }),
             cx.subscribe(&search, |this, _, _: &input::Submitted, cx| {
-                let results = model::search(&this.search_query);
+                let results = this.search_results();
                 if let Some(result) = results.get(this.search_active).cloned() {
                     this.go(result, cx);
                 }
@@ -472,6 +472,7 @@ impl SettingsView {
             chat_background_preview,
             _subscriptions: subscriptions,
         };
+        this.select_section(this.section, cx);
         this.watch_connections(cx);
         if this.prefs.notifications {
             this.probe_notification_permission(false, cx);
@@ -526,7 +527,7 @@ impl SettingsView {
         &self,
         kind: vorkspace_core::provider::Kind,
         cx: &App,
-    ) -> Option<&Vec<(String, String)>> {
+    ) -> Option<&Vec<vorkspace_core::catalog::Model>> {
         let profile = self.catalog_profile(kind, cx);
         let generation = vorkspace_core::catalog::generation(kind, &profile);
         self.discovered_catalogs.get(&(kind, profile, generation))
@@ -556,20 +557,7 @@ impl SettingsView {
                     if let Ok(models) = result
                         && vorkspace_core::catalog::generation(key.0, &key.1) == key.2
                     {
-                        this.discovered_catalogs.insert(
-                            key,
-                            models
-                                .into_iter()
-                                .map(|model| {
-                                    let name = crate::pickers::model_display_name(
-                                        kind,
-                                        &model.id,
-                                        &model.name,
-                                    );
-                                    (model.id, name.to_string())
-                                })
-                                .collect(),
-                        );
+                        this.discovered_catalogs.insert(key, models);
                     }
                     cx.notify();
                 });
@@ -590,6 +578,8 @@ impl SettingsView {
                 _ => true,
             };
             self.ctx = ctx;
+            self.select_section(self.section, cx);
+            self.search_active = 0;
             if remote_changed {
                 self.leave_connections(cx);
                 self.watch_connections(cx);
@@ -607,11 +597,40 @@ impl SettingsView {
                 });
             }
             self.prefs = prefs.clone();
+            self.select_section(self.section, cx);
+            self.search_active = 0;
             self.notification_deadline(cx);
             cx.notify();
         }
     }
+    fn section_available(&self, section: Section) -> bool {
+        match section {
+            Section::Github => self.ctx.inbox_connectors.enabled("github"),
+            Section::Gitlab => self.ctx.inbox_connectors.enabled("gitlab"),
+            Section::Jira => self.ctx.inbox_connectors.enabled("jira"),
+            Section::Notes => self.prefs.notes,
+            Section::Todos => self.prefs.todos,
+            _ => true,
+        }
+    }
+    pub(crate) fn visible_sections(&self) -> Vec<Section> {
+        Section::ALL
+            .into_iter()
+            .filter(|section| self.section_available(*section))
+            .collect()
+    }
+    fn search_results(&self) -> Vec<model::SearchResult> {
+        model::search(&self.search_query)
+            .into_iter()
+            .filter(|result| self.section_available(result.section))
+            .collect()
+    }
     pub(crate) fn select_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        let section = if self.section_available(section) {
+            section
+        } else {
+            Section::Connectors
+        };
         if self.section != section {
             if let Some(center) = crate::accounts::get(cx) {
                 center.update(cx, |center, _| center.hide_emails());
@@ -715,6 +734,8 @@ impl SettingsView {
     }
     fn update(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Preferences)) {
         change(&mut self.prefs);
+        self.select_section(self.section, cx);
+        self.search_active = 0;
         self.notification_deadline(cx);
         cx.emit(SettingsEvent::Changed(Box::new(self.prefs.clone())));
         cx.notify();
@@ -727,9 +748,12 @@ impl SettingsView {
     fn go(&mut self, result: model::SearchResult, cx: &mut Context<Self>) {
         if result.section != self.section {
             self.select_section(result.section, cx);
-            cx.emit(SettingsEvent::Section(result.section));
+            cx.emit(SettingsEvent::Section(self.section));
         }
-        self.revealed = result.setting.map(str::to_owned);
+        self.revealed = result
+            .setting
+            .filter(|_| result.section == self.section)
+            .map(str::to_owned);
         self.pending_scroll = self.revealed.is_some();
         self.search_query.clear();
         self.search
@@ -767,7 +791,7 @@ impl SettingsView {
 
     /// The breadcrumb, Restore defaults action, and settings search.
     pub(crate) fn header(&mut self, in_title_bar: bool, cx: &mut Context<Self>) -> AnyElement {
-        let results = model::search(&self.search_query);
+        let results = self.search_results();
         let open = !self.search_query.trim().is_empty();
         let weak = cx.weak_entity();
         div()
@@ -882,7 +906,7 @@ impl SettingsView {
                                 if this.search_query.trim().is_empty() {
                                     return;
                                 }
-                                let count = model::search(&this.search_query).len();
+                                let count = this.search_results().len();
                                 match event.keystroke.key.as_str() {
                                     "down" => {
                                         this.search_active =
@@ -1013,6 +1037,7 @@ impl SettingsView {
 /// SettingsNav: the rail body while Settings is open.
 pub(crate) fn nav(
     section: Section,
+    visible: &[Section],
     select: impl Fn(Section, &mut Window, &mut App) + Clone + 'static,
     back: impl Fn(&mut Window, &mut App) + 'static,
     liquid: &crate::liquid::Liquid,
@@ -1096,16 +1121,18 @@ pub(crate) fn nav(
                                 .text_color(content(0.35))
                                 .child(*group),
                         )
-                        .children(sections.iter().map(|&item| {
-                            let select = select.clone();
-                            row(
-                                format!("settings-nav-{}", item.id()).into(),
-                                item.label(),
-                                item.icon(),
-                                item == section,
-                            )
-                            .on_click(move |_, window, cx| select(item, window, cx))
-                        }))
+                        .children(sections.iter().filter(|item| visible.contains(item)).map(
+                            |&item| {
+                                let select = select.clone();
+                                row(
+                                    format!("settings-nav-{}", item.id()).into(),
+                                    item.label(),
+                                    item.icon(),
+                                    item == section,
+                                )
+                                .on_click(move |_, window, cx| select(item, window, cx))
+                            },
+                        ))
                 }))
                 .into_any_element(),
         )

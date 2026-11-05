@@ -3,6 +3,8 @@ use gpui::{AnyElement, Context, prelude::*};
 impl SettingsView {
     pub(super) fn vox_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let p = self.prefs.clone();
+        let shortcut = super::command_shortcut(&p, "App: Vox")
+            .unwrap_or_else(|| "the shortcut in Keybindings".into());
         let mut choices = vec![
             ("builtin".to_string(), "Built-in microphone".to_string()),
             ("system".into(), "System default".into()),
@@ -18,37 +20,103 @@ impl SettingsView {
                     .into(),
             ));
         }
-        let microphone_buttons = choices
-            .into_iter()
-            .map(|(id, label)| {
-                let value = serde_json::json!({"id":id,"label":label});
-                secondary_button(
-                    gpui::SharedString::from(format!("vox-mic-{id}")),
-                    label.clone(),
-                    id == selected,
-                    false,
-                )
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.update(cx, |p| p.vox_microphone = value.clone())
-                }))
-                .into_any_element()
-            })
-            .collect();
+        let microphone = self.select(
+            "vox-microphone",
+            "Microphone",
+            selected,
+            choices
+                .iter()
+                .map(|(id, label)| (id.clone(), label.clone().into(), None))
+                .collect(),
+            Some(208.),
+            cx,
+            move |this, id, cx| {
+                if let Some((_, label)) = choices.iter().find(|(value, _)| *value == id) {
+                    this.update(cx, |p| {
+                        p.vox_microphone = serde_json::json!({"id": id, "label": label})
+                    });
+                }
+            },
+        );
         let mut rows = vec![
-            self.row(Some("vox-enabled"),true,"Vox",Some("Open Vox at the Mac’s notch with Control Option Space. Uses your signed-in Codex account. Off by default.".into()),vec![self.toggle("vox-enabled","Enable Vox",p.vox_enabled,false,cx,|this,on,cx|this.update(cx,|p|p.vox_enabled=on))]),
-            self.row(Some("vox-silent"),false,"Silent replies",Some("Expand selectable reply text below the notch while keeping spoken audio muted.".into()),vec![self.toggle("vox-silent","Silent replies",p.vox_silent,false,cx,|this,on,cx|this.update(cx,|p|p.vox_silent=on))]),
-            self.row(Some("vox-microphone"),false,"Microphone",Some("Applies to the next call. Devices appear after microphone access is granted. If a selected device disappears, Vox stops instead of switching inputs.".into()),microphone_buttons),
-            self.row(Some("vox-conversation"),false,"Conversation",Some("Vox resumes the same conversation across calls. Start fresh clears its conversation identity and keeps its memory.".into()),vec![secondary_button("vox-reset","Start fresh",false,false).child("Start fresh").on_click(cx.listener(|_,_,window,cx|{
-                let answer=window.prompt(gpui::PromptLevel::Warning,"Start a fresh Vox conversation?",Some("The current call will end. Saved memory is kept."),&["Cancel","Start fresh"],cx);
-                cx.spawn(async move|this,cx|{if answer.await==Ok(1){let _=this.update(cx,|_,cx|cx.emit(SettingsEvent::VoxReset));}}).detach();
-            })).into_any_element()]),
-            self.row(Some("vox-memory"),false,"Memory",Some("Review and edit Vox's dated notes. Conflicting external changes are detected before saving.".into()),vec![secondary_button("vox-memory","Open memory",false,false).child("Open memory").on_click(cx.listener(|_,_,_,cx|cx.emit(SettingsEvent::VoxMemory))).into_any_element()]),
+            self.row(
+                Some("vox-enabled"),
+                true,
+                "Enable voice control",
+                Some(format!("Open Vox at the notch with {shortcut}.").into()),
+                vec![self.toggle(
+                    "vox-enabled",
+                    "Enable Vox",
+                    p.vox_enabled,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.vox_enabled = on),
+                )],
+            ),
+            self.row(
+                Some("vox-silent"),
+                false,
+                "Silent replies",
+                Some("Show replies as text without speaking them.".into()),
+                vec![self.toggle(
+                    "vox-silent",
+                    "Silent replies",
+                    p.vox_silent,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.vox_silent = on),
+                )],
+            ),
+            self.row(
+                Some("vox-microphone"),
+                false,
+                "Microphone",
+                Some("Applies to the next call. If the device disconnects, the call stops.".into()),
+                vec![microphone],
+            ),
+            self.row(
+                Some("vox-conversation"),
+                false,
+                "Conversation",
+                Some("Calls share one conversation. Start fresh keeps saved memory.".into()),
+                vec![
+                    secondary_button("vox-reset", "Start fresh", false, false)
+                        .child("Start fresh")
+                        .on_click(cx.listener(|_, _, window, cx| {
+                            let answer = window.prompt(
+                                gpui::PromptLevel::Warning,
+                                "Start a fresh Vox conversation?",
+                                Some("The current call will end. Saved memory is kept."),
+                                &["Cancel", "Start fresh"],
+                                cx,
+                            );
+                            cx.spawn(async move |this, cx| {
+                                if answer.await == Ok(1) {
+                                    let _ =
+                                        this.update(cx, |_, cx| cx.emit(SettingsEvent::VoxReset));
+                                }
+                            })
+                            .detach();
+                        }))
+                        .into_any_element(),
+                ],
+            ),
+            self.row(
+                Some("vox-memory"),
+                false,
+                "Memory",
+                Some("Review and edit what Vox remembers.".into()),
+                vec![
+                    secondary_button("vox-memory", "Open memory", false, false)
+                        .child("Open memory")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::VoxMemory)))
+                        .into_any_element(),
+                ],
+            ),
         ];
         if let Some(error) = &self.ctx.vox_error {
             rows.push(crate::settings::widgets::note(error.clone()));
         }
-        rows.push(crate::settings::widgets::note("Vox stays available while the main window is hidden or minimized. After 30 idle seconds it retracts and releases the microphone. Speaking, processing, and reading a focused reply pause the timeout."));
-        vec![self.group(None, true, "Vox", None, None, rows)]
+        vec![self.card(None, rows).into_any_element()]
     }
 }

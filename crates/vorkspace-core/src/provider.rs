@@ -1203,7 +1203,12 @@ fn run_background_text(
         account: request.settings.account.clone(),
         text_only: true,
         access: AccessMode::ReadOnly,
-        effort: (request.kind == Kind::Codex).then(|| "low".into()),
+        // Explicit summary effort is independent of chat defaults. Keep the
+        // inexpensive title-generation default without overriding summaries.
+        effort: request.settings.effort.clone().or_else(|| {
+            (request.kind == Kind::Codex && !matches!(operation, Operation::RestrictedText(_)))
+                .then(|| "low".into())
+        }),
         ..Default::default()
     };
     let mut output = String::new();
