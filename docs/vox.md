@@ -1,6 +1,6 @@
 # Vox
 
-Vox is an optional voice conversation in a native macOS notch panel. Enable it in Settings → Vox; it starts disabled. Open or end a call with Control Option Space, or the microphone button immediately above Subscriptions in the project rail. The global shortcut can be changed or disabled in Keyboard Shortcuts under App: Vox.
+Vox is an optional voice conversation in a native macOS notch panel. Enable it in Settings → Vox; it starts disabled. Open or end a call with Control Option Space. The global shortcut can be changed or disabled in Keyboard Shortcuts under App: Vox.
 
 The face appears to the left of the display notch, with a small status dot on the right: green while listening, amber while thinking, blue while replying, white while connecting or saving, and red after an error. The dot pulses gently and faster while you speak. Hovering it replaces it with a stop control during a call, or a start control when no call is running. The black surface uses the display's safe area and auxiliary top regions rather than fixed MacBook dimensions. Displays without a notch use a top-center panel. Silent replies expand a bounded text area below it. The panel opens without activating the main window and stays available across Spaces and while the main window is hidden or minimized.
 

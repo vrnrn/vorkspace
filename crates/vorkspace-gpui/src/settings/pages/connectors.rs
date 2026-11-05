@@ -48,7 +48,7 @@ impl SettingsView {
                 vec![self.feature_link(section, cx), toggle],
             ));
         }
-        for section in [Section::Notes, Section::Meetings, Section::Todos] {
+        for section in [Section::Notes, Section::Todos] {
             let toggle = self.local_feature_toggle(section, cx);
             rows.push(self.row(
                 None,
@@ -86,7 +86,6 @@ impl SettingsView {
     fn local_feature_toggle(&self, section: Section, cx: &mut Context<Self>) -> AnyElement {
         let enabled = match section {
             Section::Notes => self.prefs.notes,
-            Section::Meetings => self.prefs.meetings,
             Section::Todos => self.prefs.todos,
             _ => unreachable!(),
         };
@@ -97,17 +96,15 @@ impl SettingsView {
             false,
             cx,
             move |this, enabled, cx| {
-                if section == Section::Meetings && !enabled && crate::meetings::capture::active(cx)
-                {
+                if section == Section::Notes && !enabled && crate::meetings::capture::active(cx) {
                     this.meeting_toggle_error =
-                        Some("Stop the current recording before turning off Meetings.".into());
+                        Some("Stop the current recording before turning off Notes.".into());
                     cx.notify();
                     return;
                 }
                 this.meeting_toggle_error = None;
                 this.update(cx, |p| match section {
                     Section::Notes => p.notes = enabled,
-                    Section::Meetings => p.meetings = enabled,
                     Section::Todos => p.todos = enabled,
                     _ => unreachable!(),
                 });
@@ -122,12 +119,12 @@ impl SettingsView {
     ) -> Vec<AnyElement> {
         let description = match section {
             Section::Notes => {
-                "Show Notes in workspace navigation. Use @note to mention a saved note."
+                "Write notes, record meetings, and use @note to reference them in chats."
             }
             Section::Todos => {
                 "Show To-dos in workspace navigation. Saved tasks stay available when you turn it back on."
             }
-            _ => "Show Meetings in workspace navigation. Saved transcripts and summaries are kept.",
+            _ => unreachable!(),
         };
         let toggle = self.local_feature_toggle(section, cx);
         vec![self.row(
@@ -171,8 +168,8 @@ impl SettingsView {
         Ok(self.meeting_editor.as_ref().unwrap())
     }
 
-    pub(super) fn meetings_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut page = self.local_feature_page(Section::Meetings, cx);
+    pub(super) fn notes_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut page = self.local_feature_page(Section::Notes, cx);
         page.extend(self.meeting_toggle_error.clone().map(note));
         let editor = match self.meeting_editor(cx) {
             Ok(editor) => editor,
@@ -222,7 +219,12 @@ impl SettingsView {
             .filter(|kind| provider::supports_text_only(*kind))
             .and_then(|kind| self.discovered_models(kind, cx))
             .or_else(|| self.ctx.catalogs.get(&selected));
-        let mut controls = vec![div().w(px(200.)).child(model.clone()).into_any_element()];
+        let mut controls = vec![
+            crate::controls::page::field_frame()
+                .w(px(200.))
+                .child(model.clone())
+                .into_any_element(),
+        ];
         if let Some(models) = models.filter(|models| !models.is_empty()) {
             let mut choices = vec![(String::new(), "Browse models".into(), None)];
             choices.extend(
@@ -252,7 +254,7 @@ impl SettingsView {
         let save = secondary_button(
             "save-meeting-settings",
             "Save summary settings",
-            true,
+            false,
             false,
         )
         .child("Save")

@@ -385,7 +385,7 @@ impl SettingsView {
         ];
         if let Some(center) = crate::accounts::get(cx) {
             subscriptions.push(cx.observe(&center, |this, _, cx| {
-                if matches!(this.section, Section::Providers | Section::Meetings) {
+                if matches!(this.section, Section::Providers | Section::Notes) {
                     this.load_catalogs(false, cx);
                 }
                 cx.notify();
@@ -481,7 +481,7 @@ impl SettingsView {
         this
     }
     pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.section, Section::Providers | Section::Meetings)
+        if matches!(self.section, Section::Providers | Section::Notes)
             && let Some(center) = crate::accounts::get(cx)
         {
             center.update(cx, |center, cx| {
@@ -502,7 +502,7 @@ impl SettingsView {
                 this.discovery = data;
                 this.discovery_loading = false;
                 this.worktree_sizes_project.clear();
-                if matches!(this.section, Section::Providers | Section::Meetings) {
+                if matches!(this.section, Section::Providers | Section::Notes) {
                     this.load_catalogs(true, cx);
                 }
                 if this.section == Section::Mcp {
@@ -621,7 +621,7 @@ impl SettingsView {
             self.leave_connections(cx);
             self.section = section;
             self.watch_connections(cx);
-            if matches!(section, Section::Providers | Section::Meetings) {
+            if matches!(section, Section::Providers | Section::Notes) {
                 self.load_catalogs(false, cx);
             }
             if section == Section::Mcp {
@@ -849,16 +849,8 @@ impl SettingsView {
                             .flex_shrink_0()
                             .child(self.search_anchor.probe())
                             .child(
-                                div()
-                                    .h(px(28.))
+                                crate::controls::page::search_frame(&self.search.focus_handle(cx))
                                     .w(px(192.))
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(content(0.1))
-                                    .px_2()
                                     .child(icon("search-01", 14.).text_color(content(0.45)))
                                     .child(div().min_w_0().flex_1().child(self.search.clone()))
                                     .when(!self.search_query.is_empty(), |d| {

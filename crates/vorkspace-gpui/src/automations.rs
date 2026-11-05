@@ -1,13 +1,14 @@
 //! Native counterpart of AutomationsView: persisted list, example gallery,
 //! trigger editor and run history. All scheduling lives in vorkspace-core.
 use crate::{
+    controls::page,
     input::{self, Input},
     pickers::{ModelList, ModelPicked, ProjectPicked, ProjectPicker, cached_model_name},
     popover::{Anchor, AnchorSlot, popover},
 };
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Role, SharedString,
-    Subscription, Window, div, prelude::*, px, rgb,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Role, ScrollHandle,
+    SharedString, Subscription, Window, div, prelude::*, px, rgb,
 };
 use serde::Deserialize;
 use std::{
@@ -27,6 +28,10 @@ use vorkspace_ui::theme::*;
 
 mod editor;
 mod gallery;
+#[cfg(test)]
+mod screenshots;
+#[cfg(test)]
+mod tests;
 mod trigger_menu;
 
 /// Event providers and schedules are separate from agent harness branding.
@@ -39,10 +44,10 @@ fn trigger_mark(kind: &str, side: f32) -> AnyElement {
             .into_any_element();
     }
     let (path, color) = match kind {
-        "time" => ("clock", content(0.45)),
-        "github" => ("inbox-github", content(0.65)),
+        "time" => ("clock", page::secondary_ink()),
+        "github" => ("inbox-github", page::secondary_ink()),
         "jira" => ("inbox-jira", rgb(0x2684ff).into()),
-        _ => ("zap", content(0.45)),
+        _ => ("zap", page::secondary_ink()),
     };
     icon(path, side).text_color(color).into_any_element()
 }
@@ -119,9 +124,14 @@ pub(crate) struct Automations {
     saving: bool,
     running: bool,
     gallery: bool,
+    narrow_detail: bool,
     category: String,
     templates: Vec<Template>,
     filter: Entity<Input>,
+    list_scroll: ScrollHandle,
+    gallery_scroll: ScrollHandle,
+    settings_scroll: ScrollHandle,
+    history_scroll: ScrollHandle,
     focus: FocusHandle,
     _filter_subscription: Subscription,
     history: bool,
@@ -154,8 +164,14 @@ impl Automations {
         projects: Vec<String>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter =
-            cx.new(|cx| Input::field("Filter automations", "Filter automations", content(0.4), cx));
+        let filter = cx.new(|cx| {
+            Input::field(
+                "Filter automations",
+                "Filter automations",
+                page::secondary_ink(),
+                cx,
+            )
+        });
         let subscription = cx.subscribe(&filter, |_, _, _: &input::Changed, cx| cx.notify());
         let mut this = Self {
             service,
@@ -172,10 +188,15 @@ impl Automations {
             saving: false,
             running: false,
             gallery: true,
+            narrow_detail: false,
             category: "popular".into(),
             templates: serde_json::from_str(include_str!("automations/templates.json"))
                 .unwrap_or_default(),
             filter,
+            list_scroll: ScrollHandle::new(),
+            gallery_scroll: ScrollHandle::new(),
+            settings_scroll: ScrollHandle::new(),
+            history_scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             _filter_subscription: subscription,
             history: false,
@@ -238,6 +259,7 @@ impl Automations {
         self.selected = None;
         self.runs.clear();
         self.gallery = true;
+        self.narrow_detail = true;
         self.history = false;
         self.confirm_delete = false;
         self.choice = None;
@@ -246,6 +268,16 @@ impl Automations {
         self.project_picker = None;
         self.error = None;
         self.request_generation += 1;
+        cx.notify();
+    }
+    fn back_to_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.narrow_detail = false;
+        self.confirm_delete = false;
+        self.choice = None;
+        self.trigger_menu = None;
+        self.models = None;
+        self.project_picker = None;
+        window.focus(&self.filter.focus_handle(cx), cx);
         cx.notify();
     }
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -353,19 +385,44 @@ impl Automations {
         }
         self.selected = None;
         self.runs.clear();
+        self.narrow_detail = true;
+        self.settings_scroll = ScrollHandle::new();
+        self.history_scroll = ScrollHandle::new();
         self.set_editor(draft, false, cx);
+    }
+    fn open_selection(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected.as_deref() == Some(&id) && self.editor.is_some() {
+            self.narrow_detail = true;
+            cx.notify();
+        } else {
+            self.select(id, cx);
+        }
+        if self.narrow_detail && page::narrow(window) {
+            window.focus(&self.focus, cx);
+        }
     }
     fn select(&mut self, id: String, cx: &mut Context<Self>) {
         let Some(automation) = self.automations.iter().find(|a| a.id == id) else {
             return;
         };
         let draft = AutomationUpsert::from_automation(automation);
+        if self.selected.as_deref() != Some(&id) {
+            self.settings_scroll = ScrollHandle::new();
+            self.history_scroll = ScrollHandle::new();
+        }
         self.selected = Some(id);
+        self.narrow_detail = true;
         self.runs.clear();
         self.set_editor(draft, true, cx);
         self.refresh(cx);
     }
     fn set_editor(&mut self, draft: AutomationUpsert, saved: bool, cx: &mut Context<Self>) {
+        self.install_editor(draft, saved, cx);
+        self.load_folders(cx);
+        self.load_controls(cx);
+        cx.notify();
+    }
+    fn install_editor(&mut self, draft: AutomationUpsert, saved: bool, cx: &mut Context<Self>) {
         let name = cx.new(|cx| {
             let mut input = Input::automation_name(cx);
             input.set_text(draft.name.clone(), cx);
@@ -420,9 +477,6 @@ impl Automations {
         self.models = None;
         self.project_picker = None;
         self.error = None;
-        self.load_folders(cx);
-        self.load_controls(cx);
-        cx.notify();
     }
     fn rebuild_trigger_fields(&mut self, cx: &mut Context<Self>) {
         let Some(editor) = &mut self.editor else {
@@ -441,7 +495,7 @@ impl Automations {
                     let mut input = Input::field(
                         label.to_string(),
                         placeholder.to_string(),
-                        content(0.35),
+                        page::secondary_ink(),
                         cx,
                     );
                     input.set_text(text, cx);
@@ -834,28 +888,15 @@ fn project_name(path: &str) -> String {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| path.into())
 }
-fn button(
-    id: impl Into<gpui::ElementId>,
-    label: impl Into<SharedString>,
-) -> gpui::Stateful<gpui::Div> {
-    let label: SharedString = label.into();
-    crate::controls::button(id, label.clone(), true)
-        .px(px(12.))
-        .h(px(28.))
-        .rounded(px(6.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap(px(6.))
-        .text_size(px(12.))
-        .text_color(content(0.8))
-        .border_1()
-        .border_color(content(0.15))
-        .hover(|s| s.bg(content(0.1)).border_color(content(0.3)))
-        .child(label)
+fn detail_frame(narrow: bool) -> gpui::Div {
+    div()
+        .w_full()
+        .max_w(px(page::DETAIL_MAX))
+        .mx_auto()
+        .p(page::detail_padding(narrow))
 }
-impl Render for Automations {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl Automations {
+    fn render_list(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.filter.read(cx).content.to_lowercase();
         let visible: Vec<_> = self
             .automations
@@ -874,25 +915,19 @@ impl Render for Automations {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .p(px(6.))
+            .track_scroll(&self.list_scroll)
+            .p(px(8.))
             .flex()
             .flex_col()
-            .gap(px(2.));
+            .gap(px(4.));
         if visible.is_empty() {
-            list = list.child(
-                div()
-                    .p(px(12.))
-                    .text_size(px(12.))
-                    .line_height(px(19.))
-                    .text_color(content(0.5))
-                    .child(if self.loading {
-                        "Loading automations…"
-                    } else if query.trim().is_empty() {
-                        "No automations yet"
-                    } else {
-                        "No matching automations"
-                    }),
-            );
+            list = list.child(page::meta().px(px(8.)).py(px(4.)).child(if self.loading {
+                "Loading automations…"
+            } else if query.trim().is_empty() {
+                "No automations yet"
+            } else {
+                "No matching automations"
+            }));
         }
         for automation in visible {
             let id = automation.id.clone();
@@ -905,59 +940,54 @@ impl Render for Automations {
                 div()
                     .id(SharedString::from(format!("automation-{id}")))
                     .relative()
-                    .rounded(px(6.))
-                    .when(active, |d| d.bg(content(0.1)))
-                    .hover(|s| s.bg(content(0.05)))
                     .child(
-                        div()
-                            .id(SharedString::from(format!("open-{id}")))
-                            .role(Role::Button)
-                            .aria_label(format!("Open {}", automation.name))
-                            .px(px(10.))
-                            .py(px(8.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .child(
-                                div()
-                                    .pr(px(36.))
-                                    .truncate()
-                                    .text_size(px(10.))
-                                    .text_color(content(0.45))
-                                    .child(automation.trigger_label()),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(13.))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child(automation.name),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(5.))
-                                    .text_size(px(11.))
-                                    .text_color(content(0.45))
-                                    .child(self.project_mark(&automation.cwd, 12.))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .truncate()
-                                            .child(self.project_label(&automation.cwd)),
-                                    )
-                                    .child(provider_icon(kind.id(), 13.))
-                                    .child(
-                                        div()
-                                            .max_w(px(100.))
-                                            .truncate()
-                                            .child(cached_model_name(kind, model.as_deref())),
-                                    ),
-                            )
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)),
-                            ),
+                        page::row(
+                            SharedString::from(format!("open-{id}")),
+                            format!("Open {}", automation.name),
+                            active,
+                        )
+                        .role(Role::ListBoxOption)
+                        .aria_selected(active)
+                        .when(active, |d| {
+                            d.debug_selector(|| "automation-selected-row".into())
+                        })
+                        .flex()
+                        .flex_col()
+                        .child(
+                            page::meta()
+                                .pr(px(36.))
+                                .truncate()
+                                .child(automation.trigger_label()),
+                        )
+                        .child(
+                            page::label()
+                                .truncate()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(automation.name),
+                        )
+                        .child(
+                            page::meta()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .child(self.project_mark(&automation.cwd, page::ICON_SIZE))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .truncate()
+                                        .child(self.project_label(&automation.cwd)),
+                                )
+                                .child(provider_icon(kind.id(), page::ICON_SIZE))
+                                .child(
+                                    div()
+                                        .max_w(px(100.))
+                                        .truncate()
+                                        .child(cached_model_name(kind, model.as_deref())),
+                                ),
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| this.open_selection(id.clone(), window, cx),
+                        )),
                     )
                     .child(
                         div().absolute().right(px(10.)).top(px(8.)).child(
@@ -972,108 +1002,149 @@ impl Render for Automations {
                     ),
             );
         }
-        let aside = div()
-            .w(px(280.))
+        div()
+            .id("automation-sidebar")
+            .debug_selector(|| "automation-sidebar".into())
             .flex_shrink_0()
-            .border_r_1()
-            .border_color(content(0.07))
+            .when(narrow, |d| d.flex_1().min_w_0())
+            .when(!narrow, |d| {
+                d.w(px(page::LIST_WIDTH))
+                    .min_w(px(page::LIST_MIN))
+                    .max_w(px(page::LIST_MAX))
+            })
             .flex()
             .flex_col()
             .child(
-                div()
-                    .h(px(36.))
-                    .px(px(8.))
-                    .border_b_1()
-                    .border_color(content(0.07))
-                    .flex()
-                    .items_center()
-                    .gap(px(1.))
+                page::toolbar()
                     .child(
-                        div()
+                        page::search_frame(&self.filter.focus_handle(cx))
                             .flex_1()
-                            .min_w_0()
-                            .h(px(28.))
-                            .px(px(6.))
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(icon("search", 12.))
-                            .child(self.filter.clone()),
+                            .child(icon("search", page::ICON_SIZE))
+                            .child(div().flex_1().min_w_0().child(self.filter.clone())),
                     )
                     .child(
-                        icon_button("new-automation", "New automation", "plus").on_click(
-                            cx.listener(|this, _, _, cx| {
+                        page::icon_action("new-automation", "New automation", true)
+                            .debug_selector(|| "automation-new".into())
+                            .child(icon("plus", page::ICON_SIZE))
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 this.show_gallery(cx);
-                            }),
-                        ),
+                                if page::narrow(window) {
+                                    window.focus(&this.focus, cx);
+                                }
+                            })),
+                    )
+                    .when(
+                        narrow && self.selected.is_none() && self.editor.is_some(),
+                        |d| {
+                            d.child(
+                                page::action("resume-automation-draft", "Resume draft", true)
+                                    .debug_selector(|| "automation-resume-draft".into())
+                                    .child("Resume draft")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.narrow_detail = true;
+                                        window.focus(&this.focus, cx);
+                                        cx.notify();
+                                    })),
+                            )
+                        },
                     ),
             )
-            .child(list);
-        let main_content = if self.gallery || self.editor.is_none() {
-            self.render_gallery(cx)
-        } else {
-            self.render_editor(cx)
-        };
-        let mut root = div()
-            .id("automations-view")
-            .role(Role::Region)
-            .aria_label("Automations")
-            .track_focus(&self.focus)
-            .size_full()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .text_color(content(1.))
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" {
-                    // Let the trigger menu close its active submenu first.
-                    if this.trigger_menu.is_some() {
-                        cx.propagate();
-                        return;
+            .child(list)
+    }
+}
+
+impl Render for Automations {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let narrow = page::narrow(window);
+        let mut root =
+            div()
+                .id("automations-view")
+                .role(Role::Region)
+                .aria_label("Automations")
+                .track_focus(&self.focus)
+                .size_full()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .text_color(content(1.))
+                .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        // Let the trigger menu close its active submenu first.
+                        if this.trigger_menu.is_some() {
+                            cx.propagate();
+                            return;
+                        }
+                        if this.confirm_delete {
+                            this.confirm_delete = false;
+                        } else if this.choice.is_some()
+                            || this.trigger_menu.is_some()
+                            || this.models.is_some()
+                            || this.project_picker.is_some()
+                        {
+                            this.choice = None;
+                            this.trigger_menu = None;
+                            this.models = None;
+                            this.project_picker = None;
+                        } else if page::narrow(window) && this.narrow_detail {
+                            this.back_to_list(window, cx);
+                        } else if !page::narrow(window) && this.editor.is_some() && !this.gallery {
+                            this.show_gallery(cx);
+                        } else {
+                            cx.emit(Event::Close);
+                        }
+                        cx.stop_propagation();
+                        cx.notify();
                     }
-                    if this.confirm_delete {
-                        this.confirm_delete = false;
-                    } else if this.choice.is_some()
-                        || this.trigger_menu.is_some()
-                        || this.models.is_some()
-                        || this.project_picker.is_some()
-                    {
-                        this.choice = None;
-                        this.trigger_menu = None;
-                        this.models = None;
-                        this.project_picker = None;
-                    } else if this.editor.is_some() && !this.gallery {
-                        this.show_gallery(cx);
-                    } else {
-                        cx.emit(Event::Close);
-                    }
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            }))
-            .child(
-                div().flex_1().min_h_0().flex().child(aside).child(
+                }))
+                .child(
                     div()
                         .flex_1()
-                        .min_w_0()
                         .min_h_0()
                         .flex()
-                        .flex_col()
-                        .when_some(self.error.clone(), |d, error| {
-                            d.child(
-                                div()
-                                    .m(px(16.))
-                                    .p(px(10.))
-                                    .rounded(px(8.))
-                                    .bg(gpui::rgba(0xf8717114))
-                                    .text_size(px(12.))
-                                    .text_color(rgb(0xfca5a5))
-                                    .child(error),
-                            )
+                        .when(!narrow || !self.narrow_detail, |d| {
+                            d.child(self.render_list(narrow, cx))
                         })
-                        .child(main_content),
-                ),
-            );
+                        .when(!narrow || self.narrow_detail, |d| {
+                            d.child(
+                                page::detail_pane(!narrow)
+                                    .when(narrow, |d| {
+                                        d.child(
+                                            page::toolbar().child(
+                                                page::action(
+                                                    "automation-back",
+                                                    "Back to automations",
+                                                    true,
+                                                )
+                                                .debug_selector(|| "automation-back".into())
+                                                .child(icon("chevron-left", page::ICON_SIZE))
+                                                .child("Automations")
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.back_to_list(window, cx)
+                                                })),
+                                            ),
+                                        )
+                                    })
+                                    .child(if self.gallery || self.editor.is_none() {
+                                        self.render_gallery(narrow, cx)
+                                    } else {
+                                        self.render_editor(narrow, cx)
+                                    }),
+                            )
+                        }),
+                )
+                .when_some(self.error.clone(), |d, error| {
+                    d.child(
+                        page::meta()
+                            .id("automation-error")
+                            .role(Role::Alert)
+                            .m(px(16.))
+                            .p(px(12.))
+                            .rounded(px(page::CARD_CORNER))
+                            .bg(status(StatusColor::Danger, 0.08))
+                            .text_color(status(StatusColor::Danger, 1.))
+                            .child(error),
+                    )
+                });
         if let Some(menu) = &self.trigger_menu {
             root = root.child(
                 menu.read(cx)
@@ -1102,16 +1173,9 @@ impl Render for Automations {
                                 |(index, (value, label))| {
                                     let field = field.clone();
                                     let value = value.clone();
-                                    div()
-                                        .id(("automation-choice", index))
+                                    page::row(("automation-choice", index), label.clone(), false)
                                         .role(Role::MenuItem)
-                                        .aria_label(label.clone())
-                                        .px(px(8.))
-                                        .py(px(8.))
-                                        .rounded(px(6.))
-                                        .text_size(px(13.))
-                                        .hover(|s| s.bg(content(0.07)))
-                                        .child(label.clone())
+                                        .child(page::label().child(label.clone()))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.apply_choice(field.clone(), value.clone(), cx)
                                         }))

@@ -86,6 +86,12 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &crate::background_helper::Composer, cx| {
         clipboard_route(shell::status_menu::Action::QuickComposer, cx)
     });
+    cx.on_action(|_: &crate::background_helper::NewMeeting, cx| {
+        clipboard_route(shell::status_menu::Action::NewMeeting, cx)
+    });
+    cx.on_action(|_: &crate::background_helper::OpenMeeting, cx| {
+        clipboard_route(shell::status_menu::Action::OpenMeeting, cx)
+    });
     macro_rules! workspace_commands {
         ($($action:ty),+ $(,)?) => { $(workspace_fallback::<$action>(cx);)+ };
     }

@@ -2,8 +2,9 @@
 use super::*;
 
 impl Inbox {
-    pub(super) fn summary_body_width(&self) -> Pixels {
-        (self.summary_width.get().min(px(1024.)) - px(64.)).max(px(1.))
+    pub(super) fn summary_body_width(&self, window: &Window) -> Pixels {
+        let inset = detail_inset(window);
+        (self.summary_width.get().min(px(page::DETAIL_MAX)) - inset - inset).max(px(1.))
     }
 
     pub(super) fn summary_view(
@@ -102,11 +103,10 @@ impl Inbox {
         let can_post = !self.posting && !self.comment.read(cx).content.trim().is_empty();
         let body = if ix == 0 {
             div()
-                .pt(px(20.))
-                .pb(px(20.))
+                .py(detail_inset(window))
                 .flex()
                 .flex_col()
-                .gap(px(20.))
+                .gap(px(16.))
                 .when(!item.labels.is_empty(), |d| {
                     d.child(
                         div()
@@ -123,14 +123,7 @@ impl Inbox {
                     self.details
                         .as_ref()
                         .is_some_and(|d| d.body.trim().is_empty()),
-                    |d| {
-                        d.child(
-                            div()
-                                .text_size(px(13.))
-                                .text_color(content(0.45))
-                                .child("No description"),
-                        )
-                    },
+                    |d| d.child(page::meta().child("No description")),
                 )
                 .when_some(self.document.clone(), |d, document| {
                     d.child(
@@ -139,7 +132,7 @@ impl Inbox {
                             .flex_shrink_0()
                             .child(document::DocumentElement::new(
                                 document,
-                                self.summary_body_width(),
+                                self.summary_body_width(window),
                                 None,
                             )),
                     )
@@ -150,25 +143,23 @@ impl Inbox {
                 .into_any_element()
         } else if ix + 1 == count {
             div()
-                .pb(px(20.))
+                .pb(detail_inset(window))
                 .child(
                     div()
                         .w_full()
                         .flex_shrink_0()
                         .border_t_1()
-                        .border_color(content(0.07))
-                        .pt(px(20.))
+                        .border_color(page::divider())
+                        .pt(px(16.))
                         .flex()
                         .flex_col()
                         .gap(px(8.))
                         .when_some(self.reply.clone(), |d, (_, author)| {
                             d.child(
-                                div()
+                                page::meta()
                                     .flex()
                                     .items_center()
                                     .gap(px(8.))
-                                    .text_size(px(12.))
-                                    .text_color(content(0.5))
                                     .child(
                                         div()
                                             .min_w_0()
@@ -177,7 +168,6 @@ impl Inbox {
                                     )
                                     .child(
                                         icon_button("inbox-cancel-reply", "Cancel reply", "close")
-                                            .size(px(20.))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.reply = None;
                                                 this.post_error = None;
@@ -188,9 +178,9 @@ impl Inbox {
                         })
                         .child(
                             div()
-                                .rounded(px(6.))
+                                .rounded(px(page::CARD_CORNER))
                                 .border_1()
-                                .border_color(content(0.1))
+                                .border_color(page::divider())
                                 .bg(content(0.05))
                                 .flex()
                                 .flex_col()
@@ -201,48 +191,43 @@ impl Inbox {
                                         .when(self.posting, |d| d.opacity(0.4))
                                         .child(self.comment.clone()),
                                 )
-                                .child(
+                                .child({
+                                    let label = if self.posting {
+                                        "Posting…"
+                                    } else if self.reply.is_some() {
+                                        "Reply"
+                                    } else {
+                                        "Comment"
+                                    };
                                     div().px(px(8.)).pb(px(8.)).flex().justify_end().child(
-                                        action(
-                                            "inbox-post-comment",
-                                            if self.posting {
-                                                "Posting..."
-                                            } else if self.reply.is_some() {
-                                                "Reply"
-                                            } else {
-                                                "Comment"
-                                            },
-                                        )
-                                        .px(px(12.))
-                                        .bg(content(1.))
-                                        .text_color(shell_fill())
-                                        .when(!can_post, |d| d.opacity(0.4))
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.post_comment(cx)),
-                                        ),
-                                    ),
-                                ),
+                                        page::primary("inbox-post-comment", label, !can_post)
+                                            .child(label)
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.post_comment(cx)),
+                                            ),
+                                    )
+                                }),
                         )
                         .when_some(self.post_error.clone(), |d, text| d.child(error(text))),
                 )
                 .into_any_element()
         } else if discussion && ix == 1 {
             div()
-                .pb(px(if self.activity.is_empty() { 20. } else { 12. }))
+                .pb(px(if self.activity.is_empty() { 16. } else { 12. }))
                 .children(self.discussion_heading(item, window, cx))
                 .into_any_element()
         } else {
             div()
-                .pb(px(if ix + 2 == count { 20. } else { 0. }))
+                .pb(px(if ix + 2 == count { 16. } else { 0. }))
                 .child(self.discussion_row(item, ix - 2, window, cx))
                 .into_any_element()
         };
         div()
             .id(("inbox-summary-row", ix))
             .w_full()
-            .max_w(px(1024.))
+            .max_w(px(page::DETAIL_MAX))
             .mx_auto()
-            .px(px(32.))
+            .px(detail_inset(window))
             .child(body)
             .into_any_element()
     }
@@ -266,36 +251,113 @@ impl Inbox {
             .into_any_element()
     }
 
-    pub(super) fn checks_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        div().id("inbox-checks-scroll").min_h_0().flex_1().overflow_y_scroll().px(px(32.)).py(px(20.))
+    pub(super) fn checks_view(&self, inset: Pixels, cx: &mut Context<Self>) -> AnyElement {
+        let body = div()
+            .w_full()
+            .max_w(px(page::DETAIL_MAX))
+            .mx_auto()
+            .p(inset)
             .when(self.extra_loading, |d| d.child(message("Loading checks…")))
             .when_some(self.extra_error.clone(), |d, text| d.child(error(text)))
-            .when_some(self.checks.clone(), |d, checks| {
-                let failed = checks.checks.iter().filter(|c| matches!(c.state.to_lowercase().as_str(), "failure" | "failed" | "error" | "timed_out" | "cancelled" | "action_required")).cloned().collect::<Vec<_>>();
-                d.when(checks.checks.is_empty(), |d| d.child(message("No checks reported")))
-                    .when(!failed.is_empty(), |d| d.child(div().mb(px(12.)).flex().items_center().gap(px(8.))
-                        .child(div().flex_1().text_size(px(12.)).text_color(content(0.7)).child(format!("{} failing checks", failed.len())))
-                        .child(action("inbox-fix-checks", "Fix with agent").bg(content(0.1)).on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(mut item) = this.item() {
-                                if item.project_path.is_empty() { item.project_path = this.start_project.to_string_lossy().into_owned(); }
-                                let evidence = failed.iter().map(|check| format!("{}: {} {}", check.name, check.state, check.url.as_deref().unwrap_or(""))).collect::<Vec<_>>().join("\n");
-                                let prompt = format!("Investigate and repair the failing CI checks for {} {}: {}\n{}\n\n{}\n\nRead the check logs, reproduce the failures, implement the fix, and run relevant checks.", item.repo, item.reference(), item.title, item.url, evidence);
-                                cx.emit(Event::StartSession { item: Box::new(item), prompt, bot: None });
-                            }
-                        })))))
-                    .children(checks.checks.iter().enumerate().map(|(ix, check)| {
-                        let state = check.state.to_lowercase();
-                        let color: Hsla = if matches!(state.as_str(), "success" | "neutral" | "skipped") { rgb(0x4ade80).into() }
-                            else if matches!(state.as_str(), "failure" | "failed" | "error" | "timed_out" | "cancelled" | "action_required") { rgb(0xf87171).into() }
-                            else { rgb(0xfbbf24).into() };
-                        let url = check.url.clone();
-                        div().id(("inbox-check", ix)).py(px(12.)).border_b_1().border_color(content(0.07)).flex().items_center().gap(px(10.))
-                            .child(icon(if state == "success" { "check-circle" } else { "circle-dot" }, 15.).text_color(color))
-                            .child(div().flex_1().min_w_0().child(div().text_size(px(12.)).text_color(content(0.85)).child(check.name.clone()))
-                                .child(div().text_size(px(11.)).text_color(content(0.4)).child(check.workflow.clone())))
-                            .child(div().text_size(px(11.)).text_color(color).child(check.state.replace('_', " ").to_lowercase()))
-                            .when(url.is_some(), |d| d.child(action(format!("inbox-check-link-{ix}"), "Details ↗").on_click(move |_, _, cx| { if let Some(url) = &url { cx.open_url(url); } })))
-                    }))
-            }).into_any_element()
+            .when_some(self.checks.as_ref(), |d, checks| {
+                let failed = checks
+                    .checks
+                    .iter()
+                    .filter(|check| failed_check(&check.state))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                d.when(checks.checks.is_empty(), |d| {
+                    d.child(page::empty(
+                        action_icon("check-circle", page::secondary_ink()).size(px(24.)),
+                        "No checks reported",
+                        "",
+                    ))
+                })
+                .when(!failed.is_empty(), |d| {
+                    d.child(
+                        page::meta()
+                            .mb(px(12.))
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(div().flex_1().child(format!("{} failing checks", failed.len())))
+                            .child(
+                                page::secondary("inbox-fix-checks", "Fix with agent", false, false)
+                                    .child("Fix with agent")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(mut item) = this.item() {
+                                            if item.project_path.is_empty() {
+                                                item.project_path =
+                                                    this.start_project.to_string_lossy().into_owned();
+                                            }
+                                            let evidence = failed
+                                                .iter()
+                                                .map(|check| format!(
+                                                    "{}: {} {}",
+                                                    check.name,
+                                                    check.state,
+                                                    check.url.as_deref().unwrap_or("")
+                                                ))
+                                                .collect::<Vec<_>>()
+                                                .join("\n");
+                                            let prompt = format!("Investigate and repair the failing CI checks for {} {}: {}\n{}\n\n{}\n\nRead the check logs, reproduce the failures, implement the fix, and run relevant checks.", item.repo, item.reference(), item.title, item.url, evidence);
+                                            cx.emit(Event::StartSession {
+                                                item: Box::new(item),
+                                                prompt,
+                                                bot: None,
+                                            });
+                                        }
+                                    })),
+                            ),
+                    )
+                })
+                .children(checks.checks.iter().enumerate().map(|(ix, check)| {
+                    let state = check.state.to_lowercase();
+                    let color: Hsla = if matches!(state.as_str(), "success" | "neutral" | "skipped") {
+                        status(StatusColor::Success, 1.)
+                    } else if failed_check(&state) {
+                        status(StatusColor::Danger, 1.)
+                    } else {
+                        status(StatusColor::Warning, 1.)
+                    };
+                    div()
+                        .id(("inbox-check", ix))
+                        .py(px(12.))
+                        .border_b_1()
+                        .border_color(page::divider())
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(action_icon(
+                            if state == "success" { "check-circle" } else { "circle-dot" },
+                            color,
+                        ))
+                        .child(
+                            div().flex_1().min_w_0()
+                                .child(page::label().child(check.name.clone()))
+                                .child(page::meta().child(check.workflow.clone())),
+                        )
+                        .child(
+                            page::meta()
+                                .text_color(color)
+                                .child(state.replace('_', " ")),
+                        )
+                        .when_some(check.url.clone(), |d, url| {
+                            d.child(
+                                action(format!("inbox-check-link-{ix}"), "Details ↗")
+                                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                            )
+                        })
+                }))
+            });
+        div()
+            .id("inbox-checks-scroll")
+            .min_h_0()
+            .flex_1()
+            .overflow_y_scroll()
+            .child(body)
+            .into_any_element()
     }
 }

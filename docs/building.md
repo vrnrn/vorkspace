@@ -1,6 +1,6 @@
 # Building vorkspace
 
-The root Cargo workspace owns the desktop, its clipboard helper, and the shared crates. See the [repository map](repository.md) for what each crate owns.
+The root Cargo workspace owns the desktop app, its background helper, and the shared crates. See the [repository map](repository.md) for what each crate owns.
 
 ## Requirements
 
@@ -33,13 +33,13 @@ This builds the app and helper in the `native-dev` Cargo profile, which rebuilds
 
 The profile and data selection are independent. Everything after `--` goes to the app unchanged.
 
-### The clipboard helper
+### The background helper
 
-History, dictation, ⌘⇧C and the menu bar icon belong to `vorkspace-helper`, a separate process nested in the bundle at `Contents/Helpers/vorkspace helper.app`. While **Keep recent copies** or **Dictation** is on, it keeps running after the development app exits, by design:
+The `vorkspace-helper` process handles clipboard history, ⌘⇧C, dictation and meeting capture. The bundle includes it at `Contents/Helpers/vorkspace helper.app`. It stays available after the development app exits while **Keep recent copies** or **Dictation** is on.
 
 - Rebuilding replaces it on the next launch, which clears its history.
 - Each bundle path gets its own helper, so a development build and the installed app can run side by side. You'll see two menu bar icons, and only the first gets ⌘⇧C. The other reports that in Settings.
-- To stop it, use Quit in the clipboard menu or turn off both **Keep recent copies** and **Dictation**. See [dictation](dictation.md) for its permissions and custom words.
+- Quit in the clipboard menu stops the helper. When no note is recording, turning off both **Keep recent copies** and **Dictation** also stops it. See the [dictation guide](dictation.md) for permissions and custom words.
 
 `cargo run` builds only the app, and the app looks for the helper beside its own binary. To include it, build both in the same profile:
 
@@ -56,7 +56,7 @@ npm run build
 
 This compiles the app and helper with the release profile, packages `target/release/vorkspace.app`, and installs it to `/Applications/vorkspace.app` when that's safe. `VORKSPACE_NO_INSTALL=1` skips installing. To package a build by hand, use the commands in [verification](testing.md).
 
-The app provides **Restart vorkspace** in its application menu and Command Palette (`⌘⌥R`). When developing from inside the installed app, run `npm run build`, confirm installation succeeded, then use Restart to load it. Restart relaunches the bundle that is running, so a `native-dev` build stays on `target/native-dev/vorkspace.app` even when an older copy is installed. Restart prompts about unsaved file edits and uses the normal shutdown hooks for drafts, workspace state, voice, and provider processes. Its relaunch helper waits for the old process to exit before opening the successor. On macOS it prefers `/Applications/vorkspace.app`, so use the runner's `r` for a separate development bundle. Restart does not compile code; `cargo build` alone does not update the installed app bundle.
+The app provides **Restart vorkspace** in its application menu and Command Palette (`⌘⌥R`). When developing from inside the installed app, run `npm run build`, confirm installation succeeded, then use Restart to load it. Restart relaunches the bundle that is running, so a `native-dev` build stays on `target/native-dev/vorkspace.app` even when an older copy is installed. Restart prompts about unsaved file edits and uses the normal shutdown hooks for drafts, workspace state, voice, and provider processes. Its relaunch helper waits for the old process to exit before opening the successor. Restart does not compile code; use the runner's `r` to rebuild a development bundle. `cargo build` alone does not update the installed app bundle.
 
 `CARGO_TARGET_DIR` and `CARGO_BUILD_TARGET` override output placement. `CARGO_BUILD_JOBS` controls build concurrency. `npm run build` packages and installs locally but does not launch the app or publish a release.
 

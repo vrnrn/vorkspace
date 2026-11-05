@@ -19,6 +19,7 @@ pub use local_submissions::{
 };
 mod managed_sessions;
 mod notes;
+pub use notes::NoteRecording;
 mod peer_history;
 mod remote;
 mod remote_legacy;

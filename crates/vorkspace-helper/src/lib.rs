@@ -18,7 +18,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-const PROTOCOL: u32 = 9;
+const PROTOCOL: u32 = 10;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 const CONNECT_ATTEMPTS: usize = 60;
 const CONNECT_DELAY: Duration = Duration::from_millis(50);
@@ -43,6 +43,7 @@ pub enum Command {
     FinishAudio {
         id: String,
         owner: String,
+        run: String,
     },
     SetUpDictation,
     CancelDictation,
@@ -55,7 +56,10 @@ pub enum Command {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Action {
     Settings,
+    /// An older helper may still be delivering a click during replacement.
     Composer,
+    NewMeeting,
+    OpenMeeting,
     Quit,
 }
 
@@ -489,6 +493,18 @@ mod tests {
             control.action(Action::Composer),
             Step::Deliver(Action::Composer)
         );
+    }
+
+    #[test]
+    fn meeting_actions_survive_relaunch_and_keep_their_intent() {
+        for action in [Action::NewMeeting, Action::OpenMeeting] {
+            let mut control = Control::default();
+            control.configure(true);
+            assert_eq!(control.action(action), Step::LaunchApp);
+            assert_eq!(control.connected(), Some(Step::Deliver(action)));
+            assert_eq!(control.connected(), None);
+            assert_eq!(control.action(action), Step::Deliver(action));
+        }
     }
 
     #[test]

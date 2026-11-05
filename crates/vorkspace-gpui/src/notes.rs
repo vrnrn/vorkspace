@@ -1,17 +1,22 @@
 //! The desktop Notes split view, backed by the same notes and image assets.
-mod preview;
-
+mod recording;
 use crate::{
+    controls::page,
     file_tools::explorer::DraggedFile,
     input::{self, Input},
+    markdown::Document,
     popover::{Anchor, AnchorSlot, popover},
 };
 use gpui::{
     AnyElement, App, ClipboardItem, Context, CursorStyle, Entity, EventEmitter, ExternalPaths,
-    FocusHandle, Focusable, FontWeight, MouseButton, Role, Subscription, Task, Window, div,
-    prelude::*, px,
+    FocusHandle, Focusable, FontWeight, MouseButton, Role, ScrollHandle, Subscription, Task,
+    Window, div, prelude::*, px,
 };
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    time::Duration,
+};
 use vorkspace_core::notes::{self, Note};
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
@@ -27,6 +32,7 @@ pub(crate) struct Notes {
     notes: Vec<Note>,
     selected: Option<String>,
     query: Entity<Input>,
+    focus: FocusHandle,
     title: Entity<Input>,
     body: Entity<Input>,
     tag: Entity<Input>,
@@ -38,15 +44,24 @@ pub(crate) struct Notes {
     appearances: HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
     source: bool,
     modes: HashMap<String, bool>,
-    document: Option<Entity<preview::Preview>>,
+    document: Option<Entity<Document>>,
+    recording: Entity<crate::meetings::Page>,
+    recordings: HashMap<String, String>,
+    show_recording: bool,
+    ephemeral: HashSet<String>,
+    confirm_delete: bool,
     dirty: bool,
     revision: u64,
+    load_epoch: u64,
     loading: bool,
     error: Option<String>,
     debounce: Option<Task<()>>,
-    image_busy: bool,
+    image_note: Option<String>,
     image_drag: bool,
     list_width: f32,
+    list_scroll: ScrollHandle,
+    detail_scroll: ScrollHandle,
+    show_list: bool,
     resize: Option<(f32, f32)>,
     blurs_bound: bool,
     _subscriptions: Vec<Subscription>,
@@ -54,36 +69,67 @@ pub(crate) struct Notes {
 
 impl EventEmitter<Event> for Notes {}
 impl Focusable for Notes {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.query.focus_handle(cx)
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
     }
 }
 
 impl Notes {
     pub(crate) fn new(store: Database, cx: &mut Context<Self>) -> Self {
-        let query = cx.new(|cx| Input::field("Filter notes", "Filter notes", content(0.4), cx));
+        let recording = cx.new(|cx| crate::meetings::Page::new(store.clone(), cx));
+        let query =
+            cx.new(|cx| Input::field("Filter notes", "Filter notes", page::secondary_ink(), cx));
         let title = cx.new(|cx| {
-            let mut input = Input::field("Note title", "Untitled", content(0.35), cx);
-            input.set_font_size(20.);
+            let mut input = Input::field("Note title", "Untitled", page::secondary_ink(), cx);
+            input.set_font_size(page::TITLE_SIZE);
+            input.set_line_height(page::TITLE_LINE);
             input.set_max_chars(notes::MAX_TITLE);
             input
         });
         let body = cx.new(|cx| {
-            let mut input = Input::editor(cx);
-            input.set_font_size(13.);
-            input.set_editor_path("note.md".into());
-            input.set_max_chars(notes::MAX_BODY);
+            let mut input = Input::document_editor("Note Markdown", "note.md", notes::MAX_BODY, cx);
+            input.set_font_size(page::BODY_SIZE);
+            input.set_line_height(page::BODY_LINE);
             input
         });
         let tag = cx.new(|cx| {
-            let mut input = Input::field("Add note tag", "Add tag…", content(0.35), cx);
-            input.set_font_size(11.);
+            let mut input = Input::field("Add note tag", "Add tag…", page::secondary_ink(), cx);
+            input.set_font_size(page::META_SIZE);
             input.set_max_chars(notes::MAX_TAG_LENGTH + 1);
             input
         });
         let project_query =
-            cx.new(|cx| Input::field("Find project", "Find project…", content(0.4), cx));
+            cx.new(|cx| Input::field("Find project", "Find project…", page::secondary_ink(), cx));
         let subscriptions = vec![
+            cx.observe(&recording, |_, _, cx| cx.notify()),
+            cx.subscribe(&recording, |this, _, event: &crate::meetings::Event, cx| {
+                match event {
+                    crate::meetings::Event::Attached {
+                        note_id,
+                        recording_id,
+                    } => {
+                        this.revision = this.revision.wrapping_add(1);
+                        this.recordings
+                            .insert(note_id.clone(), recording_id.clone());
+                        if this.selected.as_ref() == Some(note_id) {
+                            this.show_recording = true;
+                        }
+                    }
+                    crate::meetings::Event::Deleted(id) => this.forget_note(id, cx),
+                    crate::meetings::Event::Changed => this.refresh(cx),
+                    crate::meetings::Event::SummaryReady(id) => {
+                        if this
+                            .selected
+                            .as_ref()
+                            .and_then(|note| this.recordings.get(note))
+                            == Some(id)
+                        {
+                            this.show_recording = true;
+                        }
+                    }
+                }
+                cx.notify();
+            }),
             cx.subscribe(&query, |_, _, _: &input::Changed, cx| cx.notify()),
             cx.subscribe(&title, |this, _, _: &input::Changed, cx| {
                 this.input_changed(cx)
@@ -110,6 +156,7 @@ impl Notes {
             notes: Vec::new(),
             selected: None,
             query,
+            focus: cx.focus_handle(),
             title,
             body,
             tag,
@@ -122,14 +169,23 @@ impl Notes {
             source: false,
             modes: HashMap::new(),
             document: None,
+            recording,
+            recordings: HashMap::new(),
+            show_recording: false,
+            ephemeral: HashSet::new(),
+            confirm_delete: false,
             dirty: false,
             revision: 0,
+            load_epoch: 0,
             loading: true,
             error: None,
             debounce: None,
-            image_busy: false,
+            image_note: None,
             image_drag: false,
-            list_width: 280.,
+            list_width: page::LIST_WIDTH,
+            list_scroll: ScrollHandle::new(),
+            detail_scroll: ScrollHandle::new(),
+            show_list: false,
             resize: None,
             blurs_bound: false,
             _subscriptions: subscriptions,
@@ -193,24 +249,38 @@ impl Notes {
     }
 
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.image_note.is_some() {
+            return;
+        }
         self.flush(cx);
         if self.dirty {
             return;
         }
         let revision = self.revision;
+        self.load_epoch = self.load_epoch.wrapping_add(1);
+        let epoch = self.load_epoch;
         let store = self.store.clone();
         let work = cx
             .background_executor()
-            .spawn(async move { locked(&store)?.list_notes() });
+            .spawn(async move { recording::load(&store) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
-                if this.revision != revision {
+                if this.revision != revision || this.load_epoch != epoch {
                     return;
                 }
                 match result {
-                    Ok(mut notes) => {
+                    Ok((mut notes, recordings)) => {
+                        this.recordings = recordings;
+                        this.ephemeral
+                            .retain(|id| !notes.iter().any(|note| &note.id == id));
+                        notes.extend(
+                            this.notes
+                                .iter()
+                                .filter(|note| this.ephemeral.contains(&note.id))
+                                .cloned(),
+                        );
                         // Preserve edits made while the refresh was in flight.
                         if this.dirty
                             && let Some(draft) = this.draft(cx)
@@ -218,14 +288,34 @@ impl Notes {
                             notes.retain(|note| note.id != draft.id);
                             notes.insert(0, draft);
                         }
+                        let content_changed = this.selected.as_ref().is_some_and(|id| {
+                            let before = this.notes.iter().find(|note| &note.id == id);
+                            let after = notes.iter().find(|note| &note.id == id);
+                            match (before, after) {
+                                (Some(a), Some(b)) => {
+                                    a.title != b.title
+                                        || a.body != b.body
+                                        || a.source_cwd != b.source_cwd
+                                }
+                                _ => true,
+                            }
+                        });
                         this.notes = notes;
                         let next = this
                             .selected
                             .clone()
                             .filter(|id| this.notes.iter().any(|note| &note.id == id))
                             .or_else(|| this.notes.first().map(|note| note.id.clone()));
-                        if !this.dirty || next != this.selected || this.document.is_none() {
+                        if next != this.selected
+                            || this.document.is_none()
+                            || (!this.dirty && content_changed)
+                        {
                             this.load_selection(next, cx);
+                        } else if let Some(id) = &this.selected {
+                            let recording_id = this.recordings.get(id);
+                            this.recording.update(cx, |page, cx| {
+                                page.show_note(id, recording_id.map(String::as_str), cx)
+                            });
                         }
                         this.error = None;
                     }
@@ -285,6 +375,7 @@ impl Notes {
     pub(crate) fn flush(&mut self, cx: &mut Context<Self>) {
         self.add_tag(cx);
         self.persist(true, cx);
+        self.recording.update(cx, |page, cx| page.flush_note(cx));
     }
 
     fn persist(&mut self, finalize: bool, cx: &mut Context<Self>) {
@@ -292,6 +383,14 @@ impl Notes {
         let Some(mut draft) = self.draft(cx) else {
             return;
         };
+        if self.ephemeral.contains(&draft.id)
+            && draft.title.trim().is_empty()
+            && draft.body.trim().is_empty()
+            && draft.tags.is_empty()
+        {
+            self.dirty = false;
+            return;
+        }
         let saved_title = self
             .notes
             .iter()
@@ -313,6 +412,7 @@ impl Notes {
             locked(&self.store).and_then(|store| store.upsert_note(&draft.upsert(finalize)));
         match result {
             Ok(saved) => {
+                self.ephemeral.remove(&saved.id);
                 self.revision = self.revision.wrapping_add(1);
                 if finalize {
                     self.title
@@ -332,17 +432,26 @@ impl Notes {
 
     fn select(&mut self, id: String, cx: &mut Context<Self>) {
         if self.selected.as_ref() == Some(&id) {
+            self.show_list = false;
+            cx.notify();
             return;
         }
         self.flush(cx);
         if self.dirty {
             return;
         }
+        self.discard_empty_draft(cx);
         self.load_selection(Some(id), cx);
     }
 
     fn load_selection(&mut self, id: Option<String>, cx: &mut Context<Self>) {
-        self.project_open = false;
+        let changed = self.selected != id;
+        if changed {
+            self.confirm_delete = false;
+            self.project_open = false;
+            self.show_list = false;
+            self.detail_scroll = ScrollHandle::new();
+        }
         self.selected = id;
         self.dirty = false;
         let note = self
@@ -350,6 +459,15 @@ impl Notes {
             .iter()
             .find(|note| Some(&note.id) == self.selected.as_ref())
             .cloned();
+        if let Some(note) = &note {
+            let recording_id = self.recordings.get(&note.id).cloned();
+            if changed {
+                self.show_recording = recording_id.is_some();
+            }
+            self.recording.update(cx, |page, cx| {
+                page.show_note(&note.id, recording_id.as_deref(), cx)
+            });
+        }
         self.title.update(cx, |input, cx| {
             input.set_text(
                 note.as_ref()
@@ -372,10 +490,9 @@ impl Notes {
         self.tag
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.source = note.as_ref().is_some_and(|note| {
-            self.modes
-                .get(&note.id)
-                .copied()
-                .unwrap_or(note.body.trim().is_empty() && note.title == "Untitled")
+            self.modes.get(&note.id).copied().unwrap_or(
+                note.body.trim().is_empty() && (note.title.is_empty() || note.title == "Untitled"),
+            )
         });
         self.update_preview(cx);
         cx.notify();
@@ -383,11 +500,12 @@ impl Notes {
 
     fn update_preview(&mut self, cx: &mut Context<Self>) {
         self.document = self.draft(cx).map(|note| {
-            cx.new(|_| {
-                preview::Preview::new(
+            cx.new(|cx| {
+                Document::note(
                     &note.body,
                     note.source_cwd.as_deref().unwrap_or(&self.cwd),
                     &self.store,
+                    cx,
                 )
             })
         });
@@ -398,20 +516,28 @@ impl Notes {
         if self.dirty {
             return;
         }
-        let result =
-            locked(&self.store).and_then(|store| store.create_note(Some(self.cwd.clone())));
-        match result {
-            Ok(note) => {
-                self.revision = self.revision.wrapping_add(1);
-                let id = note.id.clone();
-                self.notes.insert(0, note);
-                self.query
-                    .update(cx, |input, cx| input.set_text(String::new(), cx));
-                self.load_selection(Some(id), cx);
-                window.focus(&self.body.focus_handle(cx), cx);
-            }
-            Err(error) => self.error = Some(error),
-        }
+        self.discard_empty_draft(cx);
+        let now = vorkspace_core::time::now_ms().min(i64::MAX as u64) as i64;
+        let note = Note {
+            id: format!("note-{}", uuid::Uuid::new_v4().simple()),
+            slug: String::new(),
+            title: String::new(),
+            body: String::new(),
+            tags: Vec::new(),
+            source_session_id: None,
+            source_cwd: notes::is_project(&self.cwd).then(|| self.cwd.clone()),
+            slug_pending: true,
+            created_at: now,
+            updated_at: now,
+        };
+        self.ephemeral.insert(note.id.clone());
+        self.revision = self.revision.wrapping_add(1);
+        let id = note.id.clone();
+        self.notes.insert(0, note);
+        self.query
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        self.load_selection(Some(id), cx);
+        window.focus(&self.body.focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -419,17 +545,45 @@ impl Notes {
         let Some(id) = self.selected.clone() else {
             return;
         };
-        self.debounce = None;
-        let result = locked(&self.store).and_then(|store| store.delete_note(&id));
+        if self.image_note.as_ref() == Some(&id) {
+            return;
+        }
+        if !self.confirm_delete {
+            self.confirm_delete = true;
+            cx.notify();
+            return;
+        }
+        if self.recordings.contains_key(&id) {
+            self.recording
+                .update(cx, |page, cx| page.delete_note_recording(cx));
+        } else {
+            self.delete_saved_note(&id, cx);
+        }
+    }
+
+    fn delete_saved_note(&mut self, id: &str, cx: &mut Context<Self>) {
+        let selected = self.selected.as_deref() == Some(id);
+        if selected {
+            self.debounce = None;
+        }
+        let result = locked(&self.store).and_then(|store| store.delete_note(id));
         match result {
-            Ok(()) => {
-                self.revision = self.revision.wrapping_add(1);
-                self.notes.retain(|note| note.id != id);
-                self.modes.remove(&id);
-                self.dirty = false;
-                self.load_selection(self.notes.first().map(|note| note.id.clone()), cx);
-            }
+            Ok(()) => self.forget_note(id, cx),
             Err(error) => self.error = Some(error),
+        }
+        cx.notify();
+    }
+
+    fn forget_note(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.revision = self.revision.wrapping_add(1);
+        self.notes.retain(|note| note.id != id);
+        self.modes.remove(id);
+        self.ephemeral.remove(id);
+        self.recordings.remove(id);
+        if self.selected.as_deref() == Some(id) {
+            self.debounce = None;
+            self.dirty = false;
+            self.load_selection(self.notes.first().map(|note| note.id.clone()), cx);
         }
         cx.notify();
     }
@@ -488,7 +642,7 @@ impl Notes {
     }
 
     fn add_images(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        if paths.is_empty() || self.image_busy {
+        if paths.is_empty() || self.image_note.is_some() {
             return;
         }
         let Some(id) = self.selected.clone() else {
@@ -501,14 +655,19 @@ impl Notes {
             length..length
         };
         let store = self.store.clone();
-        self.image_busy = true;
+        let draft = self
+            .draft(cx)
+            .filter(|note| self.ephemeral.contains(&note.id))
+            .map(|note| note.upsert(false));
+        self.image_note = Some(id.clone());
+        self.revision = self.revision.wrapping_add(1);
         self.image_drag = false;
         let work = cx.background_executor().spawn(async move {
             let store = locked(&store)?;
             let mut images = Vec::new();
             let mut failure = None;
             for path in paths {
-                match store.save_note_image(&id, &path) {
+                match store.save_note_image(&id, &path, draft.as_ref()) {
                     Ok(image) => images.push(image),
                     Err(error) => failure = Some(error),
                 }
@@ -523,9 +682,10 @@ impl Notes {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.image_busy = false;
+                this.image_note = None;
                 match result {
                     Ok((id, images)) => {
+                        this.ephemeral.remove(&id);
                         let block = images
                             .iter()
                             .map(notes::image_markdown)
@@ -668,8 +828,8 @@ impl Notes {
                                 .child(
                                     div()
                                         .truncate()
-                                        .text_size(px(10.))
-                                        .text_color(content(0.4))
+                                        .text_size(px(page::META_SIZE))
+                                        .text_color(page::secondary_ink())
                                         .child(path.clone()),
                                 )
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -681,19 +841,38 @@ impl Notes {
         .into_any_element()
     }
 
-    fn detail(&mut self, note: Note, cx: &mut Context<Self>) -> AnyElement {
-        let body = note.body.clone();
+    fn shareable_note(&self, cx: &App) -> Option<Note> {
+        let mut note = self.draft(cx)?;
+        if self.show_recording {
+            let recording = self.recording.read(cx);
+            if !recording.is_for_note(&note.id) {
+                return None;
+            }
+            note.body = recording.selected_text()?.to_owned();
+        }
+        (!note.body.trim().is_empty()).then_some(note)
+    }
+
+    fn detail(&mut self, note: Note, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
         let source = note.source_session_id.clone();
-        let can_add = !body.trim().is_empty();
-        let project = div()
+        let attached = self.recordings.contains_key(&note.id);
+        let recording_ready = self.recording.read(cx).is_for_note(&note.id);
+        let can_add = if self.show_recording {
+            recording_ready
+                && self
+                    .recording
+                    .read(cx)
+                    .selected_text()
+                    .is_some_and(|text| !text.trim().is_empty())
+        } else {
+            !note.body.trim().is_empty()
+        };
+        let can_delete = self.image_note.as_ref() != Some(&note.id)
+            && (!attached || (recording_ready && self.recording.read(cx).can_delete_note()));
+        let project = page::action("note-move-project", "Move note to project", true)
             .relative()
-            .id("note-move-project")
-            .role(Role::Button)
-            .aria_label("Move note to project")
-            .rounded_md()
-            .px_1p5()
-            .py_1()
-            .hover(|style| style.bg(content(0.08)))
+            .min_w_0()
+            .max_w_full()
             .child(self.project_anchor.probe())
             .child(
                 div()
@@ -703,11 +882,16 @@ impl Notes {
                     .child(
                         note.source_cwd
                             .as_deref()
-                            .map(|path| self.project_mark(path, 12.))
-                            .unwrap_or_else(|| icon("folder", 12.).into_any_element()),
+                            .map(|path| self.project_mark(path, page::ICON_SIZE))
+                            .unwrap_or_else(|| icon("folder", page::ICON_SIZE).into_any_element()),
                     )
-                    .child(note.project_name().unwrap_or_else(|| "No project".into()))
-                    .child(icon("chevron-down", 11.)),
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(note.project_name().unwrap_or_else(|| "No project".into())),
+                    )
+                    .child(icon("chevron-down", page::ICON_SIZE)),
             )
             .on_click(cx.listener(|this, _, window, cx| {
                 this.project_open = !this.project_open;
@@ -718,82 +902,52 @@ impl Notes {
                 }
                 cx.notify();
             }));
-        let tags = div()
+        let tags = page::meta()
             .flex()
             .flex_wrap()
             .items_center()
-            .gap_1p5()
-            .text_size(px(11.))
-            .child(div().mr(px(2.)).text_color(content(0.45)).child("Tags"))
+            .gap_1()
+            .child("Tags")
             .children(note.tags.iter().enumerate().map(|(ix, tag)| {
                 let tag = tag.clone();
                 div()
-                    .h(px(24.))
+                    .h(px(page::CONTROL_HEIGHT))
                     .max_w(px(192.))
                     .flex()
                     .items_center()
                     .gap_1()
-                    .rounded_md()
+                    .rounded(px(page::CORNER))
                     .bg(content(0.08))
                     .pl_2()
                     .pr_1()
                     .text_color(content(0.7))
                     .child(div().truncate().child(format!("#{tag}")))
                     .child(
-                        div()
-                            .id(("remove-note-tag", ix))
-                            .role(Role::Button)
-                            .aria_label(format!("Remove #{tag}"))
-                            .size(px(16.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_sm()
-                            .hover(|style| style.bg(content(0.1)))
-                            .child(icon("close", 10.))
+                        page::icon_action(("remove-note-tag", ix), format!("Remove #{tag}"), true)
+                            .child(icon("close", page::ICON_SIZE))
                             .on_click(cx.listener(move |this, _, _, cx| this.remove_tag(&tag, cx))),
                     )
             }))
             .when(note.tags.len() < notes::MAX_TAGS, |d| {
-                d.child(div().min_w(px(80.)).flex_1().child(self.tag.clone()))
+                d.child(
+                    page::field_frame()
+                        .min_w(px(80.))
+                        .flex_1()
+                        .child(self.tag.clone()),
+                )
             });
-        // Solid ink on the inverted fill: dark text on a light button in dark
-        // mode, light text on a dark one in light mode.
-        let mut ink = shell_fill();
-        ink.a = 1.;
-        let danger: gpui::Hsla = gpui::rgb(0xf87171).into();
         let actions = div()
             .flex()
             .items_center()
             .flex_wrap()
             .gap_2()
             .child(
-                div()
-                    .id("note-add-to-chat")
-                    .role(Role::Button)
-                    .aria_label("Add to chat")
-                    .h(px(28.))
-                    .px_3()
-                    .rounded_md()
-                    .flex()
-                    .items_center()
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .bg(content(1.))
-                    .text_color(ink)
-                    .map(|d| {
-                        if can_add {
-                            d.cursor_pointer()
-                                .hover(move |s| s.bg(content(0.85)).text_color(ink))
-                        } else {
-                            d.opacity(0.4)
-                        }
-                    })
+                page::primary("note-add-to-chat", "Add to chat", !can_add)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if can_add {
                             this.flush(cx);
                             if !this.dirty
-                                && let Some(note) = this.draft(cx)
+                                && let Some(note) = this.shareable_note(cx)
                             {
                                 cx.emit(Event::AddToChat(note));
                             }
@@ -802,37 +956,32 @@ impl Notes {
                     .child("Add to chat"),
             )
             .child(
-                div()
-                    .id("delete-note")
-                    .role(Role::Button)
-                    .aria_label("Delete note")
-                    .h(px(28.))
-                    .px_3()
-                    .rounded_md()
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(danger)
-                    .cursor_pointer()
-                    .hover(|style| style.bg(content(0.08)))
-                    .child(icon("trash", 14.).text_color(danger))
-                    .child("Delete")
-                    .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
+                page::secondary("delete-note", "Delete note", true, !can_delete)
+                    .child(icon("trash", page::ICON_SIZE))
+                    .child(if self.confirm_delete {
+                        "Confirm delete"
+                    } else {
+                        "Delete"
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if can_delete {
+                            this.delete(cx);
+                        }
+                    })),
             )
+            .when(self.confirm_delete, |d| {
+                d.child(
+                    page::action("cancel-delete-note", "Cancel deletion", true)
+                        .child("Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.confirm_delete = false;
+                            cx.notify();
+                        })),
+                )
+            })
             .when_some(source, |d, source| {
                 d.child(
-                    div()
-                        .id("note-source-session")
-                        .role(Role::Button)
-                        .aria_label("Open source conversation")
-                        .rounded_md()
-                        .px_2()
-                        .py_1()
-                        .text_size(px(12.))
-                        .text_color(content(0.5))
-                        .hover(|style| style.bg(content(0.08)))
+                    page::action("note-source-session", "Open source conversation", true)
                         .child("Source conversation")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.flush(cx);
@@ -852,55 +1001,88 @@ impl Notes {
                 )
             })
             .child(
-                icon_button("copy-note", "Copy note", "response-copy").on_click(move |_, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(body.clone()))
-                }),
+                page::icon_action("copy-note", "Copy selected note text", can_add)
+                    .child(icon("response-copy", page::ICON_SIZE))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(note) = this.shareable_note(cx) {
+                            cx.write_to_clipboard(ClipboardItem::new_string(note.body));
+                        }
+                    })),
             );
+        let actions = if recording_ready {
+            self.recording.update(cx, |page, cx| {
+                page.note_controls(actions.into_any_element(), self.show_recording, cx)
+            })
+        } else {
+            actions.into_any_element()
+        };
         let tabs = div()
             .id("note-sections")
             .role(Role::TabList)
             .aria_label("Note sections")
-            .h(px(36.))
+            .h(px(page::TOOLBAR_HEIGHT))
             .flex()
-            .items_stretch()
-            .gap_4()
+            .items_center()
+            .gap_1()
             .border_b_1()
-            .border_color(content(0.07))
+            .border_color(page::divider())
             .children(
                 [(false, "Preview"), (true, "Source")].map(|(source, label)| {
-                    div()
-                        .id(if source {
+                    page::tab(
+                        if source {
                             "note-source"
                         } else {
                             "note-preview"
-                        })
-                        .role(Role::Tab)
-                        .aria_label(label)
-                        .aria_selected(self.source == source)
-                        .flex()
-                        .items_center()
-                        .text_size(px(12.))
-                        .text_color(content(if self.source == source { 1. } else { 0.5 }))
-                        .when(self.source == source, |d| {
-                            d.border_b_2().border_color(content(1.))
-                        })
-                        .hover(|style| style.text_color(content(1.)))
-                        .child(label)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.source = source;
-                            if let Some(id) = &this.selected {
-                                this.modes.insert(id.clone(), source);
-                            }
-                            if source {
-                                window.focus(&this.body.focus_handle(cx), cx);
+                        },
+                        label,
+                        !self.show_recording && self.source == source,
+                    )
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.source = source;
+                        this.show_recording = false;
+                        this.recording
+                            .update(cx, |page, cx| page.hide_note_content(cx));
+                        if let Some(id) = &this.selected {
+                            this.modes.insert(id.clone(), source);
+                        }
+                        if source {
+                            window.focus(&this.body.focus_handle(cx), cx);
+                        } else {
+                            this.flush(cx);
+                            this.update_preview(cx);
+                        }
+                        cx.notify();
+                    }))
+                }),
+            )
+            .when(attached, |d| {
+                d.children(
+                    [(false, "Summary"), (true, "Transcript")].map(|(transcript, label)| {
+                        page::tab(
+                            if transcript {
+                                "note-transcript"
                             } else {
-                                this.flush(cx);
-                                this.update_preview(cx);
+                                "note-summary"
+                            },
+                            label,
+                            self.show_recording
+                                && self.recording.read(cx).transcript_selected() == transcript,
+                        )
+                        .child(label)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.flush(cx);
+                            if this.dirty {
+                                return;
                             }
+                            this.show_recording = true;
+                            this.recording
+                                .update(cx, |page, cx| page.note_section(transcript, cx));
                             cx.notify();
                         }))
-                }),
-            );
+                    }),
+                )
+            });
         let editor = div()
             .id("note-image-drop-zone")
             .relative()
@@ -935,7 +1117,8 @@ impl Notes {
                 this.add_images(vec![file.0.clone()], cx)
             }))
             .when(self.source, |d| {
-                d.h(px((self.body.read(cx).editor_line_count() as f32 * 20.
+                d.h(px((self.body.read(cx).editor_line_count() as f32
+                    * page::BODY_LINE
                     + 16.)
                     .clamp(448., 2000.)))
                     .child(self.body.clone())
@@ -943,7 +1126,7 @@ impl Notes {
             .when(!self.source, |d| {
                 d.when_some(self.document.clone(), |d, preview| d.child(preview))
             })
-            .when(self.image_drag || self.image_busy, |d| {
+            .when(self.image_drag || self.image_note.is_some(), |d| {
                 d.child(
                     div()
                         .absolute()
@@ -955,7 +1138,7 @@ impl Notes {
                         .justify_center()
                         .text_size(px(12.))
                         .text_color(content(0.7))
-                        .child(if self.image_busy {
+                        .child(if self.image_note.is_some() {
                             "Adding images…"
                         } else {
                             "Drop images here"
@@ -968,49 +1151,47 @@ impl Notes {
             .min_w_0()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&self.detail_scroll)
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .min_w_0()
-                    .gap(px(20.))
+                    .gap(px(16.))
                     .w_full()
-                    .max_w(px(1024.))
+                    .max_w(px(page::DETAIL_MAX))
                     .mx_auto()
-                    .p(px(32.))
+                    .p(page::detail_padding(narrow))
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .gap_3()
+                            .gap_2()
                             .child(
-                                div()
+                                page::meta()
                                     .flex()
+                                    .flex_wrap()
                                     .items_center()
                                     .gap_2()
-                                    .text_size(px(12.))
-                                    .text_color(content(0.5))
-                                    .child(icon("note", 14.))
+                                    .child(icon("note", page::ICON_SIZE))
                                     .child("Note")
                                     .child(div().min_w_0().truncate().child(note.slug.clone()))
                                     .child(project),
                             )
+                            .child(page::title().child(self.title.clone()))
                             .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(self.title.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(content(0.5))
+                                page::meta()
                                     .child(format!("Updated {}", relative_time(note.updated_at))),
                             )
                             .child(tags)
                             .child(actions),
                     )
                     .child(tabs)
-                    .child(editor),
+                    .child(if self.show_recording && recording_ready {
+                        self.recording.read(cx).note_content()
+                    } else {
+                        editor.into_any_element()
+                    }),
             )
             .into_any_element()
     }
@@ -1041,47 +1222,187 @@ impl gpui::Render for Notes {
             .filter(|note| note.matches(&query))
             .cloned()
             .collect();
-        let list = div().relative().w(px(self.list_width)).h_full().flex_shrink_0().min_h_0().flex().flex_col().border_r_1().border_color(content(0.07))
-            .child(div().h(px(36.)).flex_shrink_0().px(px(8.)).flex().items_center().gap(px(1.)).border_b_1().border_color(content(0.07))
-                .child(div().flex_1().min_w_0().h(px(28.)).px(px(6.)).flex().items_center().gap(px(6.)).child(icon("search", 12.)).child(self.query.clone()))
-                .child(icon_button("create-note", "New note", "plus").on_click(cx.listener(|this, _, window, cx| this.create(window, cx)))))
-            .child(div().id("notes-list").role(Role::ListBox).aria_label("Saved notes").flex_1().min_h_0().overflow_y_scroll().p(px(6.))
-                .when(visible.is_empty(), |d| d.child(div().p(px(12.)).text_size(px(12.)).line_height(px(19.)).text_color(content(0.5)).child(if self.loading { "Loading notes…" } else if !query.trim().is_empty() { "No matching notes" } else { "No notes yet. Save a turn from the transcript, or create one here." })))
-                .children(visible.iter().enumerate().map(|(ix, note)| {
-                    let id = note.id.clone();
-                    let active = self.selected.as_ref() == Some(&id);
-                    let preview = note.preview();
-                    div().id(("saved-note", ix)).role(Role::Button).aria_label(note.title.clone()).aria_selected(active).mb(px(2.)).px(px(10.)).py_2().rounded_md().text_color(content(0.8)).hover(|style| style.bg(content(0.05))).when(active, |d| d.bg(content(0.1)))
-                        .child(div().flex().items_center().gap_2().text_size(px(11.)).text_color(content(0.45))
-                            .child(div().flex_1().truncate().when_some(note.project_name(), |d, name| d.child(div().flex().items_center().gap_1p5().child(self.project_mark(note.source_cwd.as_deref().unwrap_or(""), 12.)).child(name))))
-                            .child(relative_time(note.updated_at)))
-                        .child(div().mt_1().truncate().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(content(1.)).child(note.title.clone()))
-                        .when(!preview.is_empty(), |d| d.child(div().mt_1().truncate().text_size(px(12.)).text_color(content(0.45)).child(preview)))
-                        .when(!note.tags.is_empty(), |d| d.child(div().mt_1p5().flex().items_center().gap_1().overflow_hidden()
-                            .children(note.tags.iter().take(3).map(|tag| div().max_w(px(96.)).truncate().rounded_sm().bg(content(0.08)).px_1p5().py(px(2.)).text_size(px(10.)).text_color(content(0.55)).child(format!("#{tag}"))))
-                            .when(note.tags.len() > 3, |d| d.child(div().text_size(px(10.)).text_color(content(0.4)).child(format!("+{}", note.tags.len() - 3))))))
-                        .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
-                })))
-            .child(div().id("resize-notes-list").role(Role::Splitter).aria_label("Resize notes list").absolute().top_0().bottom_0().right(px(-3.)).w(px(6.)).cursor(CursorStyle::ResizeLeftRight).hover(|style| style.bg(content(0.1)))
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| { if event.click_count == 2 { this.list_width = 280.; } else { this.resize = Some((event.position.x.as_f32(), this.list_width)); } cx.notify(); })));
+        let narrow = page::narrow(window);
+        let show_list = !narrow || self.show_list || self.selected.is_none();
+        let show_detail = !narrow || !show_list;
+        if show_detail
+            && self.show_recording
+            && self
+                .selected
+                .as_deref()
+                .is_some_and(|id| self.recording.read(cx).is_for_note(id))
+        {
+            self.recording
+                .update(cx, |page, cx| page.focus_pending(window, cx));
+        }
+        let list = div()
+            .relative()
+            .w(px(self.list_width))
+            .when(narrow, |d| d.w_full())
+            .h_full()
+            .flex_shrink_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(
+                page::toolbar()
+                    .child(
+                        page::search_frame(&self.query.focus_handle(cx))
+                            .flex_1()
+                            .child(icon("search", page::ICON_SIZE))
+                            .child(self.query.clone()),
+                    )
+                    .child(
+                        page::icon_action("create-note", "New note", true)
+                            .child(icon("plus", page::ICON_SIZE))
+                            .on_click(cx.listener(|this, _, window, cx| this.create(window, cx))),
+                    ),
+            )
+            .child(
+                div()
+                    .id("notes-list")
+                    .role(Role::ListBox)
+                    .aria_label("Saved notes")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.list_scroll)
+                    .p(px(4.))
+                    .when(visible.is_empty(), |d| {
+                        d.child(page::meta().p(px(12.)).child(if self.loading {
+                            "Loading notes…"
+                        } else if !query.trim().is_empty() {
+                            "No matching notes"
+                        } else {
+                            "No notes yet. Save a turn from the transcript, or create one here."
+                        }))
+                    })
+                    .children(visible.iter().enumerate().map(|(ix, note)| {
+                        let id = note.id.clone();
+                        let active = self.selected.as_ref() == Some(&id);
+                        let preview = note.preview();
+                        page::row(("saved-note", ix), note.title.clone(), active)
+                            .aria_selected(active)
+                            .mb(px(2.))
+                            .child(
+                                page::meta()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().flex_1().truncate().when_some(
+                                        note.project_name(),
+                                        |d, name| {
+                                            d.child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1p5()
+                                                    .child(self.project_mark(
+                                                        note.source_cwd.as_deref().unwrap_or(""),
+                                                        12.,
+                                                    ))
+                                                    .child(name),
+                                            )
+                                        },
+                                    ))
+                                    .child(relative_time(note.updated_at)),
+                            )
+                            .child(
+                                page::label()
+                                    .mt_1()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .truncate()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .when(self.recordings.contains_key(&note.id), |d| {
+                                        d.child(icon("mic", page::ICON_SIZE))
+                                    })
+                                    .child(if note.title.is_empty() {
+                                        "Untitled".into()
+                                    } else {
+                                        note.title.clone()
+                                    }),
+                            )
+                            .when(!preview.is_empty(), |d| {
+                                d.child(page::meta().mt_1().truncate().child(preview))
+                            })
+                            .when(!note.tags.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .mt_1p5()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .overflow_hidden()
+                                        .children(note.tags.iter().take(3).map(|tag| {
+                                            div()
+                                                .max_w(px(96.))
+                                                .truncate()
+                                                .rounded_sm()
+                                                .bg(content(0.08))
+                                                .px_1p5()
+                                                .py(px(2.))
+                                                .text_size(px(page::META_SIZE))
+                                                .text_color(page::secondary_ink())
+                                                .child(format!("#{tag}"))
+                                        }))
+                                        .when(note.tags.len() > 3, |d| {
+                                            d.child(
+                                                div()
+                                                    .text_size(px(page::META_SIZE))
+                                                    .text_color(page::secondary_ink())
+                                                    .child(format!("+{}", note.tags.len() - 3)),
+                                            )
+                                        }),
+                                )
+                            })
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)),
+                            )
+                    })),
+            )
+            .when(!narrow, |d| {
+                d.child(
+                    div()
+                        .id("resize-notes-list")
+                        .role(Role::Splitter)
+                        .aria_label("Resize notes list")
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right(px(-3.))
+                        .w(px(6.))
+                        .cursor(CursorStyle::ResizeLeftRight)
+                        .hover(|style| style.bg(content(0.1)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                                if event.click_count == 2 {
+                                    this.list_width = page::LIST_WIDTH;
+                                } else {
+                                    this.resize =
+                                        Some((event.position.x.as_f32(), this.list_width));
+                                }
+                                cx.notify();
+                            }),
+                        ),
+                )
+            });
         let detail = if let Some(note) = self.draft(cx) {
-            self.detail(note, cx)
+            self.detail(note, narrow, cx)
         } else {
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_3()
-                .text_size(px(13.))
-                .text_color(content(0.45))
-                .child(icon("note", 24.))
-                .child("Select a note")
-                .into_any_element()
+            page::empty(
+                icon("note", 24.),
+                "Select a note",
+                "Choose a saved note, or create one with the + button.",
+            )
+            .flex_1()
+            .into_any_element()
         };
         div()
             .id("notes-view")
+            .track_focus(&self.focus)
             .role(Role::Region)
             .aria_label("Notes")
             .size_full()
@@ -1100,6 +1421,9 @@ impl gpui::Render for Notes {
                 } else if key == "escape" {
                     if this.project_open {
                         this.project_open = false;
+                    } else if page::narrow(window) && !this.show_list && this.selected.is_some() {
+                        this.show_list = true;
+                        window.focus(&this.query.focus_handle(cx), cx);
                     } else {
                         this.flush(cx);
                         if !this.dirty {
@@ -1130,10 +1454,10 @@ impl gpui::Render for Notes {
                 cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
                     if let Some((start, width)) = this.resize {
                         this.list_width = (width + event.position.x.as_f32() - start).clamp(
-                            240.,
-                            420_f32
+                            page::LIST_MIN,
+                            page::LIST_MAX
                                 .min(window.viewport_size().width.as_f32() * 0.5)
-                                .max(240.),
+                                .max(page::LIST_MIN),
                         );
                         cx.notify();
                     }
@@ -1147,7 +1471,31 @@ impl gpui::Render for Notes {
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| this.resize = None),
             )
-            .child(div().flex_1().min_h_0().flex().child(list).child(detail))
+            .when(narrow && show_detail, |d| {
+                d.child(
+                    page::toolbar().child(
+                        page::action("notes-back", "Back to notes", true)
+                            .child(icon("chevron-left", page::ICON_SIZE))
+                            .child("Notes")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.show_list = true;
+                                window.focus(&this.query.focus_handle(cx), cx);
+                                cx.notify();
+                            })),
+                    ),
+                )
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .flex()
+                    .when(show_list, |d| d.child(list))
+                    .when(show_detail, |d| {
+                        d.child(page::detail_pane(!narrow).child(detail))
+                    }),
+            )
             .when_some(self.error.clone(), |d, error| {
                 d.child(
                     div()
@@ -1194,6 +1542,9 @@ fn relative_time(at: i64) -> String {
 }
 
 #[cfg(test)]
+mod screenshots;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use gpui::{TestAppContext, VisualTestContext};
@@ -1220,6 +1571,139 @@ mod tests {
     }
 
     #[gpui::test]
+    fn returning_from_the_list_retains_the_note_editor_and_reading_position(
+        cx: &mut TestAppContext,
+    ) {
+        let store = store();
+        let (window, mut visual) = view(cx, &store);
+        window
+            .update(&mut visual, |notes, window, cx| {
+                notes.create(window, cx);
+                notes.body.update(cx, |input, cx| {
+                    input.set_text("Unfinished 🦊 note".into(), cx);
+                    input.select_utf16(11..13, cx);
+                });
+            })
+            .unwrap();
+        // Changed subscriptions publish after the enclosing app update.
+        window
+            .update(&mut visual, |notes, _, cx| {
+                let id = notes.selected.clone().unwrap();
+                let editor = notes.body.clone();
+                let position = gpui::point(px(0.), px(-160.));
+                notes.detail_scroll.set_offset(position);
+                notes.show_list = true;
+                notes.select(id.clone(), cx);
+                assert!(!notes.show_list);
+                assert_eq!(notes.selected.as_ref(), Some(&id));
+                assert_eq!(notes.body, editor);
+                assert_eq!(notes.body.read(cx).content, "Unfinished 🦊 note");
+                assert_eq!(notes.body.read(cx).selection_utf16(), 11..13);
+                assert_eq!(notes.detail_scroll.offset(), position);
+                assert!(notes.dirty);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_new_note_can_start_with_an_image_and_reopen(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("notes.db");
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            vorkspace_core::store::Store::open(&path).unwrap(),
+        ));
+        let image = root.path().join("first.svg");
+        std::fs::write(
+            &image,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>"#,
+        )
+        .unwrap();
+        let (window, mut visual) = view(cx, &store);
+        let id = window
+            .update(&mut visual, |notes, window, cx| {
+                notes.create(window, cx);
+                let id = notes.selected.clone().unwrap();
+                assert!(locked(&store).unwrap().get_note(&id).unwrap().is_none());
+                notes.add_images(vec![image], cx);
+                notes.create(window, cx);
+                assert!(
+                    notes.notes.iter().any(|note| note.id == id),
+                    "pending image belongs to its original draft"
+                );
+                id
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |notes, _, cx| {
+                assert!(notes.error.is_none(), "{:?}", notes.error);
+                assert!(!notes.ephemeral.contains(&id));
+                notes.select(id.clone(), cx);
+                notes.flush(cx);
+            })
+            .unwrap();
+        let reopened = vorkspace_core::store::Store::open(&path).unwrap();
+        let saved = reopened.get_note(&id).unwrap().unwrap();
+        assert_eq!(saved.body.matches("![").count(), 1);
+        assert!(saved.body.contains("/note-assets/"));
+        assert_eq!(
+            std::fs::read_dir(root.path().join("note-assets").join(id))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    #[gpui::test]
+    fn refreshing_the_selected_note_preserves_navigation_and_document(cx: &mut TestAppContext) {
+        let store = store();
+        let saved = locked(&store)
+            .unwrap()
+            .upsert_note(&notes::NoteUpsert {
+                id: "reading".into(),
+                title: "Reading".into(),
+                body: "Keep this document".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (window, mut visual) = view(cx, &store);
+        let (scroll, document) = window
+            .update(&mut visual, |notes, _, cx| {
+                assert_eq!(notes.selected.as_deref(), Some(saved.id.as_str()));
+                notes.show_list = true;
+                notes
+                    .body
+                    .update(cx, |input, cx| input.select_utf16(5..9, cx));
+                let scroll = notes.detail_scroll.clone();
+                let document = notes.document.clone();
+                notes.refresh(cx);
+                (scroll, document)
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |notes, _, cx| {
+                let position = gpui::point(px(0.), px(-160.));
+                scroll.set_offset(position);
+                assert_eq!(
+                    notes.detail_scroll.offset(),
+                    position,
+                    "refresh retains the scroll owner"
+                );
+                assert!(
+                    notes.show_list,
+                    "background refresh must not close the narrow list"
+                );
+                assert_eq!(
+                    notes.document, document,
+                    "unchanged Markdown retains its selection owner"
+                );
+                assert_eq!(notes.body.read(cx).selection_utf16(), 5..9);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn loading_an_empty_list_is_not_an_edit_and_new_note_works(cx: &mut TestAppContext) {
         let store = store();
         let (window, mut visual) = view(cx, &store);
@@ -1236,7 +1720,14 @@ mod tests {
             .update(&mut visual, |notes, window, cx| {
                 assert!(!notes.dirty, "loading the new note must not look edited");
                 notes.create(window, cx);
-                assert_eq!(notes.notes.len(), 2);
+                assert_eq!(notes.notes.len(), 1, "an untouched draft is discarded");
+                assert!(
+                    locked(&notes.store)
+                        .unwrap()
+                        .list_notes()
+                        .unwrap()
+                        .is_empty()
+                );
             })
             .unwrap();
     }
@@ -1267,6 +1758,49 @@ mod tests {
                 assert!(!notes.dirty);
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn deleting_another_note_keeps_the_selected_unsaved_text(cx: &mut TestAppContext) {
+        let store = store();
+        let saved = |id: &str| {
+            locked(&store)
+                .unwrap()
+                .upsert_note(&notes::NoteUpsert {
+                    id: id.into(),
+                    title: id.into(),
+                    body: "Original".into(),
+                    ..Default::default()
+                })
+                .unwrap()
+        };
+        let first = saved("first");
+        let second = saved("second");
+        let (window, mut visual) = view(cx, &store);
+        window
+            .update(&mut visual, |notes, _, cx| {
+                notes.select(second.id.clone(), cx);
+                notes.body.update(cx, |input, cx| {
+                    input.set_text("My unfinished edit".into(), cx)
+                });
+            })
+            .unwrap();
+        window
+            .update(&mut visual, |notes, _, cx| {
+                assert!(notes.dirty);
+                notes.delete_saved_note(&first.id, cx);
+                assert!(notes.dirty);
+                assert_eq!(notes.selected.as_ref(), Some(&second.id));
+                assert_eq!(notes.body.read(cx).content, "My unfinished edit");
+            })
+            .unwrap();
+        assert!(
+            locked(&store)
+                .unwrap()
+                .get_note(&first.id)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[gpui::test]

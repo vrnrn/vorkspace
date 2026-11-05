@@ -14,6 +14,4 @@ The startup benchmark under `scripts/benchmarks/` makes pretend history in a tem
 
 `npm run benchmark:native` times the real app drawing into an invisible window, using a big pretend history. It shows how long opening a long chat takes and how long the app spends working out each frame, so you can compare before and after a change. Most of the numbers stop before the graphics card; one, `metal_render_readback`, includes it. None of them run a live streaming reply.
 
-`npm run check` also tests the clipboard helper by starting the real program with its own private connection, so it can't disturb an app you have open. Another check fails if a guide mentions an `npm run` command that doesn't exist, or if a guide loses its plain-English partner.
-
-The background app is named **vorkspace helper**. It owns clipboard history and dictation.
+`npm run check` also tests clipboard history by starting **vorkspace helper** with its own private connection, separate from any app you have open. Another check fails if a guide mentions an `npm run` command that doesn't exist, or if a guide loses its plain-English partner.

@@ -69,6 +69,7 @@ pub(crate) struct Inbox {
     summary_rows: std::cell::RefCell<ui::SummaryRows>,
     focus_comment: bool,
     selected: Option<String>,
+    narrow_detail: bool,
     details: Option<Details>,
     thread: Option<Thread>,
     document: Option<Entity<document::InboxDocument>>,
@@ -161,12 +162,13 @@ impl Inbox {
                 )
             })
             .unwrap_or_else(|_| (ViewState::default(), cwd.clone()));
-        let search = cx.new(|cx| Input::field("Filter items", "Filter items", content(0.4), cx));
+        let placeholder = crate::controls::page::secondary_ink();
+        let search = cx.new(|cx| Input::field("Filter items", "Filter items", placeholder, cx));
         let comment = cx.new(Input::inbox_comment);
-        let connect_url = cx.new(|cx| Input::field("Instance URL", "https://", content(0.4), cx));
-        let connect_email = cx.new(|cx| Input::field("Email", "you@example.com", content(0.4), cx));
+        let connect_url = cx.new(|cx| Input::field("Instance URL", "https://", placeholder, cx));
+        let connect_email = cx.new(|cx| Input::field("Email", "you@example.com", placeholder, cx));
         let connect_token =
-            cx.new(|cx| Input::field("API token", "Personal access token", content(0.4), cx));
+            cx.new(|cx| Input::field("API token", "Personal access token", placeholder, cx));
         let diff_view = cx.new(DiffView::new);
         let subscriptions = vec![
             cx.subscribe(&search, |_, _, _: &input::Changed, cx| cx.notify()),
@@ -260,6 +262,7 @@ impl Inbox {
             summary_rows: Default::default(),
             focus_comment: false,
             selected: None,
+            narrow_detail: false,
             details: None,
             thread: None,
             document: None,
@@ -479,6 +482,7 @@ impl Inbox {
             .retain(|key, _| self.state.connectors.enabled(key));
         if self.item().is_none() {
             self.selected = None;
+            self.narrow_detail = false;
             self.details = None;
             self.thread = None;
             self.document = None;
@@ -648,6 +652,7 @@ impl Inbox {
             .is_none_or(|item| item.provider != self.state.source)
         {
             self.selected = None;
+            self.narrow_detail = false;
             self.details = None;
             self.document = None;
             self.comments.clear();
@@ -859,6 +864,7 @@ impl Inbox {
         }
         self.state.source = source;
         self.selected = None;
+        self.narrow_detail = false;
         self.details = None;
         self.document = None;
         self.comments.clear();

@@ -382,9 +382,6 @@ impl Shell {
                 SidebarNavigation::Notes => {
                     self.workspace.preferences.notes && self.workspace.sidebar_notes_visible
                 }
-                SidebarNavigation::Meetings => {
-                    self.workspace.preferences.meetings && self.workspace.sidebar_meetings_visible
-                }
                 SidebarNavigation::Automations => self.workspace.sidebar_automations_visible,
                 SidebarNavigation::Todos => {
                     self.workspace.preferences.todos && self.workspace.sidebar_todos_visible
@@ -404,7 +401,6 @@ impl Shell {
                         .sidebar_hidden_connectors
                         .contains(provider.id()),
                     SidebarNavigation::Notes => self.workspace.sidebar_notes_visible,
-                    SidebarNavigation::Meetings => self.workspace.sidebar_meetings_visible,
                     SidebarNavigation::Automations => self.workspace.sidebar_automations_visible,
                     SidebarNavigation::Todos => self.workspace.sidebar_todos_visible,
                 };
@@ -414,7 +410,6 @@ impl Shell {
                     .reorderable()
                     .disabled(match item {
                         SidebarNavigation::Notes => !self.workspace.preferences.notes,
-                        SidebarNavigation::Meetings => !self.workspace.preferences.meetings,
                         SidebarNavigation::Todos => !self.workspace.preferences.todos,
                         _ => false,
                     })
@@ -502,7 +497,6 @@ impl Shell {
                 "sidebar-notes" if self.workspace.preferences.notes => {
                     &mut self.workspace.sidebar_notes_visible
                 }
-                "sidebar-meetings" => &mut self.workspace.sidebar_meetings_visible,
                 "sidebar-automations" => &mut self.workspace.sidebar_automations_visible,
                 "sidebar-todos" => &mut self.workspace.sidebar_todos_visible,
                 "sidebar-bots" => &mut self.workspace.preferences.bots,
@@ -625,7 +619,6 @@ impl Shell {
                                 "GitLab" => this.open_connector(Connector::Gitlab, window, cx),
                                 "Jira" => this.open_connector(Connector::Jira, window, cx),
                                 "Notes" => this.open_notes(window, cx),
-                                "Meetings" => this.open_meetings(window, cx),
                                 "Automations" => this.open_automations(window, cx),
                                 "To-dos" => this.open_todos(window, cx),
                                 _ => (),

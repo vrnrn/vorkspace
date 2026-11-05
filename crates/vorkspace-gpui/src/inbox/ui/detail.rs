@@ -4,29 +4,22 @@ use super::*;
 impl Inbox {
     pub(super) fn detail_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(item) = self.item() else {
-            return div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(px(12.))
-                .child(
-                    provider_mark(&self.state.source)
-                        .size(px(24.))
-                        .text_color(content(0.3)),
-                )
-                .child(
-                    message(format!(
-                        "Select a {} item",
-                        model::provider_label(&self.state.source)
-                    ))
-                    .text_size(px(13.)),
-                )
-                .into_any_element();
+            return page::empty(
+                provider_mark(&self.state.source)
+                    .size(px(24.))
+                    .text_color(page::secondary_ink()),
+                format!(
+                    "Select a {} item",
+                    model::provider_label(&self.state.source)
+                ),
+                "Its details will appear here.",
+            )
+            .into_any_element();
         };
+        let inset = detail_inset(window);
         let is_pr = item.kind == "pr";
         let details = self.details.clone().unwrap_or_default();
+        let related_sessions = self.related_sessions(&item);
         let assignees = item
             .assignees
             .iter()
@@ -57,25 +50,25 @@ impl Inbox {
             .w_full()
             .flex_shrink_0()
             .border_b_1()
-            .border_color(content(0.07))
+            .border_color(page::divider())
             .child(
                 div()
                     .w_full()
-                    .max_w(px(1024.))
-                    .px(px(32.))
-                    .pt(px(20.))
-                    .pb(px(if is_pr { 0. } else { 20. }))
+                    .max_w(px(page::DETAIL_MAX))
+                    .mx_auto()
+                    .px(inset)
+                    .pt(inset)
+                    .pb(px(if is_pr { 4. } else { 16. }))
                     .flex()
                     .flex_col()
-                    .gap(px(10.))
+                    .gap(px(8.))
                     .child(
-                        div()
+                        page::meta()
                             .min_w_0()
                             .flex()
+                            .flex_wrap()
                             .items_center()
                             .gap(px(8.))
-                            .text_size(px(12.))
-                            .text_color(content(0.5))
                             .child(provider_mark(&item.provider))
                             .child(if is_pr {
                                 if item.provider == "gitlab" {
@@ -94,7 +87,7 @@ impl Inbox {
                                     .gap(px(4.))
                                     .text_color(status_color(&item))
                                     .child(
-                                        icon(status_icon(&item), 14.)
+                                        icon(status_icon(&item), page::ICON_SIZE)
                                             .text_color(status_color(&item)),
                                     )
                                     .child(item.status()),
@@ -114,24 +107,14 @@ impl Inbox {
                                 },
                             )),
                     )
+                    .child(page::title().line_clamp(2).child(item.title.clone()))
                     .child(
-                        div()
-                            .line_clamp(2)
-                            .text_size(px(20.))
-                            .line_height(px(25.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(content(1.))
-                            .child(item.title.clone()),
-                    )
-                    .child(
-                        div()
+                        page::meta()
                             .min_w_0()
                             .flex()
+                            .flex_wrap()
                             .items_center()
                             .gap(px(8.))
-                            .overflow_hidden()
-                            .text_size(px(12.))
-                            .text_color(content(0.5))
                             .when(!details.author.is_empty(), |d| {
                                 d.child(avatar::person(
                                     &item.provider,
@@ -143,7 +126,7 @@ impl Inbox {
                                 ))
                             })
                             .when(!assignees.is_empty(), |d| {
-                                d.child("·").children(assignees.iter().map(|person| {
+                                d.children(assignees.iter().map(|person| {
                                     avatar::person(
                                         &item.provider,
                                         &person.login,
@@ -157,25 +140,24 @@ impl Inbox {
                             .when(
                                 item.assignees.is_empty()
                                     && matches!(item.provider.as_str(), "github" | "gitlab"),
-                                |d| d.child("·").child("Unassigned"),
+                                |d| d.child("Unassigned"),
                             )
                             .when(!item.created_at.is_empty(), |d| {
-                                d.child("·")
-                                    .child(format!("Created {}", relative_time(&item.created_at)))
+                                d.child(format!("Created {}", relative_time(&item.created_at)))
                             })
                             .when(!item.updated_at.is_empty(), |d| {
-                                d.child("·")
-                                    .child(format!("Updated {}", relative_time(&item.updated_at)))
+                                d.child(format!("Updated {}", relative_time(&item.updated_at)))
                             })
                             .when(!base_ref.is_empty() && !head_ref.is_empty(), |d| {
                                 let branch = head_ref.to_owned();
-                                d.child("·").child(
+                                d.child(
                                     div()
                                         .min_w_0()
+                                        .max_w_full()
                                         .flex()
                                         .items_center()
                                         .gap(px(4.))
-                                        .child(icon("git-compare", 12.).text_color(content(0.5)))
+                                        .child(action_icon("git-compare", page::secondary_ink()))
                                         .child(
                                             div()
                                                 .min_w_0()
@@ -188,7 +170,6 @@ impl Inbox {
                                                 "Copy branch name",
                                                 "response-copy",
                                             )
-                                            .size(px(18.))
                                             .on_click(
                                                 move |_, _, cx| {
                                                     cx.write_to_clipboard(
@@ -200,65 +181,49 @@ impl Inbox {
                                 )
                             })
                             .when(!details.review_decision.is_empty(), |d| {
-                                d.child("·").child(review_label(&details.review_decision))
+                                d.child(review_label(&details.review_decision))
                             }),
                     )
-                    .when(!self.related_sessions(&item).is_empty(), |d| {
+                    .when(!related_sessions.is_empty(), |d| {
                         d.child(
-                            div()
+                            page::meta()
                                 .min_w_0()
                                 .flex()
+                                .flex_wrap()
                                 .items_center()
-                                .gap(px(6.))
-                                .overflow_hidden()
-                                .child(icon("message-multiple", 14.).text_color(content(0.45)))
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(content(0.45))
-                                        .child("Related threads"),
-                                )
-                                .children(self.related_sessions(&item).into_iter().map(
-                                    |session| {
-                                        action(
-                                            format!("inbox-session-{}", session.id),
-                                            session.title,
-                                        )
-                                        .h(px(24.))
+                                .gap(px(4.))
+                                .child(action_icon("message-multiple", page::secondary_ink()))
+                                .child("Related threads")
+                                .children(related_sessions.into_iter().map(|session| {
+                                    action(format!("inbox-session-{}", session.id), session.title)
                                         .bg(content(0.05))
-                                        .max_w(px(256.))
-                                        .truncate()
-                                        .on_click(
-                                            cx.listener(move |_, _, _, cx| {
-                                                cx.emit(Event::OpenSession(session.id))
-                                            }),
-                                        )
-                                    },
-                                )),
+                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                            cx.emit(Event::OpenSession(session.id))
+                                        }))
+                                })),
                         )
                     })
                     .child(
                         div()
-                            .pt(px(2.))
                             .flex()
                             .flex_wrap()
                             .items_center()
                             .gap(px(8.))
                             .when(!is_pr || item.provider == "gitlab", |d| {
                                 d.child(
-                                    action("inbox-send-agent", "Send to chat")
-                                        .px(px(12.))
-                                        .bg(content(1.))
-                                        .text_color(shell_fill())
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .when(self.detail_loading || self.details.is_none(), |d| {
-                                            d.opacity(0.4)
-                                        })
-                                        .on_click(cx.listener(|this, _, _, cx| {
+                                    page::primary(
+                                        "inbox-send-agent",
+                                        "Send to chat",
+                                        self.detail_loading || self.details.is_none(),
+                                    )
+                                    .child("Send to chat")
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
                                             if !this.detail_loading && this.details.is_some() {
                                                 this.start(cx);
                                             }
-                                        })),
+                                        },
+                                    )),
                                 )
                             })
                             .when(
@@ -286,11 +251,12 @@ impl Inbox {
                                             } else {
                                                 "folder"
                                             },
+                                            true,
                                         )
                                         .relative()
                                         .border_1()
-                                        .border_color(content(0.1))
-                                        .child(icon("chevron-down", 12.))
+                                        .border_color(page::divider())
+                                        .child(action_icon("chevron-down", page::secondary_ink()))
                                         .child(self.project_anchor.probe())
                                         .on_click(
                                             cx.listener(|this, _, _, cx| {
@@ -313,8 +279,8 @@ impl Inbox {
                                         model::provider_label(&item.provider)
                                     ),
                                     "external-link",
+                                    !item.url.is_empty(),
                                 )
-                                .when(item.url.is_empty(), |d| d.opacity(0.4))
                                 .on_click({
                                     let url = item.url.clone();
                                     move |_, _, cx| {
@@ -327,14 +293,15 @@ impl Inbox {
                     )
                     .when(is_pr, |d| {
                         d.child(
-                            div()
+                            page::toolbar()
                                 .id("inbox-pr-tabs")
                                 .role(Role::TabList)
                                 .aria_label("Pull request details")
-                                .h(px(36.))
-                                .flex()
-                                .items_stretch()
-                                .gap(px(16.))
+                                .h_auto()
+                                .min_h(px(page::TOOLBAR_HEIGHT))
+                                .border_b_0()
+                                .px_0()
+                                .flex_wrap()
                                 .children(
                                     [
                                         (Tab::Summary, "Summary"),
@@ -346,45 +313,42 @@ impl Inbox {
                                         *tab != Tab::Checks || item.provider == "github"
                                     })
                                     .map(|(tab, label)| {
-                                        action(format!("inbox-tab-{label}"), label)
-                                            .role(Role::Tab)
-                                            .h_full()
-                                            .px_0()
-                                            .rounded_none()
-                                            .when(self.tab == tab, |d| {
-                                                d.border_b_2()
-                                                    .border_color(content(1.))
-                                                    .text_color(content(1.))
-                                            })
-                                            .when(tab == Tab::Checks, |d| {
-                                                let failed = self
-                                                    .checks
-                                                    .as_ref()
-                                                    .map(|checks| {
-                                                        checks
-                                                            .checks
-                                                            .iter()
-                                                            .filter(|check| {
-                                                                failed_check(&check.state)
-                                                            })
-                                                            .count()
-                                                    })
-                                                    .unwrap_or(0);
-                                                d.when(failed > 0, |d| {
-                                                    d.child(
-                                                        icon("circle-x", 13.)
-                                                            .text_color(rgb(0xf87171)),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_color(rgb(0xf87171))
-                                                            .child(failed.to_string()),
-                                                    )
+                                        page::tab(
+                                            format!("inbox-tab-{label}"),
+                                            label,
+                                            self.tab == tab,
+                                        )
+                                        .child(label)
+                                        .when(tab == Tab::Checks, |d| {
+                                            let failed = self
+                                                .checks
+                                                .as_ref()
+                                                .map(|checks| {
+                                                    checks
+                                                        .checks
+                                                        .iter()
+                                                        .filter(|check| failed_check(&check.state))
+                                                        .count()
                                                 })
+                                                .unwrap_or(0);
+                                            d.when(failed > 0, |d| {
+                                                d.child(
+                                                    icon("circle-x", page::ICON_SIZE).text_color(
+                                                        status(StatusColor::Danger, 1.),
+                                                    ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_color(status(StatusColor::Danger, 1.))
+                                                        .child(failed.to_string()),
+                                                )
                                             })
-                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                        })
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
                                                 this.set_tab(tab, cx)
-                                            }))
+                                            }),
+                                        )
                                     }),
                                 ),
                         )
@@ -393,7 +357,7 @@ impl Inbox {
         let body = match self.tab {
             Tab::Summary => self.summary_view(&item, window, cx),
             Tab::Code => self.diff_view(cx),
-            Tab::Checks => self.checks_view(cx),
+            Tab::Checks => self.checks_view(inset, cx),
         };
         div()
             .size_full()
@@ -415,6 +379,8 @@ impl Inbox {
             _ => "Merge pull request",
         };
         div()
+            .min_w_0()
+            .max_w_full()
             .flex()
             .flex_wrap()
             .items_center()
@@ -423,55 +389,53 @@ impl Inbox {
                 d.child(
                     div()
                         .relative()
-                        .h(px(28.))
+                        .h(px(page::CONTROL_HEIGHT))
+                        .min_w_0()
+                        .max_w_full()
                         .flex()
                         .items_stretch()
-                        .rounded(px(6.))
+                        .rounded(px(page::CORNER))
                         .bg(content(1.))
                         .text_color(shell_fill())
                         .child(self.action_anchor.probe())
                         .child(
-                            icon_action_ink(
-                                "inbox-pr-merge",
-                                merge_label,
-                                "git-merge",
-                                shell_fill(),
-                            )
-                            .px(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(shell_fill())
-                            .when(self.acting, |d| d.opacity(0.4))
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
+                            page::primary("inbox-pr-merge", merge_label, self.acting)
+                                .min_w_0()
+                                .flex_shrink_1()
+                                .child(action_icon("git-merge", shell_fill()))
+                                .child(div().min_w_0().truncate().child(merge_label))
+                                .on_click(cx.listener(move |this, _, _, cx| {
                                     if !this.acting {
                                         this.confirm_action = Some(selected.clone());
                                         this.action_error = None;
                                         this.action_notice = None;
                                         cx.notify();
                                     }
-                                },
-                            )),
+                                })),
                         )
                         .child(
-                            div()
-                                .id("inbox-merge-options")
-                                .role(Role::Button)
-                                .aria_label("Merge options")
-                                .h_full()
-                                .w(px(28.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .border_l_1()
-                                .border_color(shell_fill().opacity(0.2))
-                                .cursor_pointer()
-                                .child(icon("chevron-down", 12.).text_color(shell_fill()))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if !this.acting {
-                                        this.action_menu = !this.action_menu;
-                                        cx.notify();
-                                    }
-                                })),
+                            crate::controls::icon_button(
+                                "inbox-merge-options",
+                                "Merge options",
+                                !self.acting,
+                            )
+                            .size(px(page::CONTROL_HEIGHT))
+                            .aria_disabled(self.acting)
+                            .rounded_none()
+                            .border_l_1()
+                            .border_color(shell_fill().opacity(0.2))
+                            .when(!self.acting, |d| {
+                                d.cursor_pointer()
+                                    .hover(|s| s.bg(shell_fill().opacity(0.1)))
+                            })
+                            .when(self.acting, |d| d.opacity(0.4))
+                            .child(action_icon("chevron-down", shell_fill()))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if !this.acting {
+                                    this.action_menu = !this.action_menu;
+                                    cx.notify();
+                                }
+                            })),
                         ),
                 )
             })
@@ -503,13 +467,12 @@ impl Inbox {
                             "close" => "git-pull-request-closed",
                             _ => "git-pull-request",
                         },
+                        !self.acting,
                     )
                     .relative()
                     .child(self.pr_action_anchors[anchor_ix].probe())
                     .border_1()
-                    .border_color(content(0.15))
-                    .px(px(12.))
-                    .when(self.acting, |d| d.opacity(0.4))
+                    .border_color(page::divider())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.acting {
                             this.confirm_action = Some(action_name.into());
@@ -521,12 +484,7 @@ impl Inbox {
                 }),
             )
             .when_some(self.action_notice.clone(), |d, notice| {
-                d.child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(content(0.55))
-                        .child(notice),
-                )
+                d.child(page::meta().child(notice))
             })
             .into_any_element()
     }
@@ -556,11 +514,11 @@ impl Inbox {
         };
         let state = comment.state.trim().to_uppercase();
         let review_color = if state == "APPROVED" {
-            rgb(0x4ade80).into()
+            status(StatusColor::Success, 1.)
         } else if state == "CHANGES_REQUESTED" {
-            rgb(0xf87171).into()
+            status(StatusColor::Danger, 1.)
         } else {
-            content(0.5)
+            page::secondary_ink()
         };
         let document = self
             .comments
@@ -572,21 +530,17 @@ impl Inbox {
             && (comment.body.len() > 1200 || comment.body.lines().count() > 12);
         let expandable =
             timeline && (comment.body.len() > 1200 || comment.body.lines().count() > 12);
-        let header = div()
+        let header = page::meta()
             .min_w_0()
             .flex()
             .flex_wrap()
             .items_center()
             .gap(px(8.))
-            .text_size(px(12.))
-            .text_color(content(0.5))
             .when(!nested, |d| {
-                d.px(px(12.))
-                    .py(px(if timeline { 6. } else { 8. }))
-                    .min_h(px(if timeline { 36. } else { 0. }))
+                d.px(px(12.)).py(px(4.)).min_h(px(page::TOOLBAR_HEIGHT))
             })
             .when(!nested && (has_body || has_replies), |d| {
-                d.border_b_1().border_color(content(0.07))
+                d.border_b_1().border_color(page::divider())
             })
             .child(
                 div()
@@ -620,35 +574,33 @@ impl Inbox {
                     )))
             })
             .when(comment.resolved, |d| {
-                d.child("·")
-                    .child(div().text_color(rgb(0x4ade80)).child("Resolved"))
+                d.child("·").child(
+                    div()
+                        .text_color(status(StatusColor::Success, 1.))
+                        .child("Resolved"),
+                )
             })
             .when(!comment.created_at.is_empty(), |d| {
-                d.child("·").child(
-                    action(
-                        format!("inbox-comment-time-{}", comment.id),
-                        relative_time(&comment.created_at),
+                let time = relative_time(&comment.created_at);
+                let d = d.child("·");
+                if comment.url.is_empty() {
+                    d.child(page::meta().child(time))
+                } else {
+                    let url = comment.url.clone();
+                    d.child(
+                        action(format!("inbox-comment-time-{}", comment.id), time)
+                            .px_0()
+                            .text_color(page::secondary_ink())
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
                     )
-                    .h_auto()
-                    .px_0()
-                    .text_color(content(0.5))
-                    .on_click({
-                        let url = comment.url.clone();
-                        move |_, _, cx| {
-                            if !url.is_empty() {
-                                cx.open_url(&url);
-                            }
-                        }
-                    }),
-                )
+                }
             })
             .when(!reply_id.is_empty(), |d| {
                 let name = author.to_string();
                 d.child("·").child(
                     action(format!("inbox-reply-{}", comment.id), "Reply")
-                        .h_auto()
                         .px_0()
-                        .text_color(content(0.5))
+                        .text_color(page::secondary_ink())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.reply = Some((reply_id.clone(), name.clone()));
                             this.summary_scroll.scroll_to_end();
@@ -662,9 +614,9 @@ impl Inbox {
             .min_w_0()
             .flex_shrink_0()
             .when(!nested, |d| {
-                d.rounded(px(6.))
+                d.rounded(px(page::CARD_CORNER))
                     .border_1()
-                    .border_color(content(0.1))
+                    .border_color(page::divider())
                     .bg(content(0.05))
                     .overflow_hidden()
             })
@@ -673,7 +625,7 @@ impl Inbox {
                 d.child(
                     div()
                         .when(nested, |d| d.mt(px(8.)))
-                        .when(!nested, |d| d.px(px(12.)).py(px(10.)))
+                        .when(!nested, |d| d.px(px(12.)).py(px(8.)))
                         .child(
                             div()
                                 .id(format!("inbox-comment-body-{}", comment.id))
@@ -698,10 +650,9 @@ impl Inbox {
                                     format!("inbox-expand-comment-{}", comment.id),
                                     if clamped { "Show more" } else { "Show less" },
                                 )
-                                .mt(px(6.))
-                                .h_auto()
+                                .mt(px(4.))
                                 .px_0()
-                                .text_color(content(0.5))
+                                .text_color(page::secondary_ink())
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
                                         if !this.expanded_comments.remove(&id) {
@@ -719,12 +670,12 @@ impl Inbox {
                 d.child(
                     div()
                         .border_t_1()
-                        .border_color(content(0.07))
+                        .border_color(page::divider())
                         .px(px(12.))
                         .children(comment.replies.iter().enumerate().map(|(ix, reply)| {
                             div()
-                                .py(px(10.))
-                                .when(ix > 0, |d| d.border_t_1().border_color(content(0.07)))
+                                .py(px(8.))
+                                .when(ix > 0, |d| d.border_t_1().border_color(page::divider()))
                                 .child(self.comment_card(
                                     item,
                                     reply,
@@ -839,7 +790,7 @@ impl Inbox {
     ) -> AnyElement {
         let entry = self.activity[ix].clone();
         let timeline = item.kind == "pr" && item.provider == "github";
-        let width = self.summary_body_width();
+        let width = self.summary_body_width(window);
         if !timeline {
             let Activity::Comment(comment) = entry else {
                 unreachable!()
@@ -861,9 +812,9 @@ impl Inbox {
                 let event = review_event(&comment);
                 let state = comment.state.to_uppercase();
                 let color = if state == "APPROVED" {
-                    rgb(0x4ade80).into()
+                    status(StatusColor::Success, 1.)
                 } else if state == "CHANGES_REQUESTED" {
-                    rgb(0xf87171).into()
+                    status(StatusColor::Danger, 1.)
                 } else {
                     content(0.45)
                 };
@@ -985,42 +936,33 @@ impl Inbox {
                                     .flex_1()
                                     .when(!final_commit, |d| d.pb(px(12.)))
                                     .child(
-                                        div()
-                                            .id(format!("inbox-commit-{}", commit.oid))
-                                            .role(Role::Button)
-                                            .aria_label("Open commit")
-                                            .h(px(20.))
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(12.))
-                                            .text_size(px(12.))
-                                            .cursor_pointer()
-                                            .child(
-                                                div()
-                                                    .min_w_0()
-                                                    .flex_1()
-                                                    .truncate()
-                                                    .text_color(content(0.7))
-                                                    .child(commit.message_headline),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(11.))
-                                                    .font_family("monospace")
-                                                    .text_color(content(0.35))
-                                                    .child(
-                                                        commit
-                                                            .oid
-                                                            .chars()
-                                                            .take(7)
-                                                            .collect::<String>(),
-                                                    ),
-                                            )
-                                            .on_click(move |_, _, cx| {
+                                        page::action(
+                                            format!("inbox-commit-{}", commit.oid),
+                                            "Open commit",
+                                            !url.is_empty(),
+                                        )
+                                        .px_0()
+                                        .gap(px(8.))
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .flex_1()
+                                                .truncate()
+                                                .text_color(content(0.7))
+                                                .child(commit.message_headline),
+                                        )
+                                        .child(
+                                            page::meta().font_family("monospace").child(
+                                                commit.oid.chars().take(7).collect::<String>(),
+                                            ),
+                                        )
+                                        .on_click(
+                                            move |_, _, cx| {
                                                 if !url.is_empty() {
                                                     cx.open_url(&url);
                                                 }
-                                            }),
+                                            },
+                                        ),
                                     ),
                             )
                             .into_any_element(),
@@ -1058,19 +1000,18 @@ impl Inbox {
                 .w_full()
                 .flex_shrink_0()
                 .border_t_1()
-                .border_color(content(0.07))
-                .pt(px(20.))
+                .border_color(page::divider())
+                .pt(px(16.))
                 .flex()
                 .flex_col()
                 .gap(px(12.))
                 .child(
-                    div()
+                    page::meta()
                         .flex()
+                        .flex_wrap()
                         .items_center()
                         .gap(px(8.))
-                        .text_size(px(12.))
-                        .text_color(content(0.5))
-                        .child(div().text_color(content(0.7)).child(if timeline {
+                        .child(page::label().child(if timeline {
                             "Activity".into()
                         } else {
                             format!(

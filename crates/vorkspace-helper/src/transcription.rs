@@ -10,7 +10,10 @@ use std::{
 };
 use vorkspace_helper::{AudioNotice, AudioRequest, Notice, word_rules};
 use vorkspace_macos::voice_lease::Lease;
-use vorkspace_meetings::recording::{Owner, Phase};
+use vorkspace_meetings::{
+    Meetings,
+    recording::{self, CaptureSource, Owner, Phase, State},
+};
 unsafe extern "C" {
     fn vorkspace_transcription_start(json: *const c_char, callback: extern "C" fn(*const c_char));
     fn vorkspace_transcription_finish();
@@ -45,9 +48,11 @@ impl Events {
     }
 }
 static OVERFLOW: AtomicBool = AtomicBool::new(false);
+static ACTIVE_RUN: Mutex<Option<String>> = Mutex::new(None);
 #[derive(Deserialize)]
 struct Event {
     id: String,
+    run: String,
     phase: Option<Phase>,
     source: Option<String>,
     text: Option<String>,
@@ -61,12 +66,15 @@ struct Event {
 }
 extern "C" fn event(json: *const c_char) {
     let bytes = unsafe { CStr::from_ptr(json) }.to_bytes();
-    if let Ok(event) = serde_json::from_slice(bytes)
+    if let Ok(event) = serde_json::from_slice::<Event>(bytes)
         && let Some(events) = EVENTS.get()
-        && !events.push(event)
     {
-        OVERFLOW.store(true, Ordering::Release);
-        unsafe { vorkspace_transcription_cancel() };
+        let active = ACTIVE_RUN.lock().unwrap();
+        if active.as_deref() == Some(event.run.as_str()) && !events.push(event) {
+            OVERFLOW.store(true, Ordering::Release);
+            drop(active);
+            unsafe { vorkspace_transcription_cancel() };
+        }
     }
 }
 struct Audio(Entity<Service>);
@@ -82,7 +90,7 @@ struct Recording {
     error: Option<String>,
 }
 impl Recording {
-    fn status(&self, ended: bool) -> vorkspace_meetings::recording::State {
+    fn status(&self, ended: bool) -> State {
         let mut state = self.owner.state.clone();
         // A failed disk commit cannot be advertised as a successful Stop. Keep
         // the live receipt honest even when durable recovery can only report interruption.
@@ -94,7 +102,7 @@ impl Recording {
                 Phase::Finishing
             };
             if ended {
-                state.ended_at = Some(vorkspace_meetings::recording::now_ms());
+                state.ended_at = Some(recording::now_ms());
             }
         }
         state
@@ -127,6 +135,19 @@ pub fn active(cx: &App) -> bool {
     cx.try_global::<Audio>()
         .is_some_and(|a| a.0.read(cx).recording.is_some())
 }
+#[cfg(not(test))]
+pub(crate) fn active_run(cx: &App) -> Option<&str> {
+    Some(
+        cx.try_global::<Audio>()?
+            .0
+            .read(cx)
+            .recording
+            .as_ref()?
+            .request
+            .run
+            .as_str(),
+    )
+}
 pub fn start(request: AudioRequest, cx: &mut App) {
     get(cx).update(cx, |s, cx| s.start(request, cx));
 }
@@ -135,12 +156,11 @@ pub fn finish(cx: &mut App) {
         unsafe { vorkspace_transcription_finish() }
     }
 }
-pub fn finish_owned(id: &str, owner: &str, cx: &mut App) {
-    let matches = get(cx)
-        .read(cx)
-        .recording
-        .as_ref()
-        .is_some_and(|r| r.request.id == id && r.request.owner == owner);
+pub fn finish_owned(id: &str, owner: &str, run: &str, cx: &mut App) {
+    let matches =
+        get(cx).read(cx).recording.as_ref().is_some_and(|r| {
+            r.request.id == id && r.request.owner == owner && r.request.run == run
+        });
     if matches {
         finish(cx)
     }
@@ -159,27 +179,35 @@ pub fn status(cx: &App) {
     }
 }
 impl Service {
-    fn state(&self, ended: bool, cx: &App) {
+    fn state(&self, ended: bool, cx: &mut App) {
         if let Some(r) = &self.recording {
+            let state = r.status(ended);
+            crate::meeting_panel::update(
+                &state,
+                |id, run, cx| finish_owned(id, "meetings", run, cx),
+                cx,
+            );
             crate::notify(
                 &Notice::Audio(AudioNotice::State {
                     owner: r.request.owner.clone(),
-                    state: r.status(ended),
+                    state,
                 }),
                 cx,
             )
         }
     }
     fn start(&mut self, request: AudioRequest, cx: &mut Context<Self>) {
-        if self.recording.is_some() {
-            let state = vorkspace_meetings::recording::State {
-                id: request.id,
-                started_at: vorkspace_meetings::recording::now_ms(),
-                ended_at: Some(vorkspace_meetings::recording::now_ms()),
-                phase: Phase::Failed,
-                error: Some(
+        if let Some(recording) = &self.recording {
+            let state = if recording.request.id == request.id
+                && recording.request.owner == request.owner
+                && recording.request.run == request.run
+            {
+                recording.status(false)
+            } else {
+                failed_start(
+                    &request,
                     "Another recording is still stopping. Try again after it finishes.".into(),
-                ),
+                )
             };
             crate::notify(
                 &Notice::Audio(AudioNotice::State {
@@ -193,24 +221,30 @@ impl Service {
         let result = (|| {
             if !vorkspace_meetings::valid_id(&request.id)
                 || !vorkspace_meetings::valid_id(&request.owner)
+                || !vorkspace_meetings::valid_id(&request.run)
             {
                 return Err("Invalid recording identity".into());
             }
             let rules = word_rules(&request.words)?;
             let lease = Lease::acquire()?;
-            let owner = Owner::create(&request.data_dir, &request.id)?;
+            let owner = Meetings {
+                directory: request.data_dir.clone(),
+            }
+            .start_recording(
+                &request.id,
+                &request.run,
+                request.previous_run.as_deref(),
+                request.source,
+            )?;
             Ok((lease, owner, rules))
         })();
         let (lease, owner, rules) = match result {
             Ok(v) => v,
             Err(error) => {
-                let state = vorkspace_meetings::recording::State {
-                    id: request.id,
-                    started_at: vorkspace_meetings::recording::now_ms(),
-                    ended_at: Some(vorkspace_meetings::recording::now_ms()),
-                    phase: Phase::Failed,
-                    error: Some(error),
-                };
+                let state = recording::state(&request.data_dir, &request.id)
+                    .ok()
+                    .filter(|state| state.run.as_deref() == Some(request.run.as_str()))
+                    .unwrap_or_else(|| failed_start(&request, error));
                 crate::notify(
                     &Notice::Audio(AudioNotice::State {
                         owner: request.owner,
@@ -222,24 +256,35 @@ impl Service {
             }
         };
         let json = CString::new(
-            serde_json::json!({"id":request.id,"microphone":request.microphone,"rules":rules})
-                .to_string(),
+            serde_json::json!({
+                "id": request.id,
+                "run": request.run,
+                "captureSystem": request.source == CaptureSource::MicrophoneAndSystem,
+                "microphone": request.microphone,
+                "rules": rules,
+            })
+            .to_string(),
         )
         .unwrap();
+        OVERFLOW.store(false, Ordering::Release);
+        *ACTIVE_RUN.lock().unwrap() = Some(request.run.clone());
         self.recording = Some(Recording {
             request,
             owner,
             _lease: lease,
             error: None,
         });
-        OVERFLOW.store(false, Ordering::Release);
         self.state(false, cx);
+        crate::service::meeting_recording_changed(
+            self.recording.as_ref().map(|r| r.request.run.as_str()),
+            cx,
+        );
         crate::dictation::audio_changed(true, cx);
         unsafe { vorkspace_transcription_start(json.as_ptr(), event) };
     }
     fn event(&mut self, event: Event, cx: &mut Context<Self>) {
         let Some(r) = &mut self.recording else { return };
-        if r.request.id != event.id {
+        if r.request.id != event.id || r.request.run != event.run {
             return;
         }
         if OVERFLOW.swap(false, Ordering::AcqRel) {
@@ -262,11 +307,17 @@ impl Service {
             }
             self.state(ended, cx);
             if ended {
+                *ACTIVE_RUN.lock().unwrap() = None;
                 self.recording = None;
+                crate::meeting_panel::close(cx);
+                crate::service::meeting_recording_changed(None, cx);
                 cx.spawn(async move |_, cx| {
                     cx.update(|cx| {
-                        crate::dictation::audio_changed(false, cx);
-                        crate::audio_finished(cx);
+                        // A new take can be admitted before this deferred cleanup.
+                        if !active(cx) {
+                            crate::dictation::audio_changed(false, cx);
+                            crate::audio_finished(cx);
+                        }
                     });
                 })
                 .detach();
@@ -279,7 +330,7 @@ impl Service {
         let (Some(source), Some(text)) = (event.source, event.text) else {
             return;
         };
-        if !["microphone", "system"].contains(&source.as_str()) {
+        if !r.request.source.allows(&source) {
             r.error = Some("Unknown audio source".into());
             unsafe { vorkspace_transcription_cancel() };
             return;
@@ -289,6 +340,7 @@ impl Service {
                 Ok(segment) => AudioNotice::Segment {
                     id: r.request.id.clone(),
                     owner: r.request.owner.clone(),
+                    run: r.request.run.clone(),
                     segment,
                 },
                 Err(error) => {
@@ -301,6 +353,7 @@ impl Service {
             AudioNotice::Partial {
                 id: r.request.id.clone(),
                 owner: r.request.owner.clone(),
+                run: r.request.run.clone(),
                 source,
                 text,
             }
@@ -309,12 +362,21 @@ impl Service {
     }
 }
 
+fn failed_start(request: &AudioRequest, error: String) -> State {
+    let mut state = State::starting(request.id.clone(), request.run.clone(), request.source);
+    state.phase = Phase::Failed;
+    state.ended_at = Some(recording::now_ms());
+    state.error = Some(error);
+    state
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     fn event(phase: Option<Phase>) -> Event {
         Event {
             id: "sample".into(),
+            run: "sample-run".into(),
             phase,
             source: None,
             text: None,

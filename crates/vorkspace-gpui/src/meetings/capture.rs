@@ -1,14 +1,13 @@
 //! Meetings owns capture admission, receipts, and the bounded live transcript.
 use crate::background_helper::{self, CaptureEvent};
 use gpui::{App, AppContext, Context, Entity, Global, Subscription};
-use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     time::Duration,
 };
 use vorkspace_helper::{AudioNotice, AudioRequest, Command};
-use vorkspace_meetings::recording::{self, Phase, Segment, State};
+use vorkspace_meetings::recording::{self, CaptureSource, Phase, Segment, State};
 
 const OWNER: &str = "meetings";
 
@@ -30,6 +29,12 @@ impl Recording {
 
     fn matches(&self, id: &str) -> bool {
         self.state.as_ref().is_some_and(|state| state.id == id)
+    }
+
+    fn matches_run(&self, id: &str, run: &str) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|state| state.id == id && state.run.as_deref() == Some(run))
     }
 }
 
@@ -63,7 +68,7 @@ pub(crate) fn init(cx: &mut App) {
     service(cx);
 }
 
-pub(super) fn current(cx: &App) -> Option<State> {
+pub(crate) fn current(cx: &App) -> Option<State> {
     let recording = &cx.try_global::<MeetingCapture>()?.0.read(cx).recording;
     recording
         .state
@@ -73,8 +78,10 @@ pub(super) fn current(cx: &App) -> Option<State> {
 }
 
 pub(crate) fn stop_active(cx: &mut App) -> Result<(), String> {
-    if let Some(state) = current(cx) {
-        stop(&state.id, cx)?;
+    if let Some(state) = current(cx)
+        && let Some(run) = &state.run
+    {
+        stop(&state.id, run, cx)?;
     }
     Ok(())
 }
@@ -123,19 +130,36 @@ impl Capture {
             }
             AudioNotice::State { owner, state }
                 if owner == OWNER
-                    && (recording.state.is_none() || recording.matches(&state.id)) =>
+                    && (recording.state.is_none()
+                        || state
+                            .run
+                            .as_deref()
+                            .is_some_and(|run| recording.matches_run(&state.id, run))
+                        || (!recording.active() && state.phase.active())) =>
             {
+                let same_run = recording
+                    .state
+                    .as_ref()
+                    .is_some_and(|current| current.id == state.id && current.run == state.run);
                 let finishing = recording
                     .state
                     .as_ref()
-                    .is_some_and(|current| current.phase == Phase::Finishing);
+                    .is_some_and(|current| same_run && current.phase == Phase::Finishing);
                 if !finishing || !state.phase.active() {
+                    if !same_run {
+                        recording.recent.clear();
+                        recording.bytes = 0;
+                        recording.partials.clear();
+                    }
                     recording.state = Some(state);
                 }
             }
-            AudioNotice::Segment { id, owner, segment }
-                if owner == OWNER && recording.matches(&id) =>
-            {
+            AudioNotice::Segment {
+                id,
+                run,
+                owner,
+                segment,
+            } if owner == OWNER && recording.matches_run(&id, &run) => {
                 recording.partials.remove(&segment.source);
                 while !recording.recent.is_empty()
                     && (recording.recent.len() >= 256
@@ -149,10 +173,11 @@ impl Capture {
             }
             AudioNotice::Partial {
                 id,
+                run,
                 owner,
                 source,
                 text,
-            } if owner == OWNER && recording.matches(&id) => {
+            } if owner == OWNER && recording.matches_run(&id, &run) => {
                 recording.partials.insert(source, text);
                 return;
             }
@@ -161,23 +186,27 @@ impl Capture {
         self.sync_helper(cx);
     }
 
-    fn expire_start(&mut self, id: &str, directory: &Path, cx: &mut Context<Self>) {
+    fn expire_start(&mut self, id: &str, run: &str, directory: &Path, cx: &mut Context<Self>) {
+        if !self.recording.matches_run(id, run) {
+            return;
+        }
         let awaiting_connection = self
             .recording
             .pending
             .as_ref()
-            .is_some_and(|request| request.id == id);
+            .is_some_and(|request| request.id == id && request.run == run);
         let uncertain = self
             .recording
             .state
             .as_ref()
             .is_some_and(|state| state.id == id && state.phase == Phase::Starting)
-            && recording::state(directory, id).is_err();
+            && !recording::state(directory, id)
+                .is_ok_and(|state| state.run.as_deref() == Some(run));
         if !awaiting_connection && !uncertain {
             return;
         }
         if !awaiting_connection {
-            self.helper.read(cx).send(finish_command(id));
+            self.helper.read(cx).send(finish_command(id, run));
         }
         self.recording.pending = None;
         if let Some(state) = &mut self.recording.state {
@@ -188,14 +217,21 @@ impl Capture {
     }
 }
 
-fn finish_command(id: &str) -> Command {
+fn finish_command(id: &str, run: &str) -> Command {
     Command::FinishAudio {
         id: id.into(),
         owner: OWNER.into(),
+        run: run.into(),
     }
 }
 
-pub(super) fn start(id: String, directory: PathBuf, cx: &mut App) -> Result<Value, String> {
+pub(super) fn start(
+    id: String,
+    directory: PathBuf,
+    previous_run: Option<String>,
+    source: CaptureSource,
+    cx: &mut App,
+) -> Result<State, String> {
     if !vorkspace_meetings::valid_id(&id) {
         return Err("Invalid recording id".into());
     }
@@ -205,21 +241,19 @@ pub(super) fn start(id: String, directory: PathBuf, cx: &mut App) -> Result<Valu
             return Err("Finish the current voice activity before recording a meeting.".into());
         }
         let dictation = helper.dictation_config();
+        let run = uuid::Uuid::new_v4().simple().to_string();
         capture.recording = Recording {
             pending: Some(AudioRequest {
                 id: id.clone(),
+                run: run.clone(),
+                previous_run,
+                source,
                 owner: OWNER.into(),
                 data_dir: directory.clone(),
                 microphone: dictation.microphone.clone(),
                 words: dictation.words.clone(),
             }),
-            state: Some(State {
-                id: id.clone(),
-                started_at: recording::now_ms(),
-                ended_at: None,
-                phase: Phase::Starting,
-                error: None,
-            }),
+            state: Some(State::starting(id.clone(), run.clone(), source)),
             ..Default::default()
         };
         capture.sync_helper(cx);
@@ -228,23 +262,26 @@ pub(super) fn start(id: String, directory: PathBuf, cx: &mut App) -> Result<Valu
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(5)).await;
             let _ = this.update(cx, |capture, cx| {
-                capture.expire_start(&pending_id, &directory, cx)
+                capture.expire_start(&pending_id, &run, &directory, cx)
             });
         })
         .detach();
-        Ok(json!({"id":id,"state":capture.recording.state}))
+        Ok(capture.recording.state.clone().unwrap())
     })
 }
 
-pub(super) fn stop(id: &str, cx: &mut App) -> Result<Value, String> {
-    if !vorkspace_meetings::valid_id(id) {
+pub(super) fn stop(id: &str, run: &str, cx: &mut App) -> Result<(), String> {
+    if !vorkspace_meetings::valid_id(id) || !vorkspace_meetings::valid_id(run) {
         return Err("Invalid recording id".into());
     }
     service(cx).update(cx, |capture, cx| {
         let recording = &mut capture.recording;
-        let current = recording.matches(id);
+        let current = recording.matches_run(id, run);
+        if recording.matches(id) && !current {
+            return Ok(());
+        }
         if current && !recording.active() {
-            return Ok(json!({"accepted":true}));
+            return Ok(());
         }
         if current && recording.pending.take().is_some() {
             if let Some(state) = &mut recording.state {
@@ -254,15 +291,22 @@ pub(super) fn stop(id: &str, cx: &mut App) -> Result<Value, String> {
             capture.sync_helper(cx);
         } else {
             // Native ownership validates the recording ID, including after reconnect.
-            if !capture.helper.read(cx).send(finish_command(id)) {
+            if !capture.helper.read(cx).send(finish_command(id, run)) {
                 return Err("Recording stop could not be delivered. Saved text is preserved; check the meeting before starting again.".into());
             }
             if current && let Some(state) = &mut recording.state {
                 state.phase = Phase::Finishing;
             }
         }
-        Ok(json!({"accepted":true}))
+        Ok(())
     })
+}
+
+pub(super) struct Feed {
+    pub state: State,
+    pub segments: Vec<Segment>,
+    pub partials: BTreeMap<String, String>,
+    pub reload: bool,
 }
 
 pub(super) fn status(
@@ -270,18 +314,24 @@ pub(super) fn status(
     after: u64,
     directory: PathBuf,
     cx: &mut App,
-) -> Result<Value, String> {
+) -> Result<Feed, String> {
     if !vorkspace_meetings::valid_id(id) {
         return Err("Invalid recording id".into());
     }
     service(cx).update(cx, |capture, cx| {
         if !capture.recording.matches(id) {
             let state = recording::state(&directory, id)?;
-            return Ok(json!({"state":state,"segments":[],"partials":{},"reload":true}));
+            return Ok(Feed {
+                state,
+                segments: Vec::new(),
+                partials: BTreeMap::new(),
+                reload: true,
+            });
         }
         // Durable metadata can recover a missed terminal receipt without reading text.
         if capture.recording.active()
             && let Ok(state) = recording::state(&directory, id)
+            && state.run == capture.recording.state.as_ref().unwrap().run
             && !state.phase.active()
         {
             capture.recording.state = Some(state);
@@ -290,9 +340,22 @@ pub(super) fn status(
         }
         let recording = &capture.recording;
         let next = after.saturating_add(1);
-        let first = recording.recent.front().map_or(next, |segment| segment.sequence);
-        let segments = recording.recent.iter().filter(|segment| segment.sequence > after).collect::<Vec<_>>();
-        Ok(json!({"state":recording.state,"segments":segments,"partials":recording.partials,"reload":next<first}))
+        let first = recording
+            .recent
+            .front()
+            .map_or(next, |segment| segment.sequence);
+        let segments = recording
+            .recent
+            .iter()
+            .filter(|segment| segment.sequence > after)
+            .cloned()
+            .collect();
+        Ok(Feed {
+            state: recording.state.clone().unwrap(),
+            segments,
+            partials: recording.partials.clone(),
+            reload: next < first,
+        })
     })
 }
 
@@ -306,13 +369,11 @@ mod tests {
     ) {
         let capture = cx.update(service);
         let helper = capture.update(cx, |capture, cx| {
-            capture.recording.state = Some(State {
-                id: "sample".into(),
-                started_at: 0,
-                ended_at: None,
-                phase: Phase::Starting,
-                error: None,
-            });
+            capture.recording.state = Some(State::starting(
+                "sample".into(),
+                "run-one".into(),
+                CaptureSource::Microphone,
+            ));
             capture.sync_helper(cx);
             capture.helper.clone()
         });
@@ -330,11 +391,8 @@ mod tests {
             AudioNotice::State {
                 owner: OWNER.into(),
                 state: State {
-                    id: "sample".into(),
-                    started_at: 0,
-                    ended_at: None,
                     phase: Phase::Recording,
-                    error: None,
+                    ..State::starting("sample".into(), "run-one".into(), CaptureSource::Microphone)
                 },
             },
             cx,
@@ -343,5 +401,67 @@ mod tests {
         emit(AudioNotice::Idle, cx);
         assert_eq!(phase(cx), Phase::Interrupted);
         assert!(!cx.update(|cx| active(cx)));
+    }
+
+    #[gpui::test]
+    fn a_previous_take_cannot_finish_or_append_to_a_restarted_meeting(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut owner = recording::Owner::create(directory.path(), "sample").unwrap();
+        owner.phase(Phase::Stopped, None).unwrap();
+        drop(owner);
+        let capture = cx.update(service);
+        capture.update(cx, |capture, _| {
+            capture.recording.state = Some(State::starting(
+                "sample".into(),
+                "second".into(),
+                CaptureSource::Microphone,
+            ));
+        });
+        let feed = cx
+            .update(|cx| status("sample", 0, directory.path().to_owned(), cx))
+            .unwrap();
+        assert_eq!(
+            feed.state.phase,
+            Phase::Starting,
+            "prior durable Stop is not this take's receipt"
+        );
+        capture.update(cx, |capture, cx| {
+            capture.expire_start("sample", "first", directory.path(), cx);
+            capture.receive(
+                AudioNotice::State {
+                    owner: OWNER.into(),
+                    state: State {
+                        phase: Phase::Stopped,
+                        ..State::starting(
+                            "sample".into(),
+                            "first".into(),
+                            CaptureSource::Microphone,
+                        )
+                    },
+                },
+                cx,
+            );
+            capture.receive(
+                AudioNotice::Partial {
+                    id: "sample".into(),
+                    run: "first".into(),
+                    owner: OWNER.into(),
+                    source: "microphone".into(),
+                    text: "stale speech".into(),
+                },
+                cx,
+            );
+            assert!(capture.recording.partials.is_empty());
+            assert_eq!(
+                capture.recording.state.as_ref().unwrap().phase,
+                Phase::Starting
+            );
+        });
+        cx.update(|cx| stop("sample", "first", cx)).unwrap();
+        let state = cx.update(|cx| current(cx)).unwrap();
+        assert_eq!(state.run.as_deref(), Some("second"));
+        assert_eq!(state.phase, Phase::Starting);
     }
 }

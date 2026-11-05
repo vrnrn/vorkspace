@@ -12,6 +12,18 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 pub const MAX_TRANSCRIPT: usize = 2 * 1024 * 1024;
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureSource {
+    Microphone,
+    #[default]
+    MicrophoneAndSystem,
+}
+impl CaptureSource {
+    pub fn allows(self, source: &str) -> bool {
+        source == "microphone" || (self == Self::MicrophoneAndSystem && source == "system")
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
@@ -30,10 +42,51 @@ impl Phase {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct State {
     pub id: String,
+    #[serde(default)]
+    pub run: Option<String>,
+    #[serde(default)]
+    pub source: CaptureSource,
     pub started_at: u64,
+    #[serde(default)]
+    pub run_started_at: Option<u64>,
+    #[serde(default)]
+    pub offset_ms: u64,
     pub ended_at: Option<u64>,
     pub phase: Phase,
     pub error: Option<String>,
+}
+impl State {
+    pub fn dormant(id: String) -> Self {
+        Self {
+            id,
+            run: None,
+            source: CaptureSource::default(),
+            started_at: 0,
+            run_started_at: None,
+            offset_ms: 0,
+            ended_at: None,
+            phase: Phase::Stopped,
+            error: None,
+        }
+    }
+    pub fn starting(id: String, run: String, source: CaptureSource) -> Self {
+        let start = now_ms();
+        Self {
+            run: Some(run),
+            source,
+            started_at: start,
+            run_started_at: Some(start),
+            phase: Phase::Starting,
+            ..Self::dormant(id)
+        }
+    }
+    pub fn duration_ms(&self) -> u64 {
+        let start = self.run_started_at.unwrap_or(self.started_at);
+        let end = self
+            .ended_at
+            .unwrap_or_else(|| if self.phase.active() { now_ms() } else { start });
+        self.offset_ms.saturating_add(end.saturating_sub(start))
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Segment {
@@ -47,6 +100,11 @@ pub struct Segment {
 pub struct Transcript {
     pub state: State,
     pub segments: Vec<Segment>,
+}
+impl Transcript {
+    pub fn sequence(&self) -> u64 {
+        self.segments.last().map_or(0, |segment| segment.sequence)
+    }
 }
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -111,6 +169,10 @@ fn read_json_in<T: serde::de::DeserializeOwned>(
     let file = dir
         .file(name, OFlags::RDONLY)
         .map_err(|error| error.to_string())?;
+    read_json_file(file, limit)
+}
+
+fn read_json_file<T: serde::de::DeserializeOwned>(file: File, limit: usize) -> Result<T, String> {
     let mut bytes = Vec::new();
     file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)
@@ -121,6 +183,58 @@ fn read_json_in<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(&bytes).map_err(|error| error.to_string())
 }
 
+fn read_state(dir: &Directory, id: &str) -> Result<Option<State>, String> {
+    let file = match dir.file(OsStr::new("state.json"), OFlags::RDONLY) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let state: State = read_json_file(file, 16 * 1024)?;
+    if state.id != id || state.run.as_ref().is_some_and(|run| !valid_id(run)) {
+        return Err("Recording state has an invalid identity".into());
+    }
+    Ok(Some(state))
+}
+
+fn lock_owner(dir: &Directory, flags: OFlags) -> Result<File, String> {
+    let lock = dir
+        .file(OsStr::new("owner.lock"), OFlags::RDWR | flags)
+        .map_err(|error| error.to_string())?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let error = std::io::Error::last_os_error();
+        return Err(if error.kind() == std::io::ErrorKind::WouldBlock {
+            "Recording already has an owner".into()
+        } else {
+            error.to_string()
+        });
+    }
+    Ok(lock)
+}
+
+/// Publish a dormant recording root after its metadata and empty log exist.
+pub(crate) fn initialize(base: &Path, id: &str) -> Result<(), String> {
+    let path = directory(base, id)?;
+    let dir = Directory::open(&path, true).map_err(|error| error.to_string())?;
+    if read_state(&dir, id)?.is_some() {
+        return Ok(());
+    }
+    let _owner = lock_owner(&dir, OFlags::CREATE)?;
+    if read_state(&dir, id)?.is_some() {
+        return Ok(());
+    }
+    let log = dir
+        .file(
+            OsStr::new("transcript.jsonl"),
+            OFlags::WRONLY | OFlags::CREATE,
+        )
+        .map_err(|error| error.to_string())?;
+    if log.metadata().map_err(|error| error.to_string())?.len() != 0 {
+        return Err("Recording state is missing for an existing transcript".into());
+    }
+    log.sync_all().map_err(|error| error.to_string())?;
+    atomic_json_in(&dir, OsStr::new("state.json"), &State::dormant(id.into()))
+}
+
 pub struct Owner {
     directory: Directory,
     _lock: File,
@@ -128,6 +242,7 @@ pub struct Owner {
     pub state: State,
     bytes: usize,
     next: u64,
+    rendered_bytes: Option<usize>,
 }
 impl Owner {
     pub fn create(base: &Path, id: &str) -> Result<Self, String> {
@@ -136,15 +251,7 @@ impl Owner {
         let directory = parent(&directory, true)?
             .create_child(OsStr::new(id))
             .map_err(|error| error.to_string())?;
-        let lock = directory
-            .file(
-                OsStr::new("owner.lock"),
-                OFlags::RDWR | OFlags::CREATE | OFlags::EXCL,
-            )
-            .map_err(|error| error.to_string())?;
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err("Recording already has an owner".into());
-        }
+        let lock = lock_owner(&directory, OFlags::CREATE | OFlags::EXCL)?;
         let log = directory
             .file(
                 OsStr::new("transcript.jsonl"),
@@ -152,12 +259,11 @@ impl Owner {
             )
             .map_err(|error| error.to_string())?;
         let state = State {
-            id: id.into(),
             started_at: now_ms(),
-            ended_at: None,
             phase: Phase::Starting,
-            error: None,
+            ..State::dormant(id.into())
         };
+        log.sync_all().map_err(|error| error.to_string())?;
         atomic_json_in(&directory, OsStr::new("state.json"), &state)?;
         Ok(Self {
             directory,
@@ -166,6 +272,64 @@ impl Owner {
             state,
             bytes: 0,
             next: 0,
+            rendered_bytes: None,
+        })
+    }
+
+    pub(crate) fn start(
+        base: &Path,
+        id: &str,
+        run: &str,
+        previous_run: Option<&str>,
+        source: CaptureSource,
+        before_publish: impl FnOnce(&[Segment]) -> Result<Option<usize>, String>,
+    ) -> Result<Self, String> {
+        if !valid_id(run) || previous_run == Some(run) {
+            return Err("Invalid recording run identity".into());
+        }
+        let directory =
+            Directory::open(&directory(base, id)?, false).map_err(|error| error.to_string())?;
+        let lock = lock_owner(&directory, OFlags::empty())?;
+        let previous = read_state(&directory, id)?.ok_or("Missing recording state")?;
+        if previous.run.as_deref() != previous_run {
+            return Err("The recording changed before this take could start".into());
+        }
+        let log = directory
+            .file(
+                OsStr::new("transcript.jsonl"),
+                OFlags::RDWR | OFlags::APPEND,
+            )
+            .map_err(|error| error.to_string())?;
+        let (segments, bytes, complete) = read_segments(&log)?;
+        let next = segments.len() as u64;
+        let rendered_bytes = before_publish(&segments)?;
+        if !complete {
+            log.set_len(bytes as u64)
+                .and_then(|_| log.sync_all())
+                .map_err(|error| error.to_string())?;
+        }
+        let mut state = State::starting(id.into(), run.into(), source);
+        if previous.started_at != 0 {
+            state.started_at = previous.started_at;
+        }
+        // An interrupted run has no trustworthy wall-clock endpoint.
+        let duration = if previous.phase.active() {
+            previous.offset_ms
+        } else {
+            previous.duration_ms()
+        };
+        state.offset_ms = segments
+            .iter()
+            .fold(duration, |end, segment| end.max(segment.end_ms));
+        atomic_json_in(&directory, OsStr::new("state.json"), &state)?;
+        Ok(Self {
+            directory,
+            _lock: lock,
+            log,
+            state,
+            bytes,
+            next,
+            rendered_bytes,
         })
     }
     pub fn phase(&mut self, phase: Phase, error: Option<String>) -> Result<(), String> {
@@ -191,22 +355,31 @@ impl Owner {
         text: String,
     ) -> Result<Segment, String> {
         if !self.state.phase.active()
-            || !["microphone", "system"].contains(&source)
+            || !self.state.source.allows(source)
             || end_ms < start_ms
             || text.len() > 64 * 1024
         {
             return Err("Invalid transcript segment".into());
         }
+        let shifted = |time: u64| {
+            time.checked_add(self.state.offset_ms)
+                .ok_or("Transcript timestamp exceeds its limit")
+        };
         let segment = Segment {
             sequence: self.next + 1,
             source: source.into(),
-            start_ms,
-            end_ms,
+            start_ms: shifted(start_ms)?,
+            end_ms: shifted(end_ms)?,
             text,
         };
         let mut bytes = serde_json::to_vec(&segment).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
-        if self.bytes + bytes.len() > MAX_TRANSCRIPT {
+        let rendered_bytes = self
+            .rendered_bytes
+            .map(|used| used + usize::from(used != 0) * 2 + crate::render_segment(&segment).len());
+        if self.bytes + bytes.len() > MAX_TRANSCRIPT
+            || rendered_bytes.is_some_and(|used| used > MAX_TRANSCRIPT)
+        {
             return Err(
                 "This recording reached its transcript size limit. The saved text is preserved."
                     .into(),
@@ -218,6 +391,7 @@ impl Owner {
             .map_err(|e| e.to_string())?;
         self.bytes += bytes.len();
         self.next += 1;
+        self.rendered_bytes = rendered_bytes;
         Ok(segment)
     }
 }
@@ -239,10 +413,7 @@ fn state_in(dir: &Directory, id: &str) -> Result<State, String> {
             return Err(error.to_string());
         }
     }
-    let mut state: State = read_json_in(dir, OsStr::new("state.json"), 16 * 1024)?;
-    if state.id != id {
-        return Err("Recording state has a different recording ID".into());
-    }
+    let mut state = read_state(dir, id)?.ok_or("Missing recording state")?;
     if result == 0 && state.phase.active() {
         state.phase = Phase::Interrupted;
         state.ended_at = None;
@@ -259,6 +430,11 @@ pub fn read(base: &Path, id: &str) -> Result<Transcript, String> {
     let file = dir
         .file(OsStr::new("transcript.jsonl"), OFlags::RDONLY)
         .map_err(|error| error.to_string())?;
+    let (segments, _, _) = read_segments(&file)?;
+    Ok(Transcript { state, segments })
+}
+
+fn read_segments(file: &File) -> Result<(Vec<Segment>, usize, bool), String> {
     let mut bytes = Vec::new();
     file.take(MAX_TRANSCRIPT as u64 + 1)
         .read_to_end(&mut bytes)
@@ -279,7 +455,7 @@ pub fn read(base: &Path, id: &str) -> Result<Transcript, String> {
         segments.push(segment);
     }
     // Ignore only an incomplete trailing write; completed corrupt data fails closed.
-    Ok(Transcript { state, segments })
+    Ok((segments, end, end == bytes.len()))
 }
 #[cfg(test)]
 mod tests {
@@ -322,6 +498,56 @@ mod tests {
         assert_eq!(saved.state.phase, Phase::Stopped);
         assert_eq!(saved.segments.len(), 1);
         assert!(directory(dir.path(), "../elsewhere").is_err());
+    }
+    #[test]
+    fn resume_truncates_only_a_partial_tail_and_advances_the_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        initialize(dir.path(), "sample").unwrap();
+        let mut owner = Owner::start(
+            dir.path(),
+            "sample",
+            "first",
+            None,
+            CaptureSource::Microphone,
+            |_| Ok(None),
+        )
+        .unwrap();
+        let first = owner
+            .append("microphone", 0, 500, "Before a crash.".into())
+            .unwrap();
+        drop(owner);
+        OpenOptions::new()
+            .append(true)
+            .open(
+                directory(dir.path(), "sample")
+                    .unwrap()
+                    .join("transcript.jsonl"),
+            )
+            .unwrap()
+            .write_all(b"{incomplete")
+            .unwrap();
+        let recovered = state(dir.path(), "sample").unwrap();
+        assert_eq!(recovered.phase, Phase::Interrupted);
+        assert_eq!(recovered.run.as_deref(), Some("first"));
+        let mut resumed = Owner::start(
+            dir.path(),
+            "sample",
+            "second",
+            Some("first"),
+            CaptureSource::Microphone,
+            |_| Ok(None),
+        )
+        .unwrap();
+        let second = resumed
+            .append("microphone", 0, 200, "After a crash.".into())
+            .unwrap();
+        assert_eq!(second.sequence, 2);
+        assert_eq!(second.start_ms, first.end_ms);
+        resumed.phase(Phase::Stopped, None).unwrap();
+        drop(resumed);
+        let transcript = read(dir.path(), "sample").unwrap();
+        assert_eq!(transcript.state.run.as_deref(), Some("second"));
+        assert_eq!(transcript.segments, vec![first, second]);
     }
     #[test]
     fn failed_phase_commit_does_not_publish_success_or_replace_saved_text() {

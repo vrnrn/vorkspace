@@ -1,6 +1,6 @@
 //! React's command names, defaults, scopes, filter and shortcut recorder.
 use crate::settings::{Preferences, SettingsView};
-use gpui::{AnyElement, Context, FontWeight, Role, div, prelude::*, px};
+use gpui::{AnyElement, Context, Focusable, FontWeight, Role, div, prelude::*, px};
 use vorkspace_ui::theme::*;
 #[derive(Clone, Copy)]
 pub(crate) struct Binding {
@@ -387,16 +387,8 @@ impl SettingsView {
                     )),
             )
             .child(
-                div()
-                    .h(px(28.))
+                crate::controls::page::search_frame(&self.keybinding_filter.focus_handle(cx))
                     .w(px(176.))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(content(0.1))
-                    .px_2()
                     .child(icon("search-01", 14.))
                     .child(
                         div()

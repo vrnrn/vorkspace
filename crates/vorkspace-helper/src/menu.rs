@@ -7,7 +7,8 @@ pub(super) enum Event {
     Copy(u64),
     Clear,
     Settings,
-    Composer,
+    NewMeeting,
+    StopRecording(String),
     Quit,
     Search(String),
     Closed,
@@ -34,6 +35,7 @@ unsafe extern "C" {
         status_click: bool,
     );
     fn vorkspace_helper_hide(handle: *mut c_void);
+    fn vorkspace_helper_set_recording_run(handle: *mut c_void, run: *const c_char);
     fn vorkspace_helper_begin(handle: *mut c_void);
     fn vorkspace_helper_add(
         handle: *mut c_void,
@@ -49,17 +51,19 @@ unsafe extern "C" {
 extern "C" fn receive(context: *mut c_void, action: u32, id: u64, text: *const c_char) {
     // Called synchronously on the main thread while Menu owns the sender.
     let sender = unsafe { &*context.cast::<async_channel::Sender<Event>>() };
+    let text = || {
+        unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned()
+    };
     let event = match action {
         1 => Event::Copy(id),
         2 => Event::Clear,
         3 => Event::Settings,
-        4 => Event::Composer,
+        4 => Event::NewMeeting,
         5 => Event::Quit,
-        6 => Event::Search(
-            unsafe { CStr::from_ptr(text) }
-                .to_string_lossy()
-                .into_owned(),
-        ),
+        6 => Event::Search(text()),
+        8 => Event::StopRecording(text()),
         _ => Event::Closed,
     };
     // Callbacks enqueue control events, never clipboard payloads or native UI work.
@@ -97,6 +101,15 @@ impl Menu {
     }
     pub(super) fn hide(&self) {
         unsafe { vorkspace_helper_hide(self.handle) }
+    }
+    pub(super) fn set_recording_run(&self, run: Option<&str>) {
+        let run = run.map(|run| CString::new(run).expect("validated recording run"));
+        unsafe {
+            vorkspace_helper_set_recording_run(
+                self.handle,
+                run.as_ref().map_or(std::ptr::null(), |run| run.as_ptr()),
+            )
+        };
     }
     pub(super) fn sync(&self, history: &History, query: &str, enabled: bool) {
         unsafe { vorkspace_helper_begin(self.handle) };

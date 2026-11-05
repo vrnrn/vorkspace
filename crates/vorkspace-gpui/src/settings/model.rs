@@ -20,8 +20,8 @@ pub(crate) enum Section {
     Github,
     Gitlab,
     Jira,
+    #[serde(alias = "meetings")]
     Notes,
-    Meetings,
     Todos,
     Archive,
     Worktrees,
@@ -48,7 +48,6 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
             Section::Gitlab,
             Section::Jira,
             Section::Notes,
-            Section::Meetings,
             Section::Todos,
         ],
     ),
@@ -66,7 +65,7 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
 ];
 
 impl Section {
-    pub(crate) const ALL: [Section; 19] = [
+    pub(crate) const ALL: [Section; 18] = [
         Section::General,
         Section::Connections,
         Section::Appearance,
@@ -81,7 +80,6 @@ impl Section {
         Section::Gitlab,
         Section::Jira,
         Section::Notes,
-        Section::Meetings,
         Section::Todos,
         Section::Archive,
         Section::Worktrees,
@@ -104,7 +102,6 @@ impl Section {
             Section::Gitlab => "gitlab",
             Section::Jira => "jira",
             Section::Notes => "notes",
-            Section::Meetings => "meetings",
             Section::Todos => "todos",
             Section::Archive => "archive",
             Section::Worktrees => "worktrees",
@@ -127,7 +124,6 @@ impl Section {
             Section::Gitlab => "GitLab",
             Section::Jira => "Jira",
             Section::Notes => "Notes",
-            Section::Meetings => "Meetings",
             Section::Todos => "To-dos",
             Section::Archive => "Archive",
             Section::Worktrees => "Worktrees",
@@ -161,8 +157,7 @@ impl Section {
             Section::Github => "Pull requests, reviews, and issues from GitHub.",
             Section::Gitlab => "Merge requests from GitLab.com or a self-managed instance.",
             Section::Jira => "Jira Cloud issues, projects, and filters.",
-            Section::Notes => "Control access to saved notes in your workspace.",
-            Section::Meetings => "Set the provider, model, and prompt for meeting summaries.",
+            Section::Notes => "Notes, meeting recordings, and AI summary settings.",
             Section::Todos => "Control access to project and Bot to-do boards.",
             Section::Archive => "Projects and conversations you have archived.",
             Section::Worktrees => "Manage additional worktrees for each project.",
@@ -194,8 +189,9 @@ impl Section {
             Section::Github => "gh cli connect pull request sign in",
             Section::Gitlab => "token self-managed merge request connect",
             Section::Jira => "atlassian cloud api token issues projects jql",
-            Section::Notes => "notebook markdown scratchpad",
-            Section::Meetings => "recording audio transcript summary prompt ai",
+            Section::Notes => {
+                "notebook markdown scratchpad meeting recording audio transcript summary prompt ai"
+            }
             Section::Todos => "tasks todo checklists boards",
             Section::Archive => "archived restore delete hidden",
             Section::Worktrees => "git branch worktree working copy project create delete",
@@ -219,7 +215,6 @@ impl Section {
             Section::Gitlab => "inbox-gitlab",
             Section::Jira => "inbox-jira",
             Section::Notes => "note",
-            Section::Meetings => "mic",
             Section::Todos => "check-circle",
             Section::Archive => "archive",
             Section::Worktrees => "folder-tree",
@@ -544,13 +539,13 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
     ),
     (
         "meeting-provider",
-        Section::Meetings,
+        Section::Notes,
         "Summary provider",
         "meeting ai model",
     ),
     (
         "meeting-prompt",
-        Section::Meetings,
+        Section::Notes,
         "Summary prompt",
         "meeting ai format",
     ),

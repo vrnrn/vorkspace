@@ -2,12 +2,13 @@
 //! serves a project's sidebar, a Bot's details and the To-dos page; narrow
 //! hosts stack the columns, the page lays them side by side.
 use crate::{
+    controls::page,
     input::{self, Input},
     popover::{Anchor, AnchorSlot, popover},
 };
 use gpui::{
-    App, Context, CursorStyle, Entity, FocusHandle, Focusable, FontWeight, Global, MouseButton,
-    Role, SharedString, Subscription, Window, div, prelude::*, px,
+    App, Context, Entity, FocusHandle, Focusable, FontWeight, Global, MouseButton, Role,
+    SharedString, Subscription, Window, div, prelude::*, px,
 };
 use vorkspace_core::todos::{TodoBoard, TodoItem, TodoStatus};
 use vorkspace_runtime::runtime::{Database, locked};
@@ -49,10 +50,10 @@ impl Render for DraggedTodo {
             .px_2()
             .py_1()
             .rounded_md()
-            .bg(gpui::rgb(0x2a2a2a))
+            .bg(pane_fill())
             .border_1()
-            .border_color(content(0.1))
-            .text_size(px(13.))
+            .border_color(page::divider())
+            .text_size(px(page::LABEL_SIZE))
             .text_color(content(0.9))
             .truncate()
             .child(self.title.clone())
@@ -89,7 +90,8 @@ impl Focusable for TodoBoardView {
 
 impl TodoBoardView {
     pub(crate) fn new(store: Database, columns: bool, cx: &mut Context<Self>) -> Self {
-        let draft = cx.new(|cx| Input::field("New to-do", "Add a to-do…", content(0.35), cx));
+        let draft =
+            cx.new(|cx| Input::field("New to-do", "Add a to-do…", page::secondary_ink(), cx));
         let subscriptions = vec![
             cx.subscribe(&draft, |this, _, _: &input::Submitted, cx| this.add(cx)),
             cx.observe_global::<TodoRevision>(|this, cx| this.refresh(cx)),
@@ -323,7 +325,7 @@ impl TodoBoardView {
     fn begin_edit(&mut self, item: &TodoItem, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_edit(cx);
         let input = cx.new(|cx| {
-            let mut input = Input::field("Rename to-do", "To-do", content(0.35), cx);
+            let mut input = Input::field("Rename to-do", "To-do", page::secondary_ink(), cx);
             input.set_text(item.title.clone(), cx);
             input
         });
@@ -370,7 +372,7 @@ impl TodoBoardView {
                 .text_color(accent_color())
                 .into_any_element(),
             TodoStatus::Done => icon("check-circle", 15.)
-                .text_color(content(0.45))
+                .text_color(page::secondary_ink())
                 .into_any_element(),
         }
     }
@@ -404,7 +406,7 @@ impl TodoBoardView {
                 item.title,
                 status.label()
             )))
-            .min_h(px(30.))
+            .min_h(px(36.))
             .px_1()
             .flex()
             .items_center()
@@ -417,34 +419,24 @@ impl TodoBoardView {
             }))
             .on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
             .child(
-                div()
-                    .id(SharedString::from(format!("todo-status-{}", item.id)))
-                    .debug_selector({
-                        let id = item.id.clone();
-                        move || format!("todo-status-{id}")
-                    })
-                    .role(Role::Button)
-                    .aria_label(SharedString::from(format!(
-                        "Move to {}",
-                        status.next().label()
-                    )))
-                    .size(px(22.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(|s| s.bg(content(0.08)))
-                    .child(Self::status_mark(status))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener({
-                        let id = id.clone();
-                        move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.advance(id.clone(), status, cx)
-                        }
-                    })),
+                page::icon_action(
+                    SharedString::from(format!("todo-status-{}", item.id)),
+                    format!("Move to {}", status.next().label()),
+                    true,
+                )
+                .debug_selector({
+                    let id = item.id.clone();
+                    move || format!("todo-status-{id}")
+                })
+                .child(Self::status_mark(status))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.advance(id.clone(), status, cx)
+                    }
+                })),
             )
             .child(match editing {
                 Some(input) => div().flex_1().min_w_0().child(input).into_any_element(),
@@ -453,8 +445,13 @@ impl TodoBoardView {
                     .flex_1()
                     .min_w_0()
                     .py_1()
-                    .text_size(px(13.))
-                    .text_color(content(if done { 0.4 } else { 0.85 }))
+                    .text_size(px(page::LABEL_SIZE))
+                    .line_height(px(page::LABEL_LINE))
+                    .text_color(if done {
+                        page::secondary_ink()
+                    } else {
+                        content(1.)
+                    })
                     .when(done, |d| d.line_through())
                     .child(item.title.clone())
                     .on_mouse_down(
@@ -471,25 +468,20 @@ impl TodoBoardView {
                     .into_any_element(),
             })
             .child(
-                div()
-                    .id(SharedString::from(format!("todo-delete-{}", item.id)))
-                    .role(Role::Button)
-                    .aria_label("Delete to-do")
-                    .size(px(20.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .opacity(0.)
-                    .group_hover("todo-row", |s| s.opacity(1.))
-                    .hover(|s| s.bg(content(0.08)))
-                    .child(icon("close", 12.))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.delete(id.clone(), cx)
-                    })),
+                page::icon_action(
+                    SharedString::from(format!("todo-delete-{}", item.id)),
+                    "Delete to-do",
+                    true,
+                )
+                .opacity(0.)
+                .group_hover("todo-row", |s| s.opacity(1.))
+                .focus_visible(|s| s.opacity(1.).bg(content(0.15)).border_color(accent_color()))
+                .child(icon("close", page::ICON_SIZE))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.delete(id.clone(), cx)
+                })),
             )
             .into_any_element()
     }
@@ -512,23 +504,23 @@ impl TodoBoardView {
             .gap_px()
             .min_w_0()
             .min_h(px(64.))
-            .rounded_lg()
+            .rounded(px(page::CARD_CORNER))
             .drag_over::<DraggedTodo>(|s, _, _, _| s.bg(content(0.04)))
             .on_drop(cx.listener(move |this, dragged: &DraggedTodo, _, cx| {
                 this.move_to(dragged, status, None, cx)
             }))
             .child(
                 div()
-                    .h(px(26.))
+                    .h(px(page::CONTROL_HEIGHT))
                     .px_1()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_size(px(12.))
+                    .text_size(px(page::META_SIZE))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(content(0.5))
+                    .text_color(page::secondary_ink())
                     .child(status.label())
-                    .child(div().text_color(content(0.3)).child(count.to_string())),
+                    .child(div().child(count.to_string())),
             )
             .children(items.iter().map(|item| self.row(item, cx)))
             .when(count == 0, |d| {
@@ -537,7 +529,7 @@ impl TodoBoardView {
                         .px_1()
                         .py_1()
                         .text_size(px(12.))
-                        .text_color(content(0.3))
+                        .text_color(page::secondary_ink())
                         .child(match status {
                             TodoStatus::Todo => "Nothing to do",
                             TodoStatus::InProgress => "Nothing in progress",
@@ -549,15 +541,21 @@ impl TodoBoardView {
 }
 
 impl Render for TodoBoardView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let columns = self.columns;
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let narrow = page::narrow(window);
+        let columns = self.columns && !narrow;
+        let padding = if self.columns {
+            page::detail_padding(narrow)
+        } else {
+            px(8.)
+        };
         let body = div()
             .id("todo-board-columns")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .px_2()
-            .pb_2()
+            .px(padding)
+            .pb(padding)
             .map(|d| {
                 if columns {
                     d.flex().items_start().gap_3()
@@ -571,7 +569,7 @@ impl Render for TodoBoardView {
                         .p_2()
                         .bg(content(0.02))
                         .border_1()
-                        .border_color(content(0.05))
+                        .border_color(page::divider())
                 })
             }));
         div()
@@ -583,18 +581,18 @@ impl Render for TodoBoardView {
             .flex_col()
             .child(
                 div()
-                    .h(px(36.))
+                    .h(px(page::CONTROL_HEIGHT))
                     .flex_shrink_0()
                     .px_2()
-                    .mx_2()
-                    .my_2()
+                    .mx(padding)
+                    .my_3()
                     .flex()
                     .items_center()
                     .gap_2()
                     .rounded_md()
                     .border_1()
-                    .border_color(content(0.08))
-                    .child(icon("plus", 12.))
+                    .border_color(page::divider())
+                    .child(icon("plus", page::ICON_SIZE))
                     .child(div().flex_1().min_w_0().child(self.draft.clone())),
             )
             .children(
@@ -747,8 +745,8 @@ impl TodosPage {
                         .px_2()
                         .pt_2()
                         .pb_1()
-                        .text_size(px(11.))
-                        .text_color(content(0.4))
+                        .text_size(px(page::META_SIZE))
+                        .text_color(page::secondary_ink())
                         .child(group)
                         .into_any_element(),
                 );
@@ -782,8 +780,8 @@ impl TodosPage {
                     .when(count > 0, |d| {
                         d.child(
                             div()
-                                .text_size(px(11.))
-                                .text_color(content(0.4))
+                                .text_size(px(page::META_SIZE))
+                                .text_color(page::secondary_ink())
                                 .child(count.to_string()),
                         )
                     })
@@ -834,41 +832,24 @@ impl Render for TodosPage {
                 }
             }))
             .child(
-                div()
-                    .h(px(44.))
-                    .flex_shrink_0()
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .id("todo-board-picker-button")
-                            .debug_selector(|| "todo-board-picker-button".into())
-                            .role(Role::Button)
-                            .aria_label("Choose board")
-                            .relative()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .flex()
-                            .items_center()
-                            .gap_1p5()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .hover(|s| s.bg(content(0.08)))
-                            .when(self.picker_open, |d| d.bg(content(0.08)))
-                            .child(self.anchor.probe())
-                            .child(label)
-                            .child(icon("chevron-down", 11.))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.picker_open = !this.picker_open;
-                                if this.picker_open {
-                                    this.load_counts(cx);
-                                }
-                                cx.notify();
-                            })),
-                    ),
+                page::toolbar().child(
+                    page::action("todo-board-picker-button", "Choose board", true)
+                        .debug_selector(|| "todo-board-picker-button".into())
+                        .relative()
+                        .text_size(px(page::LABEL_SIZE))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .when(self.picker_open, |d| d.bg(content(0.08)))
+                        .child(self.anchor.probe())
+                        .child(label)
+                        .child(icon("chevron-down", 11.))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.picker_open = !this.picker_open;
+                            if this.picker_open {
+                                this.load_counts(cx);
+                            }
+                            cx.notify();
+                        })),
+                ),
             )
             .child(div().flex_1().min_h_0().child(self.board.clone()))
             .when(self.picker_open, |d| d.child(self.picker(cx)))
@@ -877,3 +858,6 @@ impl Render for TodosPage {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod screenshots;

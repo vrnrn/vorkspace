@@ -103,9 +103,12 @@ function cycles(edges) {
 }
 
 test("top-level modules depend on each other in one direction", () => {
-  for (const crate of readdirSync(crates)) {
-    const found = cycles(moduleGraph(join(crates, crate, "src")));
-    assert.deepEqual(found.filter((cycle) => !allowed.includes(cycle)), [], crate);
+  for (const crate of readdirSync(crates, { withFileTypes: true })) {
+    if (!crate.isDirectory()) continue;
+    const root = join(crates, crate.name, "src");
+    if (!statSync(root, { throwIfNoEntry: false })?.isDirectory()) continue;
+    const found = cycles(moduleGraph(root));
+    assert.deepEqual(found.filter((cycle) => !allowed.includes(cycle)), [], crate.name);
   }
 });
 

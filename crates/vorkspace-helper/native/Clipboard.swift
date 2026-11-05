@@ -45,9 +45,10 @@ private final class MenuButtonCell: NSButtonCell {
         super.titleRect(forBounds: rect).insetBy(dx: 8, dy: 0)
     }
 }
-private final class MenuButton: NSButton {
+private class MenuButton: NSButton {
     override class var cellClass: AnyClass? { get { MenuButtonCell.self } set {} }
     var entered: (() -> Void)?
+    var actionTint: NSColor { .labelColor }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
@@ -57,11 +58,40 @@ private final class MenuButton: NSButton {
         wantsLayer = true
         layer?.cornerRadius = 5
         layer?.backgroundColor = menuHighlight.cgColor
-        contentTintColor = .labelColor
+        contentTintColor = actionTint
         entered?()
     }
-    func resetHover() { layer?.backgroundColor = nil; contentTintColor = .labelColor }
+    func resetHover() { layer?.backgroundColor = nil; contentTintColor = actionTint }
     override func mouseExited(with event: NSEvent) { resetHover() }
+}
+private final class MeetingButton: MenuButton {
+    enum Intent {
+        case new
+        case stop(String)
+    }
+    var intent: Intent = .new
+    override var actionTint: NSColor {
+        if case .stop = intent { return .systemRed }
+        return .labelColor
+    }
+    private var pressedIntent: Intent?
+    var activatedIntent: Intent { pressedIntent ?? intent }
+    override func mouseDown(with event: NSEvent) {
+        // A recording can finish while AppKit is tracking a held button.
+        pressedIntent = intent
+        defer { pressedIntent = nil }
+        super.mouseDown(with: event)
+    }
+}
+private final class FilterField: NSSearchField {
+    func showFocus(_ focused: Bool) {
+        layer?.backgroundColor = focused ? menuHighlight.cgColor : nil
+    }
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { showFocus(true) }
+        return accepted
+    }
 }
 private final class MenuRow: NSTableRowView {
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
@@ -88,7 +118,7 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
     private let context: UnsafeMutableRawPointer?
     private let panel = Panel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 440),
         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-    private let search = NSSearchField()
+    private let search = FilterField()
     private let table = HistoryTable()
     private let scroll = NSScrollView()
     private let preview = NSImageView()
@@ -127,7 +157,12 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
         material.layer?.cornerRadius = 10
         material.layer?.masksToBounds = true
         panel.contentView = material
+        search.isBordered = false
+        search.isBezeled = false
+        search.drawsBackground = false
         search.focusRingType = .none
+        search.wantsLayer = true
+        search.layer?.cornerRadius = 6
         search.placeholderString = "Search clipboard…"
         search.setAccessibilityLabel("Search clipboard")
         search.delegate = self
@@ -154,6 +189,7 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
         scroll.drawsBackground = false
         scroll.autohidesScrollers = true
         material.addSubview(scroll)
+        panel.initialFirstResponder = table
         empty.textColor = .secondaryLabelColor
         empty.font = .systemFont(ofSize: 13)
         material.addSubview(empty)
@@ -161,13 +197,16 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
         preview.setAccessibilityLabel("Image preview")
         preview.isHidden = true
         material.addSubview(preview)
-        for (index, title) in ["Clear history", "Settings…", "Quick Composer", "Quit vorkspace"].enumerated() {
-            let button = MenuButton(title: title, target: self, action: #selector(footer(_:)))
+        let footerRows = [(2, "Clear history"), (4, "New meeting"), (3, "Settings…"), (5, "Quit vorkspace")]
+        for (index, (tag, title)) in footerRows.enumerated() {
+            let button: MenuButton = tag == 4
+                ? MeetingButton(title: title, target: self, action: #selector(footer(_:)))
+                : MenuButton(title: title, target: self, action: #selector(footer(_:)))
             button.entered = { [weak self] in
                 self?.table.deselectAll(nil)
                 self?.cancelPreview()
             }
-            button.tag = index + 2
+            button.tag = tag
             button.isBordered = false
             button.contentTintColor = .labelColor
             button.alignment = .left
@@ -179,6 +218,24 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
         line.boxType = .separator
         line.frame = NSRect(x: 12, y: 116, width: 356, height: 1)
         material.addSubview(line)
+    }
+    func setRecordingRun(_ run: String?) {
+        guard let button = panel.contentView?.viewWithTag(4) as? MeetingButton else { return }
+        button.intent = run.map { .stop($0) } ?? .new
+        if run == nil {
+            button.title = "New meeting"
+            button.image = nil
+            button.imagePosition = .noImage
+        } else {
+            button.attributedTitle = NSAttributedString(string: "Stop recording", attributes: [
+                .font: NSFont.menuFont(ofSize: 13),
+                .foregroundColor: NSColor.systemRed,
+            ])
+            button.image = NSImage(systemSymbolName: "stop.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
+            button.imagePosition = .imageLeft
+        }
+        button.contentTintColor = button.actionTint
     }
     private func send(_ action: UInt32, _ id: UInt64 = 0, _ text: String = "") {
         text.withCString { callback(context, action, id, $0) }
@@ -247,8 +304,9 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
             placeMenu()
             layout()
             panel.setFrame(menuFrame, display: true)
+            panel.makeFirstResponder(enabled ? table : nil)
+            search.showFocus(false)
             panel.makeKeyAndOrderFront(nil)
-            panel.makeFirstResponder(enabled ? search : nil)
             outside = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in self?.outsideClick(event) }
             local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
                 guard let self else { return event }
@@ -259,6 +317,22 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
     private func localEvent(_ event: NSEvent) -> NSEvent? {
         guard visible else { return event }
         if event.type == .keyDown, event.keyCode == 53 { hide(); return nil }
+        if event.type == .keyDown, event.window === panel, enabled,
+           panel.firstResponder === table, event.modifierFlags.isDisjoint(with: [.command, .control]) {
+            switch event.keyCode {
+            case 125: moveSelection(1); return nil
+            case 126: moveSelection(-1); return nil
+            case 36, 76: choose(); return nil
+            default: break
+            }
+            let printable = event.charactersIgnoringModifiers?.unicodeScalars.contains {
+                !CharacterSet.controlCharacters.contains($0) && !(0xF700...0xF8FF).contains($0.value)
+            } ?? false
+            if printable, panel.makeFirstResponder(search), let editor = search.currentEditor() {
+                editor.keyDown(with: event)
+                return nil
+            }
+        }
         if event.type != .keyDown && event.window !== panel { outsideClick(event) }
         return event
     }
@@ -282,7 +356,9 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
         guard visible else { return }
         visible = false
         cancelPreview()
+        panel.makeFirstResponder(nil)
         panel.orderOut(nil)
+        search.showFocus(false)
         panel.contentView!.subviews.compactMap { $0 as? MenuButton }.forEach { $0.resetHover() }
         if let outside { NSEvent.removeMonitor(outside) }
         if let local { NSEvent.removeMonitor(local) }
@@ -300,6 +376,15 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
         send(1, id)
     }
     @objc private func footer(_ button: NSButton) {
+        if let meeting = button as? MeetingButton {
+            let intent = meeting.activatedIntent
+            hide()
+            switch intent {
+            case .new: send(4)
+            case .stop(let run): send(8, 0, run)
+            }
+            return
+        }
         let action = UInt32(button.tag)
         if action != 2 { hide() }
         send(action)
@@ -310,15 +395,18 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
         cancelPreview()
         send(6, 0, query)
     }
+    func controlTextDidEndEditing(_ notification: Notification) { search.showFocus(false) }
+    private func moveSelection(_ delta: Int) {
+        guard !entries.isEmpty else { return }
+        let row = min(max(table.selectedRow + delta, 0), entries.count - 1)
+        table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        table.scrollRowToVisible(row)
+        cancelPreview()
+    }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.moveUp(_:)):
-            guard !entries.isEmpty else { return true }
-            let delta = selector == #selector(NSResponder.moveDown(_:)) ? 1 : -1
-            let row = min(max(table.selectedRow + delta, 0), entries.count - 1)
-            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            table.scrollRowToVisible(row)
-            cancelPreview()
+            moveSelection(selector == #selector(NSResponder.moveDown(_:)) ? 1 : -1)
             return true
         case #selector(NSResponder.insertNewline(_:)): choose(); return true
         default: return false
@@ -437,6 +525,10 @@ func acceptToggle(_ pointer: UnsafeMutableRawPointer, _ statusClick: Bool) -> Bo
 func toggle(_ pointer: UnsafeMutableRawPointer, _ x: Double, _ y: Double, _ width: Double, _ height: Double, _ statusClick: Bool) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().toggle(x: x, y: y, statusWidth: width, statusHeight: height, statusClick: statusClick) }
 @_cdecl("vorkspace_helper_hide")
 func hide(_ pointer: UnsafeMutableRawPointer) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().hide() }
+@_cdecl("vorkspace_helper_set_recording_run")
+func setRecordingRun(_ pointer: UnsafeMutableRawPointer, _ run: UnsafePointer<CChar>?) {
+    Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().setRecordingRun(run.map { String(cString: $0) })
+}
 @_cdecl("vorkspace_helper_begin")
 func begin(_ pointer: UnsafeMutableRawPointer) { Unmanaged<ClipboardMenu>.fromOpaque(pointer).takeUnretainedValue().begin() }
 @_cdecl("vorkspace_helper_add")

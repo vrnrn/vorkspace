@@ -1,6 +1,6 @@
 # Vox
 
-Vox is an optional voice assistant that appears around your Mac's notch. Turn it on in Settings, then press Control Option Space from any app, or click the microphone above Subscriptions in Vorkspace. You can change the shortcut in Keyboard Shortcuts. Vox starts disabled.
+Vox is an optional voice assistant that appears around your Mac's notch. Turn it on in Settings, then press Control Option Space from any app. You can change the shortcut in Keyboard Shortcuts. Vox starts disabled.
 
 Its face appears on the left of the notch and a small colored dot appears on the right. Green means it is listening, amber means it is thinking, blue means it is replying, and red means something went wrong. Move your pointer over the dot to get a stop button, or a start button if no call is running. Silent mode opens the reply below the notch without reading it aloud. On a screen without a notch, Vox appears at the top center.
 
