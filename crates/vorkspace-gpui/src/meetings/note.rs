@@ -10,8 +10,8 @@ use vorkspace_runtime::runtime::locked;
 use vorkspace_ui::theme::{StatusColor, content, icon, status};
 
 pub(super) struct PendingNote {
-    note_id: String,
-    recording_id: Option<String>,
+    recording_id: String,
+    saved: bool,
     section: Option<Section>,
 }
 
@@ -22,21 +22,6 @@ impl Page {
         recording_id: Option<&str>,
         cx: &mut Context<Self>,
     ) {
-        if self.deleting || self.discarding {
-            if self.pending_note.as_ref().is_some_and(|pending| {
-                pending.note_id == note_id && pending.recording_id.as_deref() == recording_id
-            }) {
-                return;
-            }
-            // Notes has already selected this identity. Retain the latest
-            // request while the current document finishes its durable operation.
-            self.pending_note = Some(PendingNote {
-                note_id: note_id.into(),
-                recording_id: recording_id.map(str::to_owned),
-                section: None,
-            });
-            return;
-        }
         let id = recording_id.map(str::to_owned).unwrap_or_else(|| {
             self.note_ids
                 .entry(note_id.into())
@@ -44,20 +29,35 @@ impl Page {
                 .clone()
         });
         self.note_ids.insert(note_id.into(), id.clone());
+        if self
+            .pending_note
+            .as_ref()
+            .is_some_and(|pending| pending.recording_id == id)
+        {
+            // Refreshes retain the same identity and explicit tab through
+            // saving, queued I/O and loading. Failed work can be retried.
+            self.resume_note_selection(cx);
+            return;
+        }
         if self.document.as_ref().is_some_and(|doc| doc.id() == id)
-            && !self.opening
+            && self.pending_note.is_none()
+            && self.opening.is_none()
             && self.next_open.is_none()
         {
             return;
         }
-        self.navigate(
-            if recording_id.is_some() {
-                Action::Open(id)
-            } else {
-                Action::NewDraft(id)
-            },
-            cx,
-        );
+        // Notes is the selection authority; keep its identity and tab together
+        // until installation, even when a preceding operation fails or saves.
+        self.intent += 1;
+        self.open_epoch += 1;
+        self.after_save = None;
+        self.next_open = None;
+        self.pending_note = Some(PendingNote {
+            recording_id: id,
+            saved: recording_id.is_some(),
+            section: None,
+        });
+        self.resume_note_selection(cx);
     }
 
     pub(crate) fn is_for_note(&self, note_id: &str) -> bool {
@@ -67,14 +67,44 @@ impl Page {
     }
 
     pub(super) fn resume_note_selection(&mut self, cx: &mut Context<Self>) {
-        if let Some(pending) = self.pending_note.take() {
-            self.show_note(&pending.note_id, pending.recording_id.as_deref(), cx);
-            if let Some(section) = pending.section {
-                // This choice belongs to the pending note even if the visible
-                // section already matches and navigate would otherwise no-op.
-                self.intent += 1;
-                self.note_section(section == Section::Transcript, cx);
+        if !self.enabled || self.deleting || self.discarding || self.saving {
+            return;
+        }
+        let Some(pending) = &self.pending_note else {
+            return;
+        };
+        if self
+            .document
+            .as_ref()
+            .is_some_and(|doc| doc.id() == pending.recording_id)
+        {
+            self.finish_note_selection();
+        } else if self.document.as_ref().is_some_and(Document::dirty) {
+            self.save(cx);
+        } else if !self.opening_document(&pending.recording_id) {
+            let id = pending.recording_id.clone();
+            self.confirm_delete = false;
+            self.source_open = false;
+            if pending.saved {
+                self.open(id, cx);
+            } else {
+                self.install(Some(Document::temporary_with_id(id)), cx);
             }
+            self.finish_note_selection();
+            cx.notify();
+        }
+    }
+
+    pub(super) fn finish_note_selection(&mut self) {
+        if self.pending_note.as_ref().is_some_and(|pending| {
+            self.document
+                .as_ref()
+                .is_some_and(|doc| doc.id() == pending.recording_id)
+        }) && let Some(pending) = self.pending_note.take()
+            && let Some(section) = pending.section
+        {
+            self.section = section;
+            self.pending_focus = None;
         }
     }
 

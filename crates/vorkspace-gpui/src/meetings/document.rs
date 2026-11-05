@@ -120,7 +120,7 @@ impl Document {
         }
     }
 
-    fn temporary_with_id(id: String) -> Self {
+    pub(super) fn temporary_with_id(id: String) -> Self {
         Self {
             lease: Some(Arc::default()),
             ..Self::live(State::dormant(id))
@@ -239,8 +239,6 @@ impl Document {
 }
 
 pub(super) enum Action {
-    Open(String),
-    NewDraft(String),
     Section(Section),
     Record(String),
     Summarize,
@@ -472,12 +470,9 @@ impl Page {
         if !self.enabled || self.deleting || self.discarding {
             return;
         }
+        self.intent += 1;
         if matches!(&action, Action::Section(section) if *section == self.section) {
             return;
-        }
-        self.intent += 1;
-        if matches!(action, Action::Open(_) | Action::NewDraft(_)) {
-            self.open_epoch += 1;
         }
         if self.document.as_ref().is_some_and(Document::dirty) {
             self.after_save = Some((self.intent, action));
@@ -491,8 +486,6 @@ impl Page {
         self.confirm_delete = false;
         self.source_open = false;
         match action {
-            Action::Open(id) => self.open(id, cx),
-            Action::NewDraft(id) => self.install(Some(Document::temporary_with_id(id)), cx),
             Action::Section(section) => {
                 self.section = section;
                 if section == Section::Source {
@@ -523,8 +516,15 @@ impl Page {
         self.open_next(cx);
     }
 
+    pub(super) fn opening_document(&self, id: &str) -> bool {
+        self.next_open
+            .as_ref()
+            .or(self.opening.as_ref())
+            .is_some_and(|request| request.epoch == self.open_epoch && request.id == id)
+    }
+
     fn open_next(&mut self, cx: &mut Context<Self>) {
-        if self.opening {
+        if self.opening.is_some() {
             return;
         }
         let Some(PendingOpen {
@@ -548,7 +548,12 @@ impl Page {
             .filter(|doc| doc.id() == id)
             .and_then(|doc| doc.lease.clone());
         let drafts = self.drafts.clone();
-        self.opening = true;
+        self.opening = Some(PendingOpen {
+            epoch,
+            intent,
+            id: id.clone(),
+            retry,
+        });
         let opening_id = id.clone();
         let work = cx
             .background_executor()
@@ -558,7 +563,7 @@ impl Page {
             let _ = this.update(cx, |this, cx| {
                 this.complete_open(epoch, intent, retry, result, cx);
                 this.open_next(cx);
-                if !this.opening
+                if this.opening.is_none()
                     && let Some(doc) = &this.document
                     && doc.id() != id
                     && doc.awaiting_transcript
@@ -580,7 +585,7 @@ impl Page {
         result: Result<Document, String>,
         cx: &mut Context<Self>,
     ) {
-        self.opening = false;
+        self.opening = None;
         if !self.enabled || self.open_epoch != epoch {
             return;
         }
@@ -626,6 +631,7 @@ impl Page {
                     if self.intent != intent {
                         (self.section, self.pending_focus) = view;
                     }
+                    self.finish_note_selection();
                     if let Some(error) = capture_error {
                         self.fail(error, cx);
                     }
@@ -798,12 +804,14 @@ impl Page {
                     self.update_preview(cx);
                 }
                 if let Some((intent, action)) = after
+                    && self.pending_note.is_none()
                     && self.intent == intent
                     && self.document.as_ref().is_some_and(|doc| !doc.dirty())
                     && self.enabled
                 {
                     self.run_action(action, cx);
                 }
+                self.resume_note_selection(cx);
             }
             Err(error) => self.fail(error, cx),
         }
@@ -851,17 +859,21 @@ impl Page {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.discarding = false;
-                match result {
-                    Ok(doc) => this.install(Some(doc), cx),
-                    Err(error) => this.fail(error, cx),
-                }
-                this.sync_read_only(cx);
-                this.resume_note_selection(cx);
-                cx.notify();
+                this.complete_discard(result, cx);
             });
         })
         .detach();
+        cx.notify();
+    }
+
+    fn complete_discard(&mut self, result: Result<Document, String>, cx: &mut Context<Self>) {
+        self.discarding = false;
+        match result {
+            Ok(doc) => self.install(Some(doc), cx),
+            Err(error) => self.fail(error, cx),
+        }
+        self.sync_read_only(cx);
+        self.resume_note_selection(cx);
         cx.notify();
     }
 

@@ -426,7 +426,7 @@ impl Page {
             self.sync_read_only(cx);
             // Let a deliberate selection already in flight finish before
             // replacing the finished recording's retained transcript.
-            if !self.opening {
+            if self.opening.is_none() {
                 self.open(id.clone(), cx);
             }
         }

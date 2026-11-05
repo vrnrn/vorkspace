@@ -194,7 +194,12 @@ fn returning_to_authored_text_does_not_cancel_a_recording_open(cx: &mut TestAppC
     let page = cx.new(|cx| Page::with_meetings(Ok(meetings.clone()), cx));
     page.update(cx, |page, cx| {
         page.note_ids.insert("note".into(), id.clone());
-        page.opening = true;
+        page.opening = Some(PendingOpen {
+            epoch: page.open_epoch,
+            intent: page.intent,
+            id: "held-load".into(),
+            retry: true,
+        });
         let epoch = page.open_epoch;
         let intent = page.intent;
         page.hide_note_content(cx);
@@ -207,7 +212,7 @@ fn returning_to_authored_text_does_not_cancel_a_recording_open(cx: &mut TestAppC
                 .text(Field::Transcript)
                 .contains("release checklist")
         );
-        assert!(!page.opening);
+        assert!(page.opening.is_none());
     });
 }
 
@@ -221,7 +226,12 @@ fn returning_to_the_loaded_note_supersedes_another_pending_open(cx: &mut TestApp
         .open(&meetings, &other, None)
         .unwrap();
     page.update(cx, |page, cx| {
-        page.opening = true;
+        page.opening = Some(PendingOpen {
+            epoch: page.open_epoch,
+            intent: page.intent,
+            id: "held-load".into(),
+            retry: true,
+        });
         let epoch = page.open_epoch;
         let intent = page.intent;
         page.show_note("planning-note", Some(&id), cx);
@@ -236,42 +246,62 @@ fn returning_to_the_loaded_note_supersedes_another_pending_open(cx: &mut TestApp
 fn a_newer_tab_choice_survives_direct_and_queued_opens_with_a_saved_draft(cx: &mut TestAppContext) {
     for queued in [false, true] {
         for saved_draft in [false, true] {
-            let (_root, meetings) = storage();
-            let id = recorded(&meetings, "Planning");
-            let snapshot = summarized(&meetings, &id);
-            if saved_draft {
-                let write = DraftWrite::from_params(json!({
-                    "id": id, "version": "0123456789abcdef0123456789abcdef", "expected": null,
-                    "draft": { "revision": snapshot.meeting.revision, "summary": "Saved summary draft",
-                        "view": "summary", "title_focused": false, "start": 0, "end": 0 }
-                })).unwrap();
-                meetings.checkpoint_draft(&write).unwrap();
-            }
-            let page = cx.new(|cx| Page::with_meetings(Ok(meetings.clone()), cx));
-            page.update(cx, |page, cx| {
-                page.opening = queued;
-                page.show_note("planning", Some(&id), cx);
-                page.note_section(false, cx);
-                assert_eq!(page.section, Section::Summary);
-                if queued {
-                    // A prior request releases the slot after the tab choice.
-                    page.opening = false;
-                    page.open_next(cx);
-                }
-            });
-            cx.run_until_parked();
-            page.read_with(cx, |page, _| {
-                assert!(page.is_for_note("planning"));
-                assert_eq!(page.section, Section::Summary);
-                assert!(page.pending_focus.is_none());
+            for chosen in [Section::Summary, Section::Transcript] {
+                let (_root, meetings) = storage();
+                let previous = recorded(&meetings, "Previous");
+                summarized(&meetings, &previous);
+                let id = recorded(&meetings, "Planning");
+                let snapshot = summarized(&meetings, &id);
                 if saved_draft {
-                    assert_eq!(
-                        page.document.as_ref().unwrap().text(Field::Summary),
-                        "Saved summary draft"
-                    );
+                    let write = DraftWrite::from_params(json!({
+                        "id": id, "version": "0123456789abcdef0123456789abcdef", "expected": null,
+                        "draft": { "revision": snapshot.meeting.revision, "summary": "Saved summary draft",
+                            "view": "summary", "title_focused": false, "start": 0, "end": 0 }
+                    })).unwrap();
+                    meetings.checkpoint_draft(&write).unwrap();
                 }
-            });
-            cx.update(|_| drop(page));
+                let page = page(&meetings, &previous, cx);
+                page.update(cx, |page, cx| {
+                    // The selected enum still belongs to the previous document.
+                    page.note_section(chosen == Section::Transcript, cx);
+                    if queued {
+                        page.opening = Some(PendingOpen {
+                            epoch: page.open_epoch,
+                            intent: page.intent,
+                            id: "held-load".into(),
+                            retry: true,
+                        });
+                    }
+                    page.show_note("planning", Some(&id), cx);
+                    page.note_section(chosen == Section::Transcript, cx);
+                    assert_eq!(page.section, chosen);
+                    let epoch = page.open_epoch;
+                    let intent = page.intent;
+                    // An unchanged Notes refresh must not restart the request.
+                    page.show_note("planning", Some(&id), cx);
+                    assert_eq!((page.open_epoch, page.intent), (epoch, intent));
+                    if queued {
+                        page.opening = None;
+                        page.open_next(cx);
+                    } else {
+                        assert!(page.next_open.is_none());
+                    }
+                });
+                cx.run_until_parked();
+                page.read_with(cx, |page, _| {
+                    assert!(page.is_for_note("planning"));
+                    assert_eq!(page.section, chosen);
+                    assert!(page.pending_focus.is_none());
+                    assert!(page.pending_note.is_none());
+                    if saved_draft {
+                        assert_eq!(
+                            page.document.as_ref().unwrap().text(Field::Summary),
+                            "Saved summary draft"
+                        );
+                    }
+                });
+                cx.update(|_| drop(page));
+            }
         }
     }
 }
@@ -310,9 +340,75 @@ fn note_selection_during_discard_or_deletion_replays_the_latest_identity_and_tab
             assert!(page.is_for_note("third"));
             assert_eq!(page.section, Section::Summary);
             assert!(page.pending_note.is_none());
-            assert!(!page.deleting && !page.discarding && !page.opening);
+            assert!(!page.deleting && !page.discarding && page.opening.is_none());
         });
         assert_eq!(meetings.read(&first).is_ok(), discard);
+        cx.update(|_| drop(page));
+    }
+}
+
+#[gpui::test]
+fn failed_discard_or_delete_retains_the_selected_note_through_saving(cx: &mut TestAppContext) {
+    for discard in [false, true] {
+        let (root, meetings) = storage();
+        let first = recorded(&meetings, "First");
+        let second = recorded(&meetings, "Second");
+        summarized(&meetings, &second);
+        let store = Arc::new(Mutex::new(
+            vorkspace_core::store::Store::open(&root.path().join("notes.db")).unwrap(),
+        ));
+        let first_note = store
+            .lock()
+            .unwrap()
+            .import_recording_note(&first, "First", 1)
+            .unwrap()
+            .unwrap();
+        let connection = rusqlite::Connection::open(root.path().join("notes.db")).unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_delete BEFORE DELETE ON notes BEGIN SELECT RAISE(ABORT, 'injected failure'); END;").unwrap();
+        let page = page(&meetings, &first, cx);
+        type_into(
+            &page,
+            Field::Transcript,
+            "Keep these transcript edits",
+            0..0,
+            cx,
+        );
+        page.update(cx, |page, cx| {
+            page.note_store = Some(store.clone());
+            if discard {
+                // Inject a failed I/O completion, retaining the unsaved draft.
+                page.discarding = true;
+            } else {
+                page.confirm_delete = true;
+                page.delete(cx);
+                assert!(page.deleting);
+            }
+            page.show_note("second", Some(&second), cx);
+            page.note_section(false, cx);
+            if discard {
+                page.complete_discard(Err("injected discard failure".into()), cx);
+                assert!(page.saving);
+            }
+            // Refresh while the selection waits for the preceding write.
+            page.show_note("second", Some(&second), cx);
+        });
+        cx.run_until_parked();
+        page.read_with(cx, |page, _| {
+            assert!(page.is_for_note("second"));
+            assert_eq!(page.section, Section::Summary);
+            assert!(page.pending_note.is_none());
+            assert!(!page.saving && !page.deleting && !page.discarding && page.opening.is_none());
+        });
+        let saved: Snapshot = decode(meetings.read(&first).unwrap()).unwrap();
+        assert_eq!(saved.transcript, "Keep these transcript edits");
+        assert!(
+            store
+                .lock()
+                .unwrap()
+                .get_note(&first_note.id)
+                .unwrap()
+                .is_some()
+        );
         cx.update(|_| drop(page));
     }
 }
@@ -391,7 +487,7 @@ fn finishing_an_unselected_recording_refreshes_notes_without_changing_the_open_d
         assert_eq!(doc.id(), selected);
         assert!(Arc::ptr_eq(doc.lease.as_ref().unwrap(), &lease));
         assert!(!doc.awaiting_transcript);
-        assert!(!page.opening);
+        assert!(page.opening.is_none());
         assert_eq!(page.live.as_ref().unwrap().state.id, finished);
         assert_eq!(page.live.as_ref().unwrap().state.phase, Phase::Stopped);
     });
@@ -415,7 +511,7 @@ fn deleting_a_recording_leaves_the_next_note_to_the_notes_owner(cx: &mut TestApp
     page.read_with(cx, |page, _| {
         assert!(page.document.is_none());
         assert!(page.next_open.is_none());
-        assert!(!page.opening && !page.deleting);
+        assert!(page.opening.is_none() && !page.deleting);
     });
     assert_eq!(events.borrow().as_slice(), ["deleted"]);
     assert!(meetings.read(&selected).is_err());
@@ -452,7 +548,7 @@ fn an_unrecorded_note_can_be_deleted_before_its_first_saved_snapshot(cx: &mut Te
         cx.run_until_parked();
         page.read_with(cx, |page, _| {
             assert!(page.document.is_none());
-            assert!(!page.deleting && !page.opening);
+            assert!(!page.deleting && page.opening.is_none());
         });
         assert_eq!(events.borrow().as_slice(), ["deleted"]);
         assert!(meetings.read(&id).is_err());
@@ -568,7 +664,7 @@ fn hiding_notes_and_reselecting_the_same_note_preserve_its_recording_draft(
 
         let doc = page.document.as_ref().unwrap();
         assert!(page.active);
-        assert!(!page.saving && !page.opening);
+        assert!(!page.saving && page.opening.is_none());
         assert!(Arc::ptr_eq(doc.lease.as_ref().unwrap(), &lease));
         assert_eq!(doc.version, version);
         assert_eq!(doc.text(Field::Summary), "a🦊b unsaved summary");

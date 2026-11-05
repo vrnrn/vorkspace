@@ -39,7 +39,7 @@ pub(crate) struct Page {
     intent: u64,
     // Loading follows document identity and edits, independent of the shown tab.
     open_epoch: u64,
-    opening: bool,
+    opening: Option<document::PendingOpen>,
     next_open: Option<document::PendingOpen>,
     pending_note: Option<note::PendingNote>,
     drafts: Arc<DraftBuffer>,
@@ -147,7 +147,7 @@ impl Page {
             pending_focus: None,
             intent: 0,
             open_epoch: 0,
-            opening: false,
+            opening: None,
             next_open: None,
             pending_note: None,
             drafts: Arc::default(),
