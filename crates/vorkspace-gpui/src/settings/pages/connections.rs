@@ -686,19 +686,52 @@ impl SettingsView {
         let busy = self.connections.busy;
         let unavailable = self.ctx.remote.is_none();
         let disabled = busy || unavailable || self.connections.revoking;
-        let mut page = vec![div().relative().child(self.reveal_probe("remote-machines"))
-            .flex().items_end().justify_between().gap_4()
-            .child(div().min_w_0().flex_1()
-                .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("Your machines"))
-                .child(paragraph("Run agents on another computer and return to them from your laptop. The host keeps working when you close vorkspace here.").mt_1()))
-            .when(!self.connections.adding, |d| d.child(
-                secondary_button("add-machine", "Add machine", false, disabled).child(icon("plus", 16.)).child("Add machine")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.connections.busy || this.connections.revoking || this.ctx.remote.is_none() { return; }
-                        this.connections.adding = true;
-                        if let Some(input) = this.fields.get(TARGET) { window.focus(&input.focus_handle(cx), cx); }
-                        this.connections.error.clear(); this.connections.notice.clear(); cx.notify();
-                    })))).into_any_element()];
+        let mut page = vec![
+            div()
+                .relative()
+                .child(self.reveal_probe("remote-machines"))
+                .flex()
+                .items_end()
+                .justify_between()
+                .gap_4()
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Your machines"),
+                        )
+                        .child(
+                            paragraph("Remote agents keep running when you close this app.").mt_1(),
+                        ),
+                )
+                .when(!self.connections.adding, |d| {
+                    d.child(
+                        secondary_button("add-machine", "Add machine", false, disabled)
+                            .child(icon("plus", 16.))
+                            .child("Add machine")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.connections.busy
+                                    || this.connections.revoking
+                                    || this.ctx.remote.is_none()
+                                {
+                                    return;
+                                }
+                                this.connections.adding = true;
+                                if let Some(input) = this.fields.get(TARGET) {
+                                    window.focus(&input.focus_handle(cx), cx);
+                                }
+                                this.connections.error.clear();
+                                this.connections.notice.clear();
+                                cx.notify();
+                            })),
+                    )
+                })
+                .into_any_element(),
+        ];
         if !self.connections.machines.is_empty() {
             let mut list = div()
                 .mt_5()
@@ -758,7 +791,7 @@ impl SettingsView {
                     .text_center()
                     .text_size(px(13.))
                     .text_color(content(0.45))
-                    .child("Add your always-on Mac or Linux machine to get started.")
+                    .child("No machines connected.")
                     .into_any_element(),
             );
         }
@@ -775,8 +808,8 @@ impl SettingsView {
                     .child(if self.connections.advanced { "▾ Advanced" } else { "▸ Advanced" })
                     .on_click(cx.listener(|this, _, _, cx| { this.connections.advanced = !this.connections.advanced; cx.notify(); })))
                 .when(self.connections.advanced, |d| d.child(div().max_w(px(160.)).child(port)))
-                .child(paragraph("vorkspace installs and starts its background host, then connects securely. Your SSH keys and config are used automatically. Enable SSH on the host and sign in to Codex or Claude Code there. On a Mac, keep the host’s desktop account signed in and the machine awake. Locking the desktop is fine."))
-                .child(paragraph("On Linux, setup installs a systemd user service and turns on lingering for your account (loginctl enable-linger), so the host and your other user services keep running after you log out. Without systemd, as in many containers and microVMs, the host runs as a background process instead and is started again when you reconnect. The host keeps running until you stop it on that machine; removing it here only disconnects this desktop."))
+                .child(paragraph("Enable SSH and sign in to an agent provider on the remote machine. Vorkspace uses your SSH keys and config to install its background host. Keep a Mac host awake with its desktop account signed in."))
+                .child(paragraph("On Linux with systemd, setup enables your user services to keep running after logout. Other Linux hosts reconnect through a background process. Removing a connection here does not stop the remote host."))
                 .child(div().flex().justify_end().gap_2()
                     .child(secondary_button("cancel-machine", "Cancel", false, busy).child("Cancel").on_click(cx.listener(|this, _, _, cx| {
                         if !this.connections.busy { this.connections.adding = false; cx.notify(); }

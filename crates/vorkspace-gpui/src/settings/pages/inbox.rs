@@ -242,7 +242,13 @@ impl SettingsView {
             cx,
             move |_, bot, cx| cx.emit(SettingsEvent::InboxBot(source.into(), bot)),
         );
-        self.row(Some(id),false,"Default Bot",Some("Preselected when you send items to chat. You can choose another destination before sending.".into()),vec![select])
+        self.row(
+            Some(id),
+            false,
+            "Default Bot",
+            Some("Preselected when sending items to chat.".into()),
+            vec![select],
+        )
     }
     pub(super) fn connector_page(
         &mut self,
@@ -250,19 +256,10 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let id = connector.id();
-        let (description, hint) = match connector {
-            crate::workspace::Connector::Github => (
-                "Pull requests, reviews, and issues, read through the GitHub CLI.",
-                "Install GitHub CLI, run gh auth login in a terminal, then check again.",
-            ),
-            crate::workspace::Connector::Gitlab => (
-                "Merge requests from GitLab.com or a self-managed instance.",
-                "Use a personal access token with API access. Disconnect removes the saved token.",
-            ),
-            crate::workspace::Connector::Jira => (
-                "Jira Cloud issues from the projects you pick.",
-                "Connect your Jira Cloud site with your email and an API token.",
-            ),
+        let hint = match connector {
+            crate::workspace::Connector::Github => "Sign in with gh auth login in a terminal.",
+            crate::workspace::Connector::Gitlab => "Use a personal access token with API access.",
+            crate::workspace::Connector::Jira => "Use your site URL, email, and API token.",
         };
         let enabled = self.ctx.inbox_connectors.enabled(id);
         let (connected, connection_label) = self
@@ -286,6 +283,7 @@ impl SettingsView {
                     false,
                 )
                 .child("Installation guide")
+                .when(connected, |button| button.hidden())
                 .on_click(|_, _, cx| cx.open_url("https://cli.github.com/"))
                 .into_any_element(),
                 secondary_button("github-check-again", "Check again", false, false)
@@ -312,11 +310,17 @@ impl SettingsView {
             ]
         };
         let row = if enabled {
-            self.row(None, false, "Connection", Some(hint.into()), controls)
+            self.row(
+                None,
+                true,
+                "Connection",
+                (!connected).then(|| hint.into()),
+                controls,
+            )
         } else {
             self.row(
                 None,
-                false,
+                true,
                 "Connector disabled",
                 Some("Saved connection details are kept.".into()),
                 vec![],
@@ -331,14 +335,7 @@ impl SettingsView {
                 rows.extend(self.jira_filter_rows(cx));
             }
         }
-        vec![self.group(
-            Some(id),
-            true,
-            connector.label(),
-            Some(description.into()),
-            None,
-            rows,
-        )]
+        vec![self.card(Some(id), rows).into_any_element()]
     }
 }
 

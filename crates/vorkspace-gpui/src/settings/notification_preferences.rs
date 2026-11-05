@@ -896,7 +896,7 @@ impl SettingsView {
                     .into_any_element(),
             );
         }
-        self.group(Some("project-notifications"),true,"Project notifications",Some("Choose sounds, banners and sidebar indicators by category. Mute pauses them without changing your choices. Unread items stay marked in their connector.".into()),
+        self.group(Some("project-notifications"),false,"Project notifications",Some("Choose alerts for each project. Muting keeps your preferences and unread indicators.".into()),
             Some(secondary_button("notification-select-projects",if selecting {"Done"} else {"Select projects"},false,projects.is_empty()).child(if selecting {"Done"} else {"Select projects"})
                 .on_click(cx.listener(|this,_,_,cx| {this.notification_state.selecting = !this.notification_state.selecting;this.notification_state.selected.clear();cx.notify();})).into_any_element()),rows)
     }

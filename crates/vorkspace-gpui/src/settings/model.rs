@@ -41,17 +41,6 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
         ],
     ),
     (
-        "Connectors",
-        &[
-            Section::Connectors,
-            Section::Github,
-            Section::Gitlab,
-            Section::Jira,
-            Section::Notes,
-            Section::Todos,
-        ],
-    ),
-    (
         "Agents",
         &[
             Section::Chat,
@@ -60,6 +49,17 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
             Section::Skills,
             Section::Bots,
             Section::Vox,
+        ],
+    ),
+    (
+        "Connectors",
+        &[
+            Section::Connectors,
+            Section::Github,
+            Section::Gitlab,
+            Section::Jira,
+            Section::Notes,
+            Section::Todos,
         ],
     ),
 ];
@@ -131,34 +131,24 @@ impl Section {
     }
     pub(crate) fn description(self) -> &'static str {
         match self {
-            Section::Vox => "Voice control, microphone, and persistent conversation.",
-            Section::General => {
-                "The build you are running, how vorkspace reaches you, and the panels it shows."
-            }
-            Section::Connections => "Connect your machines and run agents remotely through SSH.",
-            Section::Appearance => {
-                "Theme, tint, translucency, interface scale, and conversation backgrounds."
-            }
-            Section::Keybindings => {
-                "Every shortcut the workspace handles, from the app menu and the key handler."
-            }
-            Section::Chat => {
-                "How transcripts read, what the composer does with a follow-up, how files save, and how diffs open."
-            }
+            Section::Vox => "Voice conversations with your Codex account.",
+            Section::General => "App behavior, notifications, and updates.",
+            Section::Connections => "Run agents on remote machines over SSH.",
+            Section::Appearance => "Colors, backgrounds, and interface layout.",
+            Section::Keybindings => "Customize keyboard shortcuts.",
+            Section::Chat => "Conversation layout, composer behavior, and editing.",
             Section::Providers => {
                 "Provider accounts, agent CLIs vorkspace can drive, and the model new sessions start with."
             }
-            Section::Mcp => "Find MCP servers across providers and manage their connections.",
-            Section::Skills => {
-                "Discover and manage file skills from project, personal, and harness folders."
-            }
-            Section::Bots => "The resident agent beside your tabs, and which projects have one.",
-            Section::Connectors => "Enable built-in features and manage project notifications.",
+            Section::Mcp => "Tool servers for your projects and provider accounts.",
+            Section::Skills => "Instructions available to your agents.",
+            Section::Bots => "Persistent agents for your projects.",
+            Section::Connectors => "Workspace features and project notifications.",
             Section::Github => "Pull requests, reviews, and issues from GitHub.",
             Section::Gitlab => "Merge requests from GitLab.com or a self-managed instance.",
             Section::Jira => "Jira Cloud issues, projects, and filters.",
-            Section::Notes => "Notes, meeting recordings, and AI summary settings.",
-            Section::Todos => "Control access to project and Bot to-do boards.",
+            Section::Notes => "Writing, recording, and summaries.",
+            Section::Todos => "Task boards for projects and Bots.",
             Section::Archive => "Projects and conversations you have archived.",
             Section::Worktrees => "Manage additional worktrees for each project.",
         }
@@ -190,7 +180,7 @@ impl Section {
             Section::Gitlab => "token self-managed merge request connect",
             Section::Jira => "atlassian cloud api token issues projects jql",
             Section::Notes => {
-                "notebook markdown scratchpad meeting recording audio transcript summary prompt ai"
+                "notebook markdown scratchpad meeting recording audio transcript summary prompt ai model effort reasoning"
             }
             Section::Todos => "tasks todo checklists boards",
             Section::Archive => "archived restore delete hidden",
@@ -623,7 +613,7 @@ mod tests {
     fn settings_groups_place_workspace_pages_in_app_without_changing_identity() {
         assert_eq!(
             GROUPS.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
-            ["App", "Connectors", "Agents"]
+            ["App", "Agents", "Connectors"]
         );
         assert_eq!(
             GROUPS[0].1,

@@ -94,6 +94,7 @@ impl Page {
                         model: Some(settings.model.clone()),
                         settings: vorkspace_core::agent::Settings {
                             account: account.clone(),
+                            effort: settings.effort.clone(),
                             ..Default::default()
                         },
                     },

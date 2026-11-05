@@ -19,28 +19,20 @@ impl SettingsView {
                 .justify_between()
                 .gap_3()
                 .child(
-                    div()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .items_center()
-                                .gap_3()
-                                .child(
-                                    div()
-                                        .text_size(px(14.))
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child("MCP connections"),
-                                )
-                                .child(project),
-                        )
-                        .child(
-                            div()
-                                .mt_1()
-                                .text_size(px(12.))
-                                .text_color(content(0.55))
-                                .child("Servers for this project and your accounts."),
-                        ),
+                    div().child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Servers"),
+                            )
+                            .child(project),
+                    ),
                 )
                 .child(
                     div()

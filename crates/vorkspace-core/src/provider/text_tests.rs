@@ -64,6 +64,12 @@ for line in sys.stdin:
             assert verified and 'transcript fixture' in line
         assert value['params']['threadId'] == 'fresh-text-thread'
         assert len(value['params']['input']) == 1
+        if mode == 'summary-effort':
+            assert value['params']['effort'] == 'high'
+        elif mode == 'title':
+            assert value['params']['effort'] == 'low'
+        elif mode == 'summary':
+            assert 'effort' not in value['params']
         if mode == 'cancel':
             time.sleep(10)
         elif mode == 'slow' or mode.startswith('summary'):
@@ -314,4 +320,19 @@ fn all_alternative_summary_providers_publish_only_a_successful_completed_answer(
             }
         }
     }
+}
+
+#[test]
+fn restricted_summary_preserves_explicit_effort() {
+    let (_dir, mut request) = meeting_fixture("summary-effort");
+    request.settings.effort = Some("high".into());
+    assert_eq!(
+        run_restricted_text(
+            request,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5)
+        )
+        .unwrap(),
+        "Meeting summary"
+    );
 }

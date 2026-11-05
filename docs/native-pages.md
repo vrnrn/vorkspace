@@ -29,6 +29,12 @@ Filter fields blend into the toolbar when idle. The shared `search_frame` applie
 
 Use the shared action, icon action, primary, secondary, tab, row and empty-state helpers instead of reproducing their metrics in a page. Enabled controls participate in keyboard navigation and show focus. A disabled appearance does not replace validation in the action owner.
 
+## Settings
+
+Settings uses Providers as the layout reference. Navigation groups appear in **App**, **Agents**, **Connectors** order. Disabled plugins keep their enable switch on Plugins, but their Settings button, navigation page and search results are hidden. Disabling a currently open plugin page returns to Plugins; stale direct navigation cannot reopen it until enabled. Each page has one title and a short description. Group headings distinguish related sets of controls; a single card does not repeat the page title or introduction. Row descriptions explain a setting's effect, limitation or prerequisite rather than restating its label.
+
+`settings/widgets.rs` owns the card, group, row and selector styles: 12 px card corners, 16 px horizontal and 14 px vertical row padding, 13 px labels, 12 px supporting text, and 32 px between groups. Content is centered at up to 1024 px wide. Labels sit left of controls; rows stack in narrow panes while simple switches remain beside their labels. The Notes summary selectors use the same controls and account-scoped model catalog as Providers, retaining effort capabilities alongside model names.
+
 ## Layout and continuity
 
 Side-by-side lists and documents use `detail_pane` for the document's left edge, with the workspace's 12 px top and bottom corners. The list does not draw a second straight divider over that curve. In single-column layouts, the workspace frame supplies the outside corners.
@@ -45,6 +51,6 @@ In Notes, **Preview** and **Source** display and edit authored note text. An att
 
 The first dropped image materializes a new note with its image reference; failed imports leave an untouched draft unsaved. Recording-note deletion validates the capture owner and revision, then commits the note deletion and its tombstone before removing files. UI callbacks only update presentation. Notes loading retries file cleanup for tombstoned recordings, including interruption between the database commit and file removal.
 
-Recording summaries contain the provider's completed final response after successful generation. Their renderer does not fetch images, interpret raw HTML, infer local file actions, or open arbitrary link schemes. HTTP, HTTPS and email links remain available. Authored Notes text and Inbox retain their existing attachment and project-link capabilities. Provider, model and prompt settings live in **Settings → Connectors → Notes**, whose Notes toggle also controls recording availability.
+Recording summaries contain the provider's completed final response after successful generation. Their renderer does not fetch images, interpret raw HTML, infer local file actions, or open arbitrary link schemes. HTTP, HTTPS and email links remain available. Authored Notes text and Inbox retain their existing attachment and project-link capabilities. Provider, model, effort and prompt settings live in **Settings → Connectors → Notes**, whose Enable notes toggle also controls recording availability.
 
 See [the plain-English companion](eli5/native-pages.md) for the visible behavior.

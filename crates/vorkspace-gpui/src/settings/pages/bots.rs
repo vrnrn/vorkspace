@@ -5,11 +5,82 @@ use vorkspace_ui::theme::*;
 impl SettingsView {
     pub(super) fn bots_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let p = self.prefs.clone();
-        let rows=vec![
-            self.row(Some("bots-enabled"),true,"Show bots",Some("Agents of your own on the project rail. Each works on the projects you give it, remembers what matters and picks up habits it runs on its own. Turn this off to hide them.".into()),vec![self.toggle("bots-enabled","Show bots",p.bots,false,cx,|this,on,cx|this.update(cx,|p|p.bots=on))]),
-            self.row(Some("rail-bots-pinned"),false,"Pin bots to the icon rail",Some("When the project rail is collapsed to icons, show each Bot at the top of the rail, above a divider, instead of inside the project picker.".into()),vec![self.toggle("rail-bots-pinned","Pin bots to the icon rail",p.rail_bots_pinned,!p.bots,cx,|this,on,cx|this.update(cx,|p|p.rail_bots_pinned=on))]),
-            self.row(Some("bot-channels"),false,div().flex().items_center().gap_2().child("Channels").child(div().px_1p5().rounded_sm().border_1().border_color(content(0.1)).text_size(px(11.)).text_color(content(0.5)).child("Experimental")),Some("Rooms where you and your bots talk together. Each opens on its own, without tabs.".into()),vec![self.toggle("bot-channels","Channels",p.channels,!p.bots,cx,|this,on,cx|this.update(cx,|p|p.channels=on))]),
-            self.row(Some("bot-minions"),false,div().flex().items_center().gap_2().child("Minions").child(div().px_1p5().rounded_sm().border_1().border_color(content(0.1)).text_size(px(11.)).text_color(content(0.5)).child("Experimental")),Some("Bots can spawn minions for parallel work, especially when you mention minions. Minions share their Bot's memory and show under their project like sessions.".into()),vec![self.toggle("bot-minions","Minions",p.minions,!p.bots,cx,|this,on,cx|this.update(cx,|p|p.minions=on))])];
+        let rows = vec![
+            self.row(
+                Some("bots-enabled"),
+                true,
+                "Show in navigation",
+                None,
+                vec![self.toggle(
+                    "bots-enabled",
+                    "Show bots",
+                    p.bots,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.bots = on),
+                )],
+            ),
+            self.row(
+                Some("rail-bots-pinned"),
+                false,
+                "Pin bots to the icon rail",
+                Some("Keep Bots above projects when navigation is collapsed.".into()),
+                vec![self.toggle(
+                    "rail-bots-pinned",
+                    "Pin bots to the icon rail",
+                    p.rail_bots_pinned,
+                    !p.bots,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.rail_bots_pinned = on),
+                )],
+            ),
+            self.row(
+                Some("bot-channels"),
+                false,
+                div().flex().items_center().gap_2().child("Channels").child(
+                    div()
+                        .px_1p5()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(content(0.1))
+                        .text_size(px(11.))
+                        .text_color(content(0.5))
+                        .child("Experimental"),
+                ),
+                Some("Shared conversations with your Bots.".into()),
+                vec![self.toggle(
+                    "bot-channels",
+                    "Channels",
+                    p.channels,
+                    !p.bots,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.channels = on),
+                )],
+            ),
+            self.row(
+                Some("bot-minions"),
+                false,
+                div().flex().items_center().gap_2().child("Minions").child(
+                    div()
+                        .px_1p5()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(content(0.1))
+                        .text_size(px(11.))
+                        .text_color(content(0.5))
+                        .child("Experimental"),
+                ),
+                Some("Let Bots delegate work to Minions that share their memory.".into()),
+                vec![self.toggle(
+                    "bot-minions",
+                    "Minions",
+                    p.minions,
+                    !p.bots,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.minions = on),
+                )],
+            ),
+        ];
         let mut roster = Vec::new();
         for (ix, bot) in self.ctx.bots.clone().into_iter().enumerate() {
             let show_id = bot.id.clone();
@@ -51,7 +122,7 @@ impl SettingsView {
                     .text_size(px(12.))
                     .line_height(px(20.))
                     .text_color(content(0.5))
-                    .child("Show Bot spawned session on the sidebar")
+                    .child("Show sessions in sidebar")
                     .into_any_element(),
                 div()
                     .debug_selector(|| "settings-bot-sidebar-switch".into())
@@ -92,6 +163,6 @@ impl SettingsView {
         if roster.is_empty() {
             roster.push(super::super::widgets::note("No bots yet."));
         }
-        vec![self.group(None,true,"Bots",None,None,rows),self.group(Some("bot-list"),false,"Your bots",Some("Show or hide sessions started by each Bot. Hidden sessions remain available from the Bot's chat.".into()),None,roster)]
+        vec![self.card(None, rows).into_any_element(),self.group(Some("bot-list"),false,"Your bots",Some("Show or hide sessions started by each Bot. Hidden sessions remain available from the Bot's chat.".into()),None,roster)]
     }
 }

@@ -26,14 +26,14 @@ Recording files remain below the desktop data directory at `meetings/`. Existing
 - `meetings/<id>.json` holds the editable transcript override, recording document's revision and optional summary. Its legacy title does not override the note's SQLite title.
 - `drafts/<id>.json` holds the recording attachment's edit checkpoint and the saved revision it was based on.
 - `drafts/<id>.lock` lets one window edit the recording attachment at a time.
-- `settings.json` holds provider, model and summary prompt.
+- `settings.json` holds provider, model, optional effort and summary prompt.
 - `analysis/<id>.lock` prevents duplicate analysis of one recording. The recording document is the authority for the transcript and summary.
 
 Metadata is atomically replaced after flushing; an exclusive owner lock distinguishes a live recorder from abandoned work. Reopening an abandoned recording marks it interrupted, leaves the end time unknown, and retains complete saved phrases. An incomplete final line cannot replace earlier transcript text. Storage errors stop capture; they never advertise a successful save. A missing publication marker is not interpreted as an empty finished recording.
 
 ## Summaries
 
-Open **Settings → Connectors → Notes**, select Codex, Claude, Pi, or Oh My Pi, choose or enter a model, edit the summary prompt, and press **Save**. Settings use the provider account already selected for the active project. Audio stays on the Mac. After stopping capture, clicking **Summarize** sends transcript text to the chosen provider, which may be a cloud service.
+Open **Settings → Connectors → Notes**, select Codex, Claude, Pi, or Oh My Pi, choose a model and effort, edit the summary prompt, and press **Save**. The model picker displays the selected model; **Custom model…** reveals an ID field when needed. Effort choices come from the selected account’s model catalog. Changing model or provider clears the previous effort. **Default** leaves effort to the provider, and older settings without an effort value remain readable. Settings use the provider account already selected for the active project. Audio stays on the Mac. After stopping capture, clicking **Summarize** sends transcript text to the chosen provider, which may be a cloud service.
 
 Each generation pass has a three-minute deadline within a 15-minute budget for the whole summary. Intermediate passes preserve details relevant to the requested notes.
 
@@ -51,4 +51,4 @@ The attachment editor coalesces draft checkpoints and flushes pending input on n
 
 **Delete** and confirmation remove the note and its finished recording attachment. The recording root is retired under the recorder lock before cleanup, and the durable link between note and recording keeps a deletion tombstone so delayed work cannot republish it.
 
-The saved summary Markdown is the source for the shared native Markdown renderer. Summary previews omit raw HTML and images and allow only HTTP, HTTPS and email links. The **Notes** toggle in **Settings → Connectors → Notes** controls Notes and its recording controls while preserving saved data. Finish an active recording before turning Notes off.
+The saved summary Markdown is the source for the shared native Markdown renderer. Summary previews omit raw HTML and images and allow only HTTP, HTTPS and email links. The **Enable notes** toggle in **Settings → Connectors → Notes** controls Notes and its recording controls while preserving saved data. Finish an active recording before turning Notes off.

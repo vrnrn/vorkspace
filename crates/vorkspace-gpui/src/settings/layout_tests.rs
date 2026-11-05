@@ -4,6 +4,21 @@ use gpui::{
     size,
 };
 
+fn catalog_model(id: &str, name: &str) -> vorkspace_core::catalog::Model {
+    vorkspace_core::catalog::Model {
+        id: id.into(),
+        name: name.into(),
+        alias_target: None,
+        efforts: vec!["low".into(), "high".into()],
+        default_effort: Some("low".into()),
+        fast: false,
+        thinking: false,
+        default: false,
+        tiers: Vec::new(),
+        controls: Vec::new(),
+    }
+}
+
 fn window(section: Section, cx: &mut TestAppContext) -> WindowHandle<SettingsView> {
     let window = cx.update(|cx| {
         cx.open_window(
@@ -261,7 +276,7 @@ fn providers_without_an_open_conversation_list_their_loaded_models(cx: &mut Test
                     Default::default(),
                     vorkspace_core::catalog::generation(Kind::Codex, &Default::default()),
                 ),
-                vec![("a".into(), "Alpha".into())],
+                vec![catalog_model("a", "Alpha")],
             );
             cx.notify();
         })
@@ -309,7 +324,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                     default.clone(),
                     vorkspace_core::catalog::generation(Kind::Codex, &default),
                 ),
-                vec![("default-model".into(), "Default model".into())],
+                vec![catalog_model("default-model", "Default model")],
             );
             view.discovered_catalogs.insert(
                 (
@@ -317,10 +332,10 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                     work.clone(),
                     vorkspace_core::catalog::generation(Kind::Codex, &work),
                 ),
-                vec![("work-model".into(), "Work model".into())],
+                vec![catalog_model("work-model", "Work model")],
             );
             assert_eq!(
-                view.discovered_models(Kind::Codex, cx).unwrap()[0].0,
+                view.discovered_models(Kind::Codex, cx).unwrap()[0].id,
                 "default-model"
             );
             vorkspace_core::catalog::invalidate(Kind::Codex, &default);
@@ -331,7 +346,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                     default.clone(),
                     vorkspace_core::catalog::generation(Kind::Codex, &default),
                 ),
-                vec![("new-default-model".into(), "New default model".into())],
+                vec![catalog_model("new-default-model", "New default model")],
             );
             center.update(cx, |center, cx| {
                 center
@@ -341,7 +356,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                 cx.notify();
             });
             assert_eq!(
-                view.discovered_models(Kind::Codex, cx).unwrap()[0].0,
+                view.discovered_models(Kind::Codex, cx).unwrap()[0].id,
                 "work-model"
             );
             center.update(cx, |center, cx| {
@@ -352,7 +367,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                 cx.notify();
             });
             assert_eq!(
-                view.discovered_models(Kind::Codex, cx).unwrap()[0].0,
+                view.discovered_models(Kind::Codex, cx).unwrap()[0].id,
                 "new-default-model"
             );
         })
@@ -414,4 +429,294 @@ fn a_project_setup_command_saves_edits_and_clears(cx: &mut TestAppContext) {
         .read_with(cx, |view, _| view.prefs.worktree_setup.clone())
         .unwrap();
     assert!(saved.is_empty());
+}
+
+#[gpui::test]
+fn summary_picker_saves_effort_and_clears_it_when_changing_models(cx: &mut TestAppContext) {
+    use vorkspace_core::provider::Kind;
+    use vorkspace_meetings::{Meetings, Settings};
+    let directory = tempfile::tempdir().unwrap();
+    let meetings = Meetings::open(directory.path()).unwrap();
+    meetings
+        .save_settings(&Settings {
+            provider: "codex".into(),
+            model: "alpha".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let window = window(Section::Notes, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.ctx.data_dir = Some(directory.path().into());
+            let mut beta = catalog_model("beta", "Beta");
+            beta.efforts.clear();
+            beta.default_effort = None;
+            view.discovered_catalogs.insert(
+                (
+                    Kind::Codex,
+                    Default::default(),
+                    vorkspace_core::catalog::generation(Kind::Codex, &Default::default()),
+                ),
+                vec![catalog_model("alpha", "Alpha"), beta],
+            );
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let click = |visual: &mut VisualTestContext, selector: &'static str| {
+        let target = visual.debug_bounds(selector).unwrap().center();
+        visual.simulate_click(target, Default::default());
+        visual.run_until_parked();
+    };
+    click(visual, "settings-select-meeting-effort");
+    click(visual, "settings-option-meeting-effort-2");
+    click(visual, "save-meeting-settings");
+    assert_eq!(meetings.settings().unwrap().effort.as_deref(), Some("high"));
+    click(visual, "settings-select-meeting-models");
+    click(visual, "settings-option-meeting-models-2");
+    assert!(
+        visual
+            .debug_bounds("settings-select-meeting-effort")
+            .is_none()
+    );
+    click(visual, "save-meeting-settings");
+    let saved = Meetings::open(directory.path())
+        .unwrap()
+        .settings()
+        .unwrap();
+    assert_eq!(saved.model, "beta");
+    assert_eq!(saved.effort, None);
+    click(visual, "settings-select-meeting-models");
+    click(visual, "settings-option-meeting-models-3");
+    assert!(visual.debug_bounds("summary-custom-model").is_some());
+}
+
+#[gpui::test]
+fn summary_model_selector_scrolls_and_reveals_keyboard_choices(cx: &mut TestAppContext) {
+    use vorkspace_core::provider::Kind;
+    use vorkspace_meetings::{Meetings, Settings};
+    let directory = tempfile::tempdir().unwrap();
+    let meetings = Meetings::open(directory.path()).unwrap();
+    meetings
+        .save_settings(&Settings {
+            provider: "codex".into(),
+            model: "model-0".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let window = window(Section::Notes, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.ctx.data_dir = Some(directory.path().into());
+            view.discovered_catalogs.insert(
+                (
+                    Kind::Codex,
+                    Default::default(),
+                    vorkspace_core::catalog::generation(Kind::Codex, &Default::default()),
+                ),
+                (0..30)
+                    .map(|n| catalog_model(&format!("model-{n}"), &format!("Model {n}")))
+                    .collect(),
+            );
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let click = |visual: &mut VisualTestContext, selector: &'static str| {
+        let point = visual.debug_bounds(selector).unwrap().center();
+        visual.simulate_click(point, Default::default());
+        visual.run_until_parked();
+    };
+    let visible = |visual: &mut VisualTestContext, selector: &'static str| {
+        let list = visual
+            .debug_bounds("settings-select-scroll-meeting-models")
+            .unwrap();
+        let row = visual.debug_bounds(selector).unwrap();
+        assert!(list.size.height <= px(310.));
+        assert!(
+            row.top() >= list.top() && row.bottom() <= list.bottom(),
+            "{selector}: row={row:?}, list={list:?}"
+        );
+    };
+    click(visual, "settings-select-meeting-models");
+    let list = visual
+        .debug_bounds("settings-select-scroll-meeting-models")
+        .unwrap();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: list.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-2000.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    visual.run_until_parked();
+    visible(visual, "settings-option-meeting-models-30");
+    visible(visual, "settings-option-meeting-models-31");
+    click(visual, "settings-option-meeting-models-31");
+    assert!(visual.debug_bounds("summary-custom-model").is_some());
+
+    // Reopening reveals the selected custom action; the last catalog model
+    // remains reachable just above it and can be saved normally.
+    click(visual, "settings-select-meeting-models");
+    visible(visual, "settings-option-meeting-models-31");
+    visible(visual, "settings-option-meeting-models-30");
+    click(visual, "settings-option-meeting-models-30");
+    click(visual, "save-meeting-settings");
+    assert_eq!(meetings.settings().unwrap().model, "model-29");
+
+    click(visual, "settings-select-meeting-models");
+    visible(visual, "settings-option-meeting-models-30");
+    visual.simulate_keystrokes("home");
+    visual.run_until_parked();
+    visible(visual, "settings-option-meeting-models-0");
+    visual.simulate_keystrokes("end up down");
+    visual.run_until_parked();
+    visible(visual, "settings-option-meeting-models-31");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("summary-custom-model").is_some());
+}
+
+/// Native screenshots use disposable data and never start recording or inference.
+#[test]
+#[ignore = "Requires Metal and VORKSPACE_SETTINGS_CAPTURE_DIR"]
+fn native_settings_captures() {
+    use std::sync::Arc;
+    use vorkspace_core::provider::Kind;
+    struct Fixture {
+        view: Entity<SettingsView>,
+        nav: bool,
+        liquid: crate::liquid::Liquid,
+        _observe: Subscription,
+    }
+    impl Render for Fixture {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .bg(vorkspace_ui::theme::shell_fill())
+                .when(self.nav, |d| {
+                    d.child(div().w(px(180.)).h_full().flex_shrink_0().child(nav(
+                        self.view.read(cx).section,
+                        &self.view.read(cx).visible_sections(),
+                        |_, _, _| {},
+                        |_, _| {},
+                        &self.liquid,
+                    )))
+                })
+                .child(div().min_w_0().flex_1().h_full().child(self.view.clone()))
+        }
+    }
+    let output =
+        std::path::PathBuf::from(std::env::var_os("VORKSPACE_SETTINGS_CAPTURE_DIR").unwrap());
+    assert!(output.is_absolute() && output.is_dir());
+    let directory = tempfile::tempdir().unwrap();
+    vorkspace_meetings::Meetings::open(directory.path())
+        .unwrap()
+        .save_settings(&vorkspace_meetings::Settings {
+            provider: "codex".into(),
+            model: "gpt-6.1-terra".into(),
+            effort: Some("high".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    for (appearance, light) in [("dark", false), ("light", true)] {
+        for (viewport, width, show_nav) in [("wide", 1200., true), ("narrow", 480., false)] {
+            for section in Section::ALL {
+                if light
+                    && !matches!(
+                        section,
+                        Section::Notes | Section::Providers | Section::Github | Section::Vox
+                    )
+                {
+                    continue;
+                }
+                let prefs = Preferences {
+                    theme: appearance.into(),
+                    notifications: false,
+                    ..Default::default()
+                };
+                vorkspace_ui::theme::configure(&prefs, light, false);
+                let mut cx = gpui::HeadlessAppContext::with_platform(
+                    Arc::new(gpui_apple::AppleTextSystem::new()),
+                    Arc::new(crate::assets::Assets),
+                    || {
+                        Ok(Some(Box::new(
+                            gpui_apple::metal_renderer::MetalHeadlessRenderer::new(),
+                        )))
+                    },
+                );
+                vorkspace_ui::clock::use_test_clock(&cx);
+                let window = cx
+                    .open_window(size(px(width), px(1000.)), |_, cx| {
+                        let view = cx.new(|cx| {
+                            let mut view = SettingsView::new(
+                                section,
+                                prefs,
+                                SettingsContext {
+                                    data_dir: Some(directory.path().into()),
+                                    inbox_connections: [
+                                        ("github".into(), (true, "Connected".into())),
+                                        ("gitlab".into(), (false, "Not connected".into())),
+                                        ("jira".into(), (false, "Not connected".into())),
+                                    ]
+                                    .into(),
+                                    ..Default::default()
+                                },
+                                cx,
+                            );
+                            view.discovery_task = None;
+                            view.discovery_loading = false;
+                            view.discovery.binaries =
+                                vec![(Kind::Codex, Some("/bin/codex".into()))];
+                            view.discovered_catalogs.insert(
+                                (
+                                    Kind::Codex,
+                                    Default::default(),
+                                    vorkspace_core::catalog::generation(
+                                        Kind::Codex,
+                                        &Default::default(),
+                                    ),
+                                ),
+                                vec![catalog_model("gpt-6.1-terra", "GPT-6.1 Terra")],
+                            );
+                            view
+                        });
+                        cx.new(|cx| Fixture {
+                            _observe: cx.observe(&view, |_, _, cx| cx.notify()),
+                            view,
+                            nav: show_nav,
+                            liquid: Default::default(),
+                        })
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
+                cx.capture_screenshot(window.into())
+                    .unwrap()
+                    .save(output.join(format!("{}-{appearance}-{viewport}.png", section.id())))
+                    .unwrap();
+                if section == Section::Connectors {
+                    window
+                        .update(&mut cx, |fixture, _, cx| {
+                            fixture.view.update(cx, |view, cx| {
+                                let mut context = view.ctx.clone();
+                                context.inbox_connectors.set("gitlab", false).unwrap();
+                                context.inbox_connectors.set("jira", false).unwrap();
+                                view.set_context(context, cx);
+                                view.update(cx, |prefs| prefs.todos = false);
+                            });
+                        })
+                        .unwrap();
+                    cx.run_until_parked();
+                    vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
+                    cx.capture_screenshot(window.into())
+                        .unwrap()
+                        .save(output.join(format!("plugins-disabled-{appearance}-{viewport}.png")))
+                        .unwrap();
+                }
+            }
+        }
+    }
 }

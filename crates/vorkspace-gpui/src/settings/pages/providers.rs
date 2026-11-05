@@ -103,8 +103,25 @@ impl SettingsView {
                 .ctx
                 .catalogs
                 .get(kind.id())
-                .or_else(|| self.discovered_models(kind, cx))
                 .cloned()
+                .or_else(|| {
+                    self.discovered_models(kind, cx).map(|models| {
+                        models
+                            .iter()
+                            .map(|model| {
+                                (
+                                    model.id.clone(),
+                                    crate::pickers::model_display_name(
+                                        kind,
+                                        &model.id,
+                                        &model.name,
+                                    )
+                                    .to_string(),
+                                )
+                            })
+                            .collect()
+                    })
+                })
                 .unwrap_or_default();
             let selected_model = p
                 .default_models

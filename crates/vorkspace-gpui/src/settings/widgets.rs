@@ -11,6 +11,7 @@ use vorkspace_ui::theme::*;
 
 /// `text-[12px] leading-relaxed` and `text-[13px]` line boxes.
 const RELAXED_12: f32 = 19.5;
+const SELECT_ROW_HEIGHT: f32 = 28.;
 
 pub(super) use crate::controls::red;
 pub(super) fn accent(alpha: f32) -> Hsla {
@@ -95,6 +96,25 @@ impl SettingsView {
         id.is_some() && self.revealed.as_deref() == id
     }
 
+    /// A settings card without a redundant section heading on single-group pages.
+    pub(super) fn card(&self, id: Option<&'static str>, children: Vec<AnyElement>) -> Div {
+        div()
+            .relative()
+            .when_some(id, |d, id| d.child(self.reveal_probe(id)))
+            .overflow_hidden()
+            .rounded_xl()
+            .border_1()
+            .border_color(if self.flashing(id) {
+                accent(0.6)
+            } else {
+                content(0.1)
+            })
+            .bg(content(0.03))
+            .flex()
+            .flex_col()
+            .children(children)
+    }
+
     /// Group: a titled card. `first` drops the `pt-8` the CSS `first:` does.
     pub(super) fn group(
         &self,
@@ -105,7 +125,6 @@ impl SettingsView {
         action: Option<AnyElement>,
         children: Vec<AnyElement>,
     ) -> AnyElement {
-        let flash = self.flashing(id);
         div()
             .relative()
             .when(!first, |d| d.pt_8())
@@ -144,15 +163,8 @@ impl SettingsView {
                     }),
             )
             .child(
-                div()
-                    .overflow_hidden()
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(if flash { accent(0.6) } else { content(0.1) })
-                    .bg(content(0.03))
-                    .flex()
-                    .flex_col()
-                    .children(children),
+                self.card(None, children)
+                    .when(self.flashing(id), |d| d.border_color(accent(0.6))),
             )
             .into_any_element()
     }
@@ -179,6 +191,10 @@ impl SettingsView {
                     | "tab-animations"
                     | "sidebar-right"
                     | "notes"
+                    | "todos"
+                    | "vox-enabled"
+                    | "vox-silent"
+                    | "bot-minions"
                     | "quick-composer"
                     | "clipboard-history"
                     | "dictation-enabled"
@@ -201,11 +217,18 @@ impl SettingsView {
             )
         });
         let stacked = narrow && !toggle_only;
+        let compact = description.is_none() && !stacked;
         div()
             .debug_selector(|| format!("settings-row-{}", id.unwrap_or("anonymous")))
             .relative()
             .flex()
-            .items_start()
+            .map(|d| {
+                if compact {
+                    d.items_center()
+                } else {
+                    d.items_start()
+                }
+            })
             .map(|d| {
                 if stacked {
                     d.flex_col().gap_3()
@@ -545,6 +568,12 @@ impl SettingsView {
                         } else {
                             this.select_open = Some(id);
                             this.select_active = selected.unwrap_or(0);
+                            // Use list-relative row positions: a reopened popover
+                            // can be placed somewhere else or still be animating.
+                            this.select_scroll.set_offset(gpui::point(
+                                px(0.),
+                                px(-(this.select_active as f32) * SELECT_ROW_HEIGHT),
+                            ));
                             window.focus(&this.select_focus, cx);
                         }
                         cx.notify();
@@ -566,6 +595,8 @@ impl SettingsView {
                             .aria_label(text.clone())
                             .aria_selected(is_selected)
                             .w_full()
+                            .h(px(SELECT_ROW_HEIGHT))
+                            .flex_shrink_0()
                             .flex()
                             .items_center()
                             .gap_2()
@@ -634,9 +665,14 @@ impl SettingsView {
                     .child(
                         div()
                             .id(SharedString::from(format!("select-list-{id}")))
+                            .debug_selector(move || format!("settings-select-scroll-{id}"))
                             .role(Role::ListBox)
                             .aria_label(label)
                             .track_focus(&self.select_focus)
+                            .track_scroll(&self.select_scroll)
+                            .max_h(px(310.))
+                            .min_h_0()
+                            .overflow_y_scroll()
                             .flex()
                             .flex_col()
                             .on_key_down(cx.listener(
@@ -665,6 +701,20 @@ impl SettingsView {
                                             window.focus(&this.focus, cx);
                                         }
                                         _ => return,
+                                    }
+                                    if matches!(key, "down" | "up" | "home" | "end") {
+                                        let top = px(this.select_active as f32 * SELECT_ROW_HEIGHT);
+                                        let height = this
+                                            .select_scroll
+                                            .bounds()
+                                            .size
+                                            .height
+                                            .max(px(SELECT_ROW_HEIGHT));
+                                        let offset = this.select_scroll.offset();
+                                        let y = offset
+                                            .y
+                                            .clamp(-top, height - top - px(SELECT_ROW_HEIGHT));
+                                        this.select_scroll.set_offset(gpui::point(offset.x, y));
                                     }
                                     cx.stop_propagation();
                                     cx.notify();
