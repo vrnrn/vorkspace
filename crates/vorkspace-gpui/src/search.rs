@@ -132,12 +132,20 @@ impl SearchView {
         this
     }
 
-    pub(crate) fn set_active(&mut self, visible: bool, cx: &mut Context<Self>) {
-        if self.visible == visible {
-            return;
-        }
-        self.visible = visible;
-        if visible {
+    pub(crate) fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// A revealed pane receives one current snapshot from the Shell.
+    pub(crate) fn set_active(&mut self, sources: Option<Sources>, cx: &mut Context<Self>) {
+        self.visible = sources.is_some();
+        if let Some(sources) = sources {
+            self.summaries = sources.summaries;
+            self.live = sources.live;
+            self.projects = sources.projects;
+            self.recent = sources.recent;
+            self.logos = sources.logos;
+            self.live_revision += 1;
             self.reload_files(cx);
             self.refresh(cx);
         } else {
@@ -201,7 +209,7 @@ impl SearchView {
     pub(crate) fn update_session(
         &mut self,
         summary: Session,
-        rows: Arc<Vec<Row>>,
+        rows: Option<Arc<Vec<Row>>>,
         cx: &mut Context<Self>,
     ) {
         if let Some(old) = self.summaries.iter_mut().find(|s| s.id == summary.id) {
@@ -209,21 +217,29 @@ impl SearchView {
         } else {
             self.summaries.push(summary.clone());
         }
-        self.live.insert(summary.id, rows);
+        let id = summary.id;
+        if let Some(rows) = rows {
+            self.live.insert(id, rows);
+        } else {
+            self.live.remove(&id);
+            self.local.retain(
+                |hit| !matches!(hit.target, Target::Message { session, .. } if session == id),
+            );
+        }
         self.live_revision += 1;
         if self.visible && !self.query.is_empty() {
             self.rank(cx);
             self.refresh_live(cx);
         }
     }
-    pub(crate) fn remove_live_session(&mut self, id: i64, cx: &mut Context<Self>) {
-        if self.live.remove(&id).is_some() {
-            self.live_revision += 1;
-            self.local.retain(
-                |hit| !matches!(hit.target, Target::Message { session, .. } if session == id),
-            );
-            self.rank(cx);
-            self.refresh_live(cx);
+    pub(crate) fn forget_session(&mut self, id: i64, cx: &mut Context<Self>) {
+        self.summaries.retain(|session| session.id != id);
+        self.live.remove(&id);
+        self.live_revision += 1;
+        if self.scope.sessions() {
+            // The saved-history query may have opened its SQLite snapshot
+            // before deletion. Retire that query as well as the live rows.
+            self.refresh(cx);
         }
     }
     fn refresh_live(&mut self, cx: &mut Context<Self>) {

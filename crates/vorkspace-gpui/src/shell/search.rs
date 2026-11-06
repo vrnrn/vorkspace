@@ -1,6 +1,6 @@
 use super::*;
 use crate::search::{Event, SearchView, Sources};
-use vorkspace_core::search::Target;
+use vorkspace_core::{search::Target, transcript::Row};
 
 pub(super) struct Open {
     cwd: String,
@@ -47,65 +47,9 @@ impl Shell {
         if let Some(bots) = &self.bots {
             bots.update(cx, |m, cx| m.close(cx));
         }
-        let conversations = self
-            .sessions
-            .values()
-            .cloned()
-            .chain(
-                self.bots
-                    .as_ref()
-                    .map(|m| m.read(cx).search_conversations())
-                    .unwrap_or_default(),
-            )
-            .collect::<Vec<_>>();
-        let mut summaries: HashMap<_, _> = self
-            .order
-            .iter()
-            .map(|&id| (id, self.session_metadata(id, cx).summary.clone()))
-            .collect();
-        summaries.extend(
-            conversations
-                .iter()
-                .map(|s| (s.read(cx).summary.id, s.read(cx).summary.clone())),
-        );
-        let summaries = summaries.into_values().collect();
-        let live = conversations
-            .iter()
-            .filter(|s| s.read(cx).history_loaded())
-            .map(|s| {
-                (
-                    s.read(cx).summary.id,
-                    Arc::new(s.read(cx).transcript.read(cx).source_rows().to_vec()),
-                )
-            })
-            .collect();
+        let sources = self.search_sources(&cwd, cx);
         let store = self.store.clone();
-        let projects = self.workspace.projects.clone();
-        let recent = self
-            .workspace
-            .recent_files
-            .get(&cwd)
-            .cloned()
-            .unwrap_or_default();
-        let view = cx.new(|cx| {
-            SearchView::new(
-                cwd.clone(),
-                store,
-                Sources {
-                    summaries,
-                    live,
-                    projects,
-                    recent,
-                    logos: self
-                        .workspace
-                        .project_appearance
-                        .iter()
-                        .filter_map(|(path, a)| a.logo.clone().map(|logo| (path.clone(), logo)))
-                        .collect(),
-                },
-                cx,
-            )
-        });
+        let view = cx.new(|cx| SearchView::new(cwd.clone(), store, sources, cx));
         if let Some(draft) = self.saved_search.clone() {
             view.update(cx, |v, cx| v.restore_draft(draft, cx));
         }
@@ -164,6 +108,77 @@ impl Shell {
         self.invalidate_chrome(cx);
         cx.notify();
     }
+    fn search_rows(session: &Conversation, cx: &App) -> Option<Arc<Vec<Row>>> {
+        session
+            .history_loaded()
+            .then(|| Arc::new(session.transcript.read(cx).source_rows().to_vec()))
+    }
+
+    fn search_sources(&self, cwd: &str, cx: &App) -> Sources {
+        let mut summaries = HashMap::with_capacity(self.order.len());
+        let mut live = HashMap::new();
+        for &id in &self.order {
+            summaries.insert(id, self.session_metadata(id, cx).summary.clone());
+            if let Some(rows) = self
+                .sessions
+                .get(&id)
+                .and_then(|view| Self::search_rows(view.read(cx), cx))
+            {
+                live.insert(id, rows);
+            }
+        }
+        if let Some(bots) = &self.bots {
+            for view in bots.read(cx).search_conversations() {
+                let session = view.read(cx);
+                let id = session.summary.id;
+                summaries.insert(id, session.summary.clone());
+                if let Some(rows) = Self::search_rows(session, cx) {
+                    live.insert(id, rows);
+                } else {
+                    live.remove(&id);
+                }
+            }
+        }
+        Sources {
+            summaries: summaries.into_values().collect(),
+            live,
+            projects: self.workspace.projects.clone(),
+            recent: self
+                .workspace
+                .recent_files
+                .get(cwd)
+                .cloned()
+                .unwrap_or_default(),
+            logos: self
+                .workspace
+                .project_appearance
+                .iter()
+                .filter_map(|(path, a)| a.logo.clone().map(|logo| (path.clone(), logo)))
+                .collect(),
+        }
+    }
+
+    pub(super) fn sync_search_visibility(&self, visible: bool, cx: &mut Context<Self>) {
+        let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) else {
+            return;
+        };
+        if search.view.read(cx).is_visible() == visible {
+            return;
+        }
+        let sources = visible.then(|| self.search_sources(&search.cwd, cx));
+        search
+            .view
+            .update(cx, |view, cx| view.set_active(sources, cx));
+    }
+
+    pub(super) fn forget_search_session(&self, id: i64, cx: &mut Context<Self>) {
+        if let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) {
+            search
+                .view
+                .update(cx, |view, cx| view.forget_session(id, cx));
+        }
+    }
+
     fn open_search_session(
         &mut self,
         id: i64,
@@ -222,21 +237,18 @@ impl Shell {
         let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) else {
             return;
         };
+        if !search.view.read(cx).is_visible() {
+            return;
+        }
         let views = self
             .bots
             .as_ref()
             .map(|m| m.read(cx).search_conversations())
             .unwrap_or_default();
         for view in views {
-            if !view.read(cx).history_loaded() {
-                let id = view.read(cx).summary.id;
-                search
-                    .view
-                    .update(cx, |v, cx| v.remove_live_session(id, cx));
-                continue;
-            }
-            let summary = view.read(cx).summary.clone();
-            let rows = Arc::new(view.read(cx).transcript.read(cx).source_rows().to_vec());
+            let session = view.read(cx);
+            let summary = session.summary.clone();
+            let rows = Self::search_rows(session, cx);
             search
                 .view
                 .update(cx, |v, cx| v.update_session(summary, rows, cx));
@@ -246,18 +258,14 @@ impl Shell {
         let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) else {
             return;
         };
-        let Some(session) = self.sessions.get(&id) else {
-            return;
-        };
-        let session = session.read(cx);
-        if !session.history_loaded() {
-            search
-                .view
-                .update(cx, |v, cx| v.remove_live_session(id, cx));
+        if !search.view.read(cx).is_visible() || !self.order.contains(&id) {
             return;
         }
-        let summary = session.summary.clone();
-        let rows = Arc::new(session.transcript.read(cx).source_rows().to_vec());
+        let summary = self.session_metadata(id, cx).summary.clone();
+        let rows = self
+            .sessions
+            .get(&id)
+            .and_then(|view| Self::search_rows(view.read(cx), cx));
         search
             .view
             .update(cx, |v, cx| v.update_session(summary, rows, cx));
@@ -268,6 +276,172 @@ impl Shell {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn parked_search_reconciles_deleted_new_and_renamed_conversations_on_reveal(
+        cx: &mut TestAppContext,
+    ) {
+        use std::time::Duration;
+        use vorkspace_core::search::Scope;
+
+        let project = tempfile::tempdir().unwrap();
+        let cwd = project.path().to_string_lossy().into_owned();
+        let (window, renamed, _) = crate::shell::tests::window(cx);
+        let victim = window
+            .update(cx, |shell, w, cx| {
+                shell.select_project(cwd.clone(), w, cx);
+                let mut summary = {
+                    let mut store = locked(&shell.store).unwrap();
+                    let mut summary = store.create("codex", &cwd).unwrap();
+                    summary.title = "Needle deleted".into();
+                    store.title(summary.id, &summary.title).unwrap();
+                    store
+                        .write_rows(
+                            summary.id,
+                            0,
+                            &[Row {
+                                role: "user".into(),
+                                text: "needle deleted message".into(),
+                                first: true,
+                                sent_at: None,
+                            }],
+                        )
+                        .unwrap();
+                    summary
+                };
+                summary.has_messages = true;
+                let id = summary.id;
+                shell.add(summary, cx);
+                shell.sessions[&id].update(cx, |session, cx| session.load(cx));
+                id
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let (session, pane, view) = window
+            .update(cx, |shell, w, cx| {
+                let session = shell.workspace.active.unwrap();
+                assert!(shell.sessions[&victim].read(cx).history_loaded());
+                shell.open_app_search(w, cx);
+                let pane = shell.workspace.active.unwrap();
+                let view = shell.app_search.as_ref().unwrap().view.clone();
+                view.update(cx, |view, cx| {
+                    view.restore_draft(("needle".into(), Scope::Conversations), cx)
+                });
+                (session, pane, view)
+            })
+            .unwrap();
+        let results = |cx: &mut TestAppContext| {
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_millis(200));
+            cx.run_until_parked();
+            view.read_with(cx, |view, _| view.hits().to_vec())
+        };
+        let before = results(cx);
+        assert!(
+            before
+                .iter()
+                .any(|hit| hit.target == Target::Conversation(victim))
+        );
+        assert!(
+            before.iter().any(
+                |hit| matches!(hit.target, Target::Message { session, .. } if session == victim)
+            )
+        );
+
+        let created = window
+            .update(cx, |shell, w, cx| {
+                shell.open(session, w, cx);
+                assert!(shell.app_search.is_none());
+                let summary = {
+                    let store = locked(&shell.store).unwrap();
+                    let mut summary = store.create("codex", &cwd).unwrap();
+                    summary.title = "Needle created while parked".into();
+                    store.title(summary.id, &summary.title).unwrap();
+                    summary
+                };
+                let id = summary.id;
+                shell.add(summary, cx);
+                shell.delete_session(victim, w, cx);
+                id
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, w, cx| {
+                assert!(
+                    !locked(&shell.store)
+                        .unwrap()
+                        .sessions()
+                        .unwrap()
+                        .iter()
+                        .any(|session| session.id == victim)
+                );
+                assert!(!shell.session_summaries.contains_key(&victim));
+                assert!(
+                    view.read(cx)
+                        .hits()
+                        .iter()
+                        .all(|hit| hit.target != Target::Conversation(victim))
+                );
+                shell.open(pane, w, cx);
+                assert_eq!(shell.app_search.as_ref().unwrap().view, view);
+                assert_eq!(
+                    view.read(cx).draft(cx),
+                    ("needle".into(), Scope::Conversations)
+                );
+            })
+            .unwrap();
+        let after = results(cx);
+        assert!(
+            after
+                .iter()
+                .any(|hit| hit.target == Target::Conversation(created))
+        );
+        assert!(
+            !after
+                .iter()
+                .any(|hit| hit.target == Target::Conversation(victim)
+                    || matches!(hit.target, Target::Message { session, .. } if session == victim))
+        );
+
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open(session, w, cx);
+                shell.delete_session(created, w, cx);
+                // A cold rename updates Shell metadata and the Store without
+                // a loaded Conversation publishing SessionChanged.
+                shell.sessions.remove(&renamed);
+                let title = "Needle renamed while parked";
+                shell.session_summaries.get_mut(&renamed).unwrap().title = title.into();
+                locked(&shell.store).unwrap().title(renamed, title).unwrap();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, w, cx| {
+                shell.workspace.place(pane, session, Edge::Right);
+                shell.open(session, w, cx);
+                assert!(shell.app_search.is_none());
+                assert_eq!(shell.parked_search.as_ref().unwrap().view, view);
+                assert_eq!(
+                    view.read(cx).draft(cx),
+                    ("needle".into(), Scope::Conversations)
+                );
+            })
+            .unwrap();
+        let after = results(cx);
+        assert!(
+            after
+                .iter()
+                .any(|hit| hit.target == Target::Conversation(renamed)
+                    && hit.title == "Needle renamed while parked")
+        );
+        assert!(
+            !after
+                .iter()
+                .any(|hit| hit.target == Target::Conversation(created))
+        );
+    }
 
     #[gpui::test]
     fn parked_search_refreshes_same_working_copy_files_and_content_as_a_split(
