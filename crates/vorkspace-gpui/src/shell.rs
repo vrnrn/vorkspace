@@ -2406,18 +2406,10 @@ impl Render for Shell {
                     // Cached editors and previews can outlive their rendered pane.
                     // Recover as soon as its focus node leaves the tree, including
                     // close paths without a Window in their original event.
-                    let target = window.focus_lost_restore_target(cx);
-                    if target.as_ref().is_none_or(|target| target == &this.focus)
-                        && this.workspace.active.is_some_and(|id| {
-                            this.workspace.app_panes.get(&id).is_some_and(|pane| {
-                                matches!(pane.content, crate::workspace::AppPane::Bot(_))
-                            })
-                        })
-                    {
-                        this.focus_active(window, cx);
-                    } else {
-                        window.focus(&target.unwrap_or_else(|| this.focus.clone()), cx);
-                    }
+                    let target = window
+                        .focus_lost_restore_target(cx)
+                        .unwrap_or_else(|| this.focus.clone());
+                    window.focus(&target, cx);
                 }));
             self.window_active = window.is_window_active();
             self.observations

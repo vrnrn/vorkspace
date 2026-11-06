@@ -6,6 +6,11 @@ use gpui::{EntityInputHandler, TestAppContext, VisualTestContext, point};
 fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppContext) {
     vorkspace_ui::clock::use_test_clock(cx);
     check_bot_file_link(cx, 800., false);
+}
+
+#[gpui::test]
+fn bot_file_link_tiles_beside_its_chat_when_space_allows(cx: &mut TestAppContext) {
+    vorkspace_ui::clock::use_test_clock(cx);
     check_bot_file_link(cx, 1500., true);
 }
 
@@ -29,10 +34,13 @@ fn check_bot_file_link(cx: &mut TestAppContext, width: f32, tiled: bool) {
         .unwrap();
     visual.run_until_parked();
     let (bot, chat) = window
-        .update(visual, |shell, _, cx| {
+        .update(visual, |shell, w, cx| {
             assert!(shell.bot_active(cx));
             let bot = shell.workspace.active.unwrap();
-            let chat = shell.bot_manager().read(cx).chat().unwrap();
+            let manager = shell.bot_manager();
+            assert!(manager.update(cx, |m, cx| m.dismiss_settings(w, cx)));
+            let chat = manager.read(cx).chat().unwrap();
+            assert!(chat.read(cx).input.focus_handle(cx).is_focused(w));
             chat.read(cx).input.clone().update(cx, |input, cx| {
                 input.set_text("Keep my Bot draft".into(), cx)
             });
@@ -40,6 +48,7 @@ fn check_bot_file_link(cx: &mut TestAppContext, width: f32, tiled: bool) {
         })
         .unwrap();
     visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-settings-dialog").is_none());
     assert!(
         visual.debug_bounds("composer-box").is_some(),
         "the action starts in the visible Bot"

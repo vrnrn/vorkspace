@@ -1,4 +1,4 @@
-//! Opening, reusing and closing review panes for a session.
+//! Opening, reusing and closing the workspace's file and review panes.
 use super::*;
 use crate::workspace::AppPane;
 
