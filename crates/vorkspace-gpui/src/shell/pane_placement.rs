@@ -1,6 +1,9 @@
 //! Pane admission, splitting, focus movement, drag placement and sash resizing.
 use super::*;
 
+// A proposed detached review does not have a layout ID yet.
+const REVIEW_PLACEMENT_PLACEHOLDER: i64 = i64::MIN;
+
 impl Shell {
     /// A click anywhere in a pane focuses it (PaneTree's onFocus).
     pub(super) fn focus_pane(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
@@ -87,7 +90,8 @@ impl Shell {
     }
 
     pub(super) fn pane_layout_allowed(&self, before: &PaneNode, after: &PaneNode) -> bool {
-        let session = |id| self.workspace.counts_toward_pane_limit(id);
+        let session =
+            |id| id != REVIEW_PLACEMENT_PLACEHOLDER && self.workspace.counts_toward_pane_limit(id);
         let old_stack = before.max_session_stack(session);
         let new_stack = after.max_session_stack(session);
         let stack_ok = new_stack <= MAX_SESSION_STACK
@@ -131,7 +135,7 @@ impl Shell {
             {
                 before.place_pane(owner, target, edge)
             }
-            DragSource::Review(_) => before.place_pane(i64::MIN, target, edge),
+            DragSource::Review(_) => before.place_pane(REVIEW_PLACEMENT_PLACEHOLDER, target, edge),
             DragSource::Pane(owner)
                 if self
                     .workspace
@@ -139,8 +143,12 @@ impl Shell {
                     .get(&owner)
                     .is_some_and(|r| !r.chat_hidden) =>
             {
-                let base = before.replace_leaf(owner, i64::MIN);
-                let target = if target == owner { i64::MIN } else { target };
+                let base = before.replace_leaf(owner, REVIEW_PLACEMENT_PLACEHOLDER);
+                let target = if target == owner {
+                    REVIEW_PLACEMENT_PLACEHOLDER
+                } else {
+                    target
+                };
                 base.place_pane(owner, target, edge)
             }
             _ => before.place_pane(id, target, edge),

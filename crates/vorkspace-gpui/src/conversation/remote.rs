@@ -34,6 +34,12 @@ type Snapshot = (
 );
 
 impl Conversation {
+    #[cfg(test)]
+    pub(crate) fn mark_remote_snapshot_loaded_for_test(&mut self) {
+        debug_assert!(self.is_remote());
+        self.loaded = true;
+    }
+
     pub(super) fn is_remote(&self) -> bool {
         self.summary.cwd.starts_with("remote://")
     }

@@ -446,11 +446,11 @@ impl Shell {
             let id = value
                 .as_i64()
                 .or_else(|| value.as_str()?.parse().ok())
-                .filter(|id| *id > 0)
-                .ok_or("Provide a positive sessionId")?;
+                .ok_or("Provide an integer sessionId")?;
             let summary = self
                 .session_summaries
                 .get(&id)
+                .filter(|_| self.workspace.session_for_pane(id) == Some(id))
                 .ok_or("Session is unavailable")?;
             if path_key(&summary.cwd) != path_key(project) || self.deleting.contains(&id) {
                 return Err("Session is outside the selected project or is being deleted".into());

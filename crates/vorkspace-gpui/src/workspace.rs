@@ -962,7 +962,9 @@ impl Workspace {
         self.review_owners
             .get(&id)
             .copied()
-            .or_else(|| (id >= 0).then_some(id))
+            // Remote sessions also have negative IDs. Only an app descriptor
+            // identifies a leaf without a session owner.
+            .or_else(|| (!self.app_panes.contains_key(&id)).then_some(id))
     }
     /// Focus a session, opening it as its own tab unless a tab holds it.
     pub fn open(&mut self, id: i64) {
