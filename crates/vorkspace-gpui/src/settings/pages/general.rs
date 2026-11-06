@@ -86,20 +86,6 @@ impl SettingsView {
                 )],
             ),
             self.row(
-                Some("sidebar-right"),
-                false,
-                "Switch sidebar to right side",
-                Some("Place Sessions, Explorer, and Changes at the right edge.".into()),
-                vec![self.toggle(
-                    "sidebar-right",
-                    "Switch sidebar to right side",
-                    p.sidebar_right,
-                    false,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.sidebar_right = on),
-                )],
-            ),
-            self.row(
                 Some("working-agents"),
                 false,
                 "Working agents",

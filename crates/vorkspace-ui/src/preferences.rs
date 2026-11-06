@@ -18,9 +18,6 @@ pub struct Preferences {
     pub file_word_wrap: bool,
     pub file_view_mode: String,
     pub tab_animations: bool,
-    /// Sessions, Explorer and Changes sit at the window's right edge instead of
-    /// between the project rail and the conversation.
-    pub sidebar_right: bool,
     pub notes: bool,
     pub todos: bool,
     pub quick_composer: bool,
@@ -139,7 +136,6 @@ impl Default for Preferences {
             file_word_wrap: true,
             file_view_mode: "preview".into(),
             tab_animations: false,
-            sidebar_right: false,
             notes: true,
             todos: true,
             quick_composer: false,

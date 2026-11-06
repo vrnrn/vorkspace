@@ -1,3 +1,4 @@
+use vorkspace_ui::radius;
 // Anchored popovers and menus, ported from src/shared/ui/Popover.tsx, its
 // placement math in src/shared/lib/popover.ts, and the row/keyboard model of
 // src/features/files/ui/ExplorerMenu.tsx.
@@ -273,7 +274,6 @@ type Dismiss = Rc<dyn Fn(&mut Window, &mut App)>;
 const MENU_IN: f32 = 0.17;
 const MENU_TRAVEL: f32 = 8.;
 const SUBMENU_GAP: f32 = 4.;
-const RADIUS: f32 = 12.;
 // GlassBackdrop's backdrop-blur-xl.
 const BLUR: f32 = 24.;
 
@@ -311,8 +311,6 @@ pub(crate) struct Popover {
     animate: bool,
     /// Without a fixed width, the card hugs its content between these.
     fit: (Option<f32>, Option<f32>),
-    /// Overrides the card's corner radius.
-    radius: Option<f32>,
     children: Vec<AnyElement>,
 }
 pub(crate) fn popover(id: impl Into<ElementId>, anchor: Anchor) -> Popover {
@@ -329,7 +327,6 @@ pub(crate) fn popover(id: impl Into<ElementId>, anchor: Anchor) -> Popover {
         modal_classic: None,
         animate: true,
         fit: (None, None),
-        radius: None,
         children: Vec::new(),
     }
 }
@@ -347,11 +344,6 @@ impl Popover {
     /// Modal.tsx: 16px corners, a 7% rule and the shared dialog tint.
     pub(crate) fn modal_surface(mut self, classic: bool) -> Self {
         self.modal_classic = Some(classic);
-        self
-    }
-    /// A card that opens out of a control can match the control's corners.
-    pub(crate) fn radius(mut self, radius: f32) -> Self {
-        self.radius = Some(radius);
         self
     }
     pub(crate) fn align(mut self, align: Align) -> Self {
@@ -440,9 +432,9 @@ impl Popover {
     fn render_at(self, enter: f32, viewport: gpui::Size<Pixels>) -> impl IntoElement {
         let (viewport_width, viewport_height) = (viewport.width, viewport.height);
         let radius = if self.modal_classic.is_some() {
-            16.
+            radius::MODAL
         } else {
-            self.radius.unwrap_or(RADIUS)
+            radius::SURFACE
         };
         let border = if self.modal_classic.is_some() {
             0.07
@@ -901,7 +893,7 @@ impl gpui::Render for MenuDrag {
             .gap_2()
             .px_2()
             .py_1p5()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .bg(floating_fill())
             .text_color(content(1.))
             .text_size(px(13.))
@@ -1304,6 +1296,7 @@ impl Menu {
             .relative()
             .flex_shrink_0()
             .w_full()
+            .rounded(px(radius::CONTAINER))
             .flex()
             .px_2()
             // The grip's hit area supplies the leading inset for draggable rows.
@@ -1312,37 +1305,27 @@ impl Menu {
             .text_color(ink)
             .when(dim, |d| d.opacity(0.4))
             .map(|d| match style {
-                MenuStyle::Explorer => d
-                    .items_center()
-                    .gap_3()
-                    .rounded(px(8.))
-                    .line_height(px(13.))
-                    .map(|d| {
-                        if action.description.is_some() {
-                            d.py(px(6.))
+                MenuStyle::Explorer => d.items_center().gap_3().line_height(px(13.)).map(|d| {
+                    if action.description.is_some() {
+                        d.py(px(6.))
+                    } else {
+                        d.h(px(if in_submenu && self.style == MenuStyle::Settings {
+                            32.
                         } else {
-                            d.h(px(if in_submenu && self.style == MenuStyle::Settings {
-                                32.
-                            } else {
-                                28.
-                            }))
-                        }
-                    }),
+                            28.
+                        }))
+                    }
+                }),
                 MenuStyle::Group => d
                     .items_center()
                     .gap(px(10.))
-                    .rounded(px(8.))
                     .min_h(px(32.))
                     .when(action.description.is_some(), |d| d.py_2()),
-                MenuStyle::Switcher => d.items_center().gap(px(10.)).rounded(px(6.)).h(px(32.)),
-                MenuStyle::Git | MenuStyle::Filter => {
-                    d.items_center().gap_2().rounded(px(8.)).h(px(28.))
-                }
-                MenuStyle::Settings => d.items_center().gap_2().rounded(px(8.)).h(px(36.)),
-                MenuStyle::Recent => d.items_center().gap_2().rounded(px(8.)).h(px(40.)),
-                MenuStyle::Composer | MenuStyle::Access => {
-                    d.items_start().gap(px(10.)).rounded(px(8.)).py_2()
-                }
+                MenuStyle::Switcher => d.items_center().gap(px(10.)).h(px(32.)),
+                MenuStyle::Git | MenuStyle::Filter => d.items_center().gap_2().h(px(28.)),
+                MenuStyle::Settings => d.items_center().gap_2().h(px(36.)),
+                MenuStyle::Recent => d.items_center().gap_2().h(px(40.)),
+                MenuStyle::Composer | MenuStyle::Access => d.items_start().gap(px(10.)).py_2(),
             })
             .when_some(self.row_metrics, |d, (height, _)| {
                 d.h(px(height)).gap(px(8.))
@@ -1364,7 +1347,7 @@ impl Menu {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded_sm()
+                        .rounded(px(radius::SMALL))
                         .text_color(content(0.5))
                         .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
                         .child(icon("grip-vertical", 12.))

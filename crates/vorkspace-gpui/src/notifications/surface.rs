@@ -1,5 +1,6 @@
 //! Stationary notification glass, matching GlassBackdrop and the native popover.
 use gpui::{Div, canvas, div, prelude::*, px};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) fn backdrop(radius: f32) -> impl IntoElement {
@@ -25,12 +26,12 @@ pub(crate) fn glass_frame() -> Div {
         .w(px(340.))
         .max_w_full()
         .overflow_hidden()
-        .rounded(px(12.))
+        .rounded(px(radius::SURFACE))
         .border_1()
         .border_color(content(0.1))
         .text_color(content(1.))
         .shadow_lg()
-        .child(backdrop(12.))
+        .child(backdrop(radius::SURFACE))
 }
 
 /// Shared shell for the compact cards in the top-right notification stack.

@@ -2,6 +2,7 @@ use super::*;
 use gpui::App;
 use std::path::PathBuf;
 use vorkspace_core::bot::{Bot, Message};
+use vorkspace_ui::radius;
 #[cfg(test)]
 #[path = "bot_tests.rs"]
 mod tests;
@@ -12,6 +13,7 @@ pub(super) struct ChatState {
     /// Some(false) retains the header but freezes it beneath a host modal.
     pub(super) header_animation: Option<bool>,
     pub(super) header: Option<Entity<crate::bot_header::ChatHeader>>,
+    pub(super) header_action: Option<crate::bot_header::Activate>,
     pub(super) pending: Vec<Message>,
     pub(super) card_versions: std::collections::HashMap<String, u64>,
     /// The next message waits for the current reply instead of steering it.
@@ -224,6 +226,9 @@ impl Conversation {
             self.bot_ui.header_animation = Some(animate);
             cx.notify();
         }
+    }
+    pub(crate) fn set_bot_header_action(&mut self, action: Option<crate::bot_header::Activate>) {
+        self.bot_ui.header_action = action;
     }
     pub(crate) fn bot_quote(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.reject_user_entry(cx) {
@@ -610,6 +615,30 @@ impl Conversation {
             "idle"
         }
     }
+    /// A compact description of the conversation owner's current lifecycle.
+    pub(crate) fn bot_status_label(&self) -> &'static str {
+        if self.needs_approval() {
+            "Needs your input"
+        } else if self.settings.usage_limit.is_some() {
+            "Usage limit reached"
+        } else if self.stopping {
+            "Stopping"
+        } else if self.responding() {
+            if self.status == "Thinking…" {
+                "Thinking"
+            } else {
+                "Working"
+            }
+        } else if self.loading {
+            "Loading"
+        } else if self.status != "Ready" {
+            "Needs attention"
+        } else if self.summary.has_messages {
+            "Done"
+        } else {
+            "Ready"
+        }
+    }
     pub(crate) fn bot_model(&self) -> Option<String> {
         self.model.clone()
     }
@@ -833,19 +862,25 @@ impl Conversation {
                 )
             })
             .children(self.model_list_popover(cx))
-            .child(
+            .child({
                 // Conversation owns the transcript/composer boundary. Keep the
                 // floating identity inside that viewport, including when a
                 // draft or attention control makes the composer grow.
-                crate::bot_header::chat_surface(
+                let surface = crate::bot_header::chat_surface(
                     body,
                     &bot,
                     self.bot_status(),
                     self.bot_ui.header_animation,
                     &mut self.bot_ui.header,
                     cx,
-                ),
-            )
+                );
+                if let Some(header) = &self.bot_ui.header {
+                    header.update(cx, |header, _| {
+                        header.activate = self.bot_ui.header_action.clone()
+                    });
+                }
+                surface
+            })
             .child(
                 composer_column()
                     .when_some(self.bot_ui.draft_error.clone(), |d, error| {
@@ -854,7 +889,7 @@ impl Conversation {
                                 .mb_1()
                                 .px_3()
                                 .py_2()
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .bg(content(0.06))
                                 .text_size(px(12.))
                                 .text_color(content(0.75))
@@ -883,7 +918,7 @@ impl Conversation {
                                             .max_w(px(440.))
                                             .px_3()
                                             .py_2()
-                                            .rounded_xl()
+                                            .rounded(px(radius::SURFACE))
                                             .border_1()
                                             .border_color(content(0.15))
                                             .bg(content(0.04))

@@ -23,7 +23,9 @@ struct Identity {
 /// Decorative ticks belong to this view, never the chat's notification graph.
 pub(crate) struct ChatHeader {
     identity: Identity,
+    pub(crate) activate: Option<Activate>,
 }
+pub(crate) type Activate = std::rc::Rc<dyn Fn(&mut gpui::Window, &mut App)>;
 
 /// The chat owner supplies only its transcript body, never composer/attention
 /// controls. This is the shared clipping and pass-through contract for identity.
@@ -65,6 +67,7 @@ pub(crate) fn chat_surface_with_look(
         let header = retained.get_or_insert_with(|| {
             cx.new(|_| ChatHeader {
                 identity: identity.clone(),
+                activate: None,
             })
         });
         // This child is rendered in this frame. Apply parent-supplied props
@@ -119,7 +122,7 @@ fn backdrop_mask(begin: bool) -> AnyElement {
 impl Render for ChatHeader {
     fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
         // The transcript host clips this decoration before the composer. Absolute
-        // layout reserves no chat space; this decoration inserts no hitboxes.
+        // layout reserves no chat space. Only an interactive face owns a hitbox.
         div()
             .debug_selector(|| "bot-chat-header".into())
             .absolute()
@@ -140,12 +143,24 @@ impl Render for ChatHeader {
                         move || format!("bot-chat-header-{status}")
                     })
                     .flex_shrink_0()
-                    .child(avatar::header_avatar(
-                        self.identity.look.clone(),
-                        &self.identity.status,
-                        FACE,
-                        self.identity.animate,
-                    )),
+                    .child(
+                        div()
+                            .id("bot-face-open-island")
+                            .when_some(self.activate.clone(), |d, activate| {
+                                d.debug_selector(|| "bot-face-open-island".into())
+                                    .role(gpui::Role::Button)
+                                    .aria_label("Show Bot sessions and documents")
+                                    .tab_stop(true)
+                                    .cursor_pointer()
+                                    .on_click(move |_, window, cx| activate(window, cx))
+                            })
+                            .child(avatar::header_avatar(
+                                self.identity.look.clone(),
+                                &self.identity.status,
+                                FACE,
+                                self.identity.animate,
+                            )),
+                    ),
             )
             .child(
                 div()

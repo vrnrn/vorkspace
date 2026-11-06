@@ -22,7 +22,11 @@ impl Shell {
             page.update(cx, |page, cx| page.set_active(false, cx));
         }
         if self.active_app_view == Some(AppView::Notes)
-            && let Some(notes) = &self.notes
+            && let Some(notes) = self
+                .workspace
+                .active
+                .and_then(|id| self.note_tabs.get(&id))
+                .or(self.notes.as_ref())
         {
             notes.update(cx, |notes, cx| {
                 notes.flush(cx);
@@ -38,39 +42,21 @@ impl Shell {
         self.invalidate_chrome(cx);
     }
     pub(super) fn close_app_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.navigation_revision += 1;
-        self.leave_app_views(cx);
-        if self.workspace.active.is_none() {
-            let previous = self
-                .workspace
-                .project_focus
-                .get(&self.workspace.project)
-                .copied()
-                .filter(|id| self.workspace.tab_of(*id).is_some());
-            if let Some(id) = previous {
-                self.activate_session(id, window, cx);
-            }
+        if let Some(id) = self.workspace.active {
+            self.close_pane(id, window, cx);
         }
-        self.ensure_project_session(window, cx);
-        self.update_chat_visibility(cx);
-        self.sync_right_panel(cx);
-        self.focus_active(window, cx);
-        if let Some(tab) = self.active_title_tab(cx) {
-            self.remember_title_tab(tab);
-        }
-        self.persist(cx);
-        cx.notify();
     }
 
     pub(super) fn prepare_app_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.selected_sessions.clear();
+        self.selection_anchor = None;
+        self.sidebar_target = None;
+        self.context_selection = false;
         self.leave_app_search(cx);
         self.close_preview(cx);
         self.close_menu(cx);
         if self.settings.is_some() {
             self.close_settings(window, cx);
-        }
-        if let Some(bots) = self.bots.clone() {
-            bots.update(cx, |bots, cx| bots.close(cx));
         }
         self.navigation_revision += 1;
         self.review_focused = false;
@@ -78,11 +64,9 @@ impl Shell {
     }
 
     fn show_app_view(&mut self, view: AppView, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active_app_view != Some(view) {
-            self.leave_app_views(cx);
-        }
+        self.leave_app_views(cx);
         self.active_app_view = Some(view);
-        self.remember_title_tab(TitleTab::App(view));
+        self.admit_app_pane(crate::workspace::AppPane::App(view));
         self.reveal_active_tab(cx);
         self.update_chat_visibility(cx);
         self.sync_right_panel(cx);
@@ -91,25 +75,23 @@ impl Shell {
         self.persist(cx);
         cx.notify();
     }
-    pub(super) fn app_view_body(&self) -> Option<AnyElement> {
-        match self.active_app_view? {
-            AppView::Notes => self.notes.clone().map(IntoElement::into_any_element),
-            AppView::Inbox => None,
-            AppView::Connector(provider) => self
-                .connector_pages
-                .get(&provider)
-                .cloned()
-                .map(IntoElement::into_any_element),
-            AppView::Automations => self.automations.clone().map(IntoElement::into_any_element),
-            AppView::Todos => self.todos_page.clone().map(IntoElement::into_any_element),
-        }
-    }
     pub(super) fn focus_app_view(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if let Some(id) = &self.active_terminal_tab {
             if let Some(terminal) = self.terminal_tabs.get(id) {
                 window.focus(&terminal.focus_handle(cx), cx);
             }
             return true;
+        }
+        if let Some(id) = self.workspace.active {
+            let focus = self
+                .note_tabs
+                .get(&id)
+                .map(|view| view.focus_handle(cx))
+                .or_else(|| self.item_tabs.get(&id).map(|view| view.focus_handle(cx)));
+            if let Some(focus) = focus {
+                window.focus(&focus, cx);
+                return true;
+            }
         }
         let focus = match self.active_app_view {
             Some(AppView::Notes) => self.notes.as_ref().map(|view| view.focus_handle(cx)),
@@ -137,16 +119,9 @@ impl Shell {
         self.prepare_app_view(window, cx);
         if self.notes.is_none() {
             let view = cx.new(|cx| notes::Notes::new(self.store.clone(), cx));
-            self.app_view_events.push(cx.subscribe_in(
-                &view,
-                window,
-                |this, _, event: &notes::Event, window, cx| match event {
-                    notes::Event::Close => this.close_app_view(window, cx),
-                    notes::Event::OpenSource(id) => this.open(*id, window, cx),
-                    notes::Event::AddToChat(note) => this.note_to_chat(note.clone(), window, cx),
-                },
-            ));
+            self.subscribe_notes(&view, window, cx);
             self.notes = Some(view);
+            self.sync_note_tab_owners(cx);
         }
         if let Some(notes) = &self.notes {
             let cwd = self.workspace.project.clone();
@@ -174,7 +149,11 @@ impl Shell {
                 &view,
                 window,
                 |this, _, event: &crate::todos::PageEvent, window, cx| match event {
-                    crate::todos::PageEvent::Close => this.close_app_view(window, cx),
+                    crate::todos::PageEvent::Close => this.close_app_resource(
+                        crate::workspace::AppPane::App(AppView::Todos),
+                        window,
+                        cx,
+                    ),
                 },
             ));
             self.todos_page = Some(view);
@@ -186,35 +165,16 @@ impl Shell {
         self.show_app_view(AppView::Todos, window, cx);
     }
 
-    /// Every project's and Bot's board, for the To-dos page's picker.
-    fn todo_board_choices(&self, cx: &App) -> Vec<crate::todos::BoardChoice> {
-        use vorkspace_core::todos::TodoBoard;
-        let projects = self
-            .workspace
+    /// Project boards are shared by people and Bots.
+    fn todo_board_choices(&self, _cx: &App) -> Vec<crate::todos::BoardChoice> {
+        self.workspace
             .projects
             .iter()
             .map(|path| crate::todos::BoardChoice {
-                board: TodoBoard::Project(path.clone()),
+                board: vorkspace_core::todos::TodoBoard::Project(path.clone()),
                 label: vorkspace_core::files::leaf_name(path),
-            });
-        let bots: Vec<_> = self
-            .bots
-            .as_ref()
-            .filter(|_| self.workspace.preferences.bots)
-            .map(|bots| {
-                bots.read(cx)
-                    .roster
-                    .bots
-                    .iter()
-                    .filter(|bot| !bot.is_minion())
-                    .map(|bot| crate::todos::BoardChoice {
-                        board: TodoBoard::Bot(bot.id.clone()),
-                        label: bot.name.clone(),
-                    })
-                    .collect()
             })
-            .unwrap_or_default();
-        projects.chain(bots).collect()
+            .collect()
     }
 
     /// The project sidebar's To-dos tab, pointed at the current project.
@@ -285,7 +245,7 @@ impl Shell {
             .update(cx, |owner, cx| owner.remember_source(provider.id(), cx));
         self.show_app_view(AppView::Connector(provider), window, cx);
     }
-    fn subscribe_connector(
+    pub(super) fn subscribe_connector(
         &mut self,
         view: &Entity<inbox::Inbox>,
         window: &mut Window,
@@ -294,8 +254,29 @@ impl Shell {
         self.app_view_events.push(cx.subscribe_in(
             view,
             window,
-            |this, _, event: &inbox::Event, window, cx| {
-                this.handle_connector_event(event, window, cx);
+            |this, origin, event: &inbox::Event, window, cx| {
+                if matches!(event, inbox::Event::Close) {
+                    let id = this
+                        .item_tabs
+                        .iter()
+                        .find_map(|(&id, view)| (view == origin).then_some(id))
+                        .or_else(|| {
+                            this.connector_pages.iter().find_map(|(provider, view)| {
+                                (view == origin)
+                                    .then(|| {
+                                        this.app_pane_id(&crate::workspace::AppPane::App(
+                                            AppView::Connector(*provider),
+                                        ))
+                                    })
+                                    .flatten()
+                            })
+                        });
+                    if let Some(id) = id {
+                        this.close_pane(id, window, cx);
+                    }
+                } else {
+                    this.handle_connector_event(event, window, cx);
+                }
             },
         ));
     }
@@ -306,7 +287,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match event {
-            inbox::Event::Close => self.close_app_view(window, cx),
+            inbox::Event::Close => {}
+            inbox::Event::OpenTab(item) => self.open_item_tab(item.as_ref().clone(), window, cx),
             inbox::Event::OpenSession(id) => self.open(*id, window, cx),
             inbox::Event::StartSession { item, prompt, bot } => {
                 if let Some(id) = bot {
@@ -324,7 +306,6 @@ impl Shell {
                     };
                     match result {
                         Ok(()) => {
-                            self.close_app_view(window, cx);
                             if let Some(bots) = &self.bots {
                                 bots.update(cx, |bots, cx| bots.open(id, window, cx));
                             }
@@ -408,7 +389,11 @@ impl Shell {
                 &view,
                 window,
                 |this, _, event: &automations::Event, window, cx| match event {
-                    automations::Event::Close => this.close_app_view(window, cx),
+                    automations::Event::Close => this.close_app_resource(
+                        crate::workspace::AppPane::App(AppView::Automations),
+                        window,
+                        cx,
+                    ),
                     automations::Event::Launch(run) => {
                         this.launch_automation(run.as_ref().clone(), true, cx)
                     }
@@ -445,7 +430,7 @@ impl Shell {
         self.show_app_view(AppView::Automations, window, cx);
     }
 
-    fn note_to_chat(
+    pub(super) fn note_to_chat(
         &mut self,
         note: vorkspace_core::notes::Note,
         window: &mut Window,

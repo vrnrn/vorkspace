@@ -1,13 +1,11 @@
 # Vorkspace Design Guide
 
-App chrome uses the shared `vorkspace_ui::radius` scale: 4 pt for small chips and icon actions, 6 pt for controls and tabs, 8 pt for inset content, 12 pt for surfaces, and 16 pt for dialogs. Fill, stroke, clipping and hover use the same shape. AppKit window corners, circles and artwork retain their own geometry.
-
 Vorkspace should feel like one quiet, native macOS tool. Chrome recedes; the
 conversation, code and user's work carry the color. Use this guide for every UI
 change, and extend it when you add a new shared convention.
 
-Paths are relative to `crates/vorkspace-gpui/src/`, except `theme.rs`, `reveal.rs` and
-`pane_motion.rs`, which live in `crates/vorkspace-ui/src/`.
+Paths are relative to `crates/vorkspace-gpui/src/`, except `theme.rs`, `radius.rs`,
+`reveal.rs` and `pane_motion.rs`, which live in `crates/vorkspace-ui/src/`.
 
 ---
 
@@ -135,39 +133,58 @@ From back to front:
 | Layer | Fill | Radius | Border | Shadow |
 |---|---|---|---|---|
 | Window / sidebar | `shell_fill()` | none | none | none |
-| Main pane | `pane_fill()` | 12 on its left corners | none | none |
-| Card / settings group | `content(0.03)` | `rounded_xl` | `content(0.1)` | none |
-| Composer | `composer_fill()`, `composer_blur()` | 8 | `composer_border(focused)` | none |
-| Popover / menu | `popover()` glass, or `floating_fill()` | 12 | `content(0.1)` | popover pair |
-| Toast | `notifications/surface.rs` glass frame | 12 | `content(0.1)` | `shadow_lg` |
-| Modal | `popover().modal_surface()` | 16 | `content(0.07)` | popover pair |
+| Main pane | `pane_fill()` | `radius::SURFACE` on its left corners | none | none |
+| Card / settings group | `content(0.03)` | `radius::SURFACE` | `content(0.1)` | none |
+| Composer | `composer_fill()`, `composer_blur()` | `radius::CONTAINER` | `composer_border(focused)` | none |
+| Popover / menu | `popover()` glass, or `floating_fill()` | `radius::SURFACE` | `content(0.1)` | popover pair |
+| Toast | `notifications/surface.rs` glass frame | `radius::SURFACE` | `content(0.1)` | `shadow_lg` |
+| Modal | `popover().modal_surface()` | `radius::MODAL` | `content(0.07)` | popover pair |
 
 - **Glass** is dark-only (`window_glass`). Light themes paint opaque surfaces. Never stack a second tint on glass.
 - **Floating UI** goes through `popover::popover` (placement, flipping,
   outside-press dismissal, glass and shadow). Don't hand-build floating frames.
 - A card that opens out of a sidebar row, such as usage details, aligns with
-  the row's left edge and takes its 6px radius instead of 12.
+  the row's left edge and uses the same surface radius as other popovers.
 - **Dividers** are 1px: `content(0.1)` for chrome rules, `content(0.04)–0.05`
   for faint panel edges and row separators.
-- **Radii:** 4 for small chips and 20px icon actions; 6 (`rounded_md`) for
-  buttons, icon buttons, inputs and tab plates; 8 for menu rows and the
-  composer box; 12 for floating surfaces; 16 for modals; `rounded_full` for pills,
-  avatars, switches and dots.
-- **Rail rows** join the main pane as one surface (`liquid.rs`): the hovered and
-  selected rows' pills use the selection fill `content(0.1)` (hover at 70% of
-  it) with 6px ends and concave joins, and the rail's `content(0.08)` divider
-  runs around them, so rail rows have no hover background. Projects and
-  Channels use the 3×3 dot grid in their colour as their mark. Title-bar tabs
-  use the same pills, rising from the strip's divider, so tab plates have no fill.
-- **Liquid is for the pane only.** A pill pours into the main pane (or rises
-  from the tab strip's line) only for items that open something there: pages,
-  Bots, channels, projects, sessions, tabs and the buttons that create them.
-  The workspace sidebar's Sessions / Explorer / Changes tabs are the one
-  exception: they rise from the line under them like title-bar tabs.
-  Controls that open menus or popovers, such as Sidebar options, use an
-  ordinary hover background instead.
+- **Radii:** use `vorkspace_ui::radius`, according to the scale below. A
+  surface's fill, border, blur mask, clipping and hover state share its geometry.
+- **Rail rows** use separate 6px rounded highlights: `content(0.1)` when
+  selected and `content(0.08)` on hover. They stay inset from the pane edge;
+  the static `content(0.08)` divider follows the pane's 12px outer corners.
+  Projects and Channels use the 3×3 dot grid in their colour as their mark.
+- **Title-bar tabs** use 27px plates centred in the 40px bar, with 6px corners
+  and `content(0.04)` / `content(0.07)` / `content(0.1)` fills for idle,
+  hovered and selected states. Workspace sidebar tabs use 28px rounded
+  highlights centred above their divider. Hover and selection change directly,
+  without morphing or joining the pane edge. Tab opening, closing and reordering
+  retain their separate motion settings.
 - **Shadows** belong to floating layers only; flat panes and cards have none.
   Popovers and their modal variant share the layered pair in `popover.rs`.
+
+### Corner scale (`radius.rs`)
+
+Use a size-based scale in the spirit of macOS, with compact rounded controls
+and larger surfaces. These are Vorkspace's logical-point values, not fixed
+system metrics promised by AppKit. UI zoom scales them with the rest of the UI.
+
+| Token | Points | Use |
+|---|---|---|
+| `SMALL` | 4 | Small chips, keyboard hints and compact icon actions |
+| `CONTROL` | 6 | Buttons, fields, tabs and navigation highlights |
+| `CONTAINER` | 8 | Composers, code blocks, image previews and menu rows |
+| `SURFACE` | 12 | Panes, cards, settings groups, menus and notifications |
+| `MODAL` | 16 | Dialogs and the large floating Bot island |
+
+Nested outlines subtract their inset, including the border, from the outer
+radius. A 6-point segmented frame with a 1-point border and 2-point padding has
+3-point selected segments. Express these relationships using the outer token
+rather than another literal radius. Independent menu rows keep the same
+8-point highlight across menu styles and padding sizes.
+AppKit owns native window corners. Pills, switches, circular avatars and dots
+keep `rounded_full`; user artwork, icon silhouettes and notch contours keep
+their own geometry. The helper's custom AppKit clipboard menu follows this
+scale in `native/Clipboard.swift`; ordinary AppKit controls retain system styling.
   Toasts, tooltips, image previews and dragged content can have different
   elevation; do not normalize their shadows solely by preset name.
 
@@ -220,7 +237,7 @@ old call sites at it, instead of copying it.
 Behavior rules for controls:
 
 - Buttons are borderless icons or 1px `content(0.1)` bordered text buttons with
-  `rounded_md`, 12px text, 10px horizontal padding.
+  `radius::CONTROL` corners, 12px text, 10px horizontal padding.
 - Window chrome (title bar, tab strip, sidebar chrome) uses the arrow cursor;
   content controls (settings, cards, links) use the pointer.
 - Hover feedback is a fill change plus full ink. No underline-on-hover for

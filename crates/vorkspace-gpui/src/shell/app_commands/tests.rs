@@ -74,6 +74,214 @@ fn command(
     cx.run_until_parked();
     rx.try_recv().expect("command completed")
 }
+
+#[gpui::test]
+fn native_note_ids_roundtrip_through_operator_without_changing_recording_identity(
+    cx: &mut TestAppContext,
+) {
+    let (window, caller, root) = command_window(cx);
+    let project = root.path().to_string_lossy().into_owned();
+    let native = window
+        .update(cx, |shell, _, _| {
+            let store = locked(&shell.store).unwrap();
+            let note = store
+                .upsert_note(&vorkspace_core::notes::NoteUpsert {
+                    id: "native-note-1".into(),
+                    title: "Original".into(),
+                    body: "Body".into(),
+                    tags: vec!["keep".into()],
+                    source_cwd: Some(project.clone()),
+                    ..Default::default()
+                })
+                .unwrap();
+            store
+                .upsert_note(&vorkspace_core::notes::NoteUpsert {
+                    id: "other-project-note".into(),
+                    title: "Private".into(),
+                    body: "Other".into(),
+                    source_cwd: Some("/other-project".into()),
+                    ..Default::default()
+                })
+                .unwrap();
+            note
+        })
+        .unwrap();
+    let list = command(window, caller, "native-list", "notes.list", json!({}), cx).unwrap();
+    let entry = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["noteId"] == native.id)
+        .unwrap();
+    let legacy = entry["id"].as_u64().unwrap();
+    assert!(
+        !list
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["noteId"] == "other-project-note")
+    );
+    assert_eq!(
+        command(
+            window,
+            caller,
+            "native-read",
+            "notes.read",
+            json!({"noteId":native.id}),
+            cx
+        )
+        .unwrap()["id"],
+        legacy
+    );
+    assert!(
+        command(
+            window,
+            caller,
+            "other-read",
+            "notes.read",
+            json!({"noteId":"other-project-note"}),
+            cx
+        )
+        .is_err()
+    );
+    let updated = command(
+        window,
+        caller,
+        "native-write",
+        "notes.write",
+        json!({"noteId":native.id,"title":"Updated","body":"New body"}),
+        cx,
+    )
+    .unwrap();
+    assert_eq!(updated["noteId"], native.id);
+    assert_eq!(updated["tags"], json!(["keep"]));
+    assert_eq!(
+        command(
+            window,
+            caller,
+            "legacy-read",
+            "notes.read",
+            json!({"id":legacy}),
+            cx
+        )
+        .unwrap()["body"],
+        "New body"
+    );
+    let updated = command(
+        window,
+        caller,
+        "legacy-write",
+        "notes.write",
+        json!({"id":legacy,"title":"Again","body":"Last body"}),
+        cx,
+    )
+    .unwrap();
+    assert_eq!(updated["noteId"], native.id);
+    let cleared = command(
+        window,
+        caller,
+        "native-clear-body",
+        "notes.write",
+        json!({"noteId":native.id,"title":"Again","body":""}),
+        cx,
+    )
+    .unwrap();
+    assert_eq!(cleared["body"], "");
+    window
+        .update(cx, |shell, _, _| {
+            let store = locked(&shell.store).unwrap();
+            let notes = store.list_notes().unwrap();
+            assert_eq!(notes.iter().filter(|note| note.id == native.id).count(), 1);
+            let saved = store.get_note(&native.id).unwrap().unwrap();
+            assert_eq!(saved.title, "Again");
+            assert_eq!(saved.tags, ["keep"]);
+            assert_eq!(saved.source_cwd.as_deref(), Some(project.as_str()));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn operator_workspace_commands_use_the_authenticated_dispatch_and_saved_receipts(
+    cx: &mut TestAppContext,
+) {
+    let (window, caller, root) = command_window(cx);
+    let project = root.path().to_string_lossy().into_owned();
+    window
+        .update(cx, |shell, window, cx| shell.open(caller, window, cx))
+        .unwrap();
+    let before = command(
+        window,
+        caller,
+        "workspace-list-1",
+        "workspace.list",
+        json!({}),
+        cx,
+    )
+    .unwrap();
+    assert_eq!(before["project"], project);
+    let opened = command(
+        window,
+        caller,
+        "workspace-open-1",
+        "workspace.open",
+        json!({"kind":"search"}),
+        cx,
+    )
+    .unwrap();
+    let pane = opened["paneId"].as_i64().unwrap();
+    assert!(pane < 0);
+    assert_eq!(
+        command(
+            window,
+            caller,
+            "workspace-open-1",
+            "workspace.open",
+            json!({"kind":"search"}),
+            cx
+        )
+        .unwrap()["paneId"],
+        pane
+    );
+    let listed = command(
+        window,
+        caller,
+        "workspace-list-2",
+        "workspace.list",
+        json!({}),
+        cx,
+    )
+    .unwrap();
+    assert!(listed["tabs"].as_array().unwrap().iter().any(|tab| {
+        tab["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["paneId"] == pane && entry["kind"] == "search")
+    }));
+    assert!(
+        command(
+            window,
+            caller,
+            "workspace-other",
+            "workspace.close",
+            json!({"paneId":pane,"project":"/other-project"}),
+            cx
+        )
+        .is_err()
+    );
+    assert_eq!(
+        command(
+            window,
+            caller,
+            "workspace-close-1",
+            "workspace.close",
+            json!({"paneId":pane}),
+            cx
+        )
+        .unwrap()["closed"],
+        true
+    );
+}
 fn rollback_window(
     cx: &mut TestAppContext,
     shared: bool,

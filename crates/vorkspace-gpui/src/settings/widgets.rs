@@ -7,6 +7,7 @@ use gpui::{
     AnyElement, Context, Div, ElementId, FontWeight, Hsla, MouseButton, MouseDownEvent, Role,
     SharedString, Stateful, div, prelude::*, px, relative,
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 /// `text-[12px] leading-relaxed` and `text-[13px]` line boxes.
@@ -75,7 +76,11 @@ pub(super) fn icon_action(
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(if side == 20. { 4. } else { 6. }))
+        .rounded(px(if side == 20. {
+            radius::SMALL
+        } else {
+            radius::CONTROL
+        }))
         .text_color(content(alpha))
         .when(disabled, |d| d.opacity(0.4))
         .when(!disabled, |d| {
@@ -102,7 +107,7 @@ impl SettingsView {
             .relative()
             .when_some(id, |d, id| d.child(self.reveal_probe(id)))
             .overflow_hidden()
-            .rounded_xl()
+            .rounded(px(radius::SURFACE))
             .border_1()
             .border_color(if self.flashing(id) {
                 accent(0.6)
@@ -189,7 +194,6 @@ impl SettingsView {
                 "sounds"
                     | "notifications"
                     | "tab-animations"
-                    | "sidebar-right"
                     | "notes"
                     | "todos"
                     | "vox-enabled"
@@ -346,7 +350,7 @@ impl SettingsView {
             .grid_cols(options.len() as u16)
             .flex_shrink_0()
             .gap(px(2.))
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .border_1()
             .border_color(content(0.1))
             .p(px(2.))
@@ -365,7 +369,7 @@ impl SettingsView {
                     .flex()
                     .justify_center()
                     .whitespace_nowrap()
-                    .rounded(px(5.))
+                    .rounded(px(radius::CONTROL - 2. - 1.))
                     .px(px(10.))
                     .py_1()
                     .cursor_pointer()
@@ -521,7 +525,7 @@ impl SettingsView {
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .border_1()
                     .border_color(content(0.1))
                     .bg(content(0.05))
@@ -600,7 +604,7 @@ impl SettingsView {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .rounded_lg()
+                            .rounded(px(radius::CONTAINER))
                             .px_2()
                             .py(px(6.))
                             .text_size(px(12.))
@@ -800,7 +804,7 @@ impl SettingsView {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .rounded_lg()
+                            .rounded(px(radius::CONTAINER))
                             .px_2()
                             .py(px(6.))
                             .text_size(px(12.))

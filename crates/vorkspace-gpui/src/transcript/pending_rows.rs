@@ -1,5 +1,6 @@
 //! Rows for queued prompts, launches and the review card.
 use super::*;
+use vorkspace_ui::radius;
 
 impl TranscriptView {
     /// Shows queued messages as bubbles at the end of the chat.
@@ -284,7 +285,7 @@ impl TranscriptView {
                                             if !peer_pending && bounds.size.height <= px(37.) {
                                                 f32::from(bounds.size.height) * 0.5
                                             } else {
-                                                12.
+                                                radius::SURFACE
                                             };
                                         window.paint_quad(
                                             gpui::fill(bounds, user_bubble_fill())
@@ -337,7 +338,7 @@ impl TranscriptView {
                                         .debug_selector(move || retry_selector.clone())
                                         .flex_shrink_0()
                                         .role(Role::Button)
-                                        .rounded(px(4.))
+                                        .rounded(px(radius::SMALL))
                                         .px_1()
                                         .py(px(2.))
                                         .text_color(content(0.7))
@@ -358,7 +359,7 @@ impl TranscriptView {
                                         .debug_selector(move || discard_selector.clone())
                                         .flex_shrink_0()
                                         .role(Role::Button)
-                                        .rounded(px(4.))
+                                        .rounded(px(radius::SMALL))
                                         .px_1()
                                         .py(px(2.))
                                         .text_color(content(0.7))

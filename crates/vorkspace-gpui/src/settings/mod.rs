@@ -1,4 +1,5 @@
 //! Settings pages, their navigation rail, and page-header actions.
+use vorkspace_ui::radius;
 mod data;
 mod dictation;
 mod keymap;
@@ -851,7 +852,7 @@ impl SettingsView {
                                 .flex_shrink_0()
                                 .items_center()
                                 .gap(px(6.))
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .px_2()
                                 .py_1()
                                 .text_size(px(12.))
@@ -890,7 +891,7 @@ impl SettingsView {
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
-                                                .rounded_sm()
+                                                .rounded(px(radius::SMALL))
                                                 .cursor_pointer()
                                                 .child(icon("x", 12.).text_color(content(0.45)))
                                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -984,7 +985,7 @@ impl SettingsView {
                                                         .flex()
                                                         .items_center()
                                                         .gap_2()
-                                                        .rounded_lg()
+                                                        .rounded(px(radius::CONTAINER))
                                                         .px_2()
                                                         .py(px(6.))
                                                         .text_size(px(12.))
@@ -1042,10 +1043,8 @@ pub(crate) fn nav(
     visible: &[Section],
     select: impl Fn(Section, &mut Window, &mut App) + Clone + 'static,
     back: impl Fn(&mut Window, &mut App) + 'static,
-    liquid: &crate::liquid::Liquid,
 ) -> AnyElement {
     let row = |id: SharedString, label: &'static str, path: &'static str, active: bool| {
-        let key = id.clone();
         div()
             .id(id.clone())
             .debug_selector(move || id.to_string())
@@ -1057,17 +1056,16 @@ pub(crate) fn nav(
             .flex()
             .items_center()
             .gap_2()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .px_2()
             .py(px(6.))
             .cursor_pointer()
-            .child(liquid.row(key, active))
             .map(|d| {
                 if active {
-                    d.text_color(content(1.))
+                    d.bg(content(0.1)).text_color(content(1.))
                 } else {
                     d.text_color(content(0.5))
-                        .hover(|s| s.text_color(content(1.)))
+                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
                 }
             })
             .child(

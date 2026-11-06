@@ -1,6 +1,41 @@
 use super::*;
 use gpui::{EntityInputHandler, TestAppContext, WindowHandle};
 use vorkspace_core::store::Store;
+/// Inspect the actual rounded fill, independent of the selection's state owner.
+pub(super) fn rounded_highlight(
+    window: WindowHandle<Shell>,
+    selector: &str,
+    alpha: f32,
+    visual: &mut gpui::VisualTestContext,
+) -> bool {
+    let bounds = visual
+        .debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
+        .unwrap_or_else(|| panic!("{selector} is visible"));
+    window
+        .update(visual, |_, window, _| {
+            let scale = window.scale_factor();
+            window.painted_quads().into_iter().any(|quad| {
+                (quad.bounds.left().0 - bounds.left().as_f32() * scale).abs() < 0.5
+                    && (quad.bounds.top().0 - bounds.top().as_f32() * scale).abs() < 0.5
+                    && (quad.bounds.size.width.0 - bounds.size.width.as_f32() * scale).abs() < 0.5
+                    && (quad.bounds.size.height.0 - bounds.size.height.as_f32() * scale).abs() < 0.5
+                    && quad
+                        .background
+                        .as_solid()
+                        .is_some_and(|color| (color.a - alpha).abs() < 0.001)
+                    && [
+                        quad.corner_radii.top_left,
+                        quad.corner_radii.top_right,
+                        quad.corner_radii.bottom_left,
+                        quad.corner_radii.bottom_right,
+                    ]
+                    .iter()
+                    .all(|radius| (radius.0 - 6. * scale).abs() < 0.5)
+            })
+        })
+        .unwrap()
+}
+
 #[gpui::test]
 fn hovering_archive_preserves_history_and_does_not_select_the_row(cx: &mut TestAppContext) {
     let (window, a, b) = window(cx);
@@ -420,7 +455,11 @@ fn tab_lifecycle_new_and_split_requests_do_not_undo_project_navigation(cx: &mut 
                     let restored: Workspace = serde_json::from_str(&saved).unwrap();
                     assert!(restored.tabs.contains(&created));
                     shell.select_project("/work/vorkspace".into(), w, cx);
-                    assert!(shell.visible_tabs(cx).contains(&TitleTab::Session(created)));
+                    assert!(
+                        shell
+                            .visible_tabs(cx)
+                            .contains(&TitleTab::Workspace(created))
+                    );
                 } else {
                     assert_eq!(shell.workspace.tabs.len(), 2);
                 }
@@ -1376,7 +1415,7 @@ fn left_tool_tabs_keep_file_review_and_shortcuts_live(cx: &mut TestAppContext) {
         let tool = visual.debug_bounds(header).unwrap();
         let review = visual.debug_bounds("review-tab-strip").unwrap();
         assert!(tool.right() <= sidebar.right());
-        assert!(review.right() <= sidebar.left());
+        assert!(review.left() >= sidebar.right());
         assert!(visual.debug_bounds("right-panel-frame").is_none());
         window
             .update(visual, |shell, w, cx| {
@@ -1622,9 +1661,10 @@ fn compact_rail_workspace_tabs_reopen_the_sidebar_without_changing_the_project(
         let rail = visual.debug_bounds("classic-project-rail").unwrap();
         let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
         assert_eq!(rail.size.width, px(48.));
+        assert_eq!(sidebar.left(), rail.right());
         assert_eq!(
-            sidebar.left(),
-            visual.debug_bounds("main-pane-frame").unwrap().right()
+            sidebar.right(),
+            visual.debug_bounds("main-pane-frame").unwrap().left()
         );
         window
             .update(visual, |shell, _, _| {
@@ -1676,13 +1716,10 @@ fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(cx: &mut
     let tabs = visual.debug_bounds("title-tab-strip").unwrap();
     assert_eq!(rail.left(), px(0.));
     assert_eq!(rail.size.width, px(200.));
-    assert_eq!(
-        sidebar.left(),
-        visual.debug_bounds("main-pane-frame").unwrap().right()
-    );
+    assert_eq!(sidebar.left(), rail.right());
     assert_eq!(sidebar.size.width, px(crate::right_panel::WIDTH_DEFAULT));
-    assert_eq!(main.left(), rail.right());
-    assert_eq!(sidebar.right(), px(1600.));
+    assert_eq!(main.left(), sidebar.right());
+    assert_eq!(main.right(), px(1600.));
     assert_eq!(rail.top(), px(0.));
     assert_eq!(sidebar.top(), px(0.));
     assert_eq!(main.top(), px(0.));
@@ -1744,16 +1781,16 @@ fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(cx: &mut
         let rail = visual.debug_bounds("classic-project-rail").unwrap();
         let main = visual.debug_bounds("main-pane-frame").unwrap();
         assert_eq!(rail.size.width, px(200.));
-        assert_eq!(main.left(), rail.right());
         assert_eq!(
-            main.right(),
-            px(1600.
-                - if visible {
+            main.left(),
+            rail.right()
+                + px(if visible {
                     crate::right_panel::WIDTH_DEFAULT
                 } else {
                     0.
                 })
         );
+        assert_eq!(main.right(), px(1600.));
         window
             .update(visual, |shell, _, cx| {
                 assert_eq!(shell.workspace.sidebar_visible, visible);
@@ -1816,7 +1853,7 @@ fn original_workspace_tabs_open_tools_on_the_left_and_remember_each_project(
         let main = visual.debug_bounds("main-pane-frame").unwrap();
         assert!(header.left() >= sidebar.left());
         assert!(header.right() <= sidebar.right());
-        assert_eq!(sidebar.left(), main.right());
+        assert_eq!(sidebar.right(), main.left());
         assert!(visual.debug_bounds("right-panel-frame").is_none());
         window
             .update(visual, |shell, _, _| {
@@ -1960,8 +1997,9 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
                         && q.bounds.size.height.0 == 32. * w.scale_factor()
                         && q.bounds.size.width.0
                             > shell.workspace.right_panel_width / 2. * w.scale_factor()
-                        && q.bounds.left().0
-                            >= (shell.viewport_width - shell.workspace.right_panel_width)
+                        && q.bounds.left().0 >= shell.classic_rail_width() * w.scale_factor()
+                        && q.bounds.right().0
+                            <= (shell.classic_rail_width() + shell.workspace.right_panel_width)
                                 * w.scale_factor()
                 })
                 .expect("selected session has a painted background")
@@ -2002,8 +2040,8 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
                 visual.debug_bounds("toggle-sidebar").unwrap().origin,
                 toggle.origin
             );
-            assert_eq!(content.right(), clip.right());
-            assert!((clip.left() - main.right()).abs() < px(1.));
+            assert_eq!(content.left(), clip.left());
+            assert!((clip.right() - main.left()).abs() < px(1.));
             window
                     .update(visual, |shell, w, _| {
                         let fraction = shell.sidebar_fraction;
@@ -2015,7 +2053,7 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
                         previous = fraction;
                         assert_eq!(content.size.width, px(shell.workspace.right_panel_width));
                         let quad = w.painted_quads().into_iter().find(|q| q.bounds == row);
-                        if clip.left().as_f32() * w.scale_factor() >= row.right().0 {
+                        if clip.right().as_f32() * w.scale_factor() <= row.left().0 {
                             assert!(quad.is_none(), "fully covered rows are culled");
                             return;
                         }
@@ -2025,11 +2063,10 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
                             (alpha - 0.1 * fraction).abs() < 0.0001,
                             "painted alpha {alpha} follows {fraction}"
                         );
-                        // The sidebar owns the 1px separator to its left;
-                        // its contents clip at the separator's inner edge.
-                        let clip_edge = (clip.left() + px(1.)).as_f32() * w.scale_factor();
+                        // The main pane covers the sidebar from its right edge.
+                        let clip_edge = clip.right().as_f32() * w.scale_factor();
                         assert!(
-                            (quad.content_mask.bounds.left().0 - clip_edge).abs() < w.scale_factor(),
+                            (quad.content_mask.bounds.right().0 - clip_edge).abs() < w.scale_factor(),
                             "row mask {:?} follows the inner sidebar clip edge {clip_edge} before main {main:?}",
                             quad.content_mask.bounds
                         );
@@ -2139,7 +2176,7 @@ fn switching_session_in_current_tab_keeps_its_slot_and_selection_settled(cx: &mu
                 let tabs = shell.visible_tabs(cx);
                 assert_eq!(
                     tabs,
-                    [TitleTab::Session(first), TitleTab::Session(expected)]
+                    [TitleTab::Workspace(first), TitleTab::Workspace(expected)]
                 );
                 let (slots, moving) = shell.title_tab_motion.sync(
                     tabs.into_iter().map(|tab| (tab, ())).collect(),
@@ -2156,7 +2193,7 @@ fn switching_session_in_current_tab_keeps_its_slot_and_selection_settled(cx: &mu
                 )));
                 assert_eq!(
                     shell.title_tab_selection.1,
-                    Some(TitleTab::Session(expected))
+                    Some(TitleTab::Workspace(expected))
                 );
                 assert!(
                     shell.title_tab_selection.0.is_none(),
@@ -2241,7 +2278,7 @@ fn tab_project_and_session_keys_follow_vorkspace(cx: &mut TestAppContext) {
         .update(cx, |shell, _, cx| {
             assert_eq!(
                 shell.visible_tabs(cx),
-                [TitleTab::Session(shell.workspace.active_tab().unwrap())]
+                [TitleTab::Workspace(shell.workspace.active_tab().unwrap())]
             );
         })
         .unwrap();
@@ -2921,8 +2958,6 @@ pub(super) fn window_with_scale(
     let ids = (a.id, b.id);
     let mut state = Workspace::default();
     state.preferences.ui_scale = scale;
-    // Most layout tests were written for the sidebar at the right edge.
-    state.preferences.sidebar_right = true;
     assert!(state.classic_layout);
     state.add_project("/work/another-project");
     state.add_project("/work/vorkspace");
@@ -3464,7 +3499,7 @@ fn panes_split_resize_and_take_drops_from_panes_tabs_and_the_sidebar(cx: &mut Te
                 click_count: 1,
                 first_mouse: false,
             };
-            shell.start_tab_drag(TitleTab::Session(b), &event, cx);
+            shell.start_tab_drag(TitleTab::Workspace(b), &event, cx);
             assert!(shell.tab_drag.is_some());
         })
         .unwrap();
@@ -3856,7 +3891,7 @@ fn reordered_tabs_slide_into_place_instead_of_jumping(cx: &mut TestAppContext) {
     window
         .update(cx, |shell, _, _| {
             // The neighbour makes room by easing toward the vacated slot.
-            let shift = shell.tab_shifts[&TitleTab::Session(b)];
+            let shift = shell.tab_shifts[&TitleTab::Workspace(b)];
             assert_eq!(shift.to, -slot);
             assert!(shift.at(shift.start).0 == 0.);
             let (later, _) = shift.at(shift.start + std::time::Duration::from_millis(80));
@@ -3873,7 +3908,7 @@ fn reordered_tabs_slide_into_place_instead_of_jumping(cx: &mut TestAppContext) {
             assert_eq!(shell.workspace.tabs, [b, a]);
             // Released short of its slot, the tab glides the rest of
             // the way rather than snapping there.
-            let shift = shell.tab_shifts[&TitleTab::Session(a)];
+            let shift = shell.tab_shifts[&TitleTab::Workspace(a)];
             assert!((shift.from - (-slot * 0.2)).abs() < 2., "{}", shift.from);
             assert_eq!(shift.to, 0.);
             let end = shift.start + std::time::Duration::from_millis(200);
@@ -4205,3 +4240,6 @@ fn reopening_activates_the_workspace_over_a_floating_window(cx: &mut TestAppCont
     cx.run_until_parked();
     assert_eq!(active(cx), Some(true));
 }
+
+#[path = "render_cache_tests.rs"]
+mod render_cache_tests;

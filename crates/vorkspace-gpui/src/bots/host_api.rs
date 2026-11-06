@@ -65,7 +65,24 @@ pub(crate) trait BotsHost {
         window: &mut Window,
         cx: &mut App,
     ) -> gpui::Result<Result<Value, String>>;
-    fn open_session(&self, id: i64, window: &mut Window, cx: &mut App);
+    fn workspace_action(
+        &self,
+        caller: i64,
+        project: &str,
+        action: &str,
+        input: &Value,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui::Result<Result<Value, String>>;
+    fn notes_action(
+        &self,
+        caller: i64,
+        projects: &[String],
+        action: &str,
+        input: &Value,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui::Result<Result<Value, String>>;
     fn open_channels(&self, window: &mut Window, cx: &mut App);
     fn project_appearance(&self, project: &str, cx: &App) -> Option<ProjectAppearance>;
     fn projects(&self, cx: &App) -> (Vec<String>, HashMap<String, ProjectAppearance>);

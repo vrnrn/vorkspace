@@ -4,7 +4,6 @@ use vorkspace_core::search::Target;
 
 pub(super) struct Open {
     pub(super) view: Entity<SearchView>,
-    restore: Option<FocusHandle>,
     _events: Subscription,
 }
 
@@ -12,38 +11,23 @@ impl Shell {
     pub(super) fn leave_app_search(&mut self, cx: &mut Context<Self>) {
         if let Some(search) = self.app_search.take() {
             self.saved_search = Some(search.view.read(cx).draft(cx));
+            self.parked_search = Some(search);
         }
-    }
-    pub(super) fn close_search_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_app_search(window, cx);
     }
     pub(super) fn close_app_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(search) = self.app_search.take() {
-            self.navigation_revision += 1;
-            self.saved_search = Some(search.view.read(cx).draft(cx));
-            self.update_chat_visibility(cx);
-            if let Some(restore) = search.restore {
-                window.focus(&restore, cx);
-            } else {
-                self.focus_active(window, cx);
-            }
-            if let Some(tab) = self.active_title_tab(cx) {
-                self.remember_title_tab(tab);
-            }
-            self.persist(cx);
-            self.invalidate_chrome(cx);
-            cx.notify();
-        }
+        self.close_app_resource(crate::workspace::AppPane::Search, window, cx);
     }
     pub(super) fn open_app_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(search) = &self.app_search {
-            window.focus(&search.view.focus_handle(cx), cx);
+        if self.app_search.is_some() || self.parked_search.is_some() {
+            self.prepare_app_view(window, cx);
+            self.leave_app_views(cx);
+            self.app_search = self.parked_search.take();
+            self.admit_app_pane(crate::workspace::AppPane::Search);
+            self.finish_app_pane_open(window, cx);
             return;
         }
         // Only restore focus captured from the conversation surface. Leaving a
         // sidebar page parks its focused input, so that handle is no longer visible.
-        let restore_conversation_focus =
-            !self.app_view_open() && !self.bot_active(cx) && self.settings.is_none();
         self.close_menu(cx);
         self.close_preview(cx);
         self.leave_app_views(cx);
@@ -54,9 +38,6 @@ impl Shell {
             self.close_settings(window, cx);
         }
         self.navigation_revision += 1;
-        let restore = restore_conversation_focus
-            .then(|| window.focused(cx))
-            .flatten();
         let conversations = self
             .sessions
             .values()
@@ -126,7 +107,7 @@ impl Shell {
             |this, _, event: &Event, window, cx| match event {
                 Event::Close => this.close_app_search(window, cx),
                 Event::Open(target, query) => {
-                    this.close_app_search(window, cx);
+                    this.leave_app_search(cx);
                     match target {
                         Target::Conversation(id) => this.open_search_session(*id, None, window, cx),
                         Target::Message { session, row } => this.open_search_session(
@@ -161,10 +142,9 @@ impl Shell {
         window.focus(&view.focus_handle(cx), cx);
         self.app_search = Some(Open {
             view,
-            restore,
             _events: events,
         });
-        self.remember_title_tab(TitleTab::Search);
+        self.admit_app_pane(crate::workspace::AppPane::Search);
         self.reveal_active_tab(cx);
         self.update_chat_visibility(cx);
         self.persist(cx);
@@ -226,7 +206,7 @@ impl Shell {
         .detach();
     }
     pub(super) fn sync_bot_search(&mut self, cx: &mut Context<Self>) {
-        let Some(search) = &self.app_search else {
+        let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) else {
             return;
         };
         let views = self
@@ -250,7 +230,7 @@ impl Shell {
         }
     }
     pub(super) fn sync_search_session(&mut self, id: i64, cx: &mut Context<Self>) {
-        let Some(search) = &self.app_search else {
+        let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) else {
             return;
         };
         let Some(session) = self.sessions.get(&id) else {

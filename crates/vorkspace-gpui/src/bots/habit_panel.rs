@@ -1,51 +1,27 @@
-//! Bot details content inside the shell's shared right sidebar.
+//! Habit list and editor navigation inside Bot settings.
 use super::panel_stack::{PanelStack, Pose};
 use super::*;
 use vorkspace_ui::clock::Instant;
 
-impl Bots {
-    pub(crate) fn native_detail_content(&self, cx: &App) -> bool {
-        self.details.read(cx).native_content()
-            || matches!(&self.route, Some(Route::Document(id))
-                if self.current().is_some_and(|m| m.documents.iter().any(|d| &d.id == id && d.kind == "html")))
-    }
-}
-
-pub(crate) struct Overview {
+pub(crate) struct HabitPanel {
     manager: WeakEntity<Bots>,
     focus: gpui::FocusHandle,
-    top_inset: f32,
     stack: PanelStack,
-    native_content: bool,
     _observation: Subscription,
 }
 
-impl Overview {
+impl HabitPanel {
     pub(super) fn new(manager: Entity<Bots>, cx: &mut Context<Self>) -> Self {
         Self {
             manager: manager.downgrade(),
             focus: cx.focus_handle(),
-            top_inset: 0.,
             stack: PanelStack::default(),
-            native_content: false,
             _observation: cx.observe(&manager, |_, _, cx| cx.notify()),
         }
     }
 
-    pub(crate) fn set_top_inset(&mut self, inset: f32, cx: &mut Context<Self>) {
-        if self.top_inset != inset {
-            self.top_inset = inset;
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn native_content(&self) -> bool {
-        self.native_content
-    }
-
     pub(super) fn reset(&mut self, cx: &mut Context<Self>) {
         self.stack = PanelStack::default();
-        self.native_content = false;
         cx.notify();
     }
 
@@ -76,13 +52,13 @@ fn layer(id: String, pose: Pose, interactive: bool, body: AnyElement) -> AnyElem
         .into_any_element()
 }
 
-impl Focusable for Overview {
+impl Focusable for HabitPanel {
     fn focus_handle(&self, _: &App) -> gpui::FocusHandle {
         self.focus.clone()
     }
 }
 
-impl Render for Overview {
+impl Render for HabitPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
         let state = self
@@ -93,7 +69,6 @@ impl Render for Overview {
             .ok()
             .flatten();
         let mut layers = Vec::new();
-        self.native_content = false;
         if let Some((bot, route)) = state {
             let changed = self.stack.sync(&bot.id, route, now);
             if changed && self.focus.contains_focused(window, cx) {
@@ -103,15 +78,12 @@ impl Render for Overview {
             if frame.animating {
                 window.request_animation_frame();
             }
-            self.native_content = frame.pages.iter().any(|page| {
-                matches!(&page.route, Route::Document(id) if bot.documents.iter().any(|d| &d.id == id && d.kind == "html"))
-            });
             let _ = self.manager.update(cx, |m, cx| {
                 layers.push(layer(
                     "bot-detail-base".into(),
                     frame.base,
                     !frame.covered,
-                    m.overview_panel(&bot, window, cx),
+                    m.habits_settings(&bot, cx),
                 ));
                 for page in frame.pages {
                     let key = format!("bot-detail-page-{}", page.route.key());
@@ -121,25 +93,16 @@ impl Render for Overview {
             });
         }
         div()
-            .id("bot-overview-panel")
-            .debug_selector(|| "bot-overview-panel".into())
+            .id("bot-habits-panel")
+            .debug_selector(|| "bot-habits-panel".into())
             .role(Role::Complementary)
-            .aria_label("Bot details")
+            .aria_label("Habits")
             .track_focus(&self.focus)
             .size_full()
             .min_w_0()
             .min_h_0()
             .flex()
             .flex_col()
-            .when(self.top_inset > 0., |d| {
-                d.child(
-                    div()
-                        .h(px(self.top_inset))
-                        .flex_shrink_0()
-                        .border_b_1()
-                        .border_color(crate::panel_kit::stroke()),
-                )
-            })
             .child(
                 div()
                     .id("bot-detail-stack")

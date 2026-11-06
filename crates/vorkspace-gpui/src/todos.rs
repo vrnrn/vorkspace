@@ -212,15 +212,6 @@ impl TodoBoardView {
         self.board.as_ref()
     }
 
-    pub(crate) fn open_count(&self) -> Option<usize> {
-        self.loaded.then(|| {
-            self.items
-                .iter()
-                .filter(|item| item.status != TodoStatus::Done)
-                .count()
-        })
-    }
-
     #[cfg(test)]
     pub(crate) fn items(&self) -> &[TodoItem] {
         &self.items

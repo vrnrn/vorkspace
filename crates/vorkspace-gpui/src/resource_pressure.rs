@@ -1,3 +1,4 @@
+use vorkspace_ui::radius;
 // A sidebar warning while the machine is under pressure, opening the running
 // work vorkspace owns so it can be stopped.
 use crate::{panel_kit::spinner, popover::AnchorSlot};
@@ -347,7 +348,7 @@ impl ResourceMonitor {
                             .flex()
                             .items_start()
                             .gap(px(10.))
-                            .rounded_lg()
+                            .rounded(px(radius::CONTAINER))
                             .bg(content(0.04))
                             .px_3()
                             .py(px(10.))
@@ -501,7 +502,7 @@ impl ResourceMonitor {
                         div()
                             .size(px(24.))
                             .flex_shrink_0()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .bg(content(0.05))
                             .flex()
                             .items_center()
@@ -530,7 +531,7 @@ impl ResourceMonitor {
                                 .flex()
                                 .items_center()
                                 .gap(px(6.))
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .bg(content(0.06))
                                 .px(px(10.))
                                 .text_size(px(12.))
@@ -676,7 +677,7 @@ impl ResourceMonitor {
                         }
                     ))
                     .flex_shrink_0()
-                    .rounded_sm()
+                    .rounded(px(radius::SMALL))
                     .px(px(6.))
                     .py_1()
                     .text_size(px(11.))
@@ -725,9 +726,11 @@ impl Render for ResourceMonitor {
                         .tab_index(0)
                         .map(|d| {
                             if self.compact {
-                                d.size(px(32.)).justify_center().rounded_md()
+                                d.size(px(32.))
+                                    .justify_center()
+                                    .rounded(px(radius::CONTROL))
                             } else if classic {
-                                d.h(px(20.)).px(px(6.)).rounded_md()
+                                d.h(px(20.)).px(px(6.)).rounded(px(radius::CONTROL))
                             } else {
                                 d.h(px(20.)).px_2().rounded_full()
                             }

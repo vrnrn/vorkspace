@@ -4,25 +4,21 @@ use super::*;
 impl Shell {
     /// App.tsx's `insetRightPanelShown`: open (or sliding shut), over a
     /// project, and not covered by an app view.
-    pub(super) fn right_panel_shown(&self, cx: &App) -> bool {
-        self.bot_details_active(cx)
+    pub(super) fn right_panel_shown(&self, _cx: &App) -> bool {
+        !self.workspace.classic_layout
+            && self.has_session_panes()
             && (self.workspace.right_panel_open || self.right_slide.is_some())
-            && !self.app_view_open()
             && self.settings.is_none()
-            && self.app_search.is_none()
-            && (self.bot_active(cx) || self.git.read(cx).available())
     }
     pub(super) fn sync_right_panel(&mut self, cx: &mut Context<Self>) {
         let opening = self.right_slide.as_ref().is_some_and(PaneSlide::opening);
         let classic_tools = self.workspace.classic_layout
-            && (self.workspace.sidebar_visible || self.peek_open())
+            && self.workspace.sidebar_visible
             && self.workspace.sidebar_tab() != crate::workspace::SidebarTab::Sessions;
-        let shown = !self.bot_active(cx)
-            && (classic_tools
-                || (!self.workspace.classic_layout && self.workspace.right_panel_open && !opening))
-            && !self.app_view_open()
-            && self.settings.is_none()
-            && self.app_search.is_none();
+        let shown = (classic_tools
+            || (!self.workspace.classic_layout && self.workspace.right_panel_open && !opening))
+            && self.has_session_panes()
+            && self.settings.is_none();
         let tab = if self.workspace.classic_layout {
             self.classic_tool_tab()
         } else {
@@ -38,10 +34,7 @@ impl Shell {
         }
     }
     pub(super) fn toggle_right_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.bot_active(cx) && !self.bot_details_active(cx) {
-            return;
-        }
-        if self.workspace.classic_layout && !self.bot_active(cx) {
+        if self.workspace.classic_layout {
             self.toggle_sidebar(window, cx);
             return;
         }
@@ -53,10 +46,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.bot_active(cx) && !self.bot_details_active(cx) {
-            return;
-        }
-        if self.workspace.classic_layout && !self.bot_active(cx) {
+        if self.workspace.classic_layout {
             let tab = if open {
                 self.right_panel
                     .as_ref()
@@ -68,21 +58,13 @@ impl Shell {
             self.select_classic_sidebar(tab, window, cx);
             return;
         }
-        if self.app_view_open()
-            || (!self.bot_active(cx) && !self.git.read(cx).available())
+        if !self.has_session_panes()
+            || !self.git.read(cx).available()
             || self.workspace.right_panel_open == open
         {
             return;
         }
-        let details_focus = if let Some(bots) = self
-            .bots
-            .as_ref()
-            .filter(|m| m.read(cx).active.is_some() || m.read(cx).classic_channels_open())
-        {
-            Some(bots.read(cx).details.focus_handle(cx))
-        } else {
-            self.right_panel.as_ref().map(|p| p.focus_handle(cx))
-        };
+        let details_focus = self.right_panel.as_ref().map(|p| p.focus_handle(cx));
         if !open
             && details_focus
                 .as_ref()
@@ -99,10 +81,7 @@ impl Shell {
             None => PaneSlide::new(if open { 0. } else { full }, to, full),
         });
         self.sync_right_panel(cx);
-        if open
-            && !self.bot_active(cx)
-            && let Some(panel) = self.right_panel.clone()
-        {
+        if open && let Some(panel) = self.right_panel.clone() {
             panel.update(cx, |p, cx| p.focus_pane(window, cx));
         }
         self.fit_sidebar(cx);
@@ -245,28 +224,7 @@ impl Shell {
         full: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let content = if let Some(bots) = self
-            .bots
-            .as_ref()
-            .filter(|m| m.read(cx).active.is_some() || m.read(cx).classic_channels_open())
-        {
-            let manager = bots.read(cx);
-            let details = manager.details.clone();
-            let html = manager.native_detail_content(cx);
-            // Native artifact views must update their frames and clipping
-            // on every paint; replaying cached GPU quads skips that work.
-            if html {
-                details.into_any_element()
-            } else {
-                details
-                    .cached(StyleRefinement::default().size_full())
-                    .into_any_element()
-            }
-        } else {
-            panel
-                .cached(StyleRefinement::default().size_full())
-                .into_any_element()
-        };
+        let content = panel.cached(StyleRefinement::default().size_full());
         div()
             .id("right-panel-frame")
             .debug_selector(|| "right-panel-frame".into())

@@ -1,6 +1,7 @@
 use super::*;
 use crate::shell::tests::window;
 use gpui::TestAppContext;
+use vorkspace_ui::radius;
 
 #[gpui::test]
 fn the_open_rail_holds_navigation_at_low_zoom(cx: &mut TestAppContext) {
@@ -30,8 +31,8 @@ fn the_open_rail_holds_navigation_at_low_zoom(cx: &mut TestAppContext) {
             forward.right() <= rail.right(),
             "{scale}%: {forward:?} {rail:?}"
         );
-        // No second title row pushes the page down.
-        assert_eq!(header.top(), pane.top(), "{scale}%");
+        // Search shares one title row with the other workspace tabs.
+        assert_eq!(header.top(), pane.top() + px(TITLE_BAR_HEIGHT), "{scale}%");
         // The saved width is untouched for when zoom rises again.
         window
             .update(visual, |shell, _, _| {
@@ -64,30 +65,27 @@ fn the_icon_rail_divider_curves_into_the_title_rule(cx: &mut TestAppContext) {
             })
             .unwrap()
     };
-    for sidebar_right in [true, false] {
-        window
-            .update(visual, |shell, w, cx| {
-                shell.workspace.project_rail_open = false;
-                shell.workspace.preferences.sidebar_right = sidebar_right;
-                shell.open(session, w, cx);
-                shell.set_sidebar_visible(false, cx);
-                shell.invalidate_chrome(cx);
-                cx.notify();
-            })
-            .unwrap();
-        vorkspace_ui::clock::settle_animations(window, visual);
-        let rail = visual.debug_bounds("classic-project-rail").unwrap();
-        window
-            .update(visual, |shell, _, _| assert!(shell.rail_meets_title_rule()))
-            .unwrap();
-        // The rule leaves the corner to the divider's curve.
-        assert_eq!(
-            lead_rule_left(visual),
-            rail.right().as_f32() + crate::liquid::PANE_RADIUS,
-            "sidebar_right={sidebar_right} rail={rail:?} pane={:?}",
-            visual.debug_bounds("main-pane-frame")
-        );
-    }
+    window
+        .update(visual, |shell, w, cx| {
+            shell.workspace.project_rail_open = false;
+            shell.open(session, w, cx);
+            shell.set_sidebar_visible(false, cx);
+            shell.invalidate_chrome(cx);
+            cx.notify();
+        })
+        .unwrap();
+    vorkspace_ui::clock::settle_animations(window, visual);
+    let rail = visual.debug_bounds("classic-project-rail").unwrap();
+    window
+        .update(visual, |shell, _, _| assert!(shell.rail_meets_title_rule()))
+        .unwrap();
+    // The rule leaves the corner to the divider's curve.
+    assert_eq!(
+        lead_rule_left(visual),
+        rail.right().as_f32() + radius::SURFACE,
+        "rail={rail:?} pane={:?}",
+        visual.debug_bounds("main-pane-frame")
+    );
     // A left sidebar takes the overhang, and the rule, in its own row.
     window
         .update(visual, |shell, _, cx| {
@@ -105,7 +103,7 @@ fn the_icon_rail_divider_curves_into_the_title_rule(cx: &mut TestAppContext) {
     assert_eq!(row.right(), sidebar.right());
     assert_eq!(
         lead_rule_left(visual),
-        rail.right().as_f32() + crate::liquid::PANE_RADIUS
+        rail.right().as_f32() + radius::SURFACE
     );
     // The pane's tabs start at its edge; navigation does not reach it.
     // Inside the pane's own 1px border beside the sidebar.
@@ -114,7 +112,7 @@ fn the_icon_rail_divider_curves_into_the_title_rule(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_sidebar_tabs_rise_from_their_line(cx: &mut TestAppContext) {
+fn the_sidebar_tabs_keep_rounded_highlights_above_their_divider(cx: &mut TestAppContext) {
     vorkspace_ui::clock::use_test_clock(cx);
     let (window, _, session) = window(cx);
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
@@ -128,16 +126,33 @@ fn the_sidebar_tabs_rise_from_their_line(cx: &mut TestAppContext) {
         })
         .unwrap();
     vorkspace_ui::clock::settle_animations(window, visual);
-    let selected = |visual: &mut gpui::VisualTestContext| {
-        window
-            .update(visual, |shell, _, _| shell.sidebar_tab_liquid.selected())
-            .unwrap()
-    };
-    assert_eq!(selected(visual).as_deref(), Some("sidebar-tab:Sessions"));
+    use crate::shell::tests::rounded_highlight;
+    assert!(rounded_highlight(
+        window,
+        "classic-tab-sessions",
+        0.1,
+        visual
+    ));
+    let bar = visual.debug_bounds("classic-workspace-tabs").unwrap();
+    let sessions = visual.debug_bounds("classic-tab-sessions").unwrap();
+    assert!(sessions.top() > bar.top());
+    assert!(sessions.bottom() < bar.bottom());
     let changes = visual.debug_bounds("classic-tab-changes").unwrap();
     visual.simulate_click(changes.center(), Default::default());
-    vorkspace_ui::clock::settle_animations(window, visual);
-    assert_eq!(selected(visual).as_deref(), Some("sidebar-tab:Changes"));
+    visual.simulate_mouse_move(gpui::point(px(5.), px(5.)), None, Default::default());
+    visual.run_until_parked();
+    assert!(rounded_highlight(
+        window,
+        "classic-tab-changes",
+        0.1,
+        visual
+    ));
+    assert!(!rounded_highlight(
+        window,
+        "classic-tab-sessions",
+        0.1,
+        visual
+    ));
 }
 
 #[gpui::test]

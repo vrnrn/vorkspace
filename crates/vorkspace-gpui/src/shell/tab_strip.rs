@@ -1,5 +1,6 @@
 //! The tab strip: labels, close rules, dragging and shift animation.
 use super::*;
+use vorkspace_ui::radius;
 
 impl Shell {
     pub(super) fn close_other_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -29,9 +30,8 @@ impl Shell {
             self.open_title_tab(tab, window, cx);
         }
     }
-    /// App.tsx's toTitleTab with TitleBar's tabCopy: a split tab, or a chat
-    /// with a file beside it, heads with the focused pane and names the rest
-    /// on a second line.
+    /// A mixed tab heads with its focused pane and names the other panes on
+    /// subsequent lines as focus moves.
     pub(super) fn tab_copy(&self, tab: i64, cx: &App) -> TabCopy {
         let focus = self.workspace.tab_focus(tab);
         let review = |id: &i64| {
@@ -41,7 +41,7 @@ impl Shell {
                 .filter(|r| !r.tabs.is_empty())
         };
         let mut leaves = self.workspace.layout(tab).leaf_ids();
-        // Focused first, as harnesses and files are ordered.
+        // Focused first when choosing the fallback session and file labels.
         if let Some(ix) = leaves.iter().position(|id| *id == focus) {
             let id = leaves.remove(ix);
             leaves.insert(0, id);
@@ -53,6 +53,11 @@ impl Shell {
             .filter(|id| !review(id).is_some_and(|r| r.chat_hidden))
             .filter(|id| self.session_summaries.contains_key(id))
             .collect();
+        let app_focused = self.workspace.app_panes.contains_key(&focus);
+        let app_panes = leaves
+            .iter()
+            .filter(|id| self.workspace.app_panes.contains_key(*id))
+            .count();
         let mut files = Vec::new();
         for id in &leaves {
             if let Some(r) = review(id) {
@@ -66,10 +71,10 @@ impl Shell {
             }
         }
         let file_panes = leaves.iter().filter(|id| review(id).is_some()).count();
-        let multi_pane = sessions.len() + file_panes > 1;
+        let multi_pane = sessions.len() + app_panes + file_panes > 1;
         let session_focused = sessions.first() == Some(&focus);
-        let file_focused =
-            !session_focused || (self.tab_review_focused(tab, cx) && review(&focus).is_some());
+        let file_focused = !app_focused
+            && (!session_focused || (self.tab_review_focused(tab, cx) && review(&focus).is_some()));
         let title = |id: &i64| {
             let title = self.session_metadata(*id, cx).display_title();
             if title == "New session" {
@@ -81,7 +86,9 @@ impl Shell {
         let conversation = sessions.first().map(title).unwrap_or_default();
         let file = files.first().cloned().unwrap_or_default();
         let untitled = "New session".to_owned();
-        let headline = if multi_pane && file_focused && !file.is_empty() {
+        let headline = if app_focused {
+            self.pane_title(focus, cx)
+        } else if multi_pane && file_focused && !file.is_empty() {
             file
         } else {
             [conversation, file]
@@ -89,8 +96,8 @@ impl Shell {
                 .find(|t| !t.is_empty())
                 .unwrap_or_else(|| untitled.clone())
         };
-        // Layout order, a chat before the file beside it, so moving focus
-        // right or down rolls the headline up.
+        // Layout order, a chat before its file side, so moving focus right
+        // or down rolls the headline up.
         let mut panes = Vec::new();
         for id in self.workspace.layout(tab).leaf_ids() {
             if sessions.contains(&id) {
@@ -107,6 +114,13 @@ impl Shell {
                         title
                     },
                     mark: PaneMark::Session(session.summary.provider.clone(), lit.then_some(id)),
+                });
+            }
+            if self.workspace.app_panes.contains_key(&id) {
+                panes.push(TabPane {
+                    key: (id, false),
+                    title: self.pane_title(id, cx),
+                    mark: self.app_pane_mark(id, cx),
                 });
             }
             if let Some(r) = review(&id)
@@ -130,11 +144,31 @@ impl Shell {
             focus,
         }
     }
-    /// A pane's mark: its provider, spinning while it works and checked when
-    /// it finished unseen, or the file's icon.
+    fn app_pane_mark(&self, id: i64, cx: &App) -> PaneMark {
+        if let Some(crate::workspace::AppPane::Bot(bot)) =
+            self.workspace.app_panes.get(&id).map(|pane| &pane.content)
+            && let Some(bot) = self
+                .bots
+                .as_ref()
+                .and_then(|manager| manager.read(cx).presentation_bot(bot))
+        {
+            return PaneMark::Bot(crate::avatar::BotLookConfig::from_bot(&bot));
+        }
+        PaneMark::App(self.pane_icon(id))
+    }
+
+    /// A pane's provider, file icon, or the same custom Bot avatar as the rail.
     pub(super) fn pane_mark(&self, mark: &PaneMark, active: bool) -> AnyElement {
         let ink = content(if active { 1. } else { 0.5 });
+        let side = if matches!(mark, PaneMark::Bot(_)) {
+            16.
+        } else {
+            14.
+        };
         let mark = match mark {
+            PaneMark::Bot(look) => {
+                crate::avatar::avatar_with_look(look.clone(), "idle", side, true)
+            }
             PaneMark::Session(provider, lit) => match lit.and_then(|id| self.tab_marks.get(&id)) {
                 Some(mark) => mark
                     .clone()
@@ -148,9 +182,10 @@ impl Shell {
                 vorkspace_ui::file_icons::file_type_icon(name, false, false, 14.)
             }
             PaneMark::File(None) => icon("git-compare", 14.).text_color(ink).into_any_element(),
+            PaneMark::App(name) => icon(name, 14.).text_color(ink).into_any_element(),
         };
         div()
-            .size(px(14.))
+            .size(px(side))
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -247,7 +282,7 @@ impl Shell {
         }
         (from, tick.dir, vorkspace_ui::reveal::ease_move(t))
     }
-    /// The dragged session's title, following the pointer.
+    /// The dragged pane's title, following the pointer.
     pub(super) fn drag_ghost(&self, cx: &App) -> Option<AnyElement> {
         let drag = self.pane_drag.as_ref().filter(|d| d.active)?;
         let id = drag.source.session();
@@ -256,15 +291,28 @@ impl Shell {
         .then(|| self.workspace.reviews.get(&id))
         .flatten()
         .and_then(|r| r.tabs.get(r.active));
-        let owner = self.workspace.session_for_pane(id);
-        self.session_summaries.get(&owner)?;
-        let session = self.session_metadata(owner, cx);
-        let title = if let Some(tab) = review {
-            tab.label()
-        } else if self.workspace.review_owners.contains_key(&id) {
-            self.tab_copy(id, cx).headline
+        let (title, mark) = if let Some(tab) = review {
+            let title = tab.label();
+            let mark = PaneMark::File(
+                matches!(tab, crate::git_tools::review::ReviewTab::File { .. })
+                    .then(|| title.clone()),
+            );
+            (title, mark)
+        } else if self.workspace.app_panes.contains_key(&id) {
+            (self.pane_title(id, cx), self.app_pane_mark(id, cx))
         } else {
-            session.display_title()
+            let owner = self.workspace.session_for_pane(id)?;
+            self.session_summaries.get(&owner)?;
+            let session = self.session_metadata(owner, cx);
+            let title = if self.workspace.review_owners.contains_key(&id) {
+                self.tab_copy(id, cx).headline
+            } else {
+                session.display_title()
+            };
+            (
+                title,
+                PaneMark::Session(session.summary.provider.clone(), None),
+            )
         };
         Some(
             div()
@@ -277,22 +325,14 @@ impl Shell {
                 .flex()
                 .items_center()
                 .gap(px(6.))
-                .rounded_md()
+                .rounded(px(radius::CONTROL))
                 .border_1()
                 .border_color(content(0.1))
                 .bg(pane_fill())
                 .shadow_md()
                 .text_size(px(12.))
                 .text_color(content(1.))
-                .child(if let Some(tab) = review {
-                    if matches!(tab, crate::git_tools::review::ReviewTab::File { .. }) {
-                        vorkspace_ui::file_icons::file_type_icon(&tab.label(), false, false, 14.)
-                    } else {
-                        icon("git-compare", 14.).into_any_element()
-                    }
-                } else {
-                    provider_icon(&session.summary.provider, 14.).into_any_element()
-                })
+                .child(self.pane_mark(&mark, true))
                 .child(div().min_w_0().truncate().child(title))
                 .into_any_element(),
         )
@@ -302,6 +342,13 @@ impl Shell {
             return false;
         };
         let layout = self.workspace.layout(tab);
+        if layout
+            .leaf_ids()
+            .iter()
+            .any(|id| self.workspace.app_panes.contains_key(id))
+        {
+            return true;
+        }
         self.visible_tabs(cx).len() > 1
             || layout.is_split()
             || layout.leaf_ids().iter().any(|id| {
@@ -536,16 +583,14 @@ impl Shell {
     /// panel toggle, `pl-1.5 pr-3` clear of the edge.
     pub(super) fn tabs_width(&self, window: &Window, cx: &App) -> f32 {
         let sidebar = self.workspace.right_panel_width * self.sidebar_fraction;
-        let left = !self.workspace.preferences.sidebar_right;
         let trailing = if self.workspace.classic_layout {
-            (if left { 0. } else { sidebar }) + self.right_drawn + self.strip_trail(cx)
+            self.right_drawn + self.strip_trail(cx)
         } else {
             self.toggle_room(cx)
         };
-        // Tabs start beside the project rail; both right-hand sidebars consume
-        // trailing space without moving the tab strip's leading edge.
+        // Tabs begin after the project rail and its optional left sidebar.
         let lead = if self.workspace.classic_layout {
-            self.classic_rail_width() + if left { sidebar } else { 0. } + self.strip_lead(window)
+            self.classic_rail_width() + sidebar + self.strip_lead(window)
         } else {
             self.navigation_width(window)
         };
@@ -695,36 +740,25 @@ impl Shell {
             .retain(|id, _| self.workspace.tabs.contains(id));
         let mut copies = HashMap::new();
         for id in tabs.iter().filter_map(|tab| tab.session()) {
-            if self
-                .session_summaries
-                .contains_key(&self.workspace.session_for_pane(id))
-            {
-                let copy = self.tab_copy(id, cx);
-                let tick = self.pane_tick(
-                    id,
-                    &copy,
-                    animate && !selection_changed && selected == Some(TitleTab::Session(id)),
-                );
-                moving |= tick.0.is_some();
-                copies.insert(id, (copy, tick));
+            let copy = self.tab_copy(id, cx);
+            if copy.panes.is_empty() {
+                continue;
             }
+            let tick = self.pane_tick(
+                id,
+                &copy,
+                animate && !selection_changed && selected == Some(TitleTab::Workspace(id)),
+            );
+            moving |= tick.0.is_some();
+            copies.insert(id, (copy, tick));
         }
-        let mut session_elements: HashMap<i64, AnyElement> =
+        let mut workspace_elements: HashMap<i64, AnyElement> =
             tabs.iter()
                 .enumerate()
-                .filter_map(|(ix, tab)| {
-                    tab.session().and_then(|id| {
-                        self.session_summaries
-                            .contains_key(&self.workspace.session_for_pane(id))
-                            .then_some((ix, id))
-                    })
-                })
+                .filter_map(|(ix, tab)| tab.session().map(|id| (ix, id)))
                 .filter_map(|(ix, id)| {
                     let (copy, (leaving, dir, progress)) = copies.remove(&id)?;
-                    let active = self.workspace.active_tab() == Some(id)
-                        && !self.app_view_open()
-                        && !self.bot_active(cx)
-                        && self.app_search.is_none();
+                    let active = self.workspace.active_tab() == Some(id);
                     // The press itself redraws the strip to arm tab dragging.
                     // Keep its ink stable until that press is released, even if
                     // hover hitboxes are being replaced during that redraw.
@@ -732,15 +766,15 @@ impl Shell {
                         || self
                             .tab_drag
                             .as_ref()
-                            .is_some_and(|drag| drag.id == TitleTab::Session(id) && !drag.active);
+                            .is_some_and(|drag| drag.id == TitleTab::Workspace(id) && !drag.active);
                     // A collapsed tab drops its close button, so a click anywhere
                     // on it selects it; selected, it is wide enough to show it again.
                     let close = self.tab_can_close(id, cx)
-                        && (active || tab_width(&TitleTab::Session(id)) >= TAB_CLOSE_MIN_WIDTH);
+                        && (active || tab_width(&TitleTab::Workspace(id)) >= TAB_CLOSE_MIN_WIDTH);
                     let dragging = self
                         .tab_drag
                         .as_ref()
-                        .is_some_and(|d| d.id == TitleTab::Session(id) && d.active);
+                        .is_some_and(|d| d.id == TitleTab::Workspace(id) && d.active);
                     let tab = vorkspace_ui::theme::keyboard_reachable(
                         div().id(("tab", id as usize)),
                         true,
@@ -751,7 +785,7 @@ impl Shell {
                     .aria_label(copy.headline.clone())
                     .aria_selected(active)
                     .cursor(CursorStyle::Arrow)
-                    .w(px(tab_width(&TitleTab::Session(id))))
+                    .w(px(tab_width(&TitleTab::Workspace(id))))
                     .flex_shrink_0()
                     .h(px(TITLE_BAR_HEIGHT))
                     .relative()
@@ -761,19 +795,21 @@ impl Shell {
                     .child(
                         title_tab_plate(active, hovered)
                             .id(("tab-plate", id as usize))
+                            .debug_selector(move || format!("title-tab-plate-{id}"))
                             .relative()
-                            .child(self.tab_liquid.row(format!("tab:{id}"), active))
                             .w_full()
                             .min_w_0()
                             // A narrow tab keeps its mark; the close button
                             // overlays it on hover instead of taking room.
                             .when(
-                                close && tab_width(&TitleTab::Session(id)) >= TAB_CLOSE_MIN_WIDTH,
+                                close && tab_width(&TitleTab::Workspace(id)) >= TAB_CLOSE_MIN_WIDTH,
                                 |d| d.pr_7(),
                             )
                             // Too narrow for the plate's padding: the mark sits centred.
-                            .when(tab_width(&TitleTab::Session(id)) < 30., |d| {
-                                d.px(px(((tab_width(&TitleTab::Session(id)) - 14.) / 2.).max(0.)))
+                            .when(tab_width(&TitleTab::Workspace(id)) < 30., |d| {
+                                d.px(px(
+                                    ((tab_width(&TitleTab::Workspace(id)) - 14.) / 2.).max(0.)
+                                ))
                             })
                             .gap(px(6.))
                             .child(self.pane_headline(
@@ -793,9 +829,9 @@ impl Shell {
                                 .aria_label(format!("Close tab {}", copy.headline))
                                 .absolute()
                                 .right_1()
-                                .top(px(10. + TAB_LABEL_DROP))
+                                .top(px(10.))
                                 .size(px(20.))
-                                .rounded_sm()
+                                .rounded(px(radius::SMALL))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -850,7 +886,7 @@ impl Shell {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, event, _, cx| {
-                            this.start_tab_drag(TitleTab::Session(id), event, cx)
+                            this.start_tab_drag(TitleTab::Workspace(id), event, cx)
                         }),
                     )
                     .on_hover(cx.listener(move |this, hovered, _, cx| {
@@ -883,7 +919,7 @@ impl Shell {
                         if std::mem::take(&mut this.skip_tab_click) {
                             return;
                         }
-                        this.open_title_tab(&TitleTab::Session(id), window, cx);
+                        this.open_title_tab(&TitleTab::Workspace(id), window, cx);
                     }));
                     let element = if dragging {
                         gpui::deferred(tab).with_priority(1).into_any()
@@ -898,7 +934,7 @@ impl Shell {
             .enumerate()
             .filter_map(|(ix, tab)| {
                 let element = match tab {
-                    TitleTab::Session(id) => session_elements.remove(id)?,
+                    TitleTab::Workspace(id) => workspace_elements.remove(id)?,
                     TitleTab::Terminal { .. } | TitleTab::Bot { .. } => {
                         let element = self
                             .simple_title_tab(tab, tab_width(tab), cx)?
@@ -946,17 +982,13 @@ impl Shell {
                 }
                 vorkspace_ui::tab_motion::Slot::Closing { key, open, .. } => {
                     let w = tab_width(&key);
-                    // A closed conversation stays loaded, so its copy still reads.
-                    let headline = key
-                        .session()
-                        .filter(|id| {
-                            self.session_summaries
-                                .contains_key(&self.workspace.session_for_pane(*id))
-                        })
-                        .map(|id| {
-                            let copy = self.tab_copy(id, cx);
-                            self.pane_headline(&copy, (None, 0., 1.), false, false)
-                        });
+                    // A closed pane descriptor stays loaded while its tab
+                    // animates out, so the headline remains readable.
+                    let headline = key.session().and_then(|id| {
+                        let copy = self.tab_copy(id, cx);
+                        (!copy.panes.is_empty())
+                            .then(|| self.pane_headline(&copy, (None, 0., 1.), false, false))
+                    });
                     Some(
                         slot(&key, open)
                             .child(
@@ -988,8 +1020,8 @@ impl Shell {
             .flex()
             .items_center()
             .overflow_hidden()
-            // The line beneath the tabs, and their pills rising out of it.
-            .child(self.tab_liquid.surface(None, false))
+            .border_b_1()
+            .border_color(crate::panel_kit::stroke())
             .child(
                 div()
                     .id("session-tabs")
@@ -1015,14 +1047,13 @@ impl Shell {
                             .size(px(TAB_PLATE_HEIGHT))
                             .flex_shrink_0()
                             .ml(px(new_tab_lead))
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .relative()
-                            .child(self.tab_liquid.row("new-tab", false))
                             .opacity(0.65)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .hover(|s| s.opacity(1.))
+                            .hover(|s| s.opacity(1.).bg(content(0.07)))
                             .child(
                                 icon("plus", 14.)
                                     .group_hover("new-tab", |s| s.text_color(content(1.))),

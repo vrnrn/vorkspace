@@ -148,7 +148,7 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
                 assert!(
                     shell
                         .visible_tabs(cx)
-                        .contains(&TitleTab::Session(feature_session)),
+                        .contains(&TitleTab::Workspace(feature_session)),
                     "opening a worktree chat keeps its tab in the current workspace"
                 );
                 assert!(shell
@@ -220,7 +220,7 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
             assert!(
                 shell
                     .visible_tabs(cx)
-                    .contains(&TitleTab::Session(main_session))
+                    .contains(&TitleTab::Workspace(main_session))
             );
             assert_eq!(shell.terminal_cwd(cx), project);
             assert_eq!(

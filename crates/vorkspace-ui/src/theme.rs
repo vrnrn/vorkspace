@@ -1,3 +1,4 @@
+use crate::radius;
 use gpui::{CursorStyle, Div, Hsla, Role, Stateful, Svg, div, img, prelude::*, px, rgb, rgba, svg};
 // Shared appearance tokens. Interaction fills use translucent content ink
 // rather than opaque replacement greys.
@@ -28,9 +29,6 @@ pub const TITLE_TAB_MAX_WIDTH: f32 = 224.;
 pub const PANE_HEADER_HEIGHT: f32 = 36.;
 /// Every tab's plate: title, file and terminal tabs, and the new-tab button.
 pub const TAB_PLATE_HEIGHT: f32 = 27.;
-/// How far a tab's label and close button sit below the bar's centre, so
-/// they centre in the pill that runs from the plate down to the bar's line.
-pub const TAB_LABEL_DROP: f32 = 3.;
 
 /// Attachment previews keep a fixed crop, independent of image dimensions.
 pub fn attachment_thumbnail(source: impl Into<gpui::ImageSource>) -> gpui::AnyElement {
@@ -41,14 +39,14 @@ pub fn attachment_thumbnail(source: impl Into<gpui::ImageSource>) -> gpui::AnyEl
         .max_w(px(36.))
         .max_h(px(36.))
         .flex_shrink_0()
-        .rounded_lg()
+        .rounded(px(radius::CONTAINER))
         .overflow_hidden()
         .child(
             img(source)
                 .size(px(36.))
                 .aspect_square()
                 .flex_shrink_0()
-                .rounded_lg()
+                .rounded(px(radius::CONTAINER))
                 .object_fit(gpui::ObjectFit::Cover),
         )
         .into_any_element()
@@ -246,18 +244,16 @@ pub fn title_tab_fill(selected: bool, hovered: bool) -> Hsla {
     })
 }
 
-/// The plate for session tabs in the title bar. Its fill is a pill rising
-/// from the line beneath the tabs (`crate::liquid`), so the plate has none.
+/// A separate rounded highlight, centred in the title bar.
 /// Headline ink owns inactive dimming; the plate never fades its children.
-pub fn title_tab_plate(_selected: bool, _hovered: bool) -> Div {
+pub fn title_tab_plate(selected: bool, hovered: bool) -> Div {
     div()
         .h(px(TAB_PLATE_HEIGHT))
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .px_2()
-        // The pill runs on to the line beneath; centre the label within it.
-        .pt(px(TAB_LABEL_DROP * 2.))
         .flex()
         .items_center()
+        .bg(title_tab_fill(selected, hovered))
 }
 pub fn shell_fill() -> Hsla {
     if let Some(fill) = TOKENS.with(|t| t.borrow().as_ref().map(|t| t.shell)) {
@@ -373,7 +369,7 @@ fn chrome_button(
         .items_center()
         .justify_center()
         .size(px(24.))
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .text_color(content(if enabled { 0.5 } else { 0.25 }))
         .when(enabled, |d| {
             d.hover(|s| s.bg(content(hover_alpha)).text_color(content(1.)))

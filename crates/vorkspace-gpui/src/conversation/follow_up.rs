@@ -1,6 +1,7 @@
 //! Composer.tsx / MessageQueue.tsx's durable follow-ups and saved user draft.
 use super::*;
 use vorkspace_core::follow_up::{Message, State};
+use vorkspace_ui::radius;
 
 #[derive(Default)]
 pub(super) struct FollowUps {
@@ -901,7 +902,7 @@ impl Conversation {
                 div().id(SharedString::from(format!("queued-{id}"))).role(Role::Group).aria_label(format!("Queued message: {}", message.label())).min_h(px(32.)).flex().items_center().gap(px(10.)).when(index > 0, |d| d.border_t_1().border_color(content(0.05)))
                     .child(icon("queue-list", 14.).text_color(content(0.35)))
                     .map(|row| if let Some(edit) = editing {
-                        row.child(div().flex_1().min_w_0().px(px(6.)).py(px(2.)).rounded_md().border_1().border_color(content(0.3)).bg(content(0.05)).on_action(cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, window, cx| { this.finish_queue_edit(false, window, cx); cx.stop_propagation(); })).child(edit.input.clone()))
+                        row.child(div().flex_1().min_w_0().px(px(6.)).py(px(2.)).rounded(px(radius::CONTROL)).border_1().border_color(content(0.3)).bg(content(0.05)).on_action(cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, window, cx| { this.finish_queue_edit(false, window, cx); cx.stop_propagation(); })).child(edit.input.clone()))
                             .child(queue_button("queue-save", "Save queued message", "check").on_click(cx.listener(|this, _, window, cx| this.finish_queue_edit(true, window, cx))))
                             .child(queue_button("queue-cancel", "Cancel queued message edit", "close").on_click(cx.listener(|this, _, window, cx| this.finish_queue_edit(false, window, cx))))
                     } else {

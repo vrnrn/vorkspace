@@ -297,6 +297,11 @@ impl Shell {
                 .title_order
                 .iter()
                 .any(|tab| matches!(tab, TitleTab::Terminal { cwd, .. } if within(cwd, path)) || matches!(tab, TitleTab::Bot { project, worktree, .. } if within(project, path) || within(worktree, path)))
+            || self.workspace.app_panes.iter().any(|(id, pane)| self.workspace.tab_of(*id).is_some() && match &pane.content {
+                crate::workspace::AppPane::Terminal { cwd, .. } => within(cwd, path),
+                crate::workspace::AppPane::Bot(_) => within(&pane.project, path) || within(&pane.worktree, path),
+                _ => false,
+            })
             || !before_release && self.worktree_focus.iter().any(|(p, _)| within(p, path))
         {
             return Err(
@@ -388,7 +393,8 @@ impl Shell {
                 .workspace
                 .title_order
                 .iter()
-                .any(|tab| matches!(tab, TitleTab::Terminal { cwd, .. } if within(cwd, path)));
+                .any(|tab| matches!(tab, TitleTab::Terminal { cwd, .. } if within(cwd, path)))
+            || self.workspace.app_panes.iter().any(|(id, pane)| self.workspace.tab_of(*id).is_some() && matches!(&pane.content, crate::workspace::AppPane::Terminal { cwd, .. } if within(cwd, path)));
         if busy || terminals {
             self.error = Some(
                 "Stop this project's running conversations and close its terminals before archiving it."

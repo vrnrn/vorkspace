@@ -154,9 +154,60 @@ fn native_notes_capture() {
                     .unwrap()
                     .save(output.join(format!("notes-{theme}-{layout}-{section}.png")))
                     .unwrap();
+                if layout == "wide" && section == "preview" {
+                    window
+                        .update(&mut cx, |surface, window, cx| {
+                            let x = surface.0.read(cx).list_width;
+                            window.dispatch_event(
+                                gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                    position: gpui::point(px(x), px(300.)),
+                                    pressed_button: None,
+                                    modifiers: Default::default(),
+                                }),
+                                cx,
+                            );
+                        })
+                        .unwrap();
+                    cx.run_until_parked();
+                    cx.capture_screenshot(window.into())
+                        .unwrap()
+                        .save(output.join(format!("notes-{theme}-curved-hover.png")))
+                        .unwrap();
+                }
                 cx.update_window(window.into(), |_, window, _| window.remove_window())
                     .unwrap();
             }
+        }
+        for width in [420., 900.] {
+            let pinned_id = note.id.clone();
+            let window = cx
+                .open_window(size(px(width), px(780.)), |_, cx| {
+                    cx.new(|cx| {
+                        Surface(cx.new(|cx| {
+                            let mut view =
+                                Notes::open_note_tab(store.clone(), pinned_id.clone(), cx);
+                            view.cwd = project.into();
+                            view.projects = vec![project.into()];
+                            view
+                        }))
+                    })
+                })
+                .unwrap();
+            cx.run_until_parked();
+            window
+                .update(&mut cx, |surface, _, cx| {
+                    let view = surface.0.read(cx);
+                    assert_eq!(view.pane_note_id().as_deref(), Some("release-checklist"));
+                    assert_eq!(view.pane_title(cx), "Release checklist");
+                })
+                .unwrap();
+            vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
+            cx.capture_screenshot(window.into())
+                .unwrap()
+                .save(output.join(format!("notes-{theme}-pinned-{width:.0}.png")))
+                .unwrap();
+            cx.update_window(window.into(), |_, window, _| window.remove_window())
+                .unwrap();
         }
     }
 }

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use vorkspace_core::usage::{FetchError, Snapshot};
 use vorkspace_core::{provider::Kind, usage};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 mod resets;
@@ -502,7 +503,7 @@ impl UsageFooter {
             .aria_label(format!("Switch account from {label}"))
             .h_8()
             .px(px(10.))
-            .rounded_lg()
+            .rounded(px(radius::CONTROL))
             .bg(content(0.045))
             .border_1()
             .border_color(content(0.06))
@@ -627,7 +628,7 @@ impl UsageFooter {
                         div()
                             .size_7()
                             .flex_shrink_0()
-                            .rounded_lg()
+                            .rounded(px(radius::CONTROL))
                             .bg(content(0.06))
                             .border_1()
                             .border_color(content(0.07))
@@ -680,7 +681,7 @@ impl UsageFooter {
                     d.child(
                         div()
                             .mb_2()
-                            .rounded_lg()
+                            .rounded(px(radius::CONTAINER))
                             .px(px(10.))
                             .py_2()
                             .bg(gpui::rgba(0xfbbf241a))
@@ -695,7 +696,7 @@ impl UsageFooter {
                 let loading = state.fetching || (state.snapshot.is_none() && state.error.is_none());
                 d.child(
                     div()
-                        .rounded_lg()
+                        .rounded(px(radius::CONTAINER))
                         .bg(content(0.04))
                         .border_1()
                         .border_color(content(0.06))
@@ -747,7 +748,7 @@ impl UsageFooter {
                     .map(|balance| {
                         div()
                             .mt(px(6.))
-                            .rounded_lg()
+                            .rounded(px(radius::CONTAINER))
                             .bg(content(0.045))
                             .border_1()
                             .border_color(content(0.06))
@@ -803,7 +804,7 @@ impl UsageFooter {
             .max_w_full()
             .px_1()
             .py(px(2.))
-            .rounded_sm()
+            .rounded(px(radius::SMALL))
             .flex()
             .items_center()
             .gap_1()
@@ -850,7 +851,7 @@ impl UsageFooter {
             _ => "5-hour limit",
         };
         div()
-            .rounded_lg()
+            .rounded(px(radius::CONTAINER))
             .bg(content(0.045))
             .border_1()
             .border_color(content(0.06))
@@ -937,7 +938,7 @@ impl UsageFooter {
         Some(
             div()
                 .mt_2()
-                .rounded_lg()
+                .rounded(px(radius::CONTAINER))
                 .bg(content(0.045))
                 .border_1()
                 .border_color(content(0.06))
@@ -992,7 +993,7 @@ impl UsageFooter {
                     .h_7()
                     .flex_shrink_0()
                     .px(px(10.))
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .text_size(px(11.))
                     .child("Switch")
                     .on_click(cx.listener(move |_, _, _, cx| {
@@ -1227,7 +1228,7 @@ impl Render for UsageFooter {
                             .key_context("UsageChip")
                             .relative()
                             .min_w_0()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .map(|d| {
                                 if self.compact {
                                     d.size(px(32.)).flex_shrink_0().justify_center()
@@ -1306,7 +1307,6 @@ impl Render for UsageFooter {
                         .side(Side::Top)
                         // Flush with the row it opens from, and with its corners.
                         .align(crate::popover::Align::Start)
-                        .radius(6.)
                         .gap(7.)
                         .width(if self.show_accounts { 340. } else { 300. })
                         .max_height(460.)

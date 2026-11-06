@@ -2,6 +2,7 @@
 //! layout every row shares.
 use super::*;
 use gpui::AnyElement;
+use vorkspace_ui::radius;
 
 impl TranscriptView {
     pub(super) fn interjection_row(
@@ -471,7 +472,7 @@ impl TranscriptView {
                                 let radius = if first && last && bounds.size.height <= px(37.) {
                                     f32::from(bounds.size.height) * 0.5
                                 } else {
-                                    12.
+                                    radius::SURFACE
                                 };
                                 window.paint_quad(
                                     gpui::fill(bounds, user_bubble_fill()).corner_radii(
@@ -531,7 +532,7 @@ impl TranscriptView {
                             .mt_1()
                             .px_1()
                             .py(px(2.))
-                            .rounded(px(4.))
+                            .rounded(px(radius::SMALL))
                             .text_size(px(12.))
                             .line_height(px(16.))
                             .text_color(content(0.6))

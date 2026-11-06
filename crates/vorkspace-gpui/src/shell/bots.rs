@@ -5,31 +5,36 @@ use serde_json::Value;
 use vorkspace_core::agent::Settings;
 use vorkspace_core::{project_appearance::ProjectAppearance, session_groups::Groups};
 impl Shell {
-    pub(super) fn close_bot_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Park the page, retaining Bot/channel drafts and in-flight work.
-        if let Some(bots) = self.bots.clone() {
-            bots.update(cx, |bots, cx| bots.close(cx));
-        }
-        self.close_app_view(window, cx);
-    }
     #[cfg(test)]
     pub(crate) fn bot_manager(&self) -> Entity<crate::bots::Bots> {
         self.bots.as_ref().unwrap().clone()
     }
-    pub(super) fn bot_active(&self, cx: &App) -> bool {
-        self.bots
-            .as_ref()
-            .is_some_and(|m| m.read(cx).active.is_some() || m.read(cx).classic_channels_open())
+    pub(super) fn bot_active(&self, _cx: &App) -> bool {
+        self.workspace
+            .active
+            .and_then(|id| self.workspace.app_panes.get(&id))
+            .is_some_and(|pane| {
+                matches!(
+                    pane.content,
+                    crate::workspace::AppPane::Bot(_) | crate::workspace::AppPane::Channels
+                )
+            })
     }
-    /// Channels cover the workspace too, but never own a Bot's details pane.
-    pub(super) fn bot_details_active(&self, cx: &App) -> bool {
-        self.bots.as_ref().is_some_and(|bots| {
-            let bots = bots.read(cx);
-            bots.active
-                .as_deref()
-                .is_some_and(|id| !bots.minion_read_only(id))
-                && !bots.classic_channels_open()
-        })
+    pub(super) fn workspace_bot_context(&self) -> Option<String> {
+        if !self.workspace.preferences.bots {
+            return None;
+        }
+        let tab = self.workspace.active_tab()?;
+        let mut leaves = self.workspace.layout(tab).leaf_ids();
+        if let Some(active) = self.workspace.active {
+            leaves.sort_by_key(|id| *id != active);
+        }
+        leaves
+            .iter()
+            .find_map(|id| match &self.workspace.app_panes.get(id)?.content {
+                crate::workspace::AppPane::Bot(id) => Some(id.clone()),
+                _ => None,
+            })
     }
     pub(crate) fn bot_session_views(&self, cx: &App) -> Vec<BotSession> {
         self.order
@@ -183,8 +188,31 @@ impl BotsHost for gpui::WeakEntity<Shell> {
             shell.app_session_action(caller, id, project, action, window, cx)
         })
     }
-    fn open_session(&self, id: i64, window: &mut Window, cx: &mut App) {
-        let _ = self.update(cx, |shell, cx| shell.open(id, window, cx));
+    fn workspace_action(
+        &self,
+        caller: i64,
+        project: &str,
+        action: &str,
+        input: &Value,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui::Result<Result<Value, String>> {
+        self.update(cx, |shell, cx| {
+            shell.app_workspace_action(caller, project, action, input, window, cx)
+        })
+    }
+    fn notes_action(
+        &self,
+        caller: i64,
+        projects: &[String],
+        action: &str,
+        input: &Value,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> gpui::Result<Result<Value, String>> {
+        self.update(cx, |shell, cx| {
+            shell.app_notes_action(caller, projects, action, input, true, cx)
+        })
     }
     fn open_channels(&self, window: &mut Window, cx: &mut App) {
         let _ = self.update(cx, |shell, cx| shell.open_classic_channels(window, cx));

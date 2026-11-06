@@ -1,20 +1,27 @@
 use super::*;
 use gpui::{TestAppContext, point, size};
+use vorkspace_ui::radius;
 
 #[test]
 fn artwork_rounds_only_the_corners_on_the_card_perimeter() {
     let card = Bounds::new(point(px(20.), px(40.)), size(px(800.), px(600.)));
     let inset = Bounds::new(point(px(21.), px(41.)), size(px(798.), px(598.)));
-    assert_eq!(corners(inset, false, Some(card)), Corners::all(px(9.)));
+    assert_eq!(
+        corners(inset, false, Some(card)),
+        Corners::all(px(radius::SURFACE - 1.))
+    );
     let beside_review = Bounds::new(inset.origin, size(px(400.), inset.size.height));
     let rounded = corners(beside_review, false, Some(card));
-    assert_eq!(rounded.top_left, px(9.));
-    assert_eq!(rounded.bottom_left, px(9.));
+    assert_eq!(rounded.top_left, px(radius::SURFACE - 1.));
+    assert_eq!(rounded.bottom_left, px(radius::SURFACE - 1.));
     assert_eq!(rounded.top_right, px(0.));
     let below_header = Bounds::new(point(px(21.), px(70.)), size(px(798.), px(569.)));
     assert_eq!(corners(below_header, false, Some(card)).top_left, px(0.));
     assert_eq!(corners(inset, false, None), Corners::default());
-    assert_eq!(corners(inset, true, None), Corners::all(px(11.)));
+    assert_eq!(
+        corners(inset, true, None),
+        Corners::all(px(radius::SURFACE - 1.))
+    );
 }
 
 #[gpui::test]
@@ -215,7 +222,10 @@ fn live_resize_and_opacity_reuse_the_texture_without_a_background_job(cx: &mut T
                             mask.bounds.size.height.0,
                             dimensions.height.as_f32() * _window.scale_factor()
                         );
-                        assert_eq!(mask.corner_radii.top_left.0, 11. * _window.scale_factor());
+                        assert_eq!(
+                            mask.corner_radii.top_left.0,
+                            (radius::SURFACE - 1.) * _window.scale_factor()
+                        );
                     }
                     let mut settings = background.settings.clone().unwrap();
                     settings.empty_opacity = 0.24;

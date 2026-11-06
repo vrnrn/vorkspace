@@ -4,38 +4,37 @@ use super::*;
 impl Shell {
     /// A click anywhere in a pane focuses it (PaneTree's onFocus).
     pub(super) fn focus_pane(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
-        if self.workspace.review_owners.contains_key(&id) {
-            self.open_file_pane(id, window, cx);
-            return;
+        if self.workspace.active != Some(id) {
+            self.open(id, window, cx);
         }
-        if self.workspace.active == Some(id) {
-            return;
-        }
-        self.navigation_revision += 1;
-        self.history.record(id);
-        self.workspace.open(id);
-        if let Some(view) = self.sessions.get(&id) {
-            self.workspace.project = view.read(cx).summary.cwd.clone();
-            self.workspace
-                .project_focus
-                .insert(self.workspace.project.clone(), id);
-            view.update(cx, |v, cx| v.load(cx));
-            self.record_worktree_session(id, cx);
-        }
-        if !self.review_focused {
-            self.focus_active(window, cx);
-        }
-        self.persist(cx);
-        cx.notify();
     }
     /// Close one pane of a split tab; the tab's only pane closes the tab.
     pub(super) fn close_pane(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_terminal_pane_close(id, window, cx) {
+            return;
+        }
+        self.close_pane_confirmed(id, window, cx);
+    }
+    pub(super) fn close_pane_confirmed(
+        &mut self,
+        id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.prepare_app_pane_close(id, cx) {
+            return;
+        }
         let active = self.workspace.active;
         let before = self.active_leaves();
         if !self.workspace.close_pane(id) {
-            self.close(id, window, cx);
+            if self.tab_can_close(id, cx)
+                && let Some(tab) = self.workspace.tab_of(id)
+            {
+                self.close_title_tabs_confirmed(&[TitleTab::Workspace(tab)], None, window, cx);
+            }
             return;
         }
+        self.release_app_pane(id, cx);
         self.history
             .prune(&self.workspace.open_sessions(), self.workspace.active);
         self.navigation_revision += 1;
@@ -47,11 +46,12 @@ impl Shell {
             }
         } else {
             self.persist(cx);
+            self.sync_right_panel(cx);
             cx.notify();
         }
     }
     pub(super) fn pane_available_width(&self) -> f32 {
-        let sidebar = if self.workspace.sidebar_visible {
+        let sidebar = if self.workspace.sidebar_visible && self.has_session_panes() {
             self.workspace.right_panel_width
         } else {
             0.
@@ -60,7 +60,12 @@ impl Shell {
             .workspace
             .docks
             .get(&self.workspace.project)
-            .filter(|dock| dock.open && !dock.side.vertical())
+            .filter(|dock| {
+                dock.open
+                    && !dock.side.vertical()
+                    && self.settings.is_none()
+                    && self.workspace.active_tab().is_some()
+            })
             .map_or(0., |dock| dock.size);
         let expected =
             (self.viewport_width - self.classic_rail_width() - self.right_drawn - sidebar - dock)
@@ -74,7 +79,7 @@ impl Shell {
     /// needs its room and restores it when it fits again.
     pub(super) fn pane_admission_width(&self) -> f32 {
         self.pane_available_width()
-            + if self.workspace.sidebar_visible {
+            + if self.workspace.sidebar_visible && self.has_session_panes() {
                 self.workspace.right_panel_width
             } else {
                 0.
@@ -82,7 +87,10 @@ impl Shell {
     }
 
     pub(super) fn pane_layout_allowed(&self, before: &PaneNode, after: &PaneNode) -> bool {
-        let session = |id: i64| id >= 0 && !self.workspace.review_owners.contains_key(&id);
+        let session = |id: i64| {
+            (id >= 0 || self.workspace.app_panes.contains_key(&id))
+                && !self.workspace.review_owners.contains_key(&id)
+        };
         let old_stack = before.max_session_stack(session);
         let new_stack = after.max_session_stack(session);
         let stack_ok = new_stack <= MAX_SESSION_STACK
@@ -170,7 +178,7 @@ impl Shell {
     /// cmd-d / shift-cmd-d: a new session beside the focused pane, with the
     /// focused session's provider.
     pub(super) fn split_session(&mut self, dir: SplitDir, cx: &mut Context<Self>) {
-        if self.app_view_open() || self.workspace.active.is_none() {
+        if self.workspace.active.is_none() {
             return;
         }
         let focused = self.workspace.active.unwrap();
@@ -186,7 +194,10 @@ impl Shell {
             .workspace
             .active
             .and_then(|id| self.sessions.get(&id))
-            .map_or(Kind::Codex, |s| Kind::from_id(&s.read(cx).summary.provider));
+            .map_or_else(
+                || self.default_kind(),
+                |s| Kind::from_id(&s.read(cx).summary.provider),
+            );
         let navigation_revision = self.navigation_revision;
         let target = self.workspace.active;
         let store = self.store.clone();
@@ -363,9 +374,6 @@ impl Shell {
     }
     /// The pane under a point and the edge it would take, in the active tab.
     pub(super) fn pane_hit(&self, position: Point<Pixels>) -> Option<(i64, Edge)> {
-        if self.app_view_open() {
-            return None;
-        }
         if self
             .pane_viewport
             .get()
@@ -536,7 +544,7 @@ impl Shell {
                 };
                 if let Some(to) = insert {
                     self.workspace.detach(id, self.workspace.tabs.len());
-                    self.reorder_title_tab(&TitleTab::Session(id), to, cx);
+                    self.reorder_title_tab(&TitleTab::Workspace(id), to, cx);
                     self.pane_motion = None;
                 } else if let Some((target, edge)) = over {
                     self.workspace.place(id, target, edge);
@@ -551,7 +559,7 @@ impl Shell {
                     .and_then(|next| self.workspace.tabs.iter().position(|id| *id == next))
                     .unwrap_or(self.workspace.tabs.len());
                 self.workspace.detach(id, session_index);
-                self.reorder_title_tab(&TitleTab::Session(id), to, cx);
+                self.reorder_title_tab(&TitleTab::Workspace(id), to, cx);
                 self.pane_motion = None;
             }
             (DragSource::Tab(tab), Some((target, edge)), _) => {

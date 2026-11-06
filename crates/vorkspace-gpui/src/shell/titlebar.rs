@@ -1,5 +1,6 @@
 //! Titlebar layout: navigation controls, project tools and their reserved widths.
 use super::*;
+use vorkspace_ui::radius;
 
 impl Shell {
     /// The title bar's navigation (`data-inset-title-nav`): as wide as the
@@ -33,11 +34,7 @@ impl Shell {
     /// Room before the tabs where navigation overhangs the pane.
     pub(super) fn strip_lead(&self, window: &Window) -> f32 {
         // A left sidebar takes the overhang in its own row (`classic_body`).
-        let sidebar = if self.workspace.preferences.sidebar_right {
-            0.
-        } else {
-            self.workspace.right_panel_width * self.sidebar_fraction
-        };
+        let sidebar = self.workspace.right_panel_width * self.sidebar_fraction;
         (self.rail_overhang(window) - sidebar).max(0.)
     }
     /// How far navigation reaches past the project rail.
@@ -71,12 +68,10 @@ impl Shell {
                     .size(button_size)
                     .track_focus(&self.project_rail_toggle_focus)
                     .focus(|s| s.bg(content(0.1)))
-                    .child(self.peek_toggle_bounds.probe())
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                         window.focus(&toggle_focus, cx);
                         cx.stop_propagation();
                     })
-                    // Hovering the toggle peeks a collapsed sidebar out.
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_project_rail(cx))),
             )
             .child(titlebar_drag_area().flex_1())
@@ -141,18 +136,14 @@ impl Shell {
             .flex_shrink_0()
             .flex()
             .items_center()
-            // Classic: the strip heads the workspace column, above a rule. The tab
-            // strip draws its own stretch of the rule, around the active tab's
-            // pill (crate::liquid); the lead and trail draw theirs.
+            // The strip, lead and trail each draw their stretch of the title rule.
             .child(if classic {
                 // Reserve the navigation's overhang without a second drag
                 // handler underneath its buttons (classic_body owns gestures).
                 // Where the rail's divider curves into it, the rule starts
                 // after the curve.
-                let curve = if self.rail_meets_title_rule()
-                    && (self.workspace.preferences.sidebar_right || self.sidebar_fraction <= 0.)
-                {
-                    crate::liquid::PANE_RADIUS
+                let curve = if self.rail_meets_title_rule() && self.sidebar_fraction <= 0. {
+                    radius::SURFACE
                 } else {
                     0.
                 };
@@ -171,16 +162,7 @@ impl Shell {
             } else {
                 self.navigation(window, cx).into_any_element()
             })
-            .child(if self.tabless_page(cx) {
-                titlebar_drag_area()
-                    .w(tabs_width)
-                    .h_full()
-                    .flex_shrink_0()
-                    .when(classic, |d| {
-                        d.border_b_1().border_color(crate::panel_kit::stroke())
-                    })
-                    .into_any_element()
-            } else {
+            .child(
                 self.tabs_frame
                     .clone()
                     .cached(
@@ -188,8 +170,8 @@ impl Shell {
                             .w(tabs_width)
                             .h(px(TITLE_BAR_HEIGHT)),
                     )
-                    .into_any_element()
-            })
+                    .into_any_element(),
+            )
             .child(if classic {
                 // The toggle holds the window's corner (classic_body); the
                 // strip keeps only the part an open panel leaves uncovered.
@@ -208,37 +190,29 @@ impl Shell {
 
     /// TitleBar.tsx's right panel toggle, `pl-1.5 pr-3` clear of the edge.
     pub(super) fn panel_toggle(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let bot = self.bot_details_active(cx);
-        if self.workspace.classic_layout && !bot {
+        if self.workspace.classic_layout {
             return self.classic_corner(window, cx);
         }
-        let toggle = bot || self.git.read(cx).available();
-        let panel_off = self.app_view_open();
-        let dot = !bot && !panel_off && self.git.read(cx).has_changes();
+        let toggle = self.git.read(cx).available();
+        let panel_off = !self.has_session_panes();
+        let dot = !panel_off && self.git.read(cx).has_changes();
         let panel_active = self.workspace.right_panel_open && !panel_off;
-        let tabs = if bot && panel_active {
-            self.bots.clone().map(|m| {
-                m.update(cx, |m, cx| {
-                    m.overview_controls(self.workspace.right_panel_width >= 312., window, cx)
-                })
-            })
-        } else {
-            self.right_panel
-                .as_ref()
-                .filter(|_| panel_active && !bot)
-                .map(|panel| {
-                    panel
-                        .read(cx)
-                        .tabs
-                        .clone()
-                        .cached(
-                            StyleRefinement::default()
-                                .w(px(self.project_tabs_width(cx)))
-                                .h(px(TITLE_BAR_HEIGHT)),
-                        )
-                        .into_any_element()
-                })
-        };
+        let tabs = self
+            .right_panel
+            .as_ref()
+            .filter(|_| panel_active)
+            .map(|panel| {
+                panel
+                    .read(cx)
+                    .tabs
+                    .clone()
+                    .cached(
+                        StyleRefinement::default()
+                            .w(px(self.project_tabs_width(cx)))
+                            .h(px(TITLE_BAR_HEIGHT)),
+                    )
+                    .into_any_element()
+            });
         let show_tabs = tabs.is_some();
         div()
             .relative()
@@ -272,18 +246,10 @@ impl Shell {
                         }))
                         .pr_3()
                         .when_some(tabs, |d, tabs| {
-                            d.child(tabs)
-                                .when(!bot, |d| d.child(titlebar_drag_area().flex_1().min_w_0()))
+                            d.child(tabs).child(titlebar_drag_area().flex_1().min_w_0())
                         })
                         .children(self.project_diff_stat(cx))
-                        // A Bot has no project files to search; its toggle keeps the corner.
-                        .map(|d| {
-                            if bot {
-                                d.child(div().flex_1())
-                            } else {
-                                d.child(self.file_search_button(cx).mx(px(CORNER_CONTROL_GAP)))
-                            }
-                        })
+                        .child(self.file_search_button(cx).mx(px(CORNER_CONTROL_GAP)))
                         .child(
                             div()
                                 .id("toggle-right-panel")
@@ -307,7 +273,7 @@ impl Shell {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .when(!panel_off, |d| d.hover(|s| s.bg(content(0.1))))
                                 .child(
                                     div()
@@ -372,7 +338,7 @@ impl Shell {
         let width = self.diff_stat_room(cx);
         (width > 0.).then(|| {
             crate::panel_kit::diff_stat(self.git.read(cx).stats.as_ref(), width)
-                .when(!self.app_view_open(), |d| {
+                .when(self.has_session_panes(), |d| {
                     d.cursor(CursorStyle::Arrow)
                         .hover(|s| s.bg(content(0.1)))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -404,11 +370,11 @@ impl Shell {
             .on_click(cx.listener(|this, _, window, cx| this.open_quick_open(false, window, cx)))
     }
     pub(super) fn diff_stat_room(&self, cx: &App) -> f32 {
-        if self.bot_active(cx) || !self.git.read(cx).available() {
+        if !self.has_session_panes() || !self.git.read(cx).available() {
             return 0.;
         }
         let natural = crate::panel_kit::diff_stat_width(self.git.read(cx).stats.as_ref());
-        if !self.workspace.right_panel_open || self.app_view_open() {
+        if !self.workspace.right_panel_open || !self.has_session_panes() {
             return natural;
         }
         let controls = crate::right_panel::TAB_ICONS_WIDTH + 6. + CORNER_BUTTONS_WIDTH + 12.;
@@ -434,16 +400,8 @@ impl Shell {
         if self.workspace.classic_layout {
             return self.corner_room(cx);
         }
-        if self.bot_active(cx) || self.git.read(cx).available() {
-            if self.workspace.right_panel_open && !self.app_view_open() {
-                if self.bot_active(cx) {
-                    let minimum = if self.workspace.right_panel_width >= 312. {
-                        312.
-                    } else {
-                        252.
-                    };
-                    return (self.right_drawn + 7.).max(minimum);
-                }
+        if self.has_session_panes() && self.git.read(cx).available() {
+            if self.workspace.right_panel_open {
                 // Follow the rounded panel's left edge, including the card's
                 // right inset, while keeping room for all controls when narrow.
                 (self.right_drawn + 7.).max(

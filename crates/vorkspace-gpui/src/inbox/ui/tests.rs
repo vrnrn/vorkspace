@@ -9,6 +9,31 @@ struct Fixture {
     inbox: Entity<Inbox>,
     item: Item,
 }
+struct PinnedFixture {
+    _root: Entity<Inbox>,
+    page: Entity<Inbox>,
+}
+struct TiledFixture {
+    inbox: Entity<Inbox>,
+    width: f32,
+}
+impl Render for TiledFixture {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            div()
+                .id("connector-tile")
+                .debug_selector(|| "connector-tile".into())
+                .w(px(self.width))
+                .h_full()
+                .child(self.inbox.clone()),
+        )
+    }
+}
+impl Render for PinnedFixture {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.page.clone())
+    }
+}
 impl Render for Fixture {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.inbox.update(cx, |inbox, cx| {
@@ -131,6 +156,79 @@ fn narrow_navigation_preserves_the_open_item_and_comment_draft(cx: &mut TestAppC
             assert!(inbox.details.is_some());
         })
         .unwrap();
+}
+
+#[gpui::test]
+fn a_narrow_connector_tile_uses_its_width_inside_a_wide_window(cx: &mut TestAppContext) {
+    let width = 420.;
+    let item = Item {
+        provider: "github".into(),
+        kind: "issue".into(),
+        number: 42,
+        title: "Tile width fixture".into(),
+        state: "open".into(),
+        ..Default::default()
+    };
+    let key = item.key();
+    let window = cx.update(|cx| {
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(0.), px(0.)),
+                    size(px(1440.), px(800.)),
+                ))),
+                ..Default::default()
+            },
+            |_, cx| {
+                cx.new(|cx| {
+                    let store = Arc::new(Mutex::new(
+                        vorkspace_core::store::Store::open(std::path::Path::new(":memory:"))
+                            .unwrap(),
+                    ));
+                    let inbox = cx.new(|cx| {
+                        let mut inbox = Inbox::new_inner(
+                            store,
+                            vec![],
+                            PathBuf::from("/private/tmp/inbox-tile"),
+                            false,
+                            cx,
+                        );
+                        inbox.snapshot.items = vec![item];
+                        inbox.selected = Some(key.clone());
+                        inbox.details = Some(Details::default());
+                        inbox
+                    });
+                    TiledFixture { inbox, width }
+                })
+            },
+        )
+        .unwrap()
+    });
+    window
+        .update(cx, |fixture, window, cx| {
+            assert!(!page::narrow(window));
+            fixture
+                .inbox
+                .update(cx, |inbox, cx| inbox.set_pane_width(width, cx));
+            assert_eq!(fixture.inbox.read(cx).detail_inset(window), px(16.));
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let tile = visual.debug_bounds("connector-tile").unwrap();
+    let list = visual.debug_bounds("connector-list").unwrap();
+    assert!((f32::from(tile.size.width) - width).abs() < 1.);
+    assert!((f32::from(list.size.width) - width).abs() < 1.);
+    assert!(visual.debug_bounds("inbox-back").is_none());
+    let row = Box::leak(format!("inbox-item-{key}").into_boxed_str());
+    let row_center = visual.debug_bounds(row).unwrap().center();
+    visual.simulate_click(row_center, Default::default());
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("connector-list").is_none());
+    let back = visual.debug_bounds("inbox-back").unwrap();
+    assert!(back.center().x >= tile.origin.x && back.center().x <= tile.origin.x + tile.size.width);
 }
 
 #[gpui::test]
@@ -279,6 +377,317 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
             assert_eq!(state.filters_for("jira").time, "30d");
         })
         .unwrap();
+}
+
+#[gpui::test]
+fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
+    cx: &mut TestAppContext,
+) {
+    let window = inbox_window(cx);
+    let first = Item {
+        provider: "github".into(),
+        kind: "issue".into(),
+        number: 41,
+        repo: "team/repo".into(),
+        title: "First issue".into(),
+        updated_at: "2026-11-01T10:00:00Z".into(),
+        ..Default::default()
+    };
+    let second = Item {
+        number: 42,
+        title: "Second issue".into(),
+        ..first.clone()
+    };
+    let (section, first_page, second_page) = window
+        .update(cx, |root, _, cx| {
+            root.snapshot.items = vec![first.clone(), second.clone()];
+            let section = root.connector_page("github", cx);
+            let first_page = root.connector_item_page("github", first.clone(), cx);
+            let second_page = root.connector_item_page("github", second.clone(), cx);
+            assert_eq!(
+                root.connector_item_page("github", first.clone(), cx),
+                first_page
+            );
+            assert_eq!(root.pages.len(), 3);
+            (section, first_page, second_page)
+        })
+        .unwrap();
+    cx.update(|cx| {
+        section.update(cx, |page, _| {
+            page.selected = Some(second.key());
+        });
+        for (page, item, draft) in [
+            (&first_page, &first, "First draft"),
+            (&second_page, &second, "Second draft"),
+        ] {
+            page.update(cx, |page, cx| {
+                assert_eq!(page.pinned_item().unwrap().key(), item.key());
+                page.comment
+                    .update(cx, |input, cx| input.set_text(draft.into(), cx));
+                page.reply = Some((item.key(), draft.into()));
+                page.summary_scroll = ListState::new(100, ListAlignment::Top, px(200.));
+                page.summary_scroll.scroll_to(gpui::ListOffset {
+                    item_ix: if item.number == 41 { 12 } else { 24 },
+                    offset_in_item: px(4.),
+                });
+                page.detail_generation = 4;
+                page.detail_loading = true;
+                page.finish_detail(
+                    4,
+                    item.key(),
+                    Ok(Details {
+                        body: draft.into(),
+                        ..Default::default()
+                    }),
+                    Ok(Thread::default()),
+                    cx,
+                );
+            });
+        }
+    });
+    window
+        .update(cx, |root, _, cx| {
+            root.snapshot.items = vec![Item {
+                title: "Second issue updated".into(),
+                updated_at: "2026-11-02T10:00:00Z".into(),
+                ..second.clone()
+            }];
+            root.publish_pages(cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        first_page.update(cx, |page, cx| {
+            assert_eq!(page.item().unwrap().key(), first.key());
+            assert_eq!(page.pane_title(), "First issue");
+            assert_eq!(page.details.as_ref().unwrap().body, "First draft");
+            assert_eq!(page.comment.read(cx).content.as_ref(), "First draft");
+            assert_eq!(page.reply.as_ref().unwrap().0, first.key());
+            assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 12);
+            page.finish_detail(
+                4,
+                second.key(),
+                Err("wrong item".into()),
+                Err("wrong item".into()),
+                cx,
+            );
+            assert_eq!(page.details.as_ref().unwrap().body, "First draft");
+        });
+        second_page.update(cx, |page, cx| {
+            assert_eq!(page.item().unwrap().key(), second.key());
+            assert_eq!(page.pane_title(), "Second issue updated");
+            assert_eq!(page.details.as_ref().unwrap().body, "Second draft");
+            assert_eq!(page.comment.read(cx).content.as_ref(), "Second draft");
+            assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 24);
+        });
+        section.update(cx, |page, _| {
+            assert!(page.pinned_item().is_none());
+            assert_eq!(page.selected.as_deref(), Some(second.key().as_str()));
+            assert_eq!(page.pane_title(), "GitHub");
+        });
+    });
+    window
+        .update(cx, |root, _, cx| {
+            root.snapshot.items = vec![Item {
+                title: "First issue updated".into(),
+                updated_at: "2026-11-03T10:00:00Z".into(),
+                ..first.clone()
+            }];
+            root.publish_pages(cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        first_page.update(cx, |page, _| {
+            assert_eq!(page.item().unwrap().key(), first.key());
+            assert_eq!(page.pane_title(), "First issue updated");
+        });
+        second_page.update(cx, |page, _| {
+            assert_eq!(page.item().unwrap().key(), second.key());
+            assert_eq!(page.pane_title(), "Second issue updated");
+        });
+    });
+}
+
+#[gpui::test]
+fn item_page_read_receipts_do_not_restore_old_filters_and_closed_pages_are_released(
+    cx: &mut TestAppContext,
+) {
+    let window = inbox_window(cx);
+    let item = Item {
+        provider: "jira".into(),
+        id: "10041".into(),
+        identifier: "TEAM-41".into(),
+        title: "Pinned issue".into(),
+        ..Default::default()
+    };
+    let page = window
+        .update(cx, |root, _, cx| {
+            root.snapshot.items.push(item.clone());
+            root.connector_item_page("jira", item.clone(), cx)
+        })
+        .unwrap();
+    window
+        .update(cx, |root, _, _| {
+            root.state
+                .provider_filters
+                .entry("jira".into())
+                .or_default()
+                .time = "7d".into();
+            root.state.list_width = 340.;
+        })
+        .unwrap();
+    page.update(cx, |page, cx| {
+        page.state.seen.mark(&item);
+        page.save(cx);
+    });
+    window
+        .update(cx, |root, _, cx| {
+            assert_eq!(root.state.provider_filters["jira"].time, "7d");
+            assert_eq!(root.state.list_width, 340.);
+            root.release_item_page(&item, cx);
+            assert!(root.pages.is_empty());
+        })
+        .unwrap();
+    let retained = window
+        .update(cx, |root, _, cx| {
+            root.connector_item_page("jira", item.clone(), cx)
+        })
+        .unwrap();
+    retained.update(cx, |page, _| page.posting = true);
+    window
+        .update(cx, |root, _, cx| {
+            root.release_item_page(&item, cx);
+            assert_eq!(root.pages.len(), 1, "keep in-flight writes observable");
+            assert_eq!(root.connector_item_page("jira", item.clone(), cx), retained);
+        })
+        .unwrap();
+    retained.update(cx, |page, cx| {
+        page.posting = false;
+        page.finish_pending_release(cx);
+    });
+    window
+        .update(cx, |root, _, cx| {
+            assert_eq!(root.pages.len(), 1, "reopening cancels pending release");
+            root.release_item_page(&item, cx);
+            assert!(root.pages.is_empty());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn item_tab_actions_keep_ordinary_selection_and_pinned_page_has_no_list(cx: &mut TestAppContext) {
+    let window = inbox_window(cx);
+    let first = Item {
+        provider: "github".into(),
+        kind: "issue".into(),
+        number: 51,
+        repo: "team/repo".into(),
+        title: "First issue".into(),
+        ..Default::default()
+    };
+    let second = Item {
+        number: 52,
+        title: "Second issue".into(),
+        ..first.clone()
+    };
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let _subscription = window
+        .update(cx, |root, _, cx| {
+            root.snapshot.items = vec![first.clone(), second.clone()];
+            root.selected = Some(first.key());
+            root.details = Some(Details::default());
+            let opened = opened.clone();
+            let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
+                if let Event::OpenTab(item) = event {
+                    opened.borrow_mut().push(item.key());
+                }
+            });
+            cx.notify();
+            subscription
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let header = visual.debug_bounds("inbox-open-tab").unwrap().center();
+    visual.simulate_click(header, Default::default());
+    let selector = Box::leak(format!("inbox-item-{}", second.key()).into_boxed_str());
+    let row = visual.debug_bounds(selector).unwrap().center();
+    visual.simulate_click(
+        row,
+        gpui::Modifiers {
+            platform: true,
+            ..Default::default()
+        },
+    );
+    visual.simulate_mouse_down(row, MouseButton::Middle, Default::default());
+    visual.simulate_mouse_up(row, MouseButton::Middle, Default::default());
+    assert_eq!(
+        opened.borrow().as_slice(),
+        &[first.key(), second.key(), second.key()]
+    );
+    window
+        .update(visual, |root, _, _| {
+            assert_eq!(root.selected.as_deref(), Some(first.key().as_str()));
+        })
+        .unwrap();
+    visual.simulate_click(row, Default::default());
+    window
+        .update(visual, |root, _, _| {
+            assert_eq!(root.selected.as_deref(), Some(second.key().as_str()));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn pinned_item_page_renders_detail_without_a_library_list(cx: &mut TestAppContext) {
+    let item = Item {
+        provider: "github".into(),
+        kind: "issue".into(),
+        number: 51,
+        repo: "team/repo".into(),
+        title: "Pinned issue".into(),
+        ..Default::default()
+    };
+    let pinned = cx.update(|cx| {
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(0.), px(0.)),
+                    size(px(720.), px(700.)),
+                ))),
+                ..Default::default()
+            },
+            |_, cx| {
+                let store = Arc::new(Mutex::new(
+                    vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+                ));
+                let root = cx.new(|cx| {
+                    let mut root = Inbox::new_inner(
+                        store,
+                        vec![],
+                        PathBuf::from("/private/tmp/inbox-pinned"),
+                        false,
+                        cx,
+                    );
+                    root.snapshot.items = vec![item.clone()];
+                    root
+                });
+                let page = root.update(cx, |root, cx| {
+                    root.connector_item_page("github", item.clone(), cx)
+                });
+                cx.new(|_| PinnedFixture { _root: root, page })
+            },
+        )
+        .unwrap()
+    });
+    let pinned_visual = &mut gpui::VisualTestContext::from_window(pinned.into(), cx);
+    pinned_visual.run_until_parked();
+    pinned_visual.refresh().unwrap();
+    assert!(pinned_visual.debug_bounds("connector-list").is_none());
+    assert!(pinned_visual.debug_bounds("inbox-open-tab").is_none());
+    assert!(pinned_visual.debug_bounds("inbox-open-external").is_some());
 }
 #[gpui::test]
 fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit_destinations(

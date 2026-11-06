@@ -10,4 +10,4 @@ Local builds are ad-hoc signed by default. Sparkle is enabled by supplying its f
 
 Release launches use existing desktop data. Isolated development data is available only when explicitly requested via `--dev-data`. See [data continuity](data-storage.md) before choosing `--vorkspace-db` or overriding the development directory.
 
-The desktop keeps the familiar project rail on the left and the main workspace in the middle. Sessions, Explorer, and Changes share the right-hand sidebar with Bot details. Both use the same saved width, so resizing either keeps the size consistent when switching between sessions and Bots. Settings → Appearance controls theme, translucency, and interface scale.
+The desktop keeps the project rail and its Sessions, Explorer, and Changes sidebar on the left. Drag the sidebar’s right edge to resize it. Bots have a separate floating Sessions and Documents island within their own pane; narrow panes open it from the Bot face or the top-right button. Settings → Appearance controls theme, translucency, and interface scale.

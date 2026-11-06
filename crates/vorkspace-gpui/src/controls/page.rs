@@ -3,6 +3,7 @@ use gpui::{
     Div, ElementId, FocusHandle, FontWeight, Hsla, IntoElement, Pixels, Role, SharedString,
     Stateful, Window, div, prelude::*, px,
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::{accent_color, content};
 
 pub(crate) const TOOLBAR_HEIGHT: f32 = 36.;
@@ -20,8 +21,6 @@ pub(crate) const META_SIZE: f32 = 12.;
 pub(crate) const META_LINE: f32 = 18.;
 pub(crate) const BODY_SIZE: f32 = 14.;
 pub(crate) const BODY_LINE: f32 = 22.;
-pub(crate) const CORNER: f32 = 6.;
-pub(crate) const CARD_CORNER: f32 = 8.;
 
 pub(crate) fn divider() -> Hsla {
     content(0.10)
@@ -49,10 +48,45 @@ pub(crate) fn detail_pane(split: bool) -> Div {
         .flex()
         .flex_col()
         .when(split, |d| {
-            d.rounded_l(px(crate::liquid::PANE_RADIUS))
+            d.rounded_l(px(radius::SURFACE))
                 .border_l_1()
                 .border_color(divider())
         })
+}
+
+/// The grab target spans the seam; only the detail pane's curved border lights
+/// up. Painting the grab target itself leaves a square bar across both corners.
+pub(crate) fn detail_resize_handle(
+    id: &'static str,
+    label: &'static str,
+    dragging: bool,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .group("page-detail-resize")
+        .role(Role::Splitter)
+        .aria_label(label)
+        .absolute()
+        .right(px(-3.))
+        .top_0()
+        .bottom_0()
+        .w(px(6.))
+        .cursor(gpui::CursorStyle::ResizeLeftRight)
+        .child(
+            div()
+                .absolute()
+                .left(px(3.))
+                .top_0()
+                .h_full()
+                .w(px(radius::SURFACE * 2.))
+                .rounded_l(px(radius::SURFACE))
+                .border_l_1()
+                .border_color(content(if dragging { 0.25 } else { 0. }))
+                .group_hover("page-detail-resize", |style| {
+                    style.border_color(content(0.25))
+                }),
+        )
 }
 
 pub(crate) fn toolbar() -> Div {
@@ -75,7 +109,7 @@ pub(crate) fn field_frame() -> Div {
         .flex()
         .items_center()
         .gap(px(8.))
-        .rounded(px(CORNER))
+        .rounded(px(radius::CONTROL))
         .bg(content(0.05))
         .text_color(secondary_ink())
 }
@@ -97,7 +131,7 @@ pub(crate) fn row(
         .min_w_0()
         .px(px(8.))
         .py(px(8.))
-        .rounded(px(CORNER))
+        .rounded(px(radius::CONTROL))
         .border_1()
         .border_color(content(0.))
         .cursor_pointer()
@@ -172,7 +206,7 @@ pub(crate) fn action(
         .items_center()
         .justify_center()
         .gap(px(4.))
-        .rounded(px(CORNER))
+        .rounded(px(radius::CONTROL))
         .border_1()
         .border_color(content(0.))
         .text_size(px(LABEL_SIZE))
@@ -209,7 +243,7 @@ pub(crate) fn primary(
         .px(px(12.))
         .py_0()
         .gap(px(4.))
-        .rounded(px(CORNER))
+        .rounded(px(radius::CONTROL))
         .text_size(px(LABEL_SIZE))
         .line_height(px(LABEL_LINE))
         .border_1()
@@ -231,7 +265,7 @@ pub(crate) fn secondary(
         .px(px(12.))
         .py_0()
         .gap(px(4.))
-        .rounded(px(CORNER))
+        .rounded(px(radius::CONTROL))
         .text_size(px(LABEL_SIZE))
         .line_height(px(LABEL_LINE))
 }

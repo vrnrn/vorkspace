@@ -25,6 +25,7 @@ use vorkspace_ui::theme::*;
 
 pub(crate) enum Event {
     Close,
+    OpenTab(Box<Item>),
     OpenSession(i64),
     StartSession {
         item: Box<Item>,
@@ -69,6 +70,12 @@ pub(crate) struct Inbox {
     summary_rows: std::cell::RefCell<ui::SummaryRows>,
     focus_comment: bool,
     selected: Option<String>,
+    /// A detail-only page keeps its item identity when a list refresh omits it.
+    /// The last available summary is retained until a matching item arrives.
+    pinned_item: Option<Item>,
+    /// Animated leaf width from the containing workspace, when present.
+    pane_width: Option<f32>,
+    release_pending: bool,
     narrow_detail: bool,
     details: Option<Details>,
     thread: Option<Thread>,
@@ -262,6 +269,9 @@ impl Inbox {
             summary_rows: Default::default(),
             focus_comment: false,
             selected: None,
+            pinned_item: None,
+            pane_width: None,
+            release_pending: false,
             narrow_detail: false,
             details: None,
             thread: None,
@@ -319,6 +329,17 @@ impl Inbox {
             _subscriptions: subscriptions,
         }
     }
+    pub(crate) fn set_pane_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        let width = width.is_finite().then_some(width.max(0.));
+        if self.pane_width != width {
+            self.pane_width = width;
+            if width.is_some_and(|width| width < 900.) {
+                self.resize_start = None;
+            }
+            cx.notify();
+        }
+    }
+
     pub(crate) fn set_context(
         &mut self,
         mut projects: Vec<PathBuf>,
@@ -361,7 +382,11 @@ impl Inbox {
             if let Some(item) = self.item() {
                 self.state.seen.mark(&item);
                 self.save(cx);
-            } else if self.selected.is_none()
+                if self.pinned_item.is_some() && self.details.is_none() && !self.detail_loading {
+                    self.load_detail(true, cx);
+                }
+            } else if self.pinned_item.is_none()
+                && self.selected.is_none()
                 && let Some(item) = self.visible_items(cx).first()
             {
                 self.select(item.key(), cx);
@@ -671,17 +696,20 @@ impl Inbox {
     fn save(&mut self, cx: &mut Context<Self>) {
         if let Some(owner) = self.owner.clone() {
             let state = self.state.clone();
+            let save_layout = self.pinned_item.is_none();
             let _ = owner.update(cx, |owner, cx| {
                 for (key, revision) in state.seen.items {
                     let old = owner.state.seen.items.entry(key).or_default();
                     *old = (*old).max(revision);
                 }
                 owner.state.seen.seeded |= state.seen.seeded;
-                owner
-                    .state
-                    .provider_filters
-                    .insert(state.source.clone(), state.filters);
-                owner.state.list_width = state.list_width;
+                if save_layout {
+                    owner
+                        .state
+                        .provider_filters
+                        .insert(state.source.clone(), state.filters);
+                    owner.state.list_width = state.list_width;
+                }
                 owner.save(cx);
                 cx.notify();
             });
@@ -741,6 +769,111 @@ impl Inbox {
         self.pages.insert(source.into(), page.clone());
         page
     }
+    pub(crate) fn connector_item_page(
+        &mut self,
+        source: &str,
+        item: Item,
+        cx: &mut Context<Self>,
+    ) -> Entity<Self> {
+        assert_eq!(source, item.provider, "item page provider must match item");
+        let page_key = format!("item:{}", item.key());
+        if let Some(page) = self.pages.get(&page_key) {
+            page.update(cx, |page, _| page.release_pending = false);
+            return page.clone();
+        }
+        let owner = cx.weak_entity();
+        let page = cx.new(|cx| {
+            let mut page = Self::new_inner(
+                self.store.clone(),
+                self.projects.clone(),
+                self.service.cwd.clone(),
+                false,
+                cx,
+            );
+            page.owner = Some(owner);
+            page.state = self.state.clone();
+            page.state.source = source.into();
+            page.state.filters = self.state.filters_for(source).clone();
+            page.snapshot = self.snapshot.clone();
+            page.sessions = self.sessions.clone();
+            page.bots = self.bots.clone();
+            page.appearances = self.appearances.clone();
+            page.loading = self.loading;
+            page.selected = Some(item.key());
+            page.pinned_item = Some(item);
+            page
+        });
+        self.pages.insert(page_key, page.clone());
+        page
+    }
+    pub(crate) fn release_item_page(&mut self, item: &Item, cx: &mut Context<Self>) {
+        let page_key = format!("item:{}", item.key());
+        let Some(page) = self.pages.get(&page_key) else {
+            return;
+        };
+        let busy = page.update(cx, |page, cx| {
+            page.set_active(false, cx);
+            page.release_pending = true;
+            page.posting || page.acting
+        });
+        if !busy {
+            self.pages.remove(&page_key);
+        }
+    }
+    fn finish_pending_release(&mut self, cx: &mut Context<Self>) {
+        if !self.release_pending || self.posting || self.acting {
+            return;
+        }
+        let (Some(owner), Some(item)) = (self.owner.clone(), self.pinned_item.as_ref()) else {
+            return;
+        };
+        let page_key = format!("item:{}", item.key());
+        let page_entity = cx.entity();
+        let _ = owner.update(cx, |owner, _| {
+            if owner.pages.get(&page_key) == Some(&page_entity) {
+                owner.pages.remove(&page_key);
+            }
+        });
+    }
+    pub(crate) fn pinned_item(&self) -> Option<&Item> {
+        self.pinned_item.as_ref()
+    }
+
+    fn item_in_project(item: &Item, project: &str) -> bool {
+        (item.provider == "jira" && item.project_path.is_empty())
+            || (!item.project_path.is_empty()
+                && vorkspace_core::files::path_key(&item.project_path)
+                    == vorkspace_core::files::path_key(project))
+    }
+
+    pub(crate) fn item_by_key_for_project(&self, key: &str, project: &str) -> Option<Item> {
+        self.snapshot
+            .items
+            .iter()
+            .find(|item| item.key() == key && Self::item_in_project(item, project))
+            .cloned()
+    }
+
+    pub(crate) fn items_for_project(&self, project: &str, limit: usize) -> (Vec<Item>, bool) {
+        let mut items = self
+            .snapshot
+            .items
+            .iter()
+            .filter(|item| Self::item_in_project(item, project));
+        let selected = items.by_ref().take(limit).cloned().collect();
+        (selected, items.next().is_some())
+    }
+    pub(crate) fn pane_title(&self) -> String {
+        if self.pinned_item.is_none() {
+            return model::provider_label(&self.state.source).into();
+        }
+        let item = self.item().expect("pinned page retains its item");
+        if item.title.is_empty() {
+            item.reference()
+        } else {
+            item.title
+        }
+    }
     /// Publish the complete root snapshot before delivering it to pages. Reading
     /// the latest owner at delivery avoids replaying an older queued snapshot.
     fn publish_pages(&self, cx: &mut Context<Self>) {
@@ -769,7 +902,14 @@ impl Inbox {
                     if state.connectors.enabled(&page.state.source) {
                         page.snapshot = snapshot.clone();
                         page.sessions = sessions.clone();
-                        if page.active && page.selected.is_none()
+                        if let Some(pinned) = page.pinned_item.as_mut()
+                            && let Some(current) = snapshot.items.iter().find(|item| {
+                                item.key() == pinned.key()
+                                    && item.updated_ms() >= pinned.updated_ms()
+                            }) {
+                            *pinned = current.clone();
+                        }
+                        if page.pinned_item.is_none() && page.active && page.selected.is_none()
                             && let Some(item) = page.visible_items(cx).first() {
                             page.select(item.key(), cx);
                         } else if page.active && let Some(item) = page.item() {
@@ -798,6 +938,15 @@ impl Inbox {
             .collect()
     }
     fn item(&self) -> Option<Item> {
+        if let Some(pinned) = &self.pinned_item {
+            return self
+                .snapshot
+                .items
+                .iter()
+                .find(|item| item.key() == pinned.key() && item.updated_ms() >= pinned.updated_ms())
+                .cloned()
+                .or_else(|| Some(pinned.clone()));
+        }
         self.snapshot
             .items
             .iter()
@@ -805,6 +954,13 @@ impl Inbox {
             .cloned()
     }
     fn select(&mut self, key: String, cx: &mut Context<Self>) {
+        if self
+            .pinned_item
+            .as_ref()
+            .is_some_and(|item| item.key() != key)
+        {
+            return;
+        }
         if self.selected.as_ref() == Some(&key) {
             return;
         }
@@ -1057,6 +1213,29 @@ impl Inbox {
             self.self_activity.insert(key, (revision, Instant::now()));
         }
     }
+    fn update_item_summary(&mut self, item: Item, cx: &mut Context<Self>) {
+        let key = item.key();
+        let mut changed = false;
+        if let Some(old) = self.snapshot.items.iter_mut().find(|old| old.key() == key)
+            && old.updated_ms() <= item.updated_ms()
+        {
+            *old = item.clone();
+            changed = true;
+        }
+        if let Some(pinned) = self.pinned_item.as_mut()
+            && pinned.key() == key
+            && pinned.updated_ms() <= item.updated_ms()
+        {
+            *pinned = item;
+            changed = true;
+        }
+        if changed && self.owner.is_none() {
+            self.publish_pages(cx);
+        }
+        if changed {
+            cx.notify();
+        }
+    }
     fn post_comment(&mut self, cx: &mut Context<Self>) {
         if self.posting {
             return;
@@ -1089,7 +1268,11 @@ impl Inbox {
                     this.record_self_activity(key.clone(), revision, cx);
                 }
                 if this.selected.as_ref() != Some(&key) {
+                    if result.is_ok() {
+                        this.refresh(cx);
+                    }
                     cx.notify();
+                    this.finish_pending_release(cx);
                     return;
                 }
                 match result {
@@ -1097,12 +1280,15 @@ impl Inbox {
                         this.comment
                             .update(cx, |input, cx| input.set_text(String::new(), cx));
                         this.reply = None;
-                        this.load_detail(false, cx);
+                        if !this.release_pending {
+                            this.load_detail(false, cx);
+                        }
                         this.refresh(cx);
                     }
                     Err(error) => this.post_error = Some(error),
                 }
                 cx.notify();
+                this.finish_pending_release(cx);
             });
         })
         .detach();
@@ -1246,21 +1432,28 @@ impl Inbox {
                 match result {
                     Ok(item) => {
                         this.record_self_activity(key.clone(), item.updated_ms(), cx);
-                        this.action_notice = (merging
-                            && !item.state.eq_ignore_ascii_case("merged"))
-                        .then(|| "Merge queued or auto-merge enabled.".into());
-                        if let Some(old) = this.snapshot.items.iter_mut().find(|i| i.key() == key)
-                            && old.updated_ms() <= item.updated_ms()
-                        {
-                            *old = item;
+                        if let Some(owner) = this.owner.clone() {
+                            let shared = item.clone();
+                            let _ = owner.update(cx, |owner, cx| {
+                                owner.update_item_summary(shared, cx);
+                            });
                         }
-                        this.confirm_action = None;
-                        this.load_detail(false, cx);
+                        this.update_item_summary(item.clone(), cx);
+                        if this.selected.as_ref() == Some(&key) {
+                            this.action_notice = (merging
+                                && !item.state.eq_ignore_ascii_case("merged"))
+                            .then(|| "Merge queued or auto-merge enabled.".into());
+                            this.confirm_action = None;
+                            if !this.release_pending {
+                                this.load_detail(false, cx);
+                            }
+                        }
                         this.refresh(cx);
                     }
                     Err(error) => this.action_error = Some(error),
                 }
                 cx.notify();
+                this.finish_pending_release(cx);
             });
         })
         .detach();

@@ -55,12 +55,16 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
             assert!(!shell.bot_active(cx));
             let pane = shell.workspace.active.unwrap();
             assert_ne!(pane, session, "the file has its own title tab");
-            assert_eq!(shell.workspace.session_for_pane(pane), session);
+            assert_eq!(shell.workspace.session_for_pane(pane), Some(session));
             assert!(
                 shell.visible_tabs(cx).contains(&bot),
                 "the Bot tab stays beside its file tab"
             );
-            assert!(shell.visible_tabs(cx).contains(&TitleTab::Session(session)));
+            assert!(
+                shell
+                    .visible_tabs(cx)
+                    .contains(&TitleTab::Workspace(session))
+            );
             let review = shell.active_review(cx).unwrap();
             assert!(review.read(cx).state.chat_hidden);
             let editor = review
@@ -265,7 +269,7 @@ fn numbered_shortcuts_return_from_file_only_tabs_to_sessions(cx: &mut TestAppCon
                 let file = if detached {
                     let file = shell.independent_file_pane(first, cx).unwrap();
                     shell.workspace.close(first);
-                    shell.reorder_title_tab(&TitleTab::Session(file), 0, cx);
+                    shell.reorder_title_tab(&TitleTab::Workspace(file), 0, cx);
                     file
                 } else {
                     shell.reviews[&first].update(cx, |r, cx| {
@@ -277,7 +281,7 @@ fn numbered_shortcuts_return_from_file_only_tabs_to_sessions(cx: &mut TestAppCon
                 shell.open(session, w, cx);
                 assert_eq!(
                     shell.visible_tabs(cx),
-                    [TitleTab::Session(file), TitleTab::Session(session)]
+                    [TitleTab::Workspace(file), TitleTab::Workspace(session)]
                 );
                 file
             })
@@ -413,7 +417,7 @@ fn session_pane_grip_detaches_and_redocks_preserving_chat_and_dirty_files(cx: &m
             let file = *shell.workspace.review_owners.keys().next().unwrap();
             assert_eq!(
                 shell.visible_tabs(cx),
-                [TitleTab::Session(session), TitleTab::Session(file)]
+                [TitleTab::Workspace(session), TitleTab::Workspace(file)]
             );
             assert_eq!(shell.workspace.active, Some(session));
             assert!(!shell.reviews.contains_key(&session));
@@ -610,14 +614,14 @@ fn file_pane_grip_detaches_and_redocks_without_recreating_dirty_editors(cx: &mut
         .update(visual, |shell, _, cx| {
             let pane = shell.workspace.active.unwrap();
             assert!(pane < 0);
-            assert_eq!(shell.workspace.session_for_pane(pane), session);
+            assert_eq!(shell.workspace.session_for_pane(pane), Some(session));
             assert!(!shell.reviews.contains_key(&session));
             assert_eq!(shell.reviews[&pane], review);
             assert_eq!(review.read(cx).active_editor().unwrap(), editor);
             assert!(editor.read(cx).dirty);
             assert_eq!(
                 shell.visible_tabs(cx),
-                [TitleTab::Session(pane), TitleTab::Session(session)]
+                [TitleTab::Workspace(pane), TitleTab::Workspace(session)]
             );
             assert_eq!(
                 shell.tab_copy(pane, cx).headline,

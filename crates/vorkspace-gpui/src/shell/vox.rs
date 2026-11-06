@@ -41,11 +41,11 @@ impl Shell {
                 .filter(|_| self.bot_active(cx))
                 .and_then(|m| m.read(cx).chat())
                 .or_else(|| {
-                    self.workspace.active.and_then(|id| {
-                        self.sessions
-                            .get(&self.workspace.session_for_pane(id))
-                            .cloned()
-                    })
+                    self.workspace
+                        .active
+                        .and_then(|id| self.workspace.session_for_pane(id))
+                        .and_then(|id| self.sessions.get(&id))
+                        .cloned()
                 });
             return Ok(
                 json!({"session":selected.map(|s|{let s=s.read(cx);json!({"id":s.summary.id,"title":s.summary.title,"cwd":s.summary.cwd,"harness":s.summary.provider,"busy":s.busy})}),"projects":projects,"bots":bots.bots.iter().filter(|b| !b.is_minion()).map(|b|json!({"id":b.id,"name":b.label()})).collect::<Vec<_>>()}),
@@ -178,7 +178,7 @@ impl Shell {
                 .or_else(|| {
                     self.workspace
                         .active
-                        .map(|id| self.workspace.session_for_pane(id))
+                        .and_then(|id| self.workspace.session_for_pane(id))
                 })
                 .ok_or("Choose a session")?;
             if !self

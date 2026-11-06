@@ -1033,6 +1033,7 @@ pub(crate) struct DeferredDraw {
 }
 
 pub(crate) struct Frame {
+    pub(crate) generation: u64,
     pub(crate) focus: Option<FocusId>,
     pub(crate) window_active: bool,
     pub(crate) element_states: FxHashMap<(GlobalElementId, TypeId), ElementStateBox>,
@@ -1089,6 +1090,7 @@ impl Frame {
 
     pub(crate) fn new(dispatch_tree: DispatchTree) -> Self {
         Frame {
+            generation: 0,
             focus: None,
             window_active: false,
             element_states: FxHashMap::default(),
@@ -3564,6 +3566,7 @@ impl Window {
         debug_assert!(self.rendered_entity_stack.is_empty());
         self.invalidator.set_dirty(false);
         self.requested_autoscroll = None;
+        self.next_frame.generation = self.rendered_frame.generation.wrapping_add(1);
 
         // Restore the previously-used input handler.
         // Place it back into a None slot (left by a previous .take()) so that

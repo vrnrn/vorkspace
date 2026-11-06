@@ -2,6 +2,7 @@
 use super::{TranscriptView, tasks};
 use gpui::{Animation, AnimationExt, AnyElement, Context, Div, Role, div, prelude::*, px, rgb};
 use vorkspace_core::tool::{CommandStep, ToolCall, ToolState};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 /// Shell plumbing that says nothing about what a chained command was for.
@@ -40,7 +41,7 @@ fn search_pill() -> Div {
         .px_2()
         .border_1()
         .border_color(content(0.))
-        .rounded(px(6.))
+        .rounded(px(radius::CONTROL))
         .bg(content(0.06))
 }
 
@@ -306,7 +307,7 @@ impl TranscriptView {
                             })
                         })
                         .when(is_file, |d| {
-                            d.rounded(px(4.)).px_1().bg(content(0.06)).child(
+                            d.rounded(px(radius::SMALL)).px_1().bg(content(0.06)).child(
                                 if shown.action == "List" {
                                     icon("folder", 16.).into_any_element()
                                 } else {

@@ -1,5 +1,6 @@
 //! The Bot settings dialog and the pickers it opens.
 use super::*;
+use vorkspace_ui::radius;
 
 impl Bots {
     pub(crate) fn settings_modal(
@@ -8,7 +9,10 @@ impl Bots {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if bot.is_minion() {
+        // Background editing temporarily owns the modal surface. Retain the
+        // settings section and draft, but don't paint an occluding parent above
+        // that editor (or let its outside-click handler dismiss the parent).
+        if bot.is_minion() || self.background.is_some() {
             return None;
         }
 
@@ -39,6 +43,7 @@ impl Bots {
             }
             SettingsSection::Soul => self.soul_page(bot, cx),
             SettingsSection::Memory => self.memory_page(bot, window, cx),
+            SettingsSection::Habits => self.habit_panel.clone().into_any_element(),
         };
         self.bind_settings_blurs(window, cx);
         let weak = cx.weak_entity();
@@ -139,10 +144,16 @@ impl Bots {
                                             (SettingsSection::General, "General", "settings"),
                                             (SettingsSection::Soul, "Soul", "sparkles"),
                                             (SettingsSection::Memory, "Memory", "sticky-note"),
+                                            (SettingsSection::Habits, "Habits", "clock"),
                                         ]
                                         .into_iter()
                                         .filter(|(tab, _, _)| {
-                                            !creating || *tab != SettingsSection::Memory
+                                            !creating
+                                                || matches!(
+                                                    tab,
+                                                    SettingsSection::General
+                                                        | SettingsSection::Soul
+                                                )
                                         })
                                         .map(
                                             |(tab, label, glyph)| {
@@ -163,7 +174,7 @@ impl Bots {
                                                     .gap(px(10.))
                                                     .px(px(10.))
                                                     .py(px(6.))
-                                                    .rounded_lg()
+                                                    .rounded(px(radius::CONTROL))
                                                     .text_size(px(13.))
                                                     .line_height(px(20.))
                                                     .text_color(content(if section == tab {
@@ -241,7 +252,7 @@ impl Bots {
                                                 .items_center()
                                                 .gap(px(10.))
                                                 .px(px(10.))
-                                                .rounded_lg()
+                                                .rounded(px(radius::CONTROL))
                                                 .text_size(px(13.))
                                                 .line_height(px(20.))
                                                 .text_color(rgb(0xff6467))
@@ -277,6 +288,7 @@ impl Bots {
                                         "Close Bot settings",
                                         "close",
                                     )
+                                    .debug_selector(|| "bot-settings-close".into())
                                     .size(px(28.))
                                     .on_click(cx.listener(
                                         move |this, _, window, cx| {
@@ -337,7 +349,7 @@ impl Bots {
                         .h(px(30.))
                         .min_w(px(76.))
                         .px_4()
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -452,7 +464,7 @@ impl Bots {
                 .h(px(28.))
                 .px_1p5()
                 .mx(px(-6.))
-                .rounded_md()
+                .rounded(px(radius::CONTROL))
                 .flex()
                 .items_center()
                 .gap_2()
@@ -473,7 +485,8 @@ impl Bots {
                     .id("bot-look")
                     .debug_selector(|| "bot-look".into())
                     .role(Role::Button)
-                    .aria_label("Change mascot and color")
+                    .aria_label("Edit Bot appearance")
+                    .tab_stop(true)
                     .relative()
                     .size(px(144.))
                     .flex_shrink_0()
@@ -493,6 +506,20 @@ impl Bots {
                         window,
                         cx,
                     ))
+                    .child(
+                        div()
+                            .debug_selector(|| "bot-look-edit".into())
+                            .absolute()
+                            .top_1()
+                            .right_1()
+                            .size(px(24.))
+                            .rounded(px(radius::CONTROL))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(content(0.65))
+                            .child(icon("pencil-edit", 14.)),
+                    )
                     .on_click(
                         cx.listener(move |this, _, w, cx| this.open_settings_look(&look, w, cx)),
                     ),
@@ -507,7 +534,7 @@ impl Bots {
                     .max_w_full()
                     .px_2()
                     .py_1p5()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .font_weight(FontWeight::MEDIUM)
                     .hover(|s| s.bg(content(0.05)))
                     .child(name),
@@ -527,7 +554,7 @@ impl Bots {
                     .h(px(28.))
                     .px_1p5()
                     .mx(px(-6.))
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
                     .gap_2()
@@ -599,7 +626,7 @@ impl Bots {
                         .max_w(px(208.))
                         .px_1p5()
                         .mx(px(-6.))
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .flex()
                         .items_center()
                         .gap_2()
@@ -635,7 +662,7 @@ impl Bots {
                     let group:SharedString=format!("bot-project-{ix}").into();
                     div().id(("bot-project",ix)).group(group.clone()).min_h(px(48.)).flex().items_center().gap_3().px_3().py_2()
                         .when(ix>0,|d|d.border_t_1().border_color(content(0.04)))
-                        .child(div().size(px(32.)).flex_shrink_0().rounded_lg().bg(content(0.05)).flex().items_center().justify_center()
+                        .child(div().size(px(32.)).flex_shrink_0().rounded(px(radius::CONTAINER)).bg(content(0.05)).flex().items_center().justify_center()
                             .child(crate::project_settings::project_icon(&appearance,project,16.)))
                         .child(div().flex_1().min_w_0()
                             .child(div().text_size(px(13.)).line_height(px(20.)).text_color(content(0.9)).truncate().child(label))
@@ -647,7 +674,7 @@ impl Bots {
                     .text_size(px(13.)).text_color(content(0.55)).hover(|s|s.bg(content(0.04)).text_color(content(1.)))
                     .when(!bot.projects.is_empty(),|d|d.border_t_1().border_color(content(0.04)))
                     .child(self.projects_anchor.probe())
-                    .child(div().size(px(32.)).rounded_lg().border_1().border_color(content(0.15)).flex().items_center().justify_center().child(icon("plus",14.)))
+                    .child(div().size(px(32.)).rounded(px(radius::CONTAINER)).border_1().border_color(content(0.15)).flex().items_center().justify_center().child(icon("plus",14.)))
                     .child("Add project").on_click(cx.listener(move |this,_,w,cx|this.pick_project(&add,w,cx)))))
             .child(heading("Sessions it starts",None))
             .child(card()
@@ -694,57 +721,29 @@ impl Bots {
         if self.minion_read_only(id) {
             return;
         }
-        let Some(bot) = self.roster.get(id).cloned() else {
+        if self.roster.get(id).is_none() {
             return;
-        };
-        let editor = cx.new(|cx| LookEditor::new(bot, cx));
-        let focus = editor.read(cx).name.focus_handle(cx);
-        let changed = cx.subscribe(&editor, |this, _, event: &LookChanged, cx| {
-            if let Some(bot) = this.roster.get_mut(&event.bot.id) {
-                bot.name = event.bot.name.clone();
-                bot.mascot = event.bot.mascot.clone();
-                bot.shape = event.bot.shape.clone();
-                bot.color = event.bot.color;
-                bot.fg_color = event.bot.fg_color;
-                bot.textured = event.bot.textured;
-                bot.seed = event.bot.seed;
-                bot.grid = event.bot.grid;
-            }
-            this.configure_chat(&event.bot.id, cx);
-            this.save(cx);
-        });
-        let submitted = cx.subscribe(&editor, |this, _, _: &LookSubmitted, cx| {
-            this.menu = None;
-            cx.notify();
-        });
+        }
         let menu = cx.new(|cx| {
             Menu::new(
                 "Bot options",
                 vec![
-                    MenuItem::Custom(AnyView::from(editor), focus.clone()),
-                    MenuItem::Separator,
-                    MenuAction::new("background", "Background image")
-                        .icon("image-add")
-                        .into(),
-                    MenuAction::new("settings", "Settings")
+                    MenuAction::new("settings", "Bot settings")
                         .icon("settings")
                         .into(),
                 ],
                 window,
                 cx,
             )
-            .width(280.)
-            .style(MenuStyle::Group)
+            .width(180.)
         });
         let target = id.to_string();
         let picked = cx.subscribe_in(&menu, window, move |this, _, event: &MenuEvent, w, cx| {
             this.menu = None;
-            if let MenuEvent::Picked(action, _) = event {
-                match action.as_ref() {
-                    "background" => this.open_background(&target, w, cx),
-                    "settings" => this.open_bot_settings(&target, w, cx),
-                    _ => {}
-                }
+            if let MenuEvent::Picked(action, _) = event
+                && action.as_ref() == "settings"
+            {
+                this.open_bot_settings(&target, w, cx);
             }
             cx.notify();
         });
@@ -757,8 +756,7 @@ impl Bots {
                 .map(Anchor::Slot)
                 .unwrap_or_else(|| Anchor::Slot(self.settings_anchor.clone())),
         };
-        self.menu = Some((id.into(), menu, vec![changed, submitted, picked]));
-        window.focus(&focus, cx);
+        self.menu = Some((id.into(), menu, vec![picked]));
         cx.notify();
     }
     pub(crate) fn options_surface(&self, cx: &App) -> Option<AnyElement> {
@@ -1031,7 +1029,7 @@ impl Bots {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(bot) = self.roster.get(id).cloned() else {
+        let Some(bot) = self.settings_bot(id).cloned() else {
             return;
         };
         let view = cx.new(|cx| {
@@ -1048,18 +1046,22 @@ impl Bots {
             )
         });
         let id = id.to_string();
-        let events = cx.subscribe(
+        let events = cx.subscribe_in(
             &view,
-            move |this, _, event: &BackgroundEvent, cx| match event {
+            window,
+            move |this, _, event: &BackgroundEvent, window, cx| match event {
                 BackgroundEvent::Changed(appearance) => {
-                    if let Some(bot) = this.roster.get_mut(&id) {
-                        bot.background = appearance.background.clone();
-                    }
-                    this.configure_chat(&id, cx);
-                    this.save(cx);
+                    this.edit_settings_bot(
+                        &id,
+                        |bot| {
+                            bot.background = appearance.background.clone();
+                        },
+                        cx,
+                    );
                 }
                 BackgroundEvent::Close => {
                     this.background = None;
+                    window.focus(&this.settings_focus, cx);
                     this.changed(cx);
                 }
             },

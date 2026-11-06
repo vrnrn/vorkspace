@@ -3,6 +3,7 @@ use super::*;
 use gpui::FontWeight;
 use std::sync::Arc;
 use vorkspace_ui::clock::Instant;
+use vorkspace_ui::radius;
 
 impl Bots {
     pub(in crate::bots) fn send_channel_message(&mut self, channel: &str, cx: &mut Context<Self>) {
@@ -409,7 +410,7 @@ impl Bots {
                 .w_full()
                 .px_3()
                 .py_2()
-                .rounded_md()
+                .rounded(px(radius::CONTROL))
                 .bg(content(0.04))
                 .flex()
                 .items_center()
@@ -482,7 +483,7 @@ impl Bots {
             .min_w_0()
             .border_1()
             .border_color(composer_border(focus.is_focused(window)))
-            .rounded_xl()
+            .rounded(px(radius::SURFACE))
             .bg(composer_fill())
             .px_3()
             .pt_3()
@@ -533,7 +534,7 @@ impl Bots {
                     .max_w(px(900.))
                     .px_3()
                     .py_2()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .bg(content(0.05))
                     .text_color(content(0.7))
                     .child(error.clone()),
@@ -634,7 +635,7 @@ impl Bots {
                     .w_full()
                     .h(px(42.))
                     .px_3()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
                     .gap_3()
@@ -740,8 +741,8 @@ impl Bots {
         let mut form=div().w_full().max_w(px(520.)).flex().flex_col().gap_4()
             .child(div().text_size(px(if editing.is_some(){18.}else{22.})).font_weight(FontWeight::SEMIBOLD).child(if editing.is_some(){"Channel settings"}else{"New channel"}))
             .child(div().text_color(content(0.5)).line_height(px(21.)).child("Give your Bots a shared conversation. Each keeps its own model, account and permissions."))
-            .child(div().flex().flex_col().gap_2().child("Name").child(div().px_3().py_2p5().rounded_md().border_1().border_color(content(0.12)).bg(content(0.03)).child(name)))
-            .child(div().flex().flex_col().gap_2().child("Topic").child(div().px_3().py_2p5().rounded_md().border_1().border_color(content(0.12)).bg(content(0.03)).child(topic)))
+            .child(div().flex().flex_col().gap_2().child("Name").child(div().px_3().py_2p5().rounded(px(radius::CONTROL)).border_1().border_color(content(0.12)).bg(content(0.03)).child(name)))
+            .child(div().flex().flex_col().gap_2().child("Topic").child(div().px_3().py_2p5().rounded(px(radius::CONTROL)).border_1().border_color(content(0.12)).bg(content(0.03)).child(topic)))
             .child(div().flex().flex_col().gap_2().child("Members").child(bots));
         if let Some(error) = self.channels.load_error.as_ref().or(self.error.as_ref()) {
             form = form.child(div().text_color(content(0.6)).child(error.clone()));

@@ -4,6 +4,7 @@ use gpui::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) fn stroke() -> Hsla {
@@ -11,6 +12,49 @@ pub(crate) fn stroke() -> Hsla {
 }
 pub(crate) fn selection() -> Hsla {
     content(0.1)
+}
+
+/// The rail's right edge follows the adjacent pane's rounded corners.
+/// `cap_top` is the pane's top offset, or the title rule beside a compact rail.
+pub(crate) fn rail_divider(cap_top: Option<f32>) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let edge = bounds.right().as_f32();
+            let top = bounds.top().as_f32();
+            let bottom = bounds.bottom().as_f32();
+            let start = top + cap_top.map_or(TITLE_BAR_HEIGHT, |cap| cap + radius::SURFACE);
+            let end = bottom - radius::SURFACE;
+            let divider = content(0.08);
+            if end > start {
+                window.paint_quad(gpui::fill(
+                    gpui::Bounds::new(
+                        gpui::point(px(edge - 1.), px(start)),
+                        gpui::size(px(1.), px(end - start)),
+                    ),
+                    divider,
+                ));
+            }
+            let x = edge - 0.5;
+            let at = |x, y| gpui::point(px(x), px(y));
+            let mut corners = gpui::PathBuilder::stroke(px(1.));
+            if let Some(cap) = cap_top {
+                let rule = top + cap - 0.5;
+                corners.move_to(at(x, top + cap + radius::SURFACE));
+                corners.curve_to(at(edge + radius::SURFACE, rule), at(x, rule));
+            }
+            corners.move_to(at(x, end));
+            corners.curve_to(
+                at(edge + radius::SURFACE, bottom + 0.5),
+                at(x, bottom + 0.5),
+            );
+            if let Ok(path) = corners.build() {
+                window.paint_path(path, divider);
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
 }
 pub(crate) const DIFF_ADD: u32 = 0x6ee7b7;
 pub(crate) const DIFF_DEL: u32 = 0xfda4af;
@@ -94,7 +138,7 @@ pub(crate) fn icon_action(
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(4.))
+        .rounded(px(radius::SMALL))
         .when(!enabled, |d| d.opacity(0.4))
         .when(enabled, |d| d.hover(|s| s.bg(content(0.1))))
         .child(
@@ -159,7 +203,7 @@ pub(crate) fn diff_stat(
         .justify_end()
         .gap(px(6.))
         .px_1p5()
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .whitespace_nowrap()
         .text_size(px(10. * scale))
         .font_weight(FontWeight::MEDIUM)

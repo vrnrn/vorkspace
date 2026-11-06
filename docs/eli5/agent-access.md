@@ -15,10 +15,11 @@ Once you type `/operator` in a thread, that agent can:
 - **Start new agent tabs (`sessions.start`)**: For example, you can say *"/operator open two tabs—one to check the backend and one to check the UI"* and it will create new tabs for you.
 - **Create Git worktrees (`worktrees.create`)**: It can set up fresh branch folders so multiple agents can work in parallel without stepping on each other's code.
 - **Check on other tabs (`sessions.list`, `sessions.read`)**: It can look at your other sessions in the project and read their recent replies.
+- **Arrange workspace tabs (`workspace.list`, `workspace.open`, `workspace.focus`, `workspace.close`, `workspace.move`, `workspace.detach`, `workspace.reorder`, `workspace.resize`)**: It can see which panes are open, open a note, connector item, Bot, document, terminal, Search, file, or chat, then select, tile, reorder, resize, or close those panes. It can move one pane or a whole tiled tab, using the same room limits as dragging panes yourself. If a terminal is running a process, the agent must inspect the process and explicitly confirm that exact process before closing it.
 - **Send follow-ups or drafts (`sessions.send`, `sessions.draft`)**: It can message an idle session or leave a draft message in its box for you to review before sending.
 - **Organize and clean up (`folders.move`, `sessions.stop`, `sessions.archive`, `sessions.delete`)**: It can tidy sessions into sidebar folders or stop/archive finished ones.
-- **Read and write your Notes (`notes.list`, `notes.read`, `notes.write`)**: It can look up your saved notes in Vorkspace or jot down a new note for you.
-- **Keep a to-do list (`todos.list`, `todos.add`, `todos.update`, `todos.remove`)**: It can add items to its board (or its project's board), move them between To do, In progress and Done, and tidy them up.
+- **Read and write your Notes (`notes.list`, `notes.read`, `notes.write`)**: It can look up your saved notes in Vorkspace or jot down a new note for you. The CLI shows each note's exact native `noteId` as well as its older numeric ID. If that note has an unfinished editor or recording change, the agent's write waits so your draft stays intact.
+- **Keep project to-dos (`todos.list`, `todos.add`, `todos.update`, `todos.remove`)**: It can add tasks with descriptions, attachments and dependencies, move them through To do, In progress, In review and Done, and work without GitHub. A linked project's GitHub issues also appear; publishing a local task to GitHub is an explicit choice. See [To-dos](todos.md).
 
 Bots and Minions already have the commands they can use in their instructions. They can read their saved soul and memory through Vorkspace when you ask, including topic notes and archived facts.
 

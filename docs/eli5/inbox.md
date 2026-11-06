@@ -13,9 +13,10 @@ shortcut keeps its connection running. Activity appears inside chats,
 so there is no separate Activity section or Compact view switch.
 
 Each enabled service has its own sidebar button. Click GitHub, GitLab or Jira to
-open its page in the main area; the tab bar hides while it is open, and choosing a
-project brings that project's session, terminal and Bot tabs back. Switching away keeps your search, selected
-item, scroll and unfinished reply in place during this run. A disconnected service shows its own setup instructions.
+open its library in a tab. Use Open in tab, Command-click, or middle-click an item
+to keep it open separately. Different items keep their own scroll position and
+unfinished comment. You can tile these tabs beside notes, sessions and other
+items. Switching away keeps your place; closing one does not change the others.
 
 Turning a service off hides it and stops checking it. Your saved login details
 and choices stay on your computer, so you can turn it back on later.

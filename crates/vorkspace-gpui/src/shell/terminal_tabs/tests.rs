@@ -1,25 +1,33 @@
 use super::*;
+use crate::workspace::AppPane;
 use gpui::{TestAppContext, VisualTestContext};
 
-fn terminal_id(tab: &TitleTab) -> u64 {
-    let TitleTab::Terminal { id, .. } = tab else {
-        panic!("expected a terminal tab");
+fn pane_id(tab: &TitleTab) -> i64 {
+    let TitleTab::Workspace(id) = tab else {
+        panic!("expected a workspace tab");
+    };
+    *id
+}
+
+fn terminal_id(shell: &Shell, tab: &TitleTab) -> u64 {
+    let AppPane::Terminal { id, .. } = &shell.workspace.app_panes[&pane_id(tab)].content else {
+        panic!("expected a terminal pane");
     };
     *id
 }
 
 fn active_terminal(shell: &Shell, cx: &App) -> (TitleTab, Entity<Terminal>) {
     let tab = shell.active_title_tab(cx).unwrap();
-    let terminal = shell.terminal_tabs[&terminal_id(&tab)].clone();
+    let terminal = shell.terminal_tabs[&terminal_id(shell, &tab)].clone();
     (tab, terminal)
 }
 
 fn title_selector(tab: &TitleTab) -> &'static str {
-    Box::leak(format!("terminal-title-tab-{}", terminal_id(tab)).into_boxed_str())
+    Box::leak(format!("title-tab-{}", pane_id(tab)).into_boxed_str())
 }
 
 #[gpui::test]
-fn identical_cwd_terminal_pills_keep_hover_and_selection_independent(cx: &mut TestAppContext) {
+fn identical_cwd_terminal_tabs_keep_hover_and_selection_independent(cx: &mut TestAppContext) {
     vorkspace_ui::clock::use_test_clock(cx);
     let (window, _, _) = super::super::tests::window(cx);
     let (first, second) = window
@@ -37,16 +45,19 @@ fn identical_cwd_terminal_pills_keep_hover_and_selection_independent(cx: &mut Te
     let first_bounds = visual.debug_bounds(title_selector(&first)).unwrap();
     visual.simulate_mouse_move(first_bounds.center(), None, Default::default());
     visual.run_until_parked();
-    let key = |tab: &TitleTab| format!("tool:terminal-title-tab-{}", terminal_id(tab));
+    let highlighted = |tab: &TitleTab, alpha, visual: &mut VisualTestContext| {
+        crate::shell::tests::rounded_highlight(
+            window,
+            &format!("title-tab-plate-{}", pane_id(tab)),
+            alpha,
+            visual,
+        )
+    };
+    assert!(highlighted(&first, 0.07, visual));
+    assert!(highlighted(&second, 0.1, visual));
     window
-        .update(visual, |shell, _, _| {
-            assert_eq!(
-                shell.tab_liquid.selected().as_deref(),
-                Some(key(&second).as_str())
-            );
-            let pills = shell.tab_liquid.pills();
-            assert!(pills.contains(&(key(&first).into(), false)), "{pills:?}");
-            assert!(pills.contains(&(key(&second).into(), true)));
+        .update(visual, |shell, _, cx| {
+            assert_eq!(shell.active_title_tab(cx), Some(second.clone()));
         })
         .unwrap();
     visual.simulate_click(first_bounds.center(), Default::default());
@@ -54,15 +65,11 @@ fn identical_cwd_terminal_pills_keep_hover_and_selection_independent(cx: &mut Te
     let second_bounds = visual.debug_bounds(title_selector(&second)).unwrap();
     visual.simulate_mouse_move(second_bounds.center(), None, Default::default());
     visual.run_until_parked();
+    assert!(highlighted(&first, 0.1, visual));
+    assert!(highlighted(&second, 0.07, visual));
     window
-        .update(visual, |shell, _, _| {
-            assert_eq!(
-                shell.tab_liquid.selected().as_deref(),
-                Some(key(&first).as_str())
-            );
-            let pills = shell.tab_liquid.pills();
-            assert!(pills.contains(&(key(&first).into(), true)));
-            assert!(pills.contains(&(key(&second).into(), false)));
+        .update(visual, |shell, _, cx| {
+            assert_eq!(shell.active_title_tab(cx), Some(first.clone()));
         })
         .unwrap();
 }
@@ -149,7 +156,7 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
                         shell
                             .visible_tabs(cx)
                             .iter()
-                            .filter(|tab| matches!(tab, TitleTab::Terminal { .. }))
+                            .filter(|tab| matches!(tab, TitleTab::Workspace(id) if matches!(shell.workspace.app_panes.get(id).map(|pane| &pane.content), Some(AppPane::Terminal { .. }))))
                             .count(),
                         opened.len() + 1
                     );
@@ -173,7 +180,7 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
             .update(visual, |shell, w, cx| {
                 assert_eq!(shell.active_title_tab(cx).as_ref(), Some(tab));
                 assert_eq!(shell.terminal_tabs.len(), opened.len());
-                assert_eq!(shell.terminal_tabs[&terminal_id(tab)], *terminal);
+                assert_eq!(shell.terminal_tabs[&terminal_id(shell, tab)], *terminal);
                 assert!(terminal.focus_handle(cx).is_focused(w));
                 let screen = terminal.read(cx).fixture_screen();
                 assert!(screen.contains(&format!("shell-{index}-only")));
@@ -188,21 +195,25 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
     // The real close button removes only its ID, even though every cwd matches.
     let closed = opened.remove(1).0;
     let close_selector =
-        Box::leak(format!("close-terminal-title-tab-{}", terminal_id(&closed)).into_boxed_str());
+        Box::leak(format!("close-title-tab-{}", pane_id(&closed)).into_boxed_str());
     let close = visual.debug_bounds(close_selector).unwrap();
     visual.simulate_click(close.center(), Default::default());
     visual.run_until_parked();
     window
         .update(visual, |shell, _, cx| {
             assert!(!shell.workspace.title_order.contains(&closed));
-            assert!(!shell.terminal_tabs.contains_key(&terminal_id(&closed)));
+            assert!(
+                !shell
+                    .terminal_tabs
+                    .contains_key(&terminal_id(shell, &closed))
+            );
             assert_eq!(shell.terminal_tabs.len(), opened.len());
             assert_eq!(
                 shell.active_title_tab(cx).as_ref(),
                 opened.last().map(|(tab, _)| tab)
             );
             for (tab, terminal) in &opened {
-                assert_eq!(shell.terminal_tabs[&terminal_id(tab)], *terminal);
+                assert_eq!(shell.terminal_tabs[&terminal_id(shell, tab)], *terminal);
             }
         })
         .unwrap();
@@ -212,7 +223,11 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
     window
         .update(visual, |shell, _, cx| {
             assert!(!shell.workspace.title_order.contains(&closed));
-            assert!(!shell.terminal_tabs.contains_key(&terminal_id(&closed)));
+            assert!(
+                !shell
+                    .terminal_tabs
+                    .contains_key(&terminal_id(shell, &closed))
+            );
             assert_eq!(shell.terminal_tabs.len(), opened.len());
             assert_eq!(
                 shell.active_title_tab(cx).as_ref(),
@@ -223,14 +238,31 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
     // The dock shortcut owns a separate entity and keeps every remaining top tab alive.
     visual.simulate_keystrokes("cmd-j");
     visual.run_until_parked();
+    assert!(visual.debug_bounds("terminal-dock").is_some());
     window
         .update(visual, |shell, w, cx| {
-            assert!(shell.active_terminal_tab.is_none());
+            assert_eq!(
+                shell.active_terminal_tab,
+                opened.last().map(|(tab, _)| terminal_id(shell, tab))
+            );
             assert_eq!(shell.dock_focused(w, cx), Some(0));
             for (_, terminal) in &opened {
                 assert_ne!(shell.terminals["/work/vorkspace"][0], *terminal);
             }
             assert_eq!(shell.terminal_tabs.len(), opened.len());
+        })
+        .unwrap();
+    window
+        .update(visual, |shell, w, cx| shell.new_terminal(w, cx))
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, _| {
+            assert_eq!(shell.terminal_tabs.len(), opened.len());
+            assert_eq!(shell.terminals["/work/vorkspace"].len(), 2);
+            for (tab, terminal) in &opened {
+                assert_eq!(shell.terminal_tabs[&terminal_id(shell, tab)], *terminal);
+            }
         })
         .unwrap();
 }
@@ -345,7 +377,7 @@ fn terminal_tab_close_preserves_siblings_and_revalidates_prompt_ownership(cx: &m
         .update(cx, |shell, w, cx| {
             assert_eq!(
                 old.upgrade().as_ref(),
-                shell.terminal_tabs.get(&terminal_id(&tab))
+                shell.terminal_tabs.get(&terminal_id(shell, &tab))
             );
             assert_eq!(shell.active_title_tab(cx), Some(sibling.clone()));
             shell.close_title_tabs(std::slice::from_ref(&tab), None, w, cx);
@@ -372,14 +404,17 @@ fn terminal_tab_close_preserves_siblings_and_revalidates_prompt_ownership(cx: &m
                 "old confirmation must preserve same-cwd shells"
             );
             assert_eq!(shell.active_title_tab(cx), Some(successor.clone()));
-            assert_eq!(shell.terminal_tabs[&terminal_id(&sibling)], sibling_entity);
+            assert_eq!(
+                shell.terminal_tabs[&terminal_id(shell, &sibling)],
+                sibling_entity
+            );
             assert!(
                 sibling_entity
                     .read(cx)
                     .fixture_screen()
                     .contains("sibling output")
             );
-            let terminal = &shell.terminal_tabs[&terminal_id(&successor)];
+            let terminal = &shell.terminal_tabs[&terminal_id(shell, &successor)];
             terminal.update(cx, |terminal, _| {
                 terminal.foreground = Some("replacement-job".into())
             });
@@ -398,7 +433,7 @@ fn terminal_tab_close_preserves_siblings_and_revalidates_prompt_ownership(cx: &m
     let final_entity = window
         .update(cx, |shell, w, cx| {
             assert_eq!(shell.terminal_tabs.len(), 2);
-            let terminal = &shell.terminal_tabs[&terminal_id(&successor)];
+            let terminal = &shell.terminal_tabs[&terminal_id(shell, &successor)];
             let final_entity = terminal.downgrade();
             terminal.update(cx, |terminal, _| {
                 terminal.foreground = Some("final-job".into())
@@ -419,7 +454,10 @@ fn terminal_tab_close_preserves_siblings_and_revalidates_prompt_ownership(cx: &m
         .update(cx, |shell, _, cx| {
             assert_eq!(shell.terminal_tabs.len(), 1);
             assert_eq!(shell.active_title_tab(cx), Some(sibling.clone()));
-            assert_eq!(shell.terminal_tabs[&terminal_id(&sibling)], sibling_entity);
+            assert_eq!(
+                shell.terminal_tabs[&terminal_id(shell, &sibling)],
+                sibling_entity
+            );
             assert!(
                 sibling_entity
                     .read(cx)
@@ -451,16 +489,16 @@ fn terminal_tabs_restore_duplicate_cwd_identity_order_and_fresh_lazy_shells(
             let connector = shell.connector_pages[&Connector::Github].clone();
             shell.open_connector(Connector::Github, w, cx);
             assert_eq!(shell.connector_pages[&Connector::Github], connector);
+            let connector_pane = shell.workspace.active.unwrap();
             assert_eq!(
                 shell
                     .workspace
                     .title_order
                     .iter()
-                    .filter(|tab| **tab
-                        == TitleTab::App(app_views::AppView::Connector(Connector::Github)))
+                    .filter(|tab| **tab == TitleTab::Workspace(connector_pane))
                     .count(),
-                0,
-                "connector pages are never tabs"
+                1,
+                "opening a connector twice reuses its tab"
             );
             shell.open_terminal_tab(w, cx);
             let first = shell.active_title_tab(cx).unwrap();
@@ -480,13 +518,13 @@ fn terminal_tabs_restore_duplicate_cwd_identity_order_and_fresh_lazy_shells(
             )
         })
         .unwrap();
-    assert!(saved.contains("\"terminal\""));
+    assert!(saved.contains("\"Terminal\""));
     let roundtrip = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
     assert_eq!(
         roundtrip
             .title_order
             .iter()
-            .filter(|tab| matches!(tab, TitleTab::Terminal { .. }))
+            .filter(|tab| matches!(tab, TitleTab::Workspace(id) if matches!(roundtrip.app_panes.get(id).map(|pane| &pane.content), Some(AppPane::Terminal { .. }))))
             .collect::<Vec<_>>(),
         [&second, &first]
     );
@@ -506,7 +544,7 @@ fn terminal_tabs_restore_duplicate_cwd_identity_order_and_fresh_lazy_shells(
                 1,
                 "inactive saved shells restore lazily"
             );
-            let fresh = shell.terminal_tabs[&terminal_id(&second)].clone();
+            let fresh = shell.terminal_tabs[&terminal_id(shell, &second)].clone();
             assert_ne!(fresh.entity_id(), old);
             assert_eq!(fresh.read(cx).cwd, "/work/vorkspace");
             assert!(
@@ -530,16 +568,14 @@ fn terminal_tabs_restore_duplicate_cwd_identity_order_and_fresh_lazy_shells(
                     .contains("restored second only")
             );
             shell.open_title_tab(&second, w, cx);
-            assert_eq!(shell.terminal_tabs[&terminal_id(&second)], fresh);
+            assert_eq!(shell.terminal_tabs[&terminal_id(shell, &second)], fresh);
             assert!(fresh.focus_handle(cx).is_focused(w));
             shell.open_terminal_tab(w, cx);
             assert_eq!(shell.terminal_tabs.len(), 3);
             let newest = shell.active_title_tab(cx).unwrap();
             assert_ne!(newest, first);
             assert_ne!(newest, second);
-            assert!(!shell.workspace.title_order.contains(&TitleTab::App(
-                app_views::AppView::Connector(Connector::Github)
-            )));
+            assert_eq!(shell.workspace.title_order.iter().filter(|tab| matches!(tab, TitleTab::Workspace(id) if matches!(shell.workspace.app_panes.get(id).map(|pane| &pane.content), Some(AppPane::App(app_views::AppView::Connector(Connector::Github)))))).count(), 1);
         })
         .unwrap();
 }

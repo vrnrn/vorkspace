@@ -1,4 +1,5 @@
 //! The desktop Notes split view, backed by the same notes and image assets.
+use vorkspace_ui::radius;
 mod recording;
 use crate::{
     controls::page,
@@ -8,9 +9,9 @@ use crate::{
     popover::{Anchor, AnchorSlot, popover},
 };
 use gpui::{
-    AnyElement, App, ClipboardItem, Context, CursorStyle, Entity, EventEmitter, ExternalPaths,
-    FocusHandle, Focusable, FontWeight, MouseButton, Role, ScrollHandle, Subscription, Task,
-    Window, div, prelude::*, px,
+    AnyElement, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
+    Focusable, FontWeight, MouseButton, Role, ScrollHandle, Subscription, Task, Window, div,
+    prelude::*, px,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -23,6 +24,7 @@ use vorkspace_ui::theme::*;
 
 pub(crate) enum Event {
     Close,
+    OpenTab(String),
     OpenSource(i64),
     AddToChat(Note),
 }
@@ -30,6 +32,12 @@ pub(crate) enum Event {
 pub(crate) struct Notes {
     store: Database,
     notes: Vec<Note>,
+    /// A document tab keeps its note identity even if the note is deleted.
+    /// The library is the only view allowed to change selection.
+    pinned: Option<String>,
+    /// Open document tabs remain in the library list, but selecting one
+    /// activates its existing editor instead of opening a second editor.
+    open_tabs: HashSet<String>,
     selected: Option<String>,
     query: Entity<Input>,
     focus: FocusHandle,
@@ -59,6 +67,7 @@ pub(crate) struct Notes {
     image_note: Option<String>,
     image_drag: bool,
     list_width: f32,
+    pane_width: Option<f32>,
     list_scroll: ScrollHandle,
     detail_scroll: ScrollHandle,
     show_list: bool,
@@ -76,6 +85,14 @@ impl Focusable for Notes {
 
 impl Notes {
     pub(crate) fn new(store: Database, cx: &mut Context<Self>) -> Self {
+        Self::with_pinned(store, None, cx)
+    }
+
+    pub(crate) fn open_note_tab(store: Database, note_id: String, cx: &mut Context<Self>) -> Self {
+        Self::with_pinned(store, Some(note_id), cx)
+    }
+
+    fn with_pinned(store: Database, pinned: Option<String>, cx: &mut Context<Self>) -> Self {
         let recording = cx.new(|cx| crate::meetings::Page::new(store.clone(), cx));
         let query =
             cx.new(|cx| Input::field("Filter notes", "Filter notes", page::secondary_ink(), cx));
@@ -101,6 +118,10 @@ impl Notes {
         let project_query =
             cx.new(|cx| Input::field("Find project", "Find project…", page::secondary_ink(), cx));
         let subscriptions = vec![
+            cx.on_app_quit(|this, cx| {
+                this.flush(cx);
+                std::future::ready(())
+            }),
             cx.observe(&recording, |_, _, cx| cx.notify()),
             cx.subscribe(&recording, |this, _, event: &crate::meetings::Event, cx| {
                 match event {
@@ -154,7 +175,9 @@ impl Notes {
         let mut this = Self {
             store,
             notes: Vec::new(),
-            selected: None,
+            selected: pinned.clone(),
+            pinned,
+            open_tabs: HashSet::new(),
             query,
             focus: cx.focus_handle(),
             title,
@@ -183,6 +206,7 @@ impl Notes {
             image_note: None,
             image_drag: false,
             list_width: page::LIST_WIDTH,
+            pane_width: None,
             list_scroll: ScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
             show_list: false,
@@ -192,6 +216,116 @@ impl Notes {
         };
         this.refresh(cx);
         this
+    }
+
+    pub(crate) fn pane_note_id(&self) -> Option<String> {
+        self.pinned.clone()
+    }
+
+    pub(crate) fn set_pane_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        if width.is_finite() && width > 0. && self.pane_width != Some(width) {
+            self.pane_width = Some(width);
+            cx.notify();
+        }
+    }
+
+    fn available_width(&self, window: &Window) -> f32 {
+        self.pane_width
+            .unwrap_or_else(|| window.viewport_size().width.as_f32())
+    }
+
+    fn is_narrow(&self, window: &Window) -> bool {
+        self.pane_width
+            .map_or_else(|| page::narrow(window), |width| width < 900.)
+    }
+
+    pub(crate) fn selected_note_id(&self) -> Option<String> {
+        self.selected.clone()
+    }
+
+    /// A native note write must not supersede this editor's local intent.
+    /// Read the inputs as well as `dirty`: their Changed event may still be
+    /// queued when an external write reaches Shell.
+    pub(crate) fn blocks_external_write(&self, note_id: &str, cx: &App) -> bool {
+        if self.selected.as_deref() != Some(note_id) {
+            return false;
+        }
+        if self.dirty
+            || self.ephemeral.contains(note_id)
+            || self.image_note.as_deref() == Some(note_id)
+            || !self.tag.read(cx).content.trim().is_empty()
+        {
+            return true;
+        }
+        let inputs_changed = self.draft(cx).is_some_and(|draft| {
+            self.notes
+                .iter()
+                .find(|note| note.id == note_id)
+                .is_none_or(|saved| {
+                    draft.title != saved.title
+                        || draft.body != saved.body
+                        || draft.tags != saved.tags
+                        || draft.source_cwd != saved.source_cwd
+                })
+        });
+        inputs_changed || self.recording.read(cx).has_pending_note_edit(note_id)
+    }
+
+    pub(crate) fn set_open_note_tabs(&mut self, ids: HashSet<String>, cx: &mut Context<Self>) {
+        if self.pinned.is_some() {
+            return;
+        }
+        let changed = self.open_tabs != ids;
+        self.open_tabs = ids;
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|id| self.open_tabs.contains(id))
+        {
+            self.flush(cx);
+            if !self.dirty {
+                let next = self
+                    .notes
+                    .iter()
+                    .find(|note| !self.open_tabs.contains(&note.id))
+                    .map(|note| note.id.clone());
+                self.load_selection(next, cx);
+            }
+        } else if changed {
+            cx.notify();
+        }
+    }
+
+    /// Hand the library's selected editor to a document tab without losing
+    /// its inputs or the recording edit lease. Shell can replace the library
+    /// entity after this succeeds.
+    pub(crate) fn pin_selected_note(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
+        if self.pinned.is_some()
+            || self.selected.as_deref() != Some(id)
+            || self.ephemeral.contains(id)
+            || !self.notes.iter().any(|note| note.id == id)
+        {
+            return false;
+        }
+        self.pinned = Some(id.to_owned());
+        self.show_list = false;
+        cx.notify();
+        true
+    }
+
+    pub(crate) fn pane_title(&self, cx: &App) -> String {
+        let Some(id) = self.pinned.as_deref() else {
+            return "Notes".into();
+        };
+        if !self.notes.iter().any(|note| note.id == id) {
+            return "Notes".into();
+        }
+        let title = self.title.read(cx).content.trim();
+        if title.is_empty() {
+            "Untitled".into()
+        } else {
+            title.into()
+        }
     }
 
     pub(crate) fn set_appearances(
@@ -260,9 +394,14 @@ impl Notes {
         self.load_epoch = self.load_epoch.wrapping_add(1);
         let epoch = self.load_epoch;
         let store = self.store.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { recording::load(&store) });
+        let pinned = self.pinned.clone();
+        let work = cx.background_executor().spawn(async move {
+            if let Some(id) = pinned {
+                recording::load_pinned(&store, &id)
+            } else {
+                recording::load(&store)
+            }
+        });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -301,11 +440,20 @@ impl Notes {
                             }
                         });
                         this.notes = notes;
-                        let next = this
-                            .selected
-                            .clone()
-                            .filter(|id| this.notes.iter().any(|note| &note.id == id))
-                            .or_else(|| this.notes.first().map(|note| note.id.clone()));
+                        let next = this.pinned.clone().or_else(|| {
+                            this.selected
+                                .clone()
+                                .filter(|id| {
+                                    !this.open_tabs.contains(id)
+                                        && this.notes.iter().any(|note| &note.id == id)
+                                })
+                                .or_else(|| {
+                                    this.notes
+                                        .iter()
+                                        .find(|note| !this.open_tabs.contains(&note.id))
+                                        .map(|note| note.id.clone())
+                                })
+                        });
                         if next != this.selected
                             || this.document.is_none()
                             || (!this.dirty && content_changed)
@@ -378,6 +526,17 @@ impl Notes {
         self.recording.update(cx, |page, cx| page.flush_note(cx));
     }
 
+    /// Preflight a close before Shell releases this editor entity. Failed note
+    /// writes and unfinished recording saves retain the same draft owner.
+    pub(crate) fn prepare_close(&mut self, cx: &mut Context<Self>) -> bool {
+        self.flush(cx);
+        if self.dirty || self.image_note.is_some() {
+            return false;
+        }
+        self.recording
+            .update(cx, |page, cx| page.prepare_note_close(cx))
+    }
+
     fn persist(&mut self, finalize: bool, cx: &mut Context<Self>) {
         self.debounce = None;
         let Some(mut draft) = self.draft(cx) else {
@@ -431,6 +590,13 @@ impl Notes {
     }
 
     fn select(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.pinned.as_ref().is_some_and(|pinned| pinned != &id) {
+            return;
+        }
+        if self.pinned.is_none() && self.open_tabs.contains(&id) {
+            self.request_open_tab(&id, cx);
+            return;
+        }
         if self.selected.as_ref() == Some(&id) {
             self.show_list = false;
             cx.notify();
@@ -445,6 +611,9 @@ impl Notes {
     }
 
     fn load_selection(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        if self.pinned.is_some() && id.as_ref() != self.pinned.as_ref() {
+            return;
+        }
         let changed = self.selected != id;
         if changed {
             self.confirm_delete = false;
@@ -467,6 +636,9 @@ impl Notes {
             self.recording.update(cx, |page, cx| {
                 page.show_note(&note.id, recording_id.as_deref(), cx)
             });
+        } else {
+            self.show_recording = false;
+            self.recording.update(cx, |page, cx| page.clear_note(cx));
         }
         self.title.update(cx, |input, cx| {
             input.set_text(
@@ -512,6 +684,9 @@ impl Notes {
     }
 
     fn create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pinned.is_some() {
+            return;
+        }
         self.flush(cx);
         if self.dirty {
             return;
@@ -583,9 +758,28 @@ impl Notes {
         if self.selected.as_deref() == Some(id) {
             self.debounce = None;
             self.dirty = false;
-            self.load_selection(self.notes.first().map(|note| note.id.clone()), cx);
+            self.load_selection(
+                self.pinned.clone().or_else(|| {
+                    self.notes
+                        .iter()
+                        .find(|note| !self.open_tabs.contains(&note.id))
+                        .map(|note| note.id.clone())
+                }),
+                cx,
+            );
         }
         cx.notify();
+    }
+
+    fn request_open_tab(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.notes.iter().any(|note| note.id == id) {
+            return;
+        }
+        self.flush(cx);
+        if self.dirty || self.ephemeral.contains(id) {
+            return;
+        }
+        cx.emit(Event::OpenTab(id.to_owned()));
     }
 
     fn add_tag(&mut self, cx: &mut Context<Self>) {
@@ -802,7 +996,7 @@ impl Notes {
                         .aria_label("No project")
                         .px_2()
                         .py_1p5()
-                        .rounded_md()
+                        .rounded(px(radius::CONTAINER))
                         .text_size(px(12.))
                         .hover(|style| style.bg(content(0.08)))
                         .child("No project")
@@ -821,7 +1015,7 @@ impl Notes {
                                 .aria_label(path.clone())
                                 .px_2()
                                 .py_1p5()
-                                .rounded_md()
+                                .rounded(px(radius::CONTAINER))
                                 .text_size(px(12.))
                                 .hover(|style| style.bg(content(0.08)))
                                 .child(name)
@@ -869,6 +1063,8 @@ impl Notes {
         };
         let can_delete = self.image_note.as_ref() != Some(&note.id)
             && (!attached || (recording_ready && self.recording.read(cx).can_delete_note()));
+        let open_tab = self.pinned.is_none();
+        let tab_note_id = note.id.clone();
         let project = page::action("note-move-project", "Move note to project", true)
             .relative()
             .min_w_0()
@@ -916,7 +1112,7 @@ impl Notes {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .rounded(px(page::CORNER))
+                    .rounded(px(radius::CONTROL))
                     .bg(content(0.08))
                     .pl_2()
                     .pr_1()
@@ -1087,7 +1283,7 @@ impl Notes {
             .id("note-image-drop-zone")
             .relative()
             .min_h(px(448.))
-            .rounded_lg()
+            .rounded(px(radius::CONTAINER))
             .border_1()
             .border_color(if self.image_drag {
                 accent_color()
@@ -1131,7 +1327,7 @@ impl Notes {
                     div()
                         .absolute()
                         .inset_0()
-                        .rounded_lg()
+                        .rounded(px(radius::CONTAINER))
                         .bg(pane_fill().opacity(0.9))
                         .flex()
                         .items_center()
@@ -1147,6 +1343,7 @@ impl Notes {
             });
         div()
             .id("note-detail")
+            .debug_selector(|| "note-detail".into())
             .flex_1()
             .min_w_0()
             .min_h_0()
@@ -1176,7 +1373,23 @@ impl Notes {
                                     .child(icon("note", page::ICON_SIZE))
                                     .child("Note")
                                     .child(div().min_w_0().truncate().child(note.slug.clone()))
-                                    .child(project),
+                                    .child(project)
+                                    .when(open_tab, |d| {
+                                        d.child(
+                                            page::icon_action(
+                                                "open-note-tab",
+                                                "Open note in tab",
+                                                true,
+                                            )
+                                            .debug_selector(|| "open-note-tab".into())
+                                            .child(icon("external-link", page::ICON_SIZE))
+                                            .on_click(
+                                                cx.listener(move |this, _, _, cx| {
+                                                    this.request_open_tab(&tab_note_id, cx)
+                                                }),
+                                            ),
+                                        )
+                                    }),
                             )
                             .child(page::title().child(self.title.clone()))
                             .child(
@@ -1222,9 +1435,10 @@ impl gpui::Render for Notes {
             .filter(|note| note.matches(&query))
             .cloned()
             .collect();
-        let narrow = page::narrow(window);
-        let show_list = !narrow || self.show_list || self.selected.is_none();
-        let show_detail = !narrow || !show_list;
+        let narrow = self.is_narrow(window);
+        let show_list =
+            self.pinned.is_none() && (!narrow || self.show_list || self.selected.is_none());
+        let show_detail = self.pinned.is_some() || !narrow || !show_list;
         if show_detail
             && self.show_recording
             && self
@@ -1254,6 +1468,7 @@ impl gpui::Render for Notes {
                     )
                     .child(
                         page::icon_action("create-note", "New note", true)
+                            .debug_selector(|| "create-note".into())
                             .child(icon("plus", page::ICON_SIZE))
                             .on_click(cx.listener(|this, _, window, cx| this.create(window, cx))),
                     ),
@@ -1261,6 +1476,7 @@ impl gpui::Render for Notes {
             .child(
                 div()
                     .id("notes-list")
+                    .debug_selector(|| "notes-list".into())
                     .role(Role::ListBox)
                     .aria_label("Saved notes")
                     .flex_1()
@@ -1339,7 +1555,7 @@ impl gpui::Render for Notes {
                                             div()
                                                 .max_w(px(96.))
                                                 .truncate()
-                                                .rounded_sm()
+                                                .rounded(px(radius::SMALL))
                                                 .bg(content(0.08))
                                                 .px_1p5()
                                                 .py(px(2.))
@@ -1357,36 +1573,37 @@ impl gpui::Render for Notes {
                                         }),
                                 )
                             })
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)),
+                            .on_click(cx.listener({
+                                let id = id.clone();
+                                move |this, _, _, cx| this.select(id.clone(), cx)
+                            }))
+                            .on_mouse_down(
+                                MouseButton::Middle,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.request_open_tab(&id, cx);
+                                    cx.stop_propagation();
+                                }),
                             )
                     })),
             )
             .when(!narrow, |d| {
                 d.child(
-                    div()
-                        .id("resize-notes-list")
-                        .role(Role::Splitter)
-                        .aria_label("Resize notes list")
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .right(px(-3.))
-                        .w(px(6.))
-                        .cursor(CursorStyle::ResizeLeftRight)
-                        .hover(|style| style.bg(content(0.1)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                                if event.click_count == 2 {
-                                    this.list_width = page::LIST_WIDTH;
-                                } else {
-                                    this.resize =
-                                        Some((event.position.x.as_f32(), this.list_width));
-                                }
-                                cx.notify();
-                            }),
-                        ),
+                    page::detail_resize_handle(
+                        "resize-notes-list",
+                        "Resize notes list",
+                        self.resize.is_some(),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                            if event.click_count == 2 {
+                                this.list_width = page::LIST_WIDTH;
+                            } else {
+                                this.resize = Some((event.position.x.as_f32(), this.list_width));
+                            }
+                            cx.notify();
+                        }),
+                    ),
                 )
             });
         let detail = if let Some(note) = self.draft(cx) {
@@ -1394,8 +1611,16 @@ impl gpui::Render for Notes {
         } else {
             page::empty(
                 icon("note", 24.),
-                "Select a note",
-                "Choose a saved note, or create one with the + button.",
+                if self.pinned.is_some() {
+                    "Note unavailable"
+                } else {
+                    "Select a note"
+                },
+                if self.pinned.is_some() {
+                    "This note was deleted or is not available."
+                } else {
+                    "Choose a saved note, or create one with the + button."
+                },
             )
             .flex_1()
             .into_any_element()
@@ -1421,7 +1646,11 @@ impl gpui::Render for Notes {
                 } else if key == "escape" {
                     if this.project_open {
                         this.project_open = false;
-                    } else if page::narrow(window) && !this.show_list && this.selected.is_some() {
+                    } else if this.pinned.is_none()
+                        && this.is_narrow(window)
+                        && !this.show_list
+                        && this.selected.is_some()
+                    {
                         this.show_list = true;
                         window.focus(&this.query.focus_handle(cx), cx);
                     } else {
@@ -1439,6 +1668,7 @@ impl gpui::Render for Notes {
                     cx.stop_propagation();
                 } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                     && key == "n"
+                    && this.pinned.is_none()
                 {
                     this.create(window, cx);
                     cx.stop_propagation();
@@ -1456,7 +1686,7 @@ impl gpui::Render for Notes {
                         this.list_width = (width + event.position.x.as_f32() - start).clamp(
                             page::LIST_MIN,
                             page::LIST_MAX
-                                .min(window.viewport_size().width.as_f32() * 0.5)
+                                .min(this.available_width(window) * 0.5)
                                 .max(page::LIST_MIN),
                         );
                         cx.notify();
@@ -1471,10 +1701,11 @@ impl gpui::Render for Notes {
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| this.resize = None),
             )
-            .when(narrow && show_detail, |d| {
+            .when(narrow && show_detail && self.pinned.is_none(), |d| {
                 d.child(
                     page::toolbar().child(
                         page::action("notes-back", "Back to notes", true)
+                            .debug_selector(|| "notes-back".into())
                             .child(icon("chevron-left", page::ICON_SIZE))
                             .child("Notes")
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1493,7 +1724,7 @@ impl gpui::Render for Notes {
                     .flex()
                     .when(show_list, |d| d.child(list))
                     .when(show_detail, |d| {
-                        d.child(page::detail_pane(!narrow).child(detail))
+                        d.child(page::detail_pane(!narrow && show_list).child(detail))
                     }),
             )
             .when_some(self.error.clone(), |d, error| {
@@ -1568,6 +1799,483 @@ mod tests {
         let visual = VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
         (window, visual)
+    }
+
+    #[gpui::test]
+    fn list_resize_highlight_follows_the_curved_detail_edge(cx: &mut TestAppContext) {
+        let (window, mut visual) = view(cx, &store());
+        visual.simulate_resize(gpui::size(px(1200.), px(800.)));
+        visual.run_until_parked();
+        let handle = visual.debug_bounds("resize-notes-list").unwrap();
+        visual.simulate_mouse_move(handle.center(), None, Default::default());
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |_, window, _| {
+                let scale = window.scale_factor();
+                let edge = window
+                    .painted_quads()
+                    .into_iter()
+                    .find(|quad| {
+                        (quad.bounds.left().0 - handle.center().x.as_f32() * scale).abs() < 0.5
+                            && quad.border_widths.left.0 > 0.
+                            && (quad.border_color.a - 0.25).abs() < 0.01
+                    })
+                    .expect("hover paints the curved outline");
+                assert_eq!(edge.corner_radii.top_left.0, radius::SURFACE * scale);
+                assert_eq!(edge.corner_radii.bottom_left.0, radius::SURFACE * scale);
+                assert_eq!(edge.background.as_solid().unwrap().a, 0.);
+            })
+            .unwrap();
+    }
+
+    fn pinned_view(
+        cx: &mut TestAppContext,
+        store: &Database,
+        id: &str,
+    ) -> (gpui::WindowHandle<Notes>, VisualTestContext) {
+        cx.update(|cx| {
+            crate::input::bind(cx);
+            vorkspace_ui::clock::use_test_clock(cx);
+        });
+        let store = store.clone();
+        let id = id.to_owned();
+        let window = cx.add_window(move |_, cx| Notes::open_note_tab(store, id, cx));
+        let visual = VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        (window, visual)
+    }
+
+    #[gpui::test]
+    fn pinned_editor_flushes_its_draft_when_the_app_quits(cx: &mut TestAppContext) {
+        let store = store();
+        locked(&store)
+            .unwrap()
+            .upsert_note(&notes::NoteUpsert {
+                id: "quit-note".into(),
+                title: "Quit note".into(),
+                body: "Before quit".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (window, mut visual) = pinned_view(cx, &store, "quit-note");
+        window
+            .update(&mut visual, |notes, _, cx| {
+                notes.body.update(cx, |input, cx| {
+                    input.set_text("Unfinished at quit".into(), cx)
+                });
+                notes.input_changed(cx);
+                assert!(notes.dirty);
+            })
+            .unwrap();
+        assert_eq!(
+            locked(&store)
+                .unwrap()
+                .get_note("quit-note")
+                .unwrap()
+                .unwrap()
+                .body,
+            "Before quit"
+        );
+        cx.quit();
+        assert_eq!(
+            locked(&store)
+                .unwrap()
+                .get_note("quit-note")
+                .unwrap()
+                .unwrap()
+                .body,
+            "Unfinished at quit"
+        );
+    }
+
+    #[gpui::test]
+    fn failed_note_save_keeps_the_pinned_editor_for_retry(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("notes.db");
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            vorkspace_core::store::Store::open(&path).unwrap(),
+        ));
+        locked(&store)
+            .unwrap()
+            .upsert_note(&notes::NoteUpsert {
+                id: "close-note".into(),
+                title: "Close note".into(),
+                body: "Saved body".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (window, mut visual) = pinned_view(cx, &store, "close-note");
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_note_close BEFORE UPDATE ON notes \
+                 BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END;",
+            )
+            .unwrap();
+        window
+            .update(&mut visual, |notes, _, cx| {
+                notes
+                    .body
+                    .update(cx, |input, cx| input.set_text("Unfinished body".into(), cx));
+                notes.input_changed(cx);
+                assert!(!notes.prepare_close(cx));
+                assert!(notes.dirty);
+                assert!(
+                    notes
+                        .error
+                        .as_deref()
+                        .is_some_and(|error| error.contains("simulated save failure"))
+                );
+                assert_eq!(notes.body.read(cx).content, "Unfinished body");
+            })
+            .unwrap();
+        assert_eq!(
+            locked(&store)
+                .unwrap()
+                .get_note("close-note")
+                .unwrap()
+                .unwrap()
+                .body,
+            "Saved body"
+        );
+        connection
+            .execute_batch("DROP TRIGGER reject_note_close;")
+            .unwrap();
+        window
+            .update(&mut visual, |notes, _, cx| {
+                assert!(notes.prepare_close(cx));
+                assert!(!notes.dirty);
+            })
+            .unwrap();
+        assert_eq!(
+            locked(&store)
+                .unwrap()
+                .get_note("close-note")
+                .unwrap()
+                .unwrap()
+                .body,
+            "Unfinished body"
+        );
+    }
+
+    #[gpui::test]
+    fn external_write_gate_tracks_only_the_note_with_a_local_draft(cx: &mut TestAppContext) {
+        let store = store();
+        for id in ["first", "second"] {
+            locked(&store)
+                .unwrap()
+                .upsert_note(&notes::NoteUpsert {
+                    id: id.into(),
+                    title: id.into(),
+                    body: format!("Original {id}"),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let (first, mut first_visual) = pinned_view(cx, &store, "first");
+        let (second, mut second_visual) = pinned_view(cx, &store, "second");
+        first
+            .update(&mut first_visual, |notes, _, cx| {
+                notes.body.update(cx, |input, cx| {
+                    input.set_text("Draft before Changed event".into(), cx)
+                });
+                assert!(notes.blocks_external_write("first", cx));
+                assert!(!notes.blocks_external_write("second", cx));
+            })
+            .unwrap();
+        second
+            .update(&mut second_visual, |notes, _, cx| {
+                assert!(!notes.blocks_external_write("second", cx));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn pinned_notes_keep_independent_editors_selections_and_drafts(cx: &mut TestAppContext) {
+        let store = store();
+        let lines = (0..90)
+            .map(|index| format!("Line {index}: this note has enough content to scroll."))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let first_draft = format!("First draft\n{lines}");
+        let second_draft = format!("Second draft\n{lines}");
+        for (id, title) in [("first", "First note"), ("second", "Second note")] {
+            locked(&store)
+                .unwrap()
+                .upsert_note(&notes::NoteUpsert {
+                    id: id.into(),
+                    title: title.into(),
+                    body: format!("Original {id}\n{lines}"),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let (first, mut first_visual) = pinned_view(cx, &store, "first");
+        let (second, mut second_visual) = pinned_view(cx, &store, "second");
+        first_visual.simulate_resize(gpui::size(px(600.), px(480.)));
+        second_visual.simulate_resize(gpui::size(px(600.), px(480.)));
+        let first_body = first
+            .update(&mut first_visual, |notes, _, cx| {
+                assert_eq!(notes.pane_note_id().as_deref(), Some("first"));
+                assert_eq!(notes.pane_title(cx), "First note");
+                notes.source = true;
+                notes.modes.insert("first".into(), true);
+                notes.body.update(cx, |input, cx| {
+                    input.set_text(first_draft.clone(), cx);
+                    input.select_utf16(0..5, cx);
+                });
+                notes.body.clone()
+            })
+            .unwrap();
+        first_visual.refresh().unwrap();
+        first
+            .update(&mut first_visual, |notes, _, _| {
+                notes
+                    .detail_scroll
+                    .set_offset(gpui::point(px(0.), px(-120.)));
+            })
+            .unwrap();
+        let second_body = second
+            .update(&mut second_visual, |notes, _, cx| {
+                assert_eq!(notes.pane_note_id().as_deref(), Some("second"));
+                assert_eq!(notes.pane_title(cx), "Second note");
+                notes.source = true;
+                notes.modes.insert("second".into(), true);
+                notes.body.update(cx, |input, cx| {
+                    input.set_text(second_draft.clone(), cx);
+                    input.select_utf16(7..12, cx);
+                });
+                notes.body.clone()
+            })
+            .unwrap();
+        second_visual.refresh().unwrap();
+        second
+            .update(&mut second_visual, |notes, _, _| {
+                notes
+                    .detail_scroll
+                    .set_offset(gpui::point(px(0.), px(-240.)));
+            })
+            .unwrap();
+        assert_ne!(first_body, second_body);
+        first
+            .update(&mut first_visual, |notes, _, cx| {
+                assert!(notes.dirty);
+                notes.select("second".into(), cx);
+                assert_eq!(notes.selected.as_deref(), Some("first"));
+                assert_eq!(notes.body.read(cx).content, first_draft);
+                assert_eq!(notes.body.read(cx).selection_utf16(), 0..5);
+                assert_eq!(notes.detail_scroll.offset().y, px(-120.));
+                notes.refresh(cx);
+            })
+            .unwrap();
+        first_visual.run_until_parked();
+        second
+            .update(&mut second_visual, |notes, _, cx| {
+                assert!(notes.dirty);
+                assert_eq!(notes.selected.as_deref(), Some("second"));
+                assert_eq!(notes.body.read(cx).content, second_draft);
+                assert_eq!(notes.body.read(cx).selection_utf16(), 7..12);
+                assert_eq!(notes.detail_scroll.offset().y, px(-240.));
+            })
+            .unwrap();
+        assert_eq!(
+            locked(&store)
+                .unwrap()
+                .get_note("first")
+                .unwrap()
+                .unwrap()
+                .body,
+            first_draft
+        );
+        assert_eq!(
+            locked(&store)
+                .unwrap()
+                .get_note("second")
+                .unwrap()
+                .unwrap()
+                .body,
+            format!("Original second\n{lines}")
+        );
+    }
+
+    #[gpui::test]
+    fn pinned_note_renders_detail_without_library_or_back_navigation(cx: &mut TestAppContext) {
+        let store = store();
+        locked(&store)
+            .unwrap()
+            .upsert_note(&notes::NoteUpsert {
+                id: "reading".into(),
+                title: "Reading".into(),
+                body: "A saved document".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (_, mut pinned_visual) = pinned_view(cx, &store, "reading");
+        pinned_visual.simulate_resize(gpui::size(px(1100.), px(800.)));
+        assert!(pinned_visual.debug_bounds("note-detail").is_some());
+        assert!(pinned_visual.debug_bounds("notes-list").is_none());
+        assert!(pinned_visual.debug_bounds("create-note").is_none());
+        assert!(pinned_visual.debug_bounds("open-note-tab").is_none());
+        pinned_visual.simulate_resize(gpui::size(px(500.), px(800.)));
+        assert!(pinned_visual.debug_bounds("note-detail").is_some());
+        assert!(pinned_visual.debug_bounds("notes-back").is_none());
+
+        let (_, mut library_visual) = view(cx, &store);
+        library_visual.simulate_resize(gpui::size(px(1100.), px(800.)));
+        assert!(library_visual.debug_bounds("notes-list").is_some());
+        assert!(library_visual.debug_bounds("open-note-tab").is_some());
+    }
+
+    #[gpui::test]
+    fn library_note_uses_narrow_tile_width_in_wide_window(cx: &mut TestAppContext) {
+        let store = store();
+        locked(&store)
+            .unwrap()
+            .upsert_note(&notes::NoteUpsert {
+                id: "tile-note".into(),
+                title: "Tile note".into(),
+                body: "Original body".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (window, mut visual) = view(cx, &store);
+        visual.simulate_resize(gpui::size(px(1100.), px(700.)));
+        window
+            .update(&mut visual, |notes, _, cx| {
+                notes.select("tile-note".into(), cx);
+                notes.set_pane_width(420., cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("notes-list").is_none());
+        assert!(visual.debug_bounds("note-detail").is_some());
+        assert!(visual.debug_bounds("notes-back").is_some());
+
+        let back = visual.debug_bounds("notes-back").unwrap().center();
+        visual.simulate_click(back, gpui::Modifiers::none());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("notes-list").is_some());
+        assert!(visual.debug_bounds("note-detail").is_none());
+        window
+            .update(&mut visual, |notes, _, cx| {
+                assert_eq!(notes.selected.as_deref(), Some("tile-note"));
+                notes.set_pane_width(1000., cx);
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("notes-list").is_some());
+        assert!(visual.debug_bounds("note-detail").is_some());
+        assert!(visual.debug_bounds("notes-back").is_none());
+    }
+
+    #[gpui::test]
+    fn selected_library_editor_can_become_a_pinned_tab_without_reset(cx: &mut TestAppContext) {
+        let store = store();
+        locked(&store)
+            .unwrap()
+            .upsert_note(&notes::NoteUpsert {
+                id: "handoff".into(),
+                title: "Handoff".into(),
+                body: "Original".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (window, mut visual) = view(cx, &store);
+        window
+            .update(&mut visual, |notes, _, cx| {
+                let body = notes.body.clone();
+                let document = notes.document.clone();
+                let recording = notes.recording.clone();
+                notes.body.update(cx, |input, cx| {
+                    input.set_text("Unfinished handoff".into(), cx);
+                    input.select_utf16(0..10, cx);
+                });
+                notes
+                    .detail_scroll
+                    .set_offset(gpui::point(px(0.), px(-80.)));
+                assert!(notes.pin_selected_note("handoff", cx));
+                assert_eq!(notes.body, body);
+                assert_eq!(notes.document, document);
+                assert_eq!(notes.recording, recording);
+                assert_eq!(notes.body.read(cx).content, "Unfinished handoff");
+                assert_eq!(notes.body.read(cx).selection_utf16(), 0..10);
+                assert_eq!(notes.detail_scroll.offset().y, px(-80.));
+                assert_eq!(notes.pane_note_id().as_deref(), Some("handoff"));
+            })
+            .unwrap();
+        assert!(visual.debug_bounds("note-detail").is_some());
+        assert!(visual.debug_bounds("notes-list").is_none());
+    }
+
+    #[gpui::test]
+    fn library_routes_an_open_note_to_its_existing_tab(cx: &mut TestAppContext) {
+        let store = store();
+        for id in ["first", "second"] {
+            locked(&store)
+                .unwrap()
+                .upsert_note(&notes::NoteUpsert {
+                    id: id.into(),
+                    title: id.into(),
+                    body: format!("Body of {id}"),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let (window, mut visual) = view(cx, &store);
+        let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        window
+            .update(&mut visual, |notes, _, cx| {
+                let events = opened.clone();
+                let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
+                    if let Event::OpenTab(id) = event {
+                        events.borrow_mut().push(id.clone());
+                    }
+                });
+                notes._subscriptions.push(subscription);
+                notes.set_open_note_tabs(HashSet::from(["first".into()]), cx);
+                assert_eq!(notes.selected_note_id().as_deref(), Some("second"));
+                notes.select("first".into(), cx);
+                assert_eq!(notes.selected_note_id().as_deref(), Some("second"));
+                notes.set_open_note_tabs(HashSet::from(["first".into(), "second".into()]), cx);
+                assert_eq!(notes.selected_note_id(), None);
+                assert!(!notes.recording.read(cx).is_for_note("second"));
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert_eq!(&*opened.borrow(), &["first".to_owned()]);
+    }
+
+    #[gpui::test]
+    fn deleted_pinned_note_does_not_show_another_document(cx: &mut TestAppContext) {
+        let store = store();
+        for id in ["first", "second"] {
+            locked(&store)
+                .unwrap()
+                .upsert_note(&notes::NoteUpsert {
+                    id: id.into(),
+                    title: id.into(),
+                    body: format!("Body of {id}"),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let (window, mut visual) = pinned_view(cx, &store, "first");
+        locked(&store).unwrap().delete_note("first").unwrap();
+        window
+            .update(&mut visual, |notes, _, cx| notes.refresh(cx))
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |notes, _, cx| {
+                assert_eq!(notes.pane_note_id().as_deref(), Some("first"));
+                assert_eq!(notes.selected.as_deref(), Some("first"));
+                assert!(notes.draft(cx).is_none());
+                assert_eq!(notes.pane_title(cx), "Notes");
+            })
+            .unwrap();
+        assert!(visual.debug_bounds("notes-list").is_none());
     }
 
     #[gpui::test]

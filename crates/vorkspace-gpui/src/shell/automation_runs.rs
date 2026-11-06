@@ -494,7 +494,7 @@ impl Shell {
                         // Background runs append a tab without changing the focused project.
                         if !this.workspace.tabs.contains(&id) {
                             this.workspace.tabs.push(id);
-                            this.workspace.title_order.push(TitleTab::Session(id));
+                            this.workspace.title_order.push(TitleTab::Workspace(id));
                         }
                         let prompt = due
                             .run

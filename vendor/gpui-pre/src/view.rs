@@ -313,6 +313,10 @@ impl<V: View> IntoElement for ViewElement<V> {
 }
 
 struct ViewElementState {
+    // An ancestor can replay this view without rebasing its own cached ranges.
+    // Only reuse ranges recorded against the frame being copied; otherwise
+    // render the subtree again, retaining its entities and interactive state.
+    frame_generation: u64,
     prepaint_range: Range<PrepaintStateIndex>,
     paint_range: Range<PaintIndex>,
     cache_key: ViewElementCacheKey,
@@ -531,6 +535,7 @@ fn prepaint_view(
                 let text_style = window.text_style();
 
                 if let Some(mut element_state) = element_state
+                    && element_state.frame_generation == window.rendered_frame.generation
                     && element_state.cache_key.bounds == bounds
                     && element_state.cache_key.content_mask == content_mask
                     && element_state.cache_key.text_style == text_style
@@ -544,6 +549,7 @@ fn prepaint_view(
                         .extend_accessed(&element_state.accessed_entities);
                     let prepaint_end = window.prepaint_index();
                     element_state.prepaint_range = prepaint_start..prepaint_end;
+                    element_state.frame_generation = window.next_frame.generation;
 
                     return (None, element_state);
                 }
@@ -563,6 +569,7 @@ fn prepaint_view(
                 (
                     Some(element),
                     ViewElementState {
+                        frame_generation: window.next_frame.generation,
                         accessed_entities,
                         prepaint_range: prepaint_start..prepaint_end,
                         paint_range: PaintIndex::default()..PaintIndex::default(),

@@ -64,8 +64,9 @@ impl Shell {
                         this.persist(cx);
                     }
                     ReviewEvent::Comment(text) => {
-                        let owner = this.workspace.session_for_pane(id);
-                        this.add_to_chat(owner, text, cx);
+                        if let Some(owner) = this.workspace.session_for_pane(id) {
+                            this.add_to_chat(owner, text, cx);
+                        }
                     }
                     ReviewEvent::Empty => this.close_review(id, cx),
                     ReviewEvent::DragPane(position) => {
@@ -115,8 +116,9 @@ impl Shell {
         let retained = self.workspace.review_owners.keys().copied().find(|pane| {
             self.workspace.tab_of(*pane).is_none()
                 && self
-                    .sessions
-                    .get(&self.workspace.session_for_pane(*pane))
+                    .workspace
+                    .session_for_pane(*pane)
+                    .and_then(|owner| self.sessions.get(&owner))
                     .is_some_and(|s| s.read(cx).summary.cwd == self.workspace.project)
                 && self.in_worktree_scope(*pane, cx)
                 && self
@@ -128,7 +130,11 @@ impl Shell {
         if let Some(pane) = retained {
             self.open_file_pane(pane, window, cx);
         }
-        let Some(id) = self.workspace.active else {
+        let Some(id) = self
+            .workspace
+            .active
+            .filter(|id| self.workspace.session_for_pane(*id).is_some())
+        else {
             return;
         };
         let review = match self.review_for(id, cx) {
@@ -180,7 +186,7 @@ impl Shell {
             if !chat_hidden {
                 // The closing pane stays mounted for its slide-out. Move focus
                 // before it disappears, rather than leaving keys in its editor.
-                self.pending_composer_focus = Some(self.workspace.session_for_pane(id));
+                self.pending_composer_focus = self.workspace.session_for_pane(id);
             }
         }
         if chat_hidden {

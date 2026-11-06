@@ -11,7 +11,13 @@ impl Shell {
             .map_or(&self.workspace.project, |focus| &focus.path)
     }
     pub(super) fn session_working_copy<'a>(&'a self, id: i64, cx: &'a App) -> &'a str {
-        let id = self.workspace.session_for_pane(id);
+        let Some(id) = self.workspace.session_for_pane(id) else {
+            return self
+                .workspace
+                .app_panes
+                .get(&id)
+                .map_or_else(|| self.working_copy(), |pane| pane.worktree.as_str());
+        };
         let session = self.session_metadata(id, cx);
         self.session_worktrees
             .get(&id)
@@ -39,14 +45,23 @@ impl Shell {
             })
     }
     pub(super) fn record_worktree_session(&mut self, id: i64, _cx: &App) {
-        let project = self.workspace.project.clone();
-        let path = self.working_copy().to_owned();
+        let (project, path) = self.workspace.app_panes.get(&id).map_or_else(
+            || {
+                (
+                    self.workspace.project.clone(),
+                    self.working_copy().to_owned(),
+                )
+            },
+            |pane| (pane.project.clone(), pane.worktree.clone()),
+        );
         // Opening a saved chat must not silently narrow the sidebar. Only an
         // explicit workspace selection changes that project-wide filter.
         if let Some(tab) = self.workspace.tab_of(id) {
             self.workspace.tab_workspaces.insert(tab, path.clone());
         }
-        self.worktree_returns.insert((project, path), id);
+        if self.workspace.session_for_pane(id).is_some() {
+            self.worktree_returns.insert((project, path), id);
+        }
     }
     pub(super) fn worktree_flyout(
         &self,
@@ -141,7 +156,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let project = self.workspace.project.clone();
-        if let Some(id) = self.workspace.active {
+        if let Some(id) = self
+            .workspace
+            .active
+            .filter(|id| self.workspace.session_for_pane(*id).is_some())
+        {
             self.worktree_returns
                 .insert((project.clone(), self.working_copy().into()), id);
         }
@@ -164,10 +183,12 @@ impl Shell {
             return;
         }
         let matches = |id: &i64| {
-            self.session_summaries
-                .contains_key(&self.workspace.session_for_pane(*id))
+            let Some(owner) = self.workspace.session_for_pane(*id) else {
+                return false;
+            };
+            self.session_summaries.contains_key(&owner)
                 && {
-                    let s = self.session_metadata(self.workspace.session_for_pane(*id), cx);
+                    let s = self.session_metadata(owner, cx);
                     s.summary.cwd == project && !s.summary.archived
                 }
                 && self.in_worktree_scope(*id, cx)

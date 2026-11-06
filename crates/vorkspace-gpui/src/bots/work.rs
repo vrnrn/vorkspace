@@ -6,49 +6,8 @@ pub(super) struct Cache {
     revisions: HashMap<String, Revision>,
     pending: HashSet<String>,
     checked: HashMap<String, std::time::Instant>,
-    pub(super) documents: HashMap<String, bot::Document>,
-    pub(super) loading_documents: HashSet<String>,
 }
 impl Bots {
-    pub(super) fn open_document(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.current().is_some_and(|bot| {
-            bot.documents.iter().any(|d| d.id == id)
-                && !bot.desktop_document_ids.iter().any(|source| source == id)
-        }) {
-            return;
-        }
-        if !self.work.loading_documents.insert(id.into()) {
-            return;
-        }
-        let store = self.store.clone();
-        let id = id.to_owned();
-        let target = id.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { locked(&store)?.bot_document(&target) });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                this.work.loading_documents.remove(&id);
-                match result {
-                    Ok(Some(document)) => {
-                        this.work.documents.insert(id.clone(), document);
-                        this.documents.remove(&id);
-                        this.html_documents.remove(&id);
-                    }
-                    Ok(None) => {
-                        this.work.documents.remove(&id);
-                        this.error = Some("Document unavailable. It may have been deleted.".into());
-                    }
-                    Err(error) => {
-                        this.error = Some(format!("Could not open this document: {error}"))
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
     pub(super) fn refresh_work(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.work.pending.contains(id)
             || self
@@ -104,23 +63,8 @@ impl Bots {
                 else {
                     return;
                 };
-                let old_documents = bot.desktop_document_ids.clone();
                 let changed = bot.apply_work(documents, launches).unwrap_or(false);
                 if changed {
-                    // Replace readers whose body changed while they were open.
-                    for id in old_documents
-                        .iter()
-                        .chain(bot.documents.iter().map(|d| &d.id))
-                    {
-                        this.documents.remove(id);
-                        this.html_documents.remove(id);
-                        this.work.documents.remove(id);
-                    }
-                    if this.active.as_deref() == Some(&id)
-                        && let Some(Route::Document(document)) = this.route.clone()
-                    {
-                        this.open_document(&document, cx);
-                    }
                     this.configure_chat(&id, cx);
                     this.refresh_cards(cx);
                     cx.emit(Changed);

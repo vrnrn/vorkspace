@@ -1,6 +1,7 @@
 //! RemoteSession.tsx's host observation and composer restrictions.
 use super::*;
 use serde_json::{Value, json};
+use vorkspace_ui::radius;
 
 #[derive(Default)]
 pub(super) struct State {
@@ -404,7 +405,7 @@ impl Conversation {
             return None;
         }
         let legacy = self.remote_state.legacy_recovery_error();
-        Some(div().mx_2().my_2().p_3().rounded_lg().bg(content(0.04)).flex().items_center().gap_2()
+        Some(div().mx_2().my_2().p_3().rounded(px(radius::CONTAINER)).bg(content(0.04)).flex().items_center().gap_2()
             .child(div().flex_1().text_size(px(12.)).child(if let Some(error) = legacy {error.to_owned()} else if self.remote_state.pending {"A remote command needs confirmation. Retry uses its original command ID.".to_owned()} else {self.remote_state.error.clone().unwrap_or_default()}))
             .when(legacy.is_none(), |d| d
             .child(crate::controls::secondary_button("remote-retry",if self.remote_state.rejected.is_some() {"Restore message"} else {"Retry"},true,false).debug_selector(|| "remote-retry".into()).child(if self.remote_state.rejected.is_some() {"Restore message"} else {"Retry"}).on_click(cx.listener(|this,_,_,cx| {

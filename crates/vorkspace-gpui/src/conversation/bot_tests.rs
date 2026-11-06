@@ -63,6 +63,36 @@ fn chat(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
 }
 
 #[gpui::test]
+fn island_status_distinguishes_finished_work_from_attention_and_active_turns(
+    cx: &mut TestAppContext,
+) {
+    let window = chat(cx);
+    window
+        .update(cx, |view, _, _| {
+            view.loading = false;
+            view.status = "Ready".into();
+            view.summary.has_messages = true;
+            assert_eq!(view.bot_status_label(), "Done");
+            view.busy = true;
+            view.status = "Thinking…".into();
+            assert_eq!(view.bot_status_label(), "Thinking");
+            view.status = "Running a tool".into();
+            assert_eq!(view.bot_status_label(), "Working");
+            view.settings.usage_limit = Some(Default::default());
+            assert_eq!(view.bot_status_label(), "Usage limit reached");
+            view.settings.usage_limit = None;
+            view.busy = false;
+            view.status = "Provider disconnected".into();
+            assert_eq!(
+                view.bot_status_label(),
+                "Needs attention",
+                "an error must never look done"
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn canceling_draft_edit_restores_saved_mcp_context(cx: &mut TestAppContext) {
     let window = chat(cx);
     let original = "Use @mcp/docs";

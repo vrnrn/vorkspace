@@ -432,15 +432,8 @@ impl Shell {
     }
 
     fn notice_session_visible(&self, id: i64, cx: &App) -> bool {
-        if self.app_view_open() || self.settings.is_some() || self.app_search.is_some() {
+        if self.settings.is_some() {
             return false;
-        }
-        if self.bot_active(cx) {
-            return self
-                .bots
-                .as_ref()
-                .and_then(|m| m.read(cx).active_notification_session(cx))
-                == Some(id);
         }
         self.workspace.active_tab().is_some_and(|tab| {
             self.workspace
@@ -448,8 +441,28 @@ impl Shell {
                 .leaf_ids()
                 .into_iter()
                 .any(|pane| {
-                    self.workspace.session_for_pane(pane) == id
+                    if self.workspace.session_for_pane(pane) == Some(id)
                         && !self.workspace.review_owners.contains_key(&pane)
+                    {
+                        return true;
+                    }
+                    let Some(crate::workspace::AppPane::Bot(bot)) = self
+                        .workspace
+                        .app_panes
+                        .get(&pane)
+                        .map(|pane| &pane.content)
+                    else {
+                        return false;
+                    };
+                    self.bots.as_ref().is_some_and(|manager| {
+                        let manager = manager.read(cx);
+                        manager
+                            .roster
+                            .get(bot)
+                            .is_some_and(|actor| actor.session_id == Some(id))
+                            && (manager.active.as_deref() != Some(bot.as_str())
+                                || manager.active_notification_session(cx) == Some(id))
+                    })
                 })
         })
     }
@@ -497,7 +510,12 @@ impl Shell {
                 inbox_ask: false,
                 orchestration_worker: self.orchestration_worker(id),
                 conversation_focused: self.window_active
-                    && (self.workspace.active == Some(id) || bot_visible)
+                    && (self
+                        .workspace
+                        .active
+                        .and_then(|pane| self.workspace.session_for_pane(pane))
+                        == Some(id)
+                        || bot_visible)
                     && self.notice_session_visible(id, cx)
                     && chat.composer_focused(window, cx),
             });

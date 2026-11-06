@@ -16,12 +16,20 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "sessions.send" => "sessionId prompt project notifyOnComplete",
         "sessions.draft" => "sessionId prompt project",
         "sessions.stop" | "sessions.archive" | "sessions.delete" => "sessionId project",
+        "workspace.list" => "project",
+        "workspace.open" => "project kind sessionId noteId provider itemKey bot document path placement targetPaneId",
+        "workspace.focus" => "project paneId",
+        "workspace.close" => "project paneId confirmRunning expectedProcess",
+        "workspace.move" => "project paneId tabId targetPaneId edge",
+        "workspace.detach" => "project paneId index",
+        "workspace.reorder" => "project tabId index",
+        "workspace.resize" => "project tabId sashPath index ratio",
         "worktrees.create" => "branch base existing project",
         "worktrees.remove" => "path project",
         "folders.move" => "sessionId folderId newFolderName project",
-        "notes.list" => "limit offset",
-        "notes.read" => "id",
-        "notes.write" => "id title body tags",
+        "notes.list" => "project limit offset",
+        "notes.read" => "project id noteId",
+        "notes.write" => "project id noteId title body tags",
         "todos.list" => "project",
         "todos.add" => "title description attachments dependencies status github project",
         "todos.update" => "id title description attachments dependencies status before project",
@@ -69,6 +77,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
             "confirmNoIssue",
             "confirmNoEffect",
             "confirmChecked",
+            "confirmRunning",
         ]
         .contains(&key.as_str())
             && !value.is_boolean()
@@ -76,7 +85,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
             return Err(format!("{key} must be true or false"));
         }
         if !todo_before
-            && ["before", "limit", "offset", "maxChars", "number"].contains(&key.as_str())
+            && ["before", "limit", "offset", "maxChars", "number", "index"].contains(&key.as_str())
             && value.as_u64().is_none()
         {
             return Err(format!("{key} must be a non-negative integer"));
@@ -93,14 +102,21 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
                 "confirmNoIssue",
                 "confirmNoEffect",
                 "confirmChecked",
+                "confirmRunning",
                 "before",
                 "limit",
                 "offset",
                 "maxChars",
                 "number",
+                "index",
                 "id",
                 "sessionId",
                 "besideSessionId",
+                "paneId",
+                "tabId",
+                "targetPaneId",
+                "sashPath",
+                "ratio",
                 "modelSettings",
                 "schedule",
                 "tags",
@@ -144,6 +160,17 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
             .is_none_or(|value| value == "tab")
     {
         return Err("besideSessionId requires placement right or down".into());
+    }
+    if action.starts_with("workspace.") {
+        validate_workspace(action, input)?;
+    }
+    if action.starts_with("notes.") {
+        if input.get("id").is_some() && input.get("noteId").is_some() {
+            return Err("Use id or noteId, not both".into());
+        }
+        if action == "notes.read" && input.get("id").is_none() && input.get("noteId").is_none() {
+            return Err("Provide id or noteId".into());
+        }
     }
     if input.get("tags").is_some_and(|v| {
         v.as_array().is_none_or(|a| {
@@ -211,6 +238,110 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     }
     Ok(())
 }
+
+fn validate_workspace(action: &str, input: &Value) -> Result<(), String> {
+    for key in ["paneId", "tabId", "targetPaneId"] {
+        if input.get(key).is_some_and(|value| value.as_i64().is_none()) {
+            return Err(format!("{key} must be an integer pane ID"));
+        }
+    }
+    if input.get("sashPath").is_some_and(|value| {
+        value
+            .as_array()
+            .is_none_or(|path| path.len() > 32 || path.iter().any(|part| part.as_u64().is_none()))
+    }) {
+        return Err("sashPath must be an array of non-negative child indices".into());
+    }
+    if input.get("ratio").is_some_and(|value| {
+        value
+            .as_f64()
+            .is_none_or(|ratio| !ratio.is_finite() || !(0.0..=1.0).contains(&ratio))
+    }) {
+        return Err("ratio must be a number between 0 and 1".into());
+    }
+    match action {
+        "workspace.open" => {
+            let kind = input
+                .get("kind")
+                .and_then(Value::as_str)
+                .ok_or("Provide kind")?;
+            let required = match kind {
+                "session" => Some("sessionId"),
+                "note" => Some("noteId"),
+                "connector" => Some("provider"),
+                "item" => Some("itemKey"),
+                "bot" | "botDocument" => Some("bot"),
+                "file" => Some("path"),
+                "notes" | "todos" | "automations" | "terminal" | "search" | "channels" => None,
+                _ => return Err("Unknown workspace pane kind".into()),
+            };
+            if let Some(key) = required {
+                if input.get(key).is_none() {
+                    return Err(format!("Provide {key}"));
+                }
+            }
+            if kind == "botDocument" && input.get("document").is_none() {
+                return Err("Provide document".into());
+            }
+            let placement = input
+                .get("placement")
+                .and_then(Value::as_str)
+                .unwrap_or("tab");
+            if (placement == "tab") != input.get("targetPaneId").is_none() {
+                return Err("targetPaneId requires placement right or down, and split placement requires targetPaneId".into());
+            }
+            let allowed = match kind {
+                "session" => &["sessionId"][..],
+                "note" => &["noteId"],
+                "connector" => &["provider"],
+                "item" => &["itemKey"],
+                "bot" => &["bot"],
+                "botDocument" => &["bot", "document"],
+                "file" => &["path"],
+                _ => &[],
+            };
+            if let Some(extra) = input.as_object().unwrap().keys().find(|key| {
+                !["project", "kind", "placement", "targetPaneId"].contains(&key.as_str())
+                    && !allowed.contains(&key.as_str())
+            }) {
+                return Err(format!("{kind} panes do not take {extra}"));
+            }
+        }
+        "workspace.focus" | "workspace.close" | "workspace.detach" => {
+            if input.get("paneId").is_none() {
+                return Err("Provide paneId".into());
+            }
+        }
+        "workspace.move" => {
+            if input.get("paneId").is_some() == input.get("tabId").is_some() {
+                return Err("Provide exactly one of paneId or tabId".into());
+            }
+            if input.get("targetPaneId").is_none() {
+                return Err("Provide targetPaneId".into());
+            }
+            if !matches!(
+                input.get("edge").and_then(Value::as_str),
+                Some("left" | "right" | "top" | "bottom")
+            ) {
+                return Err("edge must be left, right, top or bottom".into());
+            }
+        }
+        "workspace.reorder" => {
+            if input.get("tabId").is_none() || input.get("index").is_none() {
+                return Err("Provide tabId and index".into());
+            }
+        }
+        "workspace.resize"
+            if ["tabId", "sashPath", "index", "ratio"]
+                .iter()
+                .any(|key| input.get(*key).is_none()) =>
+        {
+            return Err("Provide tabId, sashPath, index and ratio".into());
+        }
+        _ => (),
+    }
+    Ok(())
+}
 /// Read queries do not reserve durable effects or turn a frequent listing into
 /// a database write. Every other validated action requires durable admission.
 pub fn is_read_only(action: &str) -> bool {
@@ -221,6 +352,7 @@ pub fn is_read_only(action: &str) -> bool {
             | "bots.read"
             | "sessions.list"
             | "sessions.read"
+            | "workspace.list"
             | "folders.list"
             | "notes.list"
             | "notes.read"
@@ -257,6 +389,7 @@ pub fn minion_allowed(action: &str) -> bool {
                 | "soul.read"
                 | "sessions.list"
                 | "sessions.read"
+                | "workspace.list"
                 | "worktrees.list"
                 | "minions.list"
                 | "artifacts.list"
@@ -277,36 +410,28 @@ mod tests {
     }
     #[test]
     fn validates_before_mutation() {
-        assert!(
-            validate(
-                "minions.hire",
-                &json!({"name":"Scout","role":"Review","specialties":["Rust"]})
-            )
-            .is_ok()
-        );
-        assert!(
-            validate(
-                "minions.hire",
-                &json!({"name":"Scout","role":"Review","specialties":"Rust"})
-            )
-            .is_err()
-        );
-        assert!(
-            validate(
-                "minions.hire",
-                &json!({"name":"Scout","role":"Review","specialties":[""]})
-            )
-            .is_err()
-        );
+        assert!(validate(
+            "minions.hire",
+            &json!({"name":"Scout","role":"Review","specialties":["Rust"]})
+        )
+        .is_ok());
+        assert!(validate(
+            "minions.hire",
+            &json!({"name":"Scout","role":"Review","specialties":"Rust"})
+        )
+        .is_err());
+        assert!(validate(
+            "minions.hire",
+            &json!({"name":"Scout","role":"Review","specialties":[""]})
+        )
+        .is_err());
         assert!(validate("minions.fire", &json!({"minion":"scout"})).is_ok());
         assert!(!is_read_only("minions.hire") && !is_read_only("minions.fire"));
-        assert!(
-            validate(
-                "bots.send",
-                &json!({"to":"Beta","message":"Review","expectReply":true})
-            )
-            .is_ok()
-        );
+        assert!(validate(
+            "bots.send",
+            &json!({"to":"Beta","message":"Review","expectReply":true})
+        )
+        .is_ok());
         assert!(validate("bots.send", &json!({"to":["Beta"],"message":"Review"})).is_err());
         assert!(validate("bots.send", &json!({"to":"Beta","expectReply":"true"})).is_err());
         assert!(
@@ -315,13 +440,11 @@ mod tests {
         assert!(validate("sessions.start", &json!({"prompt":"x","draft":"false"})).is_err());
         assert!(validate("sessions.delete", &json!({"sessionId":1,"force":true})).is_err());
         assert!(validate("sessions.start", &json!({"runtimeMode":"unsafe"})).is_err());
-        assert!(
-            validate(
-                "sessions.start",
-                &json!({"prompt":"x","project":"/code","draft":true})
-            )
-            .is_ok()
-        );
+        assert!(validate(
+            "sessions.start",
+            &json!({"prompt":"x","project":"/code","draft":true})
+        )
+        .is_ok());
     }
     #[test]
     fn before_is_a_todo_id_or_a_page_cursor_by_action() {
@@ -330,5 +453,100 @@ mod tests {
         assert!(validate("bots.read", &json!({"bot":"b","before":3})).is_ok());
         assert!(validate("bots.read", &json!({"bot":"b","before":"3"})).is_err());
         assert!(validate("sessions.read", &json!({"sessionId":1,"before":"3"})).is_err());
+    }
+    #[test]
+    fn workspace_actions_validate_typed_panes_and_layout_coordinates() {
+        assert!(validate("workspace.list", &json!({"project":"/p"})).is_ok());
+        assert!(is_read_only("workspace.list"));
+        assert!(minion_allowed("workspace.list"));
+        assert!(!is_read_only("workspace.open"));
+        assert!(!minion_allowed("workspace.close"));
+        assert!(validate("workspace.open", &json!({"kind":"item","itemKey":"github:repo:pr:1","placement":"right","targetPaneId":-4})).is_ok());
+        assert!(validate(
+            "workspace.open",
+            &json!({"kind":"botDocument","bot":"bot-id","document":"doc-id"})
+        )
+        .is_ok());
+        assert!(validate(
+            "workspace.open",
+            &json!({"kind":"item","itemKey":"key","bot":"other"})
+        )
+        .is_err());
+        assert!(validate(
+            "workspace.open",
+            &json!({"kind":"note","noteId":"n","placement":"down"})
+        )
+        .is_err());
+        assert!(validate(
+            "workspace.open",
+            &json!({"kind":"session","sessionId":1,"targetPaneId":-2})
+        )
+        .is_err());
+        assert!(validate(
+            "workspace.move",
+            &json!({"paneId":-2,"targetPaneId":1,"edge":"left"})
+        )
+        .is_ok());
+        assert!(validate(
+            "workspace.move",
+            &json!({"tabId":-2,"targetPaneId":1,"edge":"bottom"})
+        )
+        .is_ok());
+        assert!(validate(
+            "workspace.move",
+            &json!({"paneId":-2,"tabId":-2,"targetPaneId":1,"edge":"left"})
+        )
+        .is_err());
+        assert!(validate("workspace.move", &json!({"targetPaneId":1,"edge":"left"})).is_err());
+        assert!(validate(
+            "workspace.move",
+            &json!({"paneId":-2,"targetPaneId":1,"edge":"diagonal"})
+        )
+        .is_err());
+        assert!(validate("workspace.detach", &json!({"paneId":-2,"index":0})).is_ok());
+        assert!(validate("workspace.reorder", &json!({"tabId":-2,"index":0})).is_ok());
+        assert!(validate("workspace.reorder", &json!({"tabId":-2})).is_err());
+        assert!(validate(
+            "workspace.resize",
+            &json!({"tabId":1,"sashPath":[0,1],"index":0,"ratio":0.4})
+        )
+        .is_ok());
+        assert!(validate(
+            "workspace.resize",
+            &json!({"tabId":1,"sashPath":[-1],"index":0,"ratio":0.4})
+        )
+        .is_err());
+        assert!(validate(
+            "workspace.resize",
+            &json!({"tabId":1,"sashPath":[],"index":0,"ratio":1.2})
+        )
+        .is_err());
+        assert!(validate(
+            "workspace.close",
+            &json!({"paneId":-2,"confirmRunning":true})
+        )
+        .is_ok());
+        assert!(validate(
+            "workspace.close",
+            &json!({"paneId":-2,"confirmRunning":true,"expectedProcess":"vim"})
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn native_note_ids_and_legacy_ids_are_mutually_exclusive() {
+        assert!(validate("notes.read", &json!({"noteId":"native-note"})).is_ok());
+        assert!(validate("notes.read", &json!({"id":42})).is_ok());
+        assert!(validate("notes.read", &json!({})).is_err());
+        assert!(validate(
+            "notes.write",
+            &json!({"noteId":"native-note","title":"T","body":"B"})
+        )
+        .is_ok());
+        assert!(validate(
+            "notes.write",
+            &json!({"id":42,"noteId":"native-note","title":"T","body":"B"})
+        )
+        .is_err());
     }
 }

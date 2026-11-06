@@ -301,8 +301,16 @@ impl DraftBuffer {
         Ok(())
     }
 
-    fn has_pending(&self) -> bool {
+    pub(super) fn has_pending(&self) -> bool {
         self.pending.lock().unwrap().is_some()
+    }
+
+    pub(super) fn pending_for(&self, id: &str) -> bool {
+        self.pending
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|edit| edit.write.id == id)
     }
 
     pub(super) fn flush(&self, meetings: &Meetings) -> Result<(), String> {

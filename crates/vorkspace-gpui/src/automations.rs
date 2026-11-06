@@ -24,6 +24,7 @@ use vorkspace_core::{
     session_groups::Folder,
 };
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 mod editor;
@@ -125,6 +126,7 @@ pub(crate) struct Automations {
     running: bool,
     gallery: bool,
     narrow_detail: bool,
+    pane_width: Option<f32>,
     category: String,
     templates: Vec<Template>,
     filter: Entity<Input>,
@@ -189,6 +191,7 @@ impl Automations {
             running: false,
             gallery: true,
             narrow_detail: false,
+            pane_width: None,
             category: "popular".into(),
             templates: serde_json::from_str(include_str!("automations/templates.json"))
                 .unwrap_or_default(),
@@ -253,6 +256,16 @@ impl Automations {
         self.projects = projects;
         self.load_folders(cx);
         cx.notify();
+    }
+    pub(crate) fn set_pane_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        if width.is_finite() && width > 0. && self.pane_width != Some(width) {
+            self.pane_width = Some(width);
+            cx.notify();
+        }
+    }
+    fn is_narrow(&self, window: &Window) -> bool {
+        self.pane_width
+            .map_or_else(|| page::narrow(window), |width| width < 900.)
     }
     fn show_gallery(&mut self, cx: &mut Context<Self>) {
         self.editor = None;
@@ -397,7 +410,7 @@ impl Automations {
         } else {
             self.select(id, cx);
         }
-        if self.narrow_detail && page::narrow(window) {
+        if self.narrow_detail && self.is_narrow(window) {
             window.focus(&self.focus, cx);
         }
     }
@@ -1028,7 +1041,7 @@ impl Automations {
                             .child(icon("plus", page::ICON_SIZE))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.show_gallery(cx);
-                                if page::narrow(window) {
+                                if this.is_narrow(window) {
                                     window.focus(&this.focus, cx);
                                 }
                             })),
@@ -1055,96 +1068,97 @@ impl Automations {
 
 impl Render for Automations {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let narrow = page::narrow(window);
-        let mut root =
-            div()
-                .id("automations-view")
-                .role(Role::Region)
-                .aria_label("Automations")
-                .track_focus(&self.focus)
-                .size_full()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .text_color(content(1.))
-                .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                    if event.keystroke.key == "escape" {
-                        // Let the trigger menu close its active submenu first.
-                        if this.trigger_menu.is_some() {
-                            cx.propagate();
-                            return;
-                        }
-                        if this.confirm_delete {
-                            this.confirm_delete = false;
-                        } else if this.choice.is_some()
-                            || this.trigger_menu.is_some()
-                            || this.models.is_some()
-                            || this.project_picker.is_some()
-                        {
-                            this.choice = None;
-                            this.trigger_menu = None;
-                            this.models = None;
-                            this.project_picker = None;
-                        } else if page::narrow(window) && this.narrow_detail {
-                            this.back_to_list(window, cx);
-                        } else if !page::narrow(window) && this.editor.is_some() && !this.gallery {
-                            this.show_gallery(cx);
-                        } else {
-                            cx.emit(Event::Close);
-                        }
-                        cx.stop_propagation();
-                        cx.notify();
+        let narrow = self.is_narrow(window);
+        let mut root = div()
+            .id("automations-view")
+            .role(Role::Region)
+            .aria_label("Automations")
+            .track_focus(&self.focus)
+            .size_full()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .text_color(content(1.))
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    // Let the trigger menu close its active submenu first.
+                    if this.trigger_menu.is_some() {
+                        cx.propagate();
+                        return;
                     }
-                }))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .flex()
-                        .when(!narrow || !self.narrow_detail, |d| {
-                            d.child(self.render_list(narrow, cx))
-                        })
-                        .when(!narrow || self.narrow_detail, |d| {
-                            d.child(
-                                page::detail_pane(!narrow)
-                                    .when(narrow, |d| {
-                                        d.child(
-                                            page::toolbar().child(
-                                                page::action(
-                                                    "automation-back",
-                                                    "Back to automations",
-                                                    true,
-                                                )
-                                                .debug_selector(|| "automation-back".into())
-                                                .child(icon("chevron-left", page::ICON_SIZE))
-                                                .child("Automations")
-                                                .on_click(cx.listener(|this, _, window, cx| {
+                    if this.confirm_delete {
+                        this.confirm_delete = false;
+                    } else if this.choice.is_some()
+                        || this.trigger_menu.is_some()
+                        || this.models.is_some()
+                        || this.project_picker.is_some()
+                    {
+                        this.choice = None;
+                        this.trigger_menu = None;
+                        this.models = None;
+                        this.project_picker = None;
+                    } else if this.is_narrow(window) && this.narrow_detail {
+                        this.back_to_list(window, cx);
+                    } else if !this.is_narrow(window) && this.editor.is_some() && !this.gallery {
+                        this.show_gallery(cx);
+                    } else {
+                        cx.emit(Event::Close);
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .when(!narrow || !self.narrow_detail, |d| {
+                        d.child(self.render_list(narrow, cx))
+                    })
+                    .when(!narrow || self.narrow_detail, |d| {
+                        d.child(
+                            page::detail_pane(!narrow)
+                                .when(narrow, |d| {
+                                    d.child(
+                                        page::toolbar().child(
+                                            page::action(
+                                                "automation-back",
+                                                "Back to automations",
+                                                true,
+                                            )
+                                            .debug_selector(|| "automation-back".into())
+                                            .child(icon("chevron-left", page::ICON_SIZE))
+                                            .child("Automations")
+                                            .on_click(
+                                                cx.listener(|this, _, window, cx| {
                                                     this.back_to_list(window, cx)
-                                                })),
+                                                }),
                                             ),
-                                        )
-                                    })
-                                    .child(if self.gallery || self.editor.is_none() {
-                                        self.render_gallery(narrow, cx)
-                                    } else {
-                                        self.render_editor(narrow, cx)
-                                    }),
-                            )
-                        }),
+                                        ),
+                                    )
+                                })
+                                .child(if self.gallery || self.editor.is_none() {
+                                    self.render_gallery(narrow, cx)
+                                } else {
+                                    self.render_editor(narrow, cx)
+                                }),
+                        )
+                    }),
+            )
+            .when_some(self.error.clone(), |d, error| {
+                d.child(
+                    page::meta()
+                        .id("automation-error")
+                        .role(Role::Alert)
+                        .m(px(16.))
+                        .p(px(12.))
+                        .rounded(px(radius::SURFACE))
+                        .bg(status(StatusColor::Danger, 0.08))
+                        .text_color(status(StatusColor::Danger, 1.))
+                        .child(error),
                 )
-                .when_some(self.error.clone(), |d, error| {
-                    d.child(
-                        page::meta()
-                            .id("automation-error")
-                            .role(Role::Alert)
-                            .m(px(16.))
-                            .p(px(12.))
-                            .rounded(px(page::CARD_CORNER))
-                            .bg(status(StatusColor::Danger, 0.08))
-                            .text_color(status(StatusColor::Danger, 1.))
-                            .child(error),
-                    )
-                });
+            });
         if let Some(menu) = &self.trigger_menu {
             root = root.child(
                 menu.read(cx)

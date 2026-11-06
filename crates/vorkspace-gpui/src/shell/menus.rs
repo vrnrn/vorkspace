@@ -120,7 +120,9 @@ impl Shell {
             MenuTarget::TerminalTab(_) => ("".into(), Vec::new(), 160., MenuStyle::Explorer),
             MenuTarget::Tab(_) | MenuTarget::TitleTab(_) => {
                 let (tab, label) = match target {
-                    MenuTarget::Tab(id) => (TitleTab::Session(*id), title(id)),
+                    MenuTarget::Tab(id) => {
+                        (TitleTab::Workspace(*id), self.tab_copy(*id, cx).headline)
+                    }
                     MenuTarget::TitleTab(tab) => {
                         let label = match tab {
                             TitleTab::Bot { id, .. } => self
@@ -435,7 +437,7 @@ impl Shell {
             MenuTarget::SessionFilter => self.change_session_filter(action, cx),
             MenuTarget::SidebarOptions => self.change_sidebar_option(action, cx),
             MenuTarget::Tab(id) => {
-                self.run_title_tab_menu(TitleTab::Session(id), action, window, cx)
+                self.run_title_tab_menu(TitleTab::Workspace(id), action, window, cx)
             }
             MenuTarget::TitleTab(tab) => self.run_title_tab_menu(tab, action, window, cx),
             MenuTarget::Session(id) => self.run_session_menu(id, action, window, cx),

@@ -11,7 +11,18 @@ enum Effect {
     Groups(String, vorkspace_core::session_groups::Groups),
 }
 impl Shell {
-    fn app_caller_allowed(&self, caller: i64, project: &str, cx: &App) -> bool {
+    pub(super) fn app_caller_can_read(&self, caller: i64, project: &str, cx: &App) -> bool {
+        self.sessions.get(&caller).is_some_and(|view| {
+            let view = view.read(cx);
+            view.settings.operator
+                && vorkspace_core::files::path_key(&view.summary.cwd)
+                    == vorkspace_core::files::path_key(project)
+        }) || self
+            .bots
+            .as_ref()
+            .is_some_and(|bots| bots.read(cx).app_project_allowed(caller, project, cx))
+    }
+    pub(super) fn app_caller_allowed(&self, caller: i64, project: &str, cx: &App) -> bool {
         self.sessions.get(&caller).is_some_and(|view| {
             let view = view.read(cx);
             view.settings.operator
@@ -185,7 +196,7 @@ impl Shell {
                 .unwrap_or_default()
         )
     }
-    fn check_live_app_target(&self, id: i64, cx: &App) -> Result<(), String> {
+    pub(super) fn check_live_app_target(&self, id: i64, cx: &App) -> Result<(), String> {
         if self.orchestration_worker(id)
             || self
                 .bots
@@ -267,6 +278,207 @@ impl Shell {
         self.invalidate_chrome(cx);
         cx.notify();
         Ok(json!({"accepted":true}))
+    }
+    pub(super) fn app_notes_action(
+        &mut self,
+        caller: i64,
+        assigned: &[String],
+        action: &str,
+        input: &Value,
+        full_list: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<Value, String> {
+        let projects = if let Some(requested) = input.get("project").and_then(Value::as_str) {
+            if !assigned.iter().any(|project| {
+                vorkspace_core::files::path_key(project)
+                    == vorkspace_core::files::path_key(requested)
+            }) {
+                return Err("Project is outside the caller's assignments".into());
+            }
+            vec![requested.to_owned()]
+        } else {
+            assigned.to_vec()
+        };
+        let write = action == "notes.write";
+        if projects.is_empty()
+            || !projects.iter().all(|project| {
+                if write {
+                    self.app_caller_allowed(caller, project, cx)
+                } else {
+                    self.app_caller_can_read(caller, project, cx)
+                }
+            })
+        {
+            return Err("The caller no longer owns this project's app capability".into());
+        }
+        let store = locked(&self.store)?;
+        let native = store.list_notes()?;
+        let compatible = store.notes()?;
+        if native.len() != compatible.len() {
+            return Err("Note identities changed while reading; retry the listing".into());
+        }
+        let records = native.into_iter().zip(compatible).collect::<Vec<_>>();
+        let in_scope = |note: &vorkspace_core::notes::Note| {
+            note.source_cwd.as_deref().is_some_and(|cwd| {
+                projects.iter().any(|project| {
+                    vorkspace_core::files::path_key(project) == vorkspace_core::files::path_key(cwd)
+                })
+            })
+        };
+        if action == "notes.list" {
+            let offset = input
+                .get("offset")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .min(usize::MAX as u64) as usize;
+            let limit = input
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(if full_list { 50 } else { 200 })
+                .clamp(1, 200) as usize;
+            let listed = records
+                .iter()
+                .filter(|(note, _)| in_scope(note))
+                .skip(offset)
+                .take(limit)
+                .map(|(note, compatible)| {
+                    if full_list {
+                        let mut value = json!(compatible);
+                        value["noteId"] = json!(note.id);
+                        value
+                    } else {
+                        json!({"id":compatible.id,"noteId":note.id,"title":note.title})
+                    }
+                })
+                .collect::<Vec<_>>();
+            return Ok(json!(listed));
+        }
+        let native_id = input.get("noteId").and_then(Value::as_str);
+        let legacy_id = input
+            .get("id")
+            .map(|value| {
+                value
+                    .as_u64()
+                    .or_else(|| value.as_str()?.parse().ok())
+                    .ok_or("id must be a numeric note ID")
+            })
+            .transpose()?;
+        if native_id.is_some() && legacy_id.is_some() {
+            return Err("Use id or noteId, not both".into());
+        }
+        let matching = records
+            .iter()
+            .filter(|(note, compatible)| {
+                native_id.is_some_and(|id| note.id == id)
+                    || legacy_id.is_some_and(|id| compatible.id == id)
+            })
+            .collect::<Vec<_>>();
+        if matching.len() > 1 {
+            return Err(
+                "Numeric note ID is ambiguous; use the exact noteId from notes.list".into(),
+            );
+        }
+        let existing = matching.first().copied();
+        if let Some((note, _)) = existing
+            && !in_scope(note)
+        {
+            return Err("Note is outside the caller's assigned project".into());
+        }
+        if action == "notes.read" {
+            let (note, compatible) = existing.ok_or("Note not found in assigned projects")?;
+            let mut value = json!(compatible);
+            value["noteId"] = json!(note.id);
+            return Ok(value);
+        }
+        if !write {
+            return Err("Unsupported notes action".into());
+        }
+        if native_id.is_some() && existing.is_none() {
+            return Err("Native noteId is unavailable; create without noteId".into());
+        }
+        let title = note_field(input, "title", vorkspace_core::notes::MAX_TITLE)?;
+        let body = note_field(input, "body", 256 * 1024)?;
+        let tags = input.get("tags").and_then(Value::as_array).map(|tags| {
+            tags.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        });
+        let project = existing
+            .and_then(|(note, _)| note.source_cwd.clone())
+            .or_else(|| (projects.len() == 1).then(|| projects[0].clone()))
+            .ok_or("Choose project when creating a note with several assigned projects")?;
+        let mut numeric = legacy_id.unwrap_or_else(vorkspace_core::time::now_ms);
+        if existing.is_none() && native_id.is_none() {
+            while records
+                .iter()
+                .any(|(_, compatible)| compatible.id == numeric)
+            {
+                numeric = numeric.checked_add(1).ok_or("Could not allocate note ID")?;
+            }
+        }
+        let note_id = existing
+            .map(|(note, _)| note.id.clone())
+            .unwrap_or_else(|| format!("gpui-note-{numeric}"));
+        let blocked = self
+            .notes
+            .as_ref()
+            .is_some_and(|view| view.read(cx).blocks_external_write(&note_id, cx))
+            || self
+                .note_tabs
+                .values()
+                .any(|view| view.read(cx).blocks_external_write(&note_id, cx));
+        if blocked {
+            return Err("The note has an open draft, recording, or save in progress; its editor was preserved".into());
+        }
+        // The dirty gate and native write share this UI turn, with no await or
+        // intervening editor event. Keep the native ID and recording links.
+        if let Some((note, _)) = existing {
+            let mut update = note.upsert(false);
+            update.title = title;
+            update.body = body;
+            if let Some(tags) = tags {
+                update.tags = tags;
+            }
+            store.update_note_preserving_artifact(&update)?;
+        } else {
+            let compatible = vorkspace_core::response::Note {
+                id: numeric,
+                title,
+                body,
+                tags: tags.unwrap_or_default(),
+                source_session: caller,
+                source_cwd: project,
+            };
+            store.save_note(&compatible)?;
+        }
+        let saved_native = store.list_notes()?;
+        let saved_compatible = store.notes()?;
+        let result = saved_native
+            .into_iter()
+            .zip(saved_compatible)
+            .find(|(note, _)| note.id == note_id)
+            .ok_or("Note was saved but could not be read back")?;
+        let mut value = json!(result.1);
+        value["noteId"] = json!(result.0.id);
+        drop(store);
+        let refresh_if_clean = |view: &Entity<Notes>, cx: &mut Context<Self>| {
+            let clean = view
+                .read(cx)
+                .selected_note_id()
+                .is_none_or(|selected| !view.read(cx).blocks_external_write(&selected, cx));
+            if clean {
+                view.update(cx, |view, cx| view.refresh(cx));
+            }
+        };
+        if let Some(view) = &self.notes {
+            refresh_if_clean(view, cx);
+        }
+        for view in self.note_tabs.values() {
+            refresh_if_clean(view, cx);
+        }
+        cx.notify();
+        Ok(value)
     }
     pub(super) fn init_app_bridge(&mut self, cx: &mut Context<Self>) {
         // GPUI's deterministic executor cannot be woken by an OS socket thread.
@@ -360,6 +572,7 @@ impl Shell {
                 "models.list"
                     | "sessions.list"
                     | "sessions.read"
+                    | "workspace.list"
                     | "folders.list"
                     | "notes.list"
                     | "notes.read"
@@ -422,6 +635,9 @@ impl Shell {
         let input = call.input.clone();
         let action = call.action.clone();
         let result = match action.as_str() {
+            "workspace.list" | "workspace.open" | "workspace.focus" | "workspace.close" | "workspace.move" | "workspace.reorder" | "workspace.detach" | "workspace.resize" => {
+                self.app_workspace_action(call.session, &project, &action, &input, window, cx)
+            }
             "sessions.list" => Ok(json!(self.order.iter().map(|&id| self.session_metadata(id, cx).summary).filter(|s| s.cwd == project).map(|s| json!({"sessionId":s.id,"title":s.title,"harness":s.provider,"project":s.cwd,"archived":s.archived})).collect::<Vec<_>>())),
             "models.list" => Ok(json!(Kind::ALL.into_iter().map(|kind| json!({"harness":kind.id(),"name":kind.label(),"models":self.sessions.values().find(|v| { let v=v.read(cx); let profile=if kind.id()==provider { inherited.account.clone() } else { crate::accounts::get(cx).map(|center|center.read(cx).selected(kind,&project)).unwrap_or_default() }; v.summary.provider == kind.id() && v.settings.account.id==profile.id }).map(|v| v.read(cx).settings_models()).unwrap_or_default()})).collect::<Vec<_>>())),
             "folders.list" => Ok(json!(self.groups.get(&project).cloned().unwrap_or_default().folders)),
@@ -471,22 +687,7 @@ impl Shell {
                 }, cx); return;
             }
             "notes.list" | "notes.read" | "notes.write" => {
-                let caller = call.session;
-                self.app_background(call, move |store| {
-                    let store = locked(&store)?;
-                    let notes = store.notes()?;
-                    let result = match action.as_str() {
-                        "notes.list" => json!(notes.iter().filter(|n| n.source_cwd == project).map(|n| json!({"id":n.id,"title":n.title})).collect::<Vec<_>>()),
-                        "notes.read" => { let id = number(&input, "id")?; json!(notes.iter().find(|n| n.id == id && n.source_cwd == project).ok_or("Note not found in this project.")?) },
-                        _ => {
-                            let id = input.get("id").and_then(Value::as_u64).unwrap_or_else(vorkspace_core::time::now_ms);
-                            if notes.iter().any(|n| n.id == id && n.source_cwd != project) { return Err("Note is outside this project.".into()); }
-                            let note = vorkspace_core::response::Note { id, title: text(&input,"title",512)?, body: text(&input,"body",256*1024)?, tags:input.get("tags").and_then(Value::as_array).map(|tags|tags.iter().filter_map(Value::as_str).map(str::to_owned).collect()).or_else(||notes.iter().find(|n|n.id==id).map(|n|n.tags.clone())).unwrap_or_default(),source_session: caller, source_cwd: project.clone() };
-                            store.save_note(&note)?; json!(note)
-                        }
-                    };
-                    Ok((result, Effect::None))
-                }, cx); return;
+                self.app_notes_action(call.session, std::slice::from_ref(&project), &action, &input, false, cx)
             }
             "todos.list" | "todos.add" | "todos.update" | "todos.remove" | "todos.publish" | "todos.reconcile" | "todos.retry" | "todos.reconcileEdit" | "todos.retryEdit" | "todos.discardEdit" | "todos.cancelPublish" => {
                 let board = vorkspace_core::todos::TodoBoard::Project(project.clone());
@@ -521,7 +722,7 @@ impl Shell {
                     this.finish_app_call(call,result.map(|()|json!({"removed":true})));
                 }),cx);return;
             }
-            _ => Err("Unknown Operator action. Supported: models.list, sessions.list/read/start/send/draft/stop/archive/delete, folders.list/move, notes.list/read/write, todos.list/add/update/remove, worktrees.list/create/remove.".into()),
+            _ => Err("Unknown Operator action. Run app help for the supported actions.".into()),
         };
         self.finish_app_call(call, result);
         let _ = window;
@@ -532,6 +733,14 @@ fn text(input: &Value, key: &str, max: usize) -> Result<String, String> {
         .get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty() && s.len() <= max)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("Provide {key} (up to {max} bytes)."))
+}
+fn note_field(input: &Value, key: &str, max: usize) -> Result<String, String> {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| value.len() <= max)
         .map(str::to_owned)
         .ok_or_else(|| format!("Provide {key} (up to {max} bytes)."))
 }

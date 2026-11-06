@@ -215,6 +215,42 @@ fn shared_response_bridge_preserves_original_identity_slug_and_subtype() {
     assert_eq!(subtype, "document");
 }
 
+#[test]
+fn external_note_update_keeps_pending_slug_subtype_and_recording_link() {
+    let store = store();
+    ensure_notes_table(&store.conn).unwrap();
+    let mut original = input("native-recorded-note", "", "Draft");
+    original.source_cwd = Some("/project".into());
+    original.tags = vec!["existing".into()];
+    let saved = upsert_content(&store.conn, &original, "note", Some("document")).unwrap();
+    assert!(saved.slug_pending);
+    store.attach_note_recording(&saved.id, RECORDING_A).unwrap();
+
+    let mut update = saved.upsert(true);
+    update.title = "New title".into();
+    update.body = "Revised".into();
+    let revised = store.update_note_preserving_artifact(&update).unwrap();
+    assert_eq!(revised.id, saved.id);
+    assert_eq!(revised.slug, saved.slug);
+    assert!(revised.slug_pending);
+    assert_eq!(revised.source_cwd, saved.source_cwd);
+    assert_eq!(revised.tags, ["existing"]);
+    assert_eq!(store.note_recordings().unwrap()[0].note_id, saved.id);
+    assert!(!store.note_recordings().unwrap()[0].deleted);
+    let subtype: String = store
+        .conn
+        .query_row(
+            "SELECT artifact_kind FROM notes WHERE id = ?1",
+            [&saved.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(subtype, "document");
+    assert!(store
+        .update_note_preserving_artifact(&input("missing", "No", "note"))
+        .is_err());
+}
+
 const RECORDING_A: &str = "0123456789abcdef0123456789abcdef";
 const RECORDING_B: &str = "1123456789abcdef0123456789abcdef";
 

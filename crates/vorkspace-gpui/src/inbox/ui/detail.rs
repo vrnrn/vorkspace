@@ -1,5 +1,6 @@
 //! The work item detail page: actions, comments and activity.
 use super::*;
+use vorkspace_ui::radius;
 
 impl Inbox {
     pub(super) fn detail_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -16,7 +17,7 @@ impl Inbox {
             )
             .into_any_element();
         };
-        let inset = detail_inset(window);
+        let inset = self.detail_inset(window);
         let is_pr = item.kind == "pr";
         let details = self.details.clone().unwrap_or_default();
         let related_sessions = self.related_sessions(&item);
@@ -270,6 +271,22 @@ impl Inbox {
                             .when(is_pr && item.provider == "github", |d| {
                                 d.child(self.pr_actions(&item, cx))
                             })
+                            .when(self.pinned_item.is_none(), |d| {
+                                let item = item.clone();
+                                d.child(
+                                    icon_action(
+                                        "inbox-open-tab",
+                                        "Open in new tab",
+                                        "app-window",
+                                        true,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |_, _, _, cx| {
+                                            cx.emit(Event::OpenTab(Box::new(item.clone())));
+                                        },
+                                    )),
+                                )
+                            })
                             .child(
                                 icon_action(
                                     "inbox-open-external",
@@ -394,7 +411,7 @@ impl Inbox {
                         .max_w_full()
                         .flex()
                         .items_stretch()
-                        .rounded(px(page::CORNER))
+                        .rounded(px(radius::CONTROL))
                         .bg(content(1.))
                         .text_color(shell_fill())
                         .child(self.action_anchor.probe())
@@ -614,7 +631,7 @@ impl Inbox {
             .min_w_0()
             .flex_shrink_0()
             .when(!nested, |d| {
-                d.rounded(px(page::CARD_CORNER))
+                d.rounded(px(radius::SURFACE))
                     .border_1()
                     .border_color(page::divider())
                     .bg(content(0.05))

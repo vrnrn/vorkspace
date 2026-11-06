@@ -1,21 +1,24 @@
 //! Bot workspaces: one runtime per identity, shared by the rail, tabs,
 //! overview and settings.
 pub(crate) use crate::avatar;
+use vorkspace_ui::radius;
 pub(crate) mod cards;
-mod changes;
 mod channels;
 mod creation;
+mod document_pane;
 mod effects;
 mod files;
 mod filters;
+mod habit_panel;
 #[cfg(test)]
 mod header_tests;
 mod host;
 pub(crate) mod host_api;
 mod html;
+mod island;
+pub(crate) use island::ISLAND_BREAKPOINT;
 mod memory_ui;
 mod notifications;
-mod overview;
 mod panel_stack;
 mod panels;
 mod peers;
@@ -30,11 +33,12 @@ use crate::{
     input::{self, Input},
     popover::{Anchor, AnchorSlot, Menu, MenuEvent, menu_popover, popover},
 };
+pub(crate) use document_pane::BotDocumentPane;
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, Focusable, MouseButton, Role, SharedString,
     Subscription, WeakEntity, Window, div, prelude::*, px, rgb,
 };
-use panels::{OpenPicker, OverviewTab, Route, SettingsSection};
+use panels::{OpenPicker, Route, SettingsSection};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -54,16 +58,18 @@ use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
 pub(crate) struct Changed;
 pub(crate) struct TabOpened(pub String);
-pub(crate) struct ShowDetails(pub String);
-pub(crate) use notifications::{NotificationChanged, NotificationFinished};
-#[derive(Clone, PartialEq)]
-pub(crate) struct OverviewChrome {
-    active: Option<String>,
-    creating: bool,
-    tab: OverviewTab,
-    routed: bool,
-    counts: (usize, usize, usize, usize),
+#[derive(Clone, Debug)]
+pub(crate) enum OpenWorkspacePane {
+    Session { bot: String, session: i64 },
+    Document { bot: String, document: String },
 }
+#[derive(Clone, Debug)]
+pub(crate) struct BotDocumentSource {
+    pub bot: String,
+    pub document: bot::Document,
+    pub desktop: bool,
+}
+pub(crate) use notifications::{NotificationChanged, NotificationFinished};
 struct RunningHabit {
     bot: String,
     habit: String,
@@ -104,14 +110,9 @@ pub(crate) struct Bots {
     work: work::Cache,
     pub(crate) error: Option<String>,
     notice_region: AnchorSlot,
-    pub(crate) details: Entity<overview::Overview>,
-    overview_tab: OverviewTab,
-    /// The current Bot's to-do board, behind its To-dos tab.
-    todo_board: Option<Entity<crate::todos::TodoBoardView>>,
-    /// Open to-dos by board key, for the tab badge before a board is open.
-    todo_counts: HashMap<String, usize>,
-    todo_counts_generation: u64,
-    overview_reveal: Option<crate::project_tabs::TabReveal<OverviewTab>>,
+    habit_panel: Entity<habit_panel::HabitPanel>,
+    open_islands: HashSet<String>,
+    expanded_islands: HashMap<String, island::Section>,
     route: Option<Route>,
     settings: Option<SettingsSection>,
     creation: Option<creation::Creation>,
@@ -137,10 +138,6 @@ pub(crate) struct Bots {
     access_anchor: AnchorSlot,
     menu: Option<(String, Entity<Menu>, Vec<Subscription>)>,
     menu_anchor: Anchor,
-    documents: HashMap<String, Entity<crate::transcript::TranscriptView>>,
-    html_documents: HashMap<String, Entity<html::Html>>,
-    project_changes: changes::ProjectChanges,
-    review: Option<Entity<crate::git_tools::review::ReviewPane>>,
     rail_ids: Vec<String>,
     running: HashMap<i64, RunningHabit>,
     active_run: Option<i64>,
@@ -165,11 +162,10 @@ pub(crate) struct Bots {
     held: HashSet<String>,
     card_refresh: HashMap<String, u64>,
     session_filters: filters::Filters,
-    session_filter_anchor: AnchorSlot,
 }
 impl EventEmitter<Changed> for Bots {}
 impl EventEmitter<TabOpened> for Bots {}
-impl EventEmitter<ShowDetails> for Bots {}
+impl EventEmitter<OpenWorkspacePane> for Bots {}
 impl Bots {
     pub(crate) fn presentation_bot(&self, id: &str) -> Option<Bot> {
         let mut actor = self.roster.effective_bot(id)?;
@@ -306,15 +302,42 @@ impl Bots {
     pub(crate) fn bind_window(&mut self, window: &Window) {
         self.parent_window = Some(window.window_handle());
     }
-    pub(super) fn open_workspace(&self, id: i64, window: &Window, cx: &mut Context<Self>) {
-        let owner = self.owner.clone();
-        let handle = window.window_handle();
-        let app: &mut App = cx;
-        app.defer(move |cx| {
-            let _ = handle.update(cx, |_, window, cx| {
-                owner.open_session(id, window, cx);
-            });
+    pub(crate) fn open_session_workspace_pane(&mut self, id: i64, cx: &mut Context<Self>) {
+        let Some(bot) = self.active.clone() else {
+            return;
+        };
+        self.open_islands.remove(&bot);
+        cx.emit(OpenWorkspacePane::Session { bot, session: id });
+        cx.notify();
+    }
+
+    pub(crate) fn open_document_workspace_pane(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(bot) = self.current() else {
+            return;
+        };
+        if !bot.documents.iter().any(|document| document.id == id) {
+            return;
+        }
+        let bot = bot.id.clone();
+        self.open_islands.remove(&bot);
+        cx.emit(OpenWorkspacePane::Document {
+            bot,
+            document: id.to_owned(),
         });
+        cx.notify();
+    }
+
+    pub(crate) fn document_for_pane(&self, bot: &str, id: &str) -> Option<BotDocumentSource> {
+        let actor = self.roster.get(bot)?;
+        let listed = actor.documents.iter().find(|document| document.id == id)?;
+        let desktop = actor.desktop_document_ids.iter().any(|source| source == id);
+        Some(BotDocumentSource {
+            bot: bot.into(),
+            // Resolve through this Bot's roster so a document ID alone never
+            // grants access to another Bot's output.
+            document: listed.clone(),
+            desktop,
+        })
     }
     pub(crate) fn move_rail_drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
         if let Some((_, start, over)) = &mut self.drag {
@@ -332,16 +355,11 @@ impl Bots {
             }
         }
     }
-    pub(crate) fn visible_idle_sessions(&self, cx: &App) -> Vec<i64> {
-        self.chat()
-            .into_iter()
-            .map(|chat| chat.read(cx).summary.id)
+    pub(crate) fn visible_idle_sessions(&self, visible: &HashSet<String>) -> Vec<i64> {
+        visible
+            .iter()
+            .filter_map(|id| self.roster.get(id).and_then(|bot| bot.session_id))
             .collect()
-    }
-    pub(crate) fn hide_html(&self, cx: &App) {
-        for view in self.html_documents.values() {
-            view.read(cx).hide();
-        }
     }
     pub(crate) fn sidebar_preferences(
         &mut self,
@@ -409,7 +427,7 @@ impl Bots {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         let manager = cx.entity();
-        let details = cx.new(|cx| overview::Overview::new(manager, cx));
+        let habit_panel = cx.new(|cx| habit_panel::HabitPanel::new(manager, cx));
         let mut channel_state =
             locked(&store).and_then(|db| vorkspace_core::bot::channels::Channels::load(&db));
         if let Ok(state) = &mut channel_state {
@@ -445,17 +463,14 @@ impl Bots {
             work: work::Cache::default(),
             error: roster_error.or(channel_error),
             notice_region,
-            details,
+            habit_panel,
+            open_islands: HashSet::new(),
+            expanded_islands: HashMap::new(),
             minion_registry: Default::default(),
             team_histories: Default::default(),
             minion_effects: Default::default(),
             conversation_views: Default::default(),
             retired_teams: Default::default(),
-            overview_tab: OverviewTab::Sessions,
-            todo_board: None,
-            todo_counts: HashMap::new(),
-            todo_counts_generation: 0,
-            overview_reveal: None,
             route: None,
             settings: None,
             creation: None,
@@ -481,10 +496,6 @@ impl Bots {
             access_anchor: AnchorSlot::default(),
             menu: None,
             menu_anchor: Anchor::Point(gpui::Point::default()),
-            documents: HashMap::new(),
-            html_documents: HashMap::new(),
-            project_changes: Default::default(),
-            review: None,
             rail_ids: Vec::new(),
             running: HashMap::new(),
             active_run: None,
@@ -502,7 +513,6 @@ impl Bots {
             held,
             card_refresh: HashMap::new(),
             session_filters,
-            session_filter_anchor: AnchorSlot::default(),
         };
         if let Some(rx) = rx {
             this._bridge_task = Some(cx.spawn(async move |this, cx| {
@@ -539,10 +549,6 @@ impl Bots {
         this.resume_peer_queues(cx);
         this.sync_minions();
         this.sync_team_histories(cx);
-        this.observations.push(
-            cx.observe_global::<crate::todos::TodoRevision>(|this, cx| this.load_todo_counts(cx)),
-        );
-        this.load_todo_counts(cx);
         this
     }
     pub(crate) fn is_bot_session(&self, id: i64) -> bool {
@@ -602,9 +608,6 @@ impl Bots {
     ) {
         let was = self.prefs.bots;
         self.prefs = prefs;
-        if !self.prefs.todos && self.overview_tab == OverviewTab::Todos {
-            self.select_overview(OverviewTab::Sessions, cx);
-        }
         bot::set_minions_enabled(self.prefs.bots && self.prefs.minions);
         self.sync_minions();
         if was && !self.prefs.bots {
@@ -616,31 +619,6 @@ impl Bots {
             self.close_classic_channels(cx);
         }
         cx.notify();
-    }
-    pub(crate) fn overview_chrome(&self) -> OverviewChrome {
-        let counts = self.current().map_or((0, 0, 0, 0), |bot| {
-            (
-                bot.launches.len(),
-                bot.documents.len(),
-                self.habits.len(),
-                self.project_changes.count(&bot.id),
-            )
-        });
-        OverviewChrome {
-            active: self.active.clone(),
-            creating: self.creating(),
-            tab: self.overview_tab,
-            routed: self.route.is_some(),
-            counts,
-        }
-    }
-    fn show_overview(&self, cx: &mut Context<Self>) {
-        if self.current().is_some_and(Bot::is_minion) {
-            return;
-        }
-        if let Some(id) = self.active.clone() {
-            cx.emit(ShowDetails(id));
-        }
     }
     pub(crate) fn current(&self) -> Option<&Bot> {
         self.active.as_deref().and_then(|id| self.roster.get(id))
@@ -659,6 +637,17 @@ impl Bots {
     ) -> Option<Entity<Conversation>> {
         self.ensure_chat(id, cx);
         self.chats.get(id).cloned()
+    }
+    pub(crate) fn set_visible_panes(&mut self, visible: &HashSet<String>, cx: &mut Context<Self>) {
+        for id in visible {
+            self.ensure_chat(id, cx);
+        }
+        for (id, chat) in &self.chats {
+            chat.update(cx, |chat, cx| {
+                chat.transcript
+                    .update(cx, |view, cx| view.visible(visible.contains(id), cx));
+            });
+        }
     }
     /// Queue an application message through the Bot's ordinary outbox.
     pub(crate) fn send_message(
@@ -987,11 +976,14 @@ impl Bots {
                     },
                 ));
                 let source = id.clone();
+                let mut status = view.read(cx).bot_status_label();
                 this.observations
-                    .push(cx.observe(&view, move |this, _, cx| {
-                        if this.active.as_ref() == Some(&source) {
+                    .push(cx.observe(&view, move |this, view, cx| {
+                        let next = view.read(cx).bot_status_label();
+                        if this.active.as_ref() == Some(&source) || status != next {
                             cx.notify();
                         }
+                        status = next;
                         this.dispatch(&source, cx);
                         if this.channels.inspecting.as_ref().is_some_and(|key| key.1 == source && !this.channels.views.contains_key(key)) || this.channels.state.channels.iter().any(|c| {
                             !this.channels.views.contains_key(&(c.id.clone(), source.clone()))
@@ -1496,41 +1488,80 @@ impl Bots {
         self.changed(cx);
     }
     pub(crate) fn open(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_workspace_pane(id, window, cx) {
+            cx.emit(TabOpened(id.into()));
+        }
+    }
+    /// Prepare an already selected Bot pane synchronously. Sidebar navigation
+    /// still uses `open` to ask Shell to select its workspace tab.
+    pub(crate) fn open_workspace_pane(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.prefs.bots || self.roster.get(id).is_none() {
+            return false;
+        }
+        let already_active = self.active.as_deref() == Some(id);
+        self.set_workspace_context(Some(id), cx);
+        if already_active {
+            self.ensure_chat(id, cx);
+            self.reload_files(id, cx);
+            if let Some(view) = self.chats.get(id) {
+                let count = view.read(cx).bot_row_count(cx);
+                if let Some(bot) = self.roster.get_mut(id) {
+                    bot.seen_rows = count;
+                }
+            }
+            self.save(cx);
+        }
+        self.focus_active(window, cx);
+        true
+    }
+    /// Follow the Bot that owns the visible workspace context without
+    /// changing the selected pane or claiming keyboard focus from a sibling.
+    pub(crate) fn set_workspace_context(&mut self, bot: Option<&str>, cx: &mut Context<Self>) {
+        let bot = bot
+            .filter(|id| self.prefs.bots && self.roster.get(id).is_some())
+            .map(str::to_owned);
+        if self.active == bot {
             return;
         }
-        if self.roster.get(id).is_some_and(Bot::is_retired)
-            && let Some(parent) = self.minion_parent(id)
+        let Some(id) = bot else {
+            self.park_workspace_context(cx);
+            return;
+        };
+        if self.roster.get(&id).is_some_and(Bot::is_retired)
+            && let Some(parent) = self.minion_parent(&id)
         {
             self.retired_teams.insert(parent);
         }
-        if self.active.as_deref() != Some(id) {
-            self.save_open_file(cx);
-            self.pause_changes(cx);
-            self.route = None;
-            self.details.update(cx, |details, cx| details.reset(cx));
-            self.fields
-                .retain(|k, _| k.starts_with("file:") || k.starts_with("channel-"));
-            self.files = None;
-            self.memory_editor = None;
-            self.memory_topics.clear();
-            self.memory_loading = false;
-            self.memory_load_error = None;
-            self.settings = None;
-        }
-        self.close_classic_channels(cx);
-        self.active = Some(id.into());
-        self.ensure_chat(id, cx);
-        self.reload_files(id, cx);
-        cx.emit(TabOpened(id.into()));
-        self.focus_active(window, cx);
-        if let Some(view) = self.chats.get(id) {
+        self.save_open_file(cx);
+        self.route = None;
+        self.habit_panel.update(cx, |panel, cx| panel.reset(cx));
+        self.fields.retain(|k, _| {
+            k.starts_with("file:")
+                || k.starts_with("channel-")
+                || k.starts_with("bot-session-search-")
+        });
+        self.files = None;
+        self.memory_editor = None;
+        self.memory_topics.clear();
+        self.memory_loading = false;
+        self.memory_load_error = None;
+        self.settings = None;
+        self.active = Some(id.clone());
+        self.ensure_chat(&id, cx);
+        self.reload_files(&id, cx);
+        if let Some(view) = self.chats.get(&id) {
             let count = view.read(cx).bot_row_count(cx);
-            if let Some(bot) = self.roster.get_mut(id) {
+            if let Some(bot) = self.roster.get_mut(&id) {
                 bot.seen_rows = count;
             }
         }
         self.save(cx);
+        cx.notify();
     }
     pub(crate) fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
         if self.focus_creation(window, cx) {
@@ -1548,17 +1579,25 @@ impl Bots {
             window.focus(&self.settings_focus, cx);
         }
     }
+    /// Focus this Bot's chat or modal even when a Channels pane is also open.
+    pub(crate) fn focus_bot_pane(&self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active.as_deref() == Some(id) {
+            self.focus_active(window, cx);
+        }
+    }
     pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
         self.close_classic_channels(cx);
+        self.park_workspace_context(cx);
+    }
+    fn park_workspace_context(&mut self, cx: &mut Context<Self>) {
         self.save_open_file(cx);
-        self.pause_changes(cx);
-        self.hide_html(cx);
         if self.active.take().is_some() {
-            self.details.update(cx, |details, cx| details.reset(cx));
+            self.habit_panel.update(cx, |panel, cx| panel.reset(cx));
             self.settings = None;
             self.picker = None;
             self.save(cx);
         }
+        cx.notify();
     }
     pub(crate) fn dismiss_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self
@@ -1631,12 +1670,7 @@ impl Bots {
         })
         .detach();
     }
-    pub(crate) fn rail(
-        &mut self,
-        project: Option<String>,
-        liquid: &crate::liquid::Liquid,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    pub(crate) fn rail(&mut self, project: Option<String>, cx: &mut Context<Self>) -> AnyElement {
         if !self.prefs.bots {
             return div().into_any_element();
         }
@@ -1656,11 +1690,10 @@ impl Bots {
         let add_project = project.clone();
         let heading = section_label("Bots").when(has, |d| {
             d.child(
-                icon_button_hover("new-bot", "New bot", "plus", 0.)
+                icon_button("new-bot", "New bot", "plus")
                     .debug_selector(|| "sidebar-bot-button".into())
                     .size(px(20.))
                     .relative()
-                    .child(liquid.row("add:bot", false))
                     .mr(px(-2.))
                     .on_click(cx.listener(move |this, _, w, cx| {
                         this.create(add_project.clone().into_iter().collect(), w, cx)
@@ -1680,15 +1713,14 @@ impl Bots {
                         .aria_label("New bot")
                         .h(px(32.))
                         .px_2()
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .flex()
                         .items_center()
                         .gap_2()
                         .text_size(px(14.))
                         .text_color(content(0.5))
                         .relative()
-                        .child(liquid.row("new-bot", false))
-                        .hover(|s| s.text_color(content(1.)))
+                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
                         .child(icon("plus", 16.))
                         .child("New bot")
                         .on_click(cx.listener(move |this, _, w, cx| {
@@ -1735,7 +1767,7 @@ impl Bots {
                 let context = id.clone();
                 let drag = id.clone();
                 let slot = self.rail_bounds[&id].clone();
-                let team = self.team_rail(&bot, liquid, cx);
+                let team = self.team_rail(&bot, cx);
                 let row = div()
                     .id(SharedString::from(format!("bot-rail-{id}")))
                     .debug_selector({
@@ -1745,16 +1777,17 @@ impl Bots {
                     .group("bot-rail-row")
                     .role(Role::Button)
                     .aria_label(label)
+                    .aria_selected(active)
                     .h(px(32.))
                     .px_2()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .relative()
                     .flex()
                     .items_center()
                     .gap_2()
                     .opacity(if active { 1. } else { 0.65 })
-                    .child(liquid.row(format!("bot:{id}"), active))
-                    .hover(|s| s.opacity(1.))
+                    .when(active, |d| d.bg(content(0.1)))
+                    .hover(|s| s.bg(content(0.08)).opacity(1.))
                     .child(avatar::bot_avatar(&bot, state, 16., false))
                     .child(
                         div()
@@ -1842,32 +1875,67 @@ impl Bots {
             .into_any_element()
     }
 }
-impl gpui::Render for Bots {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.hide_html(cx);
-        if self.channels.open {
-            return self.channels_view(window, cx);
-        }
-        let Some(bot) = self.current().cloned() else {
+impl Bots {
+    pub(crate) fn render_channels_pane(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        self.channels_view(window, cx)
+    }
+    pub(crate) fn render_bot_pane(
+        &mut self,
+        id: &str,
+        width: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(bot) = self.presentation_bot(id) else {
             return div().into_any_element();
         };
-        self.ensure_changes_summary(&bot, cx);
         let bg = self
             .backgrounds
             .entry(bot.id.clone())
             .or_insert_with(|| cx.new(|_| crate::project_background::ProjectBackground::default()))
             .clone();
-        let empty = self.chat().is_none_or(|v| !v.read(cx).summary.has_messages);
+        let chat = self.chat_for_action(id, cx);
+        let empty = chat
+            .as_ref()
+            .is_none_or(|v| !v.read(cx).summary.has_messages);
+        // `active` owns the one settings/modal surface. Shell owns keyboard
+        // focus, which may be on a session or document beside this Bot.
+        let owns_overlays = self.active.as_deref() == Some(id);
         bg.update(cx, |bg, cx| {
             bg.configure(bot.background.clone(), empty, None, cx)
         });
-        let header_visible = self.settings.is_none() && self.background.is_none();
+        let wide = width >= island::ISLAND_BREAKPOINT;
+        let show_island = !bot.is_minion() && !self.creating();
+        let overlay = show_island && !wide && self.open_islands.contains(id);
+        let escape_id = id.to_string();
+        let header_action: Option<crate::bot_header::Activate> =
+            (show_island && !wide).then(|| {
+                let manager = cx.weak_entity();
+                let id = id.to_string();
+                std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
+                    let _ = manager.update(cx, |manager, cx| manager.toggle_island(&id, cx));
+                }) as crate::bot_header::Activate
+            });
+        let header_visible =
+            !owns_overlays || (self.settings.is_none() && self.background.is_none());
         div()
             .size_full()
             .min_w_0()
             .flex()
             .relative()
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape"
+                    && overlay
+                    && this.open_islands.remove(&escape_id)
+                {
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
                 if event.keystroke.key == "escape"
                     && this.settings.is_some()
                     && this.picker.is_none()
@@ -1896,16 +1964,34 @@ impl gpui::Render for Bots {
                             .into_iter()
                             .map(|view| view.update(cx, |v, cx| v.bot_attention(window, cx))),
                     )
-                    .when_some(self.chat(), |d, chat| {
-                        chat.update(cx, |chat, cx| chat.show_bot_header(header_visible, cx));
+                    .when_some(chat, |d, chat| {
+                        chat.update(cx, |chat, cx| {
+                            chat.show_bot_header(header_visible, cx);
+                            chat.set_bot_header_action(header_action);
+                        });
                         d.child(div().flex_1().min_h_0().child(chat))
                     }),
             )
-            .children(self.settings_modal(&bot, window, cx))
-            .when(!self.creating() && !bot.is_minion(), |d| {
+            .when(show_island && wide, |d| d.child(self.island_lane(&bot, cx)))
+            .when(show_island && !wide && !overlay, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top_3()
+                        .right_3()
+                        .child(self.island_trigger(&bot, cx)),
+                )
+            })
+            .when(overlay, |d| d.child(self.island_overlay(&bot, width, cx)))
+            .when(owns_overlays, |d| {
+                d.children(self.settings_modal(&bot, window, cx))
+            })
+            .when(owns_overlays && !self.creating() && !bot.is_minion(), |d| {
                 d.children(self.picker_surface(cx))
             })
-            .when(!bot.is_minion(), |d| d.children(self.options_surface(cx)))
+            .when(owns_overlays && !bot.is_minion(), |d| {
+                d.children(self.options_surface(cx))
+            })
             .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, _| {
                 if let Some((_, start, over)) = &mut this.drag
                     && (event.position - *start).magnitude() > 5.
@@ -1925,5 +2011,17 @@ impl gpui::Render for Bots {
                 }),
             )
             .into_any_element()
+    }
+}
+
+impl gpui::Render for Bots {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.channels.open {
+            return self.channels_view(window, cx);
+        }
+        let Some(id) = self.active.clone() else {
+            return div().into_any_element();
+        };
+        self.render_bot_pane(&id, window.viewport_size().width.as_f32(), window, cx)
     }
 }
