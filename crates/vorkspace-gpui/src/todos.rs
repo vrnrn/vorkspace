@@ -594,17 +594,16 @@ impl TodoBoardView {
         self.details_item(self.details.as_ref()?)
     }
 
-    fn take_details_draft(&mut self, item: &TodoItem) -> Option<DetailsEditor> {
+    fn saved_details_key(&self, item: &TodoItem) -> Option<String> {
         let key = self.details_key(&item.id)?;
-        if let Some(editor) = self.saved_details.remove(&key) {
-            return Some(editor);
+        if self.saved_details.contains_key(&key) {
+            return Some(key);
         }
         item.issue.as_ref()?;
         let prefix = self.details_key("")?;
         // Leave other drafts under their original keys if two card IDs were
         // editable before the publication receipt was visible to this view.
-        let key = self
-            .saved_details
+        self.saved_details
             .iter()
             .filter_map(|(key, editor)| {
                 (key.starts_with(&prefix)
@@ -613,9 +612,8 @@ impl TodoBoardView {
                         .is_some_and(|issue| issue.matches(item)))
                 .then_some(key)
             })
-            .min()?
-            .clone();
-        self.saved_details.remove(&key)
+            .min()
+            .cloned()
     }
 
     fn stash_details(&mut self) {
@@ -638,7 +636,9 @@ impl TodoBoardView {
             return;
         }
         self.stash_details();
-        if let Some(mut editor) = self.take_details_draft(item) {
+        if let Some(key) = self.saved_details_key(item)
+            && let Some(mut editor) = self.saved_details.remove(&key)
+        {
             let text = editor.description.read(cx).content.clone();
             editor.preview =
                 cx.new(|cx| crate::markdown::Document::prose(&text, "No description", cx));
@@ -1484,8 +1484,13 @@ impl TodoBoardView {
                             .on_click(cx.listener(|this, _, _, cx| this.save_details(cx))),
                         )
                         .when(!uncertain && !pending_edit && !editor.matches_revision(item), |d| {
+                            let label = if self.saved_details_key(item).is_some() {
+                                "Discard draft and open saved draft"
+                            } else {
+                                "Discard draft and reload"
+                            };
                             d.child(
-                                labeled_secondary("todo-reload-details", "Discard draft and reload", false, self.pending_changes > 0)
+                                labeled_secondary("todo-reload-details", label, false, self.pending_changes > 0)
                                     .debug_selector(|| "todo-reload-details".into())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if this.pending_changes > 0 { return; }
