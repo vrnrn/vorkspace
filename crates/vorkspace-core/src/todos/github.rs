@@ -192,10 +192,11 @@ fn issue(row: &Value, repo: &str, position: i64) -> Result<TodoItem, String> {
 }
 
 fn attachment_urls(body: &str) -> Vec<String> {
-    let pattern =
-        regex::Regex::new(r"!?\[([^\]]*)\]\(<?(https://[^)\s>]+)>?\)").expect("valid regex");
+    static LINKS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"!?\[([^\]]*)\]\(<?(https://[^)\s>]+)>?\)").expect("valid regex")
+    });
     let mut urls = Vec::new();
-    for captures in pattern.captures_iter(body) {
+    for captures in LINKS.captures_iter(body) {
         let label = &captures[1];
         let url = &captures[2];
         if let Ok(url) = url::Url::parse(url) {
@@ -356,8 +357,9 @@ fn attachment_inputs(
 
 fn body_with_attachments(description: &str, urls: &[String], token: Option<&str>) -> String {
     let mut body = description.trim().to_string();
+    let existing = attachment_urls(description);
     for url in urls {
-        if !body.contains(url) {
+        if !existing.contains(url) {
             if !body.is_empty() {
                 body.push_str("\n\n");
             }
@@ -373,6 +375,26 @@ fn body_with_attachments(description: &str, urls: &[String], token: Option<&str>
     body
 }
 
+fn edit_body(
+    current: &TodoItem,
+    description: Option<&str>,
+    attachment_urls: Option<&[String]>,
+) -> Option<String> {
+    if description.is_none() && attachment_urls.is_none_or(<[String]>::is_empty) {
+        return None;
+    }
+    Some(body_with_attachments(
+        description.unwrap_or(&current.description),
+        attachment_urls.unwrap_or(&current.attachments),
+        current.submission_token.as_deref(),
+    ))
+}
+
+/// A description-only edit retains the attachment links seen before submission.
+pub fn description_edit_applied(current: &TodoItem, before: &TodoItem, description: &str) -> bool {
+    current.description == body_with_attachments(description, &before.attachments, None)
+}
+
 fn issue_url(raw: &str, repo: &str) -> Result<i64, String> {
     raw.lines()
         .find_map(|line| issue_number_from_url(line.trim(), repo))
@@ -384,7 +406,7 @@ fn issue_number_from_url(raw: &str, repo: &str) -> Option<i64> {
     target_repo.eq_ignore_ascii_case(repo).then_some(number)
 }
 
-pub(crate) fn issue_ref_from_url(raw: &str) -> Option<(String, i64)> {
+pub fn issue_ref_from_url(raw: &str) -> Option<(String, i64)> {
     let url = url::Url::parse(raw).ok()?;
     if url.scheme() != "https"
         || url.host_str() != Some("github.com")
@@ -633,9 +655,8 @@ pub fn update(
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
-        .transpose()?
-        .unwrap_or_default();
-    let (paths, urls) = attachment_inputs(root, &attachments)?;
+        .transpose()?;
+    let (paths, urls) = attachment_inputs(root, attachments.as_deref().unwrap_or_default())?;
     let dependencies = input
         .get("dependencies")
         .map(|value| {
@@ -667,12 +688,11 @@ pub fn update(
     if let Some(title) = title {
         args.extend(["--title".into(), title]);
     }
-    if description.is_some() || !urls.is_empty() {
-        let body = body_with_attachments(
-            description.as_deref().unwrap_or(&current.description),
-            &urls,
-            current.submission_token.as_deref(),
-        );
+    if let Some(body) = edit_body(
+        &current,
+        description.as_deref(),
+        attachments.is_some().then_some(urls.as_slice()),
+    ) {
         args.extend(["--body".into(), body]);
     }
     for path in paths {
@@ -945,6 +965,42 @@ mod tests {
         rows[10]["body"] = json!("<!-- vorkspace-todo:receipt -->");
         assert_eq!(submission_number(&rows, "receipt").unwrap(), Some(11));
         assert_eq!(submission_number(&[], "receipt").unwrap(), None);
+    }
+
+    #[test]
+    fn description_only_edit_preserves_attachments_and_its_receipt_marker() {
+        let retained = "https://example.com/screenshot";
+        let replacement = "https://example.com/replacement";
+        let mut row = json!({
+            "number":7,"title":"Ship","url":"https://github.com/acme/app/issues/7",
+            "body":format!("Old details\n\n[Attachment](<{retained}>)\n\n<!-- vorkspace-todo:receipt-token -->"),
+        });
+        let original = issue(&row, "acme/app", 0).unwrap();
+        let description = "Revised details with https://example.com/screenshot-preview";
+        let body = edit_body(&original, Some(description), None).unwrap();
+        assert_eq!(attachment_urls(&body), [retained]);
+        assert!(token_in_body(&body, "receipt-token"));
+        row["body"] = json!(body);
+        let updated = issue(&row, "acme/app", 0).unwrap();
+        assert!(description_edit_applied(&updated, &original, description));
+        row["body"] = json!(description);
+        let missing_link = issue(&row, "acme/app", 0).unwrap();
+        assert!(!description_edit_applied(
+            &missing_link,
+            &original,
+            description
+        ));
+
+        let body = edit_body(&original, Some("Remove attachments"), Some(&[])).unwrap();
+        assert!(attachment_urls(&body).is_empty());
+        assert!(token_in_body(&body, "receipt-token"));
+        let urls = [replacement.to_owned()];
+        let body = edit_body(&original, Some("Replace attachments"), Some(&urls)).unwrap();
+        assert_eq!(attachment_urls(&body), [replacement]);
+        let body = edit_body(&original, None, Some(&urls)).unwrap();
+        assert_eq!(attachment_urls(&body), [retained, replacement]);
+        assert!(edit_body(&original, None, None).is_none());
+        assert!(edit_body(&original, None, Some(&[])).is_none());
     }
 
     #[test]

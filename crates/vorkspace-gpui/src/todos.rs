@@ -9,6 +9,7 @@ use gpui::{
     App, Context, Div, ElementId, Entity, FocusHandle, Focusable, FontWeight, Global, MouseButton,
     Role, SharedString, Stateful, Subscription, Window, div, prelude::*, px,
 };
+use std::borrow::Cow;
 use vorkspace_core::todos::{TodoBoard, TodoItem, TodoStatus, TodoSync};
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::radius;
@@ -713,19 +714,47 @@ impl TodoBoardView {
     fn dependency_ref(item: &TodoItem) -> String {
         item.issue
             .as_ref()
-            .map(|issue| format!("#{}", issue.number))
+            .map(|issue| Self::issue_dependency_ref(&issue.repo, issue.number))
             .unwrap_or_else(|| item.id.clone())
     }
 
-    fn dependency_label(&self, reference: &str) -> String {
-        self.dependency_item(reference)
-            .map(|item| {
-                if let Some(issue) = &item.issue {
-                    format!("#{} · {}", issue.number, item.title)
-                } else {
-                    item.title.clone()
-                }
-            })
+    fn issue_dependency_ref(repo: &str, number: i64) -> String {
+        format!(
+            "https://github.com/{}/issues/{number}",
+            repo.to_ascii_lowercase()
+        )
+    }
+
+    fn dependency_key<'a>(&self, owner: &TodoItem, reference: &'a str) -> Cow<'a, str> {
+        if let Some((repo, number)) = vorkspace_core::todos::github::issue_ref_from_url(reference) {
+            return Cow::Owned(Self::issue_dependency_ref(&repo, number));
+        }
+        if let Some(number) = reference
+            .strip_prefix('#')
+            .and_then(|number| number.parse::<i64>().ok())
+            .filter(|number| *number > 0)
+            && let Some(repo) = owner
+                .issue
+                .as_ref()
+                .map(|issue| issue.repo.as_str())
+                .or(self.github_repo.as_deref())
+        {
+            return Cow::Owned(Self::issue_dependency_ref(repo, number));
+        }
+        Cow::Borrowed(reference)
+    }
+
+    fn dependency_item_label(item: &TodoItem) -> String {
+        if let Some(issue) = &item.issue {
+            format!("{}#{} · {}", issue.repo, issue.number, item.title)
+        } else {
+            item.title.clone()
+        }
+    }
+
+    fn dependency_label(&self, owner: &TodoItem, reference: &str) -> String {
+        self.dependency_item(owner, reference)
+            .map(Self::dependency_item_label)
             .unwrap_or_else(|| {
                 if let Some(path) = reference.strip_prefix("https://github.com/") {
                     format!("GitHub issue {path}")
@@ -746,19 +775,21 @@ impl TodoBoardView {
         let Some(editor) = self.details.as_ref() else {
             return;
         };
-        if self
-            .items
-            .iter()
-            .find(|item| item.id == editor.id)
-            .and_then(|item| item.issue.as_ref())
+        let Some(item) = self.items.iter().find(|item| item.id == editor.id) else {
+            return;
+        };
+        if item
+            .issue
+            .as_ref()
             .is_some_and(|issue| issue.dependencies_truncated)
         {
             return;
         }
         let mut values = Self::dependency_values(&editor.dependencies, cx);
-        if let Some(index) = values.iter().position(|value| value == &reference) {
-            values.remove(index);
-        } else {
+        let key = self.dependency_key(item, &reference);
+        let previous_count = values.len();
+        values.retain(|value| self.dependency_key(item, value) != key);
+        if values.len() == previous_count {
             values.push(reference);
         }
         editor
@@ -1092,15 +1123,20 @@ impl TodoBoardView {
             .is_some_and(|issue| issue.dependencies_truncated);
         let attachment_refs = Self::reference_lines(&editor.attachments, cx);
         let selected_dependencies = Self::dependency_values(&editor.dependencies, cx);
+        let selected_keys = selected_dependencies
+            .iter()
+            .map(|reference| self.dependency_key(item, reference))
+            .collect::<std::collections::HashSet<_>>();
+        let own_reference = Self::dependency_ref(item);
         let dependency_choices = self
             .items
             .iter()
-            .filter(|candidate| candidate.id != item.id && (!remote || candidate.issue.is_some()))
-            .map(|candidate| {
-                (
-                    Self::dependency_ref(candidate),
-                    self.dependency_label(&Self::dependency_ref(candidate)),
-                )
+            .filter(|candidate| !remote || candidate.issue.is_some())
+            .filter_map(|candidate| {
+                let reference = Self::dependency_ref(candidate);
+                let selected = selected_keys.contains(reference.as_str());
+                (reference != own_reference)
+                    .then(|| (reference, Self::dependency_item_label(candidate), selected))
             })
             .collect::<Vec<_>>();
         Some(
@@ -1284,7 +1320,7 @@ impl TodoBoardView {
                                 .py_1()
                                 .rounded(px(radius::CONTROL))
                                 .bg(content(0.05))
-                                .child(div().flex_1().min_w_0().text_size(px(page::LABEL_SIZE)).child(self.dependency_label(&reference)))
+                                .child(div().flex_1().min_w_0().text_size(px(page::LABEL_SIZE)).child(self.dependency_label(item, &reference)))
                                 .when(!dependencies_truncated, |d| {
                                     d.child(page::icon_action(
                                         SharedString::from(format!("todo-remove-dependency-{index}")),
@@ -1327,14 +1363,13 @@ impl TodoBoardView {
                             .flex_col()
                             .gap_1()
                             .children(dependency_choices.iter().enumerate().map(
-                                |(index, (reference, label))| {
+                                |(index, (reference, label, selected))| {
                                     let reference = reference.clone();
-                                    let selected = selected_dependencies.contains(&reference);
                                     labeled_secondary(
                                         SharedString::from(format!(
                                             "todo-dependency-choice-{index}"
                                         )),
-                                        format!("{} {label}", if selected { "✓" } else { "+" }),
+                                        format!("{} {label}", if *selected { "✓" } else { "+" }),
                                         false,
                                         false,
                                     )
