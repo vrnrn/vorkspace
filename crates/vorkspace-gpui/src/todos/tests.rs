@@ -973,6 +973,191 @@ fn refreshed_issue_does_not_replace_the_editors_original_revision(cx: &mut TestA
 }
 
 #[gpui::test]
+fn external_publication_preserves_open_and_stashed_task_drafts(cx: &mut TestAppContext) {
+    for stashed in [false, true] {
+        let (window, store) = board_window(cx);
+        let directory = tempfile::tempdir().unwrap();
+        let board = TodoBoard::Project(directory.path().to_string_lossy().into_owned());
+        let task = locked(&store)
+            .unwrap()
+            .add_todo(&board, "Stored task", TodoStatus::Todo)
+            .unwrap();
+        let mut issue = task.clone();
+        issue.id = "github:example/Project#12".into();
+        issue.title = "Published task".into();
+        issue.issue = Some(vorkspace_core::todos::TodoIssue {
+            repo: "example/Project".into(),
+            number: 12,
+            url: "https://github.com/example/Project/issues/12".into(),
+            labels: vec![],
+            dependencies_truncated: false,
+        });
+        issue.sync = TodoSync::Synced;
+        // Independent revision clocks can have the same numeric value.
+        assert_eq!(task.updated_at, issue.updated_at);
+
+        window
+            .update(cx, |view, _, cx| view.set_board(Some(board.clone()), cx))
+            .unwrap();
+        cx.run_until_parked();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        let draft = [
+            "My draft title",
+            "My draft description",
+            "notes/design.md\nhttps://example.com/reference",
+            "dependency-id, #23",
+            "https://example.com/unfinished",
+        ];
+        let assert_draft = |view: &TodoBoardView, cx: &App| {
+            let editor = view.details.as_ref().unwrap();
+            assert_eq!(editor.id, task.id);
+            assert_eq!(editor.revision, task.updated_at);
+            for (field, text) in [
+                &editor.title,
+                &editor.description,
+                &editor.attachments,
+                &editor.dependencies,
+                &editor.url,
+            ]
+            .into_iter()
+            .zip(draft)
+            {
+                assert_eq!(field.read(cx).content.as_ref(), text);
+            }
+        };
+        window
+            .update(visual, |view, window, cx| {
+                if !stashed {
+                    // An earlier list can expose the issue before it sees
+                    // the publication receipt. Retain that distinct draft too.
+                    view.install_snapshot(service::BoardSnapshot::project(
+                        vec![task.clone()],
+                        vec![],
+                        Some(vec![issue.clone()]),
+                    ));
+                    view.open_details(&issue, cx);
+                    view.details
+                        .as_ref()
+                        .unwrap()
+                        .title
+                        .update(cx, |input, cx| {
+                            input.set_text("Earlier GitHub draft".into(), cx)
+                        });
+                }
+                view.present_details(&task, window, cx);
+                view.detail_editing = true;
+                let editor = view.details.as_ref().unwrap();
+                for (field, text) in [
+                    &editor.title,
+                    &editor.description,
+                    &editor.attachments,
+                    &editor.dependencies,
+                    &editor.url,
+                ]
+                .into_iter()
+                .zip(draft)
+                {
+                    field.update(cx, |input, cx| input.set_text(text.into(), cx));
+                }
+                if stashed {
+                    view.dismiss_details(window, cx);
+                }
+            })
+            .unwrap();
+
+        let snapshot = {
+            let store = locked(&store).unwrap();
+            store
+                .begin_todo_publish(&board, &task.id, "example/project", task.updated_at)
+                .unwrap();
+            store.finish_todo_publish(&board, &task.id, &issue).unwrap();
+            service::BoardSnapshot::project(
+                store.list_todos(&board).unwrap(),
+                vec![],
+                Some(vec![issue.clone()]),
+            )
+        };
+        assert_eq!(snapshot.items, vec![issue.clone()]);
+        let stale_save = service::action(
+            &store,
+            &board,
+            "todos.update",
+            &serde_json::json!({"id":task.id,"title":"Stale edit","expectedUpdatedAt":task.updated_at}),
+        );
+        assert_eq!(stale_save.unwrap_err(), STALE_DETAILS);
+
+        window
+            .update(visual, |view, window, cx| {
+                view.install_snapshot(snapshot);
+                if stashed {
+                    view.present_details(&issue, window, cx);
+                    view.detail_editing = true;
+                }
+                assert_eq!(view.open_detail_item().unwrap().id, issue.id);
+                assert_draft(view, cx);
+                view.save_details(cx);
+                assert_eq!(view.pending_changes, 0);
+                assert_eq!(view.change_error.as_deref(), Some(STALE_DETAILS));
+                if !stashed {
+                    let key = view.details_key(&issue.id).unwrap();
+                    assert_eq!(
+                        view.saved_details[&key].title.read(cx).content.as_ref(),
+                        "Earlier GitHub draft"
+                    );
+                }
+                cx.notify();
+            })
+            .unwrap();
+        assert!(visual.debug_bounds("todo-details-dialog").is_some());
+        assert!(visual.debug_bounds("todo-reload-details").is_some());
+
+        // A pending GitHub edit can supply the displayed issue even offline.
+        let attempt = locked(&store)
+            .unwrap()
+            .begin_remote_todo_edit(&board, &issue, &serde_json::json!({"status":"done"}))
+            .unwrap();
+        visual.cx.update(changed);
+        visual.run_until_parked();
+        window
+            .update(visual, |view, _, cx| {
+                let item = view.open_detail_item().unwrap();
+                assert_eq!(item.id, issue.id);
+                assert!(item.pending_edit.is_some());
+                assert_draft(view, cx);
+            })
+            .unwrap();
+        locked(&store)
+            .unwrap()
+            .clear_remote_todo_edit(&board, &issue.id, &attempt)
+            .unwrap();
+
+        // A refresh without a GitHub origin displays the durable local receipt.
+        visual.cx.update(changed);
+        visual.run_until_parked();
+        window
+            .update(visual, |view, window, cx| {
+                assert_eq!(view.open_detail_item().unwrap().id, task.id);
+                assert_draft(view, cx);
+                assert!(
+                    !view
+                        .details
+                        .as_ref()
+                        .unwrap()
+                        .matches_revision(&view.items[0])
+                );
+                window.remove_window();
+            })
+            .unwrap();
+        let store = locked(&store).unwrap();
+        assert_eq!(
+            store.get_todo(&board, &task.id).unwrap().unwrap().title,
+            task.title
+        );
+        assert!(store.pending_remote_todo_edits(&board).unwrap().is_empty());
+    }
+}
+
+#[gpui::test]
 fn cards_open_details_for_local_and_github_items_and_escape_returns_to_the_board(
     cx: &mut TestAppContext,
 ) {

@@ -28,7 +28,7 @@ impl TodoBoardView {
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         let editor = self.details.as_ref()?;
-        let item = self.items.iter().find(|item| item.id == editor.id)?;
+        let item = self.details_item(editor)?;
         let size = window.viewport_size();
         let width = 760_f32.min((size.width.as_f32() - 32.).max(0.));
         let height = 680_f32.min((size.height.as_f32() - 40.).max(0.));
