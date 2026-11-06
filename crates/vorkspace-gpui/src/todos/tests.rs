@@ -497,9 +497,31 @@ fn details_editor_saves_description_attachments_and_dependencies(cx: &mut TestAp
             editor.description.update(cx, |input, cx| {
                 input.set_text("Explain the work".into(), cx)
             });
-            view.append_attachment("https://example.com/design".into(), cx);
+            editor.url.update(cx, |input, cx| {
+                input.set_text("https://example.com/design".into(), cx)
+            });
             view.toggle_dependency(dependency.id.clone(), cx);
             assert_eq!(view.dependency_label(&task, &dependency.id), "Prerequisite");
+            view.save_details(cx);
+            assert_eq!(view.pending_changes, 0);
+            assert!(
+                view.change_error
+                    .as_deref()
+                    .unwrap()
+                    .contains("unfinished attachment link")
+            );
+            view.stash_details();
+            view.open_details(&task, cx);
+            let reopened = view.details.as_ref().unwrap();
+            assert_eq!(
+                reopened.url.read(cx).content.as_ref(),
+                "https://example.com/design"
+            );
+            assert_eq!(
+                reopened.description.read(cx).content.as_ref(),
+                "Explain the work"
+            );
+            view.add_attachment_url(cx);
             view.save_details(cx);
         })
         .unwrap();
@@ -512,6 +534,71 @@ fn details_editor_saves_description_attachments_and_dependencies(cx: &mut TestAp
     assert_eq!(saved.description, "Explain the work");
     assert_eq!(saved.attachments, ["https://example.com/design"]);
     assert_eq!(saved.dependencies, [dependency.id]);
+}
+
+#[gpui::test]
+fn github_detail_save_does_not_queue_an_unfinished_attachment_link(cx: &mut TestAppContext) {
+    let (window, store) = board_window(cx);
+    let mut issue = locked(&store)
+        .unwrap()
+        .add_todo(&TodoBoard::Personal, "Issue", TodoStatus::Todo)
+        .unwrap();
+    issue.id = "github:example/project#42".into();
+    issue.issue = Some(vorkspace_core::todos::TodoIssue {
+        repo: "example/project".into(),
+        number: 42,
+        url: "https://github.com/example/project/issues/42".into(),
+        labels: Vec::new(),
+        dependencies_truncated: false,
+    });
+    issue.sync = TodoSync::Synced;
+    let project = tempfile::tempdir().unwrap();
+    let board = TodoBoard::Project(project.path().to_string_lossy().into_owned());
+    window
+        .update(cx, |view, window, cx| {
+            view.board = Some(board.clone());
+            view.items = vec![issue.clone()];
+            view.present_details(&issue, window, cx);
+            view.detail_editing = true;
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    for value in ["https://example.com/design", "not a complete URL"] {
+        window
+            .update(visual, |view, _, cx| {
+                view.details
+                    .as_ref()
+                    .unwrap()
+                    .url
+                    .update(cx, |input, cx| input.set_text(value.into(), cx));
+            })
+            .unwrap();
+        let save = visual.debug_bounds("todo-details-save").unwrap();
+        visual.simulate_click(save.center(), Default::default());
+        window
+            .update(visual, |view, _, cx| {
+                assert_eq!(view.pending_changes, 0);
+                assert!(
+                    view.change_error
+                        .as_deref()
+                        .unwrap()
+                        .contains("unfinished attachment link")
+                );
+                assert_eq!(
+                    view.details.as_ref().unwrap().url.read(cx).content.as_ref(),
+                    value
+                );
+            })
+            .unwrap();
+    }
+    assert!(
+        locked(&store)
+            .unwrap()
+            .pending_remote_todo_edits(&board)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[gpui::test]
