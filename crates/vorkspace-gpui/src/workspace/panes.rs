@@ -34,6 +34,9 @@ pub(crate) struct AppPaneState {
     pub content: AppPane,
     pub project: String,
     pub worktree: String,
+    /// The Bot that owns Add to chat for this standalone review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_bot: Option<String>,
 }
 
 impl Workspace {
@@ -56,8 +59,28 @@ impl Workspace {
     }
 
     pub fn app_pane(&mut self, content: AppPane, project: String, worktree: String) -> Option<i64> {
+        self.app_pane_with_review_bot(content, project, worktree, None)
+    }
+
+    pub fn standalone_review_pane(
+        &mut self,
+        project: String,
+        worktree: String,
+        bot: Option<String>,
+    ) -> Option<i64> {
+        self.app_pane_with_review_bot(AppPane::Review, project, worktree, bot)
+    }
+
+    fn app_pane_with_review_bot(
+        &mut self,
+        content: AppPane,
+        project: String,
+        worktree: String,
+        review_bot: Option<String>,
+    ) -> Option<i64> {
         if let Some(id) = self.app_panes.iter().find_map(|(&id, pane)| {
             (pane.content.same_resource(&content)
+                && pane.review_bot == review_bot
                 && (!content.project_scoped()
                     || (vorkspace_core::files::path_key(&pane.project)
                         == vorkspace_core::files::path_key(&project)
@@ -81,6 +104,7 @@ impl Workspace {
                 content,
                 project,
                 worktree,
+                review_bot,
             },
         );
         Some(id)

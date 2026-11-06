@@ -30,7 +30,7 @@ Bots, sessions, terminals, notes, GitHub/GitLab/Jira items, Search, Automations,
 
 Click a project to return to its workspace. A separate Channels tab stays open so you can return to it later. If Channels was active when you quit, it opens again on restart.
 
-Files opened from Search or a Bot link stay with the working copy they came from. A new file pane opens beside the Bot when there is room, or in its own tab. Closing and reopening the file tab keeps unfinished edits while the app is open. GitHub activity appears in the Bot chat it belongs to.
+Files opened from Search or a Bot link stay with the working copy they came from. A new file pane opens beside the Bot when there is room, or in its own tab. Closing and reopening the file tab keeps unfinished edits while the app is open. Add to chat puts your comment in the original Bot's draft, even if you've moved the file or restarted. If the chat can't accept it, your comment stays available to copy or try again. GitHub activity appears in the Bot chat it belongs to.
 
 Drag a tab onto another pane’s edge to put them beside or above one another. Drag a pane’s small header to move it, or back to the tab bar to give it its own tab. You can resize the space between panes. The same limits apply throughout: each column needs 420 points of width, and up to three content panes can be stacked vertically. Existing file-pane exceptions stay the same. When you shrink the window, an older large layout scrolls instead of throwing away panes.
 

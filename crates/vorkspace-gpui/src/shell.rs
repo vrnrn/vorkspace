@@ -1644,28 +1644,18 @@ impl Shell {
     }
     /// requestAddToChat(text, "plain"): appended to the tab's draft as its
     /// own paragraph.
-    fn add_to_chat(&mut self, id: i64, text: &str, cx: &mut Context<Self>) {
-        let Some(view) = self.ensure_session(id, cx) else {
-            return;
-        };
-        let input = view.read(cx).input.clone();
-        if input.read(cx).is_composing() {
-            return;
+    fn add_to_chat(&mut self, id: i64, text: &str, cx: &mut Context<Self>) -> Result<(), String> {
+        if self.deleting.contains(&id) {
+            return Err("The originating chat is being deleted.".into());
         }
-        input.update(cx, |input, cx| {
-            let draft = input.content.to_string();
-            let separator = if draft.is_empty() || draft.ends_with("\n\n") {
-                ""
-            } else if draft.ends_with('\n') {
-                "\n"
-            } else {
-                "\n\n"
-            };
-            input.set_text(format!("{draft}{separator}{}\n\n", text.trim()), cx);
-        });
+        let view = self
+            .ensure_session(id, cx)
+            .ok_or("The originating chat is unavailable.")?;
+        view.update(cx, |chat, cx| chat.append_review_comment(text, cx))?;
         self.chat_hidden_off(id, cx);
         self.pending_composer_focus = Some(id);
         cx.notify();
+        Ok(())
     }
     fn chat_hidden_off(&mut self, id: i64, cx: &mut Context<Self>) {
         if let Some(review) = self.reviews.get(&id) {
