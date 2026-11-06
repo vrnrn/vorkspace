@@ -366,6 +366,91 @@ fn changes_reach_the_store_in_the_order_they_were_made(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn local_drops_use_local_ordering_anchors_on_mixed_issue_boards(cx: &mut TestAppContext) {
+    for (status, remote_target, local_after) in [
+        (TodoStatus::Todo, true, true),
+        (TodoStatus::InProgress, true, true),
+        (TodoStatus::InProgress, true, false),
+        (TodoStatus::Todo, false, true),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let board = TodoBoard::Project(root.path().to_string_lossy().into_owned());
+        let (window, store) = board_window(cx);
+        let task = locked(&store)
+            .unwrap()
+            .add_todo(&board, "Move me", TodoStatus::Todo)
+            .unwrap();
+        let anchor = locked(&store)
+            .unwrap()
+            .add_todo(&board, "Local anchor", status)
+            .unwrap();
+        window
+            .update(cx, |view, _, cx| view.set_board(Some(board.clone()), cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                let mut issue = anchor.clone();
+                issue.id = "github:test/project#7".into();
+                issue.issue = Some(vorkspace_core::todos::TodoIssue {
+                    repo: "test/project".into(),
+                    number: 7,
+                    url: "https://github.com/test/project/issues/7".into(),
+                    labels: vec![],
+                    dependencies_truncated: false,
+                });
+                let target = if remote_target {
+                    issue.id.clone()
+                } else {
+                    anchor.id.clone()
+                };
+                view.items = if local_after {
+                    vec![task.clone(), issue, anchor.clone()]
+                } else {
+                    vec![anchor.clone(), issue, task.clone()]
+                };
+                view.move_to(
+                    &DraggedTodo {
+                        board: board.key(),
+                        id: task.id.clone(),
+                        title: task.title.clone().into(),
+                    },
+                    status,
+                    Some(target),
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let stored = locked(&store)
+            .unwrap()
+            .get_todo(&board, &task.id)
+            .unwrap()
+            .unwrap();
+        let anchor = locked(&store)
+            .unwrap()
+            .get_todo(&board, &anchor.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, status);
+        if local_after {
+            assert!(
+                stored.position < anchor.position,
+                "the next local card is the ordering anchor"
+            );
+        } else {
+            assert!(
+                stored.position > anchor.position,
+                "a remote card without a following local card appends"
+            );
+        }
+        window
+            .update(cx, |view, _, _| assert!(view.change_error.is_none()))
+            .unwrap();
+    }
+}
+
+#[gpui::test]
 fn a_drop_from_another_board_is_ignored(cx: &mut TestAppContext) {
     let (window, store) = board_window(cx);
     let elsewhere = locked(&store)
@@ -541,6 +626,81 @@ fn rejected_detail_save_keeps_the_draft_and_error(cx: &mut TestAppContext) {
                 "Keep this draft"
             );
             assert_eq!(view.pending_changes, 0);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn refreshed_issue_does_not_replace_the_editors_original_revision(cx: &mut TestAppContext) {
+    let (window, store) = board_window(cx);
+    let mut issue = locked(&store)
+        .unwrap()
+        .add_todo(&TodoBoard::Personal, "Original", TodoStatus::Todo)
+        .unwrap();
+    issue.issue = Some(vorkspace_core::todos::TodoIssue {
+        repo: "example/project".into(),
+        number: 42,
+        url: "https://github.com/example/project/issues/42".into(),
+        labels: vec![],
+        dependencies_truncated: false,
+    });
+    issue.sync = vorkspace_core::todos::TodoSync::Synced;
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.items = vec![issue.clone()];
+            view.open_details(&issue, cx);
+            view.details
+                .as_ref()
+                .unwrap()
+                .description
+                .update(cx, |input, cx| {
+                    input.set_text("My unfinished edit".into(), cx)
+                });
+            let mut refreshed = issue.clone();
+            refreshed.updated_at += 1;
+            refreshed.description = "Someone else's newer edit".into();
+            refreshed.issue.as_mut().unwrap().dependencies_truncated = true;
+            view.items = vec![refreshed.clone()];
+            view.stash_details();
+            view.open_details(&refreshed, cx);
+            assert_eq!(view.details.as_ref().unwrap().revision, issue.updated_at);
+            assert!(view.details.as_ref().unwrap().dependencies_complete);
+            view.detail_editing = true;
+            view.save_details(cx);
+            assert_eq!(view.pending_changes, 0);
+            assert!(
+                view.change_error
+                    .as_deref()
+                    .unwrap()
+                    .contains("draft is preserved")
+            );
+            assert_eq!(
+                view.details
+                    .as_ref()
+                    .unwrap()
+                    .description
+                    .read(cx)
+                    .content
+                    .as_ref(),
+                "My unfinished edit"
+            );
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.refresh().unwrap();
+    let reload = visual.debug_bounds("todo-reload-details").unwrap();
+    visual.simulate_click(reload.center(), Default::default());
+    window
+        .update(visual, |view, _, cx| {
+            let editor = view.details.as_ref().unwrap();
+            assert_eq!(editor.revision, issue.updated_at + 1);
+            assert!(!editor.dependencies_complete);
+            assert_eq!(
+                editor.description.read(cx).content.as_ref(),
+                "Someone else's newer edit"
+            );
+            assert!(view.change_error.is_none());
         })
         .unwrap();
 }

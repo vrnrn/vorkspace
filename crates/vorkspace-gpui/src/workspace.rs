@@ -701,7 +701,7 @@ impl Workspace {
                             state.app_panes.get(id).is_some_and(|pane| {
                                 vorkspace_core::files::path_key(&pane.project)
                                     == vorkspace_core::files::path_key(&state.project)
-                                    && (!matches!(&pane.content, AppPane::Bot(_))
+                                    && (!pane.content.project_scoped()
                                         || vorkspace_core::files::path_key(&pane.worktree)
                                             == vorkspace_core::files::path_key(&state.project))
                             })

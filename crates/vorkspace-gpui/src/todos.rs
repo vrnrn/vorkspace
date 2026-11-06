@@ -68,6 +68,8 @@ struct SavedDetails {
 #[derive(Clone)]
 struct DetailsEditor {
     id: String,
+    revision: i64,
+    dependencies_complete: bool,
     title: Entity<Input>,
     description: Entity<Input>,
     attachments: Entity<Input>,
@@ -465,6 +467,23 @@ impl TodoBoardView {
             .items
             .iter()
             .any(|item| item.id == id && item.issue.is_some());
+        let before = if let Some(target) = before {
+            let Some(at) = self
+                .items
+                .iter()
+                .position(|item| item.id == target && item.status == status)
+            else {
+                return;
+            };
+            // GitHub cards have no SQLite ordering slot. Use the next local
+            // card in the displayed column, or append if there is none.
+            self.items[at..]
+                .iter()
+                .find(|item| item.status == status && item.issue.is_none() && item.id != id)
+                .map(|item| item.id.clone())
+        } else {
+            None
+        };
         self.change(
             move |store, board| {
                 let mut input = serde_json::json!({"id":id,"status":status.id()});
@@ -638,6 +657,11 @@ impl TodoBoardView {
         let preview = cx.new(|cx| crate::markdown::Document::prose(&text, "No description", cx));
         self.details = Some(DetailsEditor {
             id: item.id.clone(),
+            revision: item.updated_at,
+            dependencies_complete: !item
+                .issue
+                .as_ref()
+                .is_some_and(|issue| issue.dependencies_truncated),
             title,
             description,
             attachments,
@@ -839,6 +863,11 @@ impl TodoBoardView {
             return;
         }
         let remote = item.issue.is_some();
+        if remote && item.updated_at != details.revision {
+            self.change_error = Some("This issue changed while you were editing. Your draft is preserved; reload details before saving.".into());
+            cx.notify();
+            return;
+        }
         let title = details.title.read(cx).content.to_string();
         let description = details.description.read(cx).content.to_string();
         let attachments = details
@@ -861,15 +890,11 @@ impl TodoBoardView {
             .collect::<Vec<_>>();
         let saved_details = SavedDetails { id: id.clone() };
         let mut input = serde_json::json!({"id":id,"title":title,"description":description});
-        if !item
-            .issue
-            .as_ref()
-            .is_some_and(|issue| issue.dependencies_truncated)
-        {
+        if details.dependencies_complete {
             input["dependencies"] = serde_json::json!(dependencies);
         }
         if remote {
-            input["expectedUpdatedAt"] = serde_json::json!(item.updated_at);
+            input["expectedUpdatedAt"] = serde_json::json!(details.revision);
         }
         if !remote || !attachments.is_empty() {
             input["attachments"] = serde_json::json!(attachments);
@@ -1329,6 +1354,21 @@ impl TodoBoardView {
                             .debug_selector(|| "todo-details-save".into())
                             .on_click(cx.listener(|this, _, _, cx| this.save_details(cx))),
                         )
+                        .when(remote && item.updated_at != editor.revision, |d| {
+                            d.child(
+                                labeled_secondary("todo-reload-details", "Discard draft and reload", false, self.pending_changes > 0)
+                                    .debug_selector(|| "todo-reload-details".into())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if this.pending_changes > 0 { return; }
+                                        let Some(id) = this.details.as_ref().map(|editor| editor.id.clone()) else { return; };
+                                        let Some(item) = this.items.iter().find(|item| item.id == id).cloned() else { return; };
+                                        this.details = None;
+                                        if let Some(key) = this.details_key(&id) { this.saved_details.remove(&key); }
+                                        this.change_error = None;
+                                        this.open_details(&item, cx);
+                                    })),
+                            )
+                        })
                         .when(can_publish, |d| {
                             d.child(
                                 labeled_secondary(

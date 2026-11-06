@@ -3116,13 +3116,9 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(s.window, visual);
+    let draft_name = "A long but valid habit name that fills the narrow panel";
     s.manager.update(visual, |m, cx| {
-        m.fields["habit-name"].update(cx, |f, cx| {
-            f.set_text(
-                "A long but valid habit name that fills the narrow panel".into(),
-                cx,
-            )
-        });
+        m.fields["habit-name"].update(cx, |f, cx| f.set_text(draft_name.into(), cx));
         m.fields["habit-instructions"].update(cx, |f, cx| {
             f.set_text(
                 "Report useful updates on the current project.\n".repeat(65),
@@ -3134,6 +3130,18 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
     });
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(s.window, visual);
+    s.window
+        .update(visual, |shell, window, cx| {
+            shell.select_project(s.project.clone(), window, cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert_eq!(
+        s.manager
+            .read_with(visual, |m, cx| (m.route.clone(), m.value("habit-name", cx))),
+        (Some(Route::NewHabit), draft_name.into()),
+        "reselecting the current project preserves the open Habit draft"
+    );
     let body = visual.debug_bounds("bot-habit-editor").unwrap();
     let name = visual.debug_bounds("bot-habit-name-field").unwrap();
     let schedule = visual.debug_bounds("bot-habit-schedule").unwrap();
@@ -3607,8 +3615,14 @@ fn sidebar_options_lead_to_settings_where_appearance_is_edited(cx: &mut TestAppC
         s.manager
             .read_with(visual, |m, _| m.menu.is_none() && m.background.is_some())
     );
-    assert!(visual.debug_bounds("bot-settings-dialog").is_none(), "the background editor owns this modal transition");
-    assert!(s.manager.read_with(visual, |m, _| m.settings == Some(SettingsSection::General)));
+    assert!(
+        visual.debug_bounds("bot-settings-dialog").is_none(),
+        "the background editor owns this modal transition"
+    );
+    assert!(
+        s.manager
+            .read_with(visual, |m, _| m.settings == Some(SettingsSection::General))
+    );
     let effect_trigger = visual.debug_bounds("project-background-effect").unwrap();
     visual.simulate_click(effect_trigger.center(), Default::default());
     visual.run_until_parked();
@@ -3632,7 +3646,10 @@ fn sidebar_options_lead_to_settings_where_appearance_is_edited(cx: &mut TestAppC
     visual.simulate_click(close_bg.center(), Default::default());
     visual.run_until_parked();
     assert!(s.manager.read_with(visual, |m, _| m.background.is_none()));
-    assert!(visual.debug_bounds("bot-settings-dialog").is_some(), "closing the child restores settings");
+    assert!(
+        visual.debug_bounds("bot-settings-dialog").is_some(),
+        "closing the child restores settings"
+    );
 }
 
 #[gpui::test]
@@ -4627,6 +4644,42 @@ fn minion_channel_admission_filters_reads_and_refuses_user_posts(cx: &mut TestAp
         assert!(m.channel_user_read_only(&team));
         assert!(m.channels.state.get(&team).unwrap().messages.is_empty());
     });
+}
+
+#[gpui::test]
+fn failed_bot_todo_command_refreshes_committed_legacy_migration(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let legacy = vorkspace_core::todos::TodoBoard::Bot(s.id.clone());
+    let board = vorkspace_core::todos::TodoBoard::Project(s.project.clone());
+    let saved = locked(&s.store)
+        .unwrap()
+        .add_todo(
+            &legacy,
+            "Keep this task",
+            vorkspace_core::todos::TodoStatus::Todo,
+        )
+        .unwrap();
+    let view = cx.new(|cx| crate::todos::TodoBoardView::new(s.store.clone(), false, cx));
+    view.update(cx, |view, cx| view.set_board(Some(board), cx));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| assert!(view.items().is_empty()));
+    let result = call_as(
+        &s,
+        s.session,
+        "failed-todo-after-migration",
+        "todos.update",
+        json!({"id":"missing-task","title":"Cannot update this"}),
+        cx,
+    );
+    assert!(result.is_err(), "the original command failure is returned");
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .list_todos(&legacy)
+            .unwrap()
+            .is_empty()
+    );
+    view.read_with(cx, |view, _| assert_eq!(view.items()[0].id, saved.id));
 }
 
 #[gpui::test]

@@ -6,6 +6,7 @@ use crate::workspace::{AppPane, AppView};
 /// Render after Shell releases its entity lease. Bot controls read workspace
 /// state through BotsHost, so rendering them inline from Shell is reentrant.
 pub(super) struct BotPaneView {
+    shell: gpui::WeakEntity<Shell>,
     manager: Entity<crate::bots::Bots>,
     bot: Option<String>,
     width: f32,
@@ -18,12 +19,22 @@ impl Render for BotPaneView {
         let wide = self.width >= crate::bots::ISLAND_BREAKPOINT;
         let resized = wide != self.wide;
         self.wide = wide;
+        let linked = self
+            .bot
+            .as_ref()
+            .and_then(|id| self.manager.read(cx).pane_notification_session(id, cx))
+            .and_then(|session| {
+                self.shell
+                    .update(cx, |shell, cx| shell.linked_notice(session, cx))
+                    .ok()
+                    .flatten()
+            });
         self.manager.update(cx, |manager, cx| match &self.bot {
             Some(id) => {
                 if resized {
                     manager.collapse_island(id);
                 }
-                manager.render_bot_pane(id, self.width, window, cx)
+                manager.render_bot_pane(id, self.width, linked, window, cx)
             }
             None => manager.render_channels_pane(window, cx),
         })
@@ -38,9 +49,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let manager = self.bots.clone()?;
+        let shell = cx.weak_entity();
         let view = self.bot_pane_views.entry(pane).or_insert_with(|| {
             cx.new(|cx| BotPaneView {
                 _changed: cx.observe(&manager, |_, _, cx| cx.notify()),
+                shell,
                 manager,
                 bot,
                 width: 0.,
@@ -99,8 +112,22 @@ impl Shell {
                 Some(AppPane::App(AppView::Todos)) => self.todos_page.is_some(),
                 Some(AppPane::App(AppView::Automations)) => self.automations.is_some(),
                 Some(AppPane::Terminal { id, .. }) => self.terminal_tabs.contains_key(id),
-                Some(AppPane::Search) => self.app_search.is_some() || self.parked_search.is_some(),
-                Some(AppPane::Bot(_) | AppPane::Channels | AppPane::App(AppView::Inbox)) => true,
+                Some(AppPane::Search) => {
+                    let cwd = self
+                        .app_layout_scope(leaf, cx)
+                        .map(|(_, worktree)| worktree);
+                    let cwd = cwd.as_deref().unwrap_or_else(|| self.working_copy());
+                    self.app_search
+                        .as_ref()
+                        .or(self.parked_search.as_ref())
+                        .is_some_and(|search| search.matches_working_copy(cwd))
+                }
+                Some(
+                    AppPane::Bot(_)
+                    | AppPane::Channels
+                    | AppPane::App(AppView::Inbox)
+                    | AppPane::Review,
+                ) => true,
                 None => {
                     if let Some(owner) = self.workspace.session_for_pane(leaf) {
                         self.ensure_session(owner, cx);
@@ -146,6 +173,16 @@ impl Shell {
             let active = self.workspace.app_panes.iter().any(|(pane, state)| shown.contains(pane) && matches!(state.content, AppPane::Terminal { id: terminal, .. } if terminal == *id));
             view.update(cx, |v, _| v.visible = active);
         }
+        for (&id, review) in &self.reviews {
+            if self
+                .workspace
+                .app_panes
+                .get(&id)
+                .is_some_and(|pane| pane.content == AppPane::Review)
+            {
+                review.update(cx, |view, cx| view.set_visible(shown.contains(&id), cx));
+            }
+        }
         if let Some(manager) = self.bots.clone() {
             let context = self.workspace_bot_context();
             let channels_visible = shown.iter().any(|id| {
@@ -173,6 +210,60 @@ impl Shell {
                 manager.set_visible_panes(&visible, cx);
             });
         }
+    }
+
+    /// A global resource may be tiled beside a project-bound leaf. Restore that
+    /// layout's project and working copy before configuring the resource view.
+    pub(super) fn restore_app_layout_scope(&mut self, pane: i64, cx: &App) {
+        let Some((project, worktree)) = self.app_layout_scope(pane, cx) else {
+            return;
+        };
+        self.workspace.project = project.clone();
+        if vorkspace_core::files::path_key(self.working_copy())
+            != vorkspace_core::files::path_key(&worktree)
+        {
+            if vorkspace_core::files::path_key(&project)
+                == vorkspace_core::files::path_key(&worktree)
+            {
+                self.worktree_focus.remove(&project);
+            } else {
+                self.worktree_focus.insert(
+                    project,
+                    crate::git_tools::worktree_switcher::WorktreeFocus {
+                        path: worktree,
+                        branch: None,
+                    },
+                );
+            }
+        }
+    }
+
+    fn app_layout_scope(&self, pane: i64, cx: &App) -> Option<(String, String)> {
+        let tab = self.workspace.tab_of(pane).unwrap_or(pane);
+        self.workspace
+            .layout(tab)
+            .leaf_ids()
+            .into_iter()
+            .find_map(|id| {
+                if let Some(owner) = self.workspace.session_for_pane(id) {
+                    if !self.session_summaries.contains_key(&owner) {
+                        return None;
+                    }
+                    let project = self.session_metadata(owner, cx).summary.cwd.clone();
+                    let worktree = self
+                        .workspace
+                        .tab_workspaces
+                        .get(&tab)
+                        .cloned()
+                        .unwrap_or_else(|| self.session_working_copy(id, cx).to_owned());
+                    return Some((project, worktree));
+                }
+                self.workspace
+                    .app_panes
+                    .get(&id)
+                    .filter(|state| state.content.project_scoped())
+                    .map(|state| (state.project.clone(), state.worktree.clone()))
+            })
     }
 
     pub(super) fn app_pane_id(&self, content: &AppPane) -> Option<i64> {
@@ -273,6 +364,12 @@ impl Shell {
             AppPane::Terminal { cwd, .. } => format!("Terminal · {}", project_name(cwd)),
             AppPane::Search => "Search".into(),
             AppPane::Channels => "Channels".into(),
+            AppPane::Review => self
+                .workspace
+                .reviews
+                .get(&id)
+                .and_then(|state| state.tabs.get(state.active))
+                .map_or_else(|| "Files".into(), |tab| tab.label()),
         }
     }
 
@@ -286,7 +383,7 @@ impl Shell {
             Some(AppPane::App(AppView::Automations)) => "zap",
             Some(AppPane::App(AppView::Todos)) => "circle-check",
             Some(AppPane::Bot(_)) => "bot",
-            Some(AppPane::BotDocument { .. }) => "file-text",
+            Some(AppPane::BotDocument { .. } | AppPane::Review) => "file-text",
             Some(AppPane::Terminal { .. }) => "terminal",
             Some(AppPane::Search) => "search",
             Some(AppPane::Channels) => "messages-square",
@@ -296,15 +393,11 @@ impl Shell {
 
     pub(super) fn pane_in_scope(&self, id: i64, cx: &App) -> bool {
         if let Some(pane) = self.workspace.app_panes.get(&id) {
-            return match &pane.content {
-                AppPane::Bot(_) => {
-                    vorkspace_core::files::path_key(&pane.project)
-                        == vorkspace_core::files::path_key(&self.workspace.project)
-                        && vorkspace_core::files::path_key(&pane.worktree)
-                            == vorkspace_core::files::path_key(self.working_copy())
-                }
-                _ => true,
-            };
+            return !pane.content.project_scoped()
+                || (vorkspace_core::files::path_key(&pane.project)
+                    == vorkspace_core::files::path_key(&self.workspace.project)
+                    && vorkspace_core::files::path_key(&pane.worktree)
+                        == vorkspace_core::files::path_key(self.working_copy()));
         }
         self.workspace.session_for_pane(id).is_some_and(|owner| {
             self.session_summaries.contains_key(&owner)
@@ -339,7 +432,7 @@ impl Shell {
             return;
         };
         if !self.app_pane_available(&pane.content, cx) {
-            self.prepare_app_view(window, cx);
+            self.prepare_app_view(Some(id), window, cx);
             self.leave_app_views(cx);
             self.workspace.open(id);
             self.finish_app_pane_open(window, cx);
@@ -353,7 +446,7 @@ impl Shell {
                 self.open_bot_document(bot, document, window, cx)
             }
             AppPane::Bot(bot) => {
-                self.prepare_app_view(window, cx);
+                self.prepare_app_view(Some(id), window, cx);
                 self.leave_app_views(cx);
                 self.workspace.project = pane.project;
                 self.workspace.open(id);
@@ -370,6 +463,7 @@ impl Shell {
             AppPane::Terminal { id, cwd } => self.show_terminal_tab(id, cwd, window, cx),
             AppPane::Search => self.open_app_search(window, cx),
             AppPane::Channels => self.open_classic_channels(window, cx),
+            AppPane::Review => self.open_standalone_review(id, window, cx),
         }
     }
 
@@ -409,7 +503,7 @@ impl Shell {
                 .into_any_element(),
             AppPane::App(AppView::Todos) => self.todos_page.clone()?.into_any_element(),
             AppPane::App(AppView::Automations) => self.automations.clone()?.into_any_element(),
-            AppPane::App(AppView::Inbox) => return None,
+            AppPane::App(AppView::Inbox) | AppPane::Review => return None,
             AppPane::Terminal { id, .. } => div()
                 .id(("terminal-tab-body", id))
                 .debug_selector(|| "terminal-tab-body".into())
@@ -498,7 +592,7 @@ impl Shell {
         }
         let previous = self.workspace.active;
         let previously_open = self.app_pane_id(&AppPane::Note(note.clone())).is_some();
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(self.app_pane_id(&AppPane::Note(note.clone())), window, cx);
         self.leave_app_views(cx);
         let Some(id) = self.admit_app_pane(AppPane::Note(note.clone())) else {
             return;
@@ -571,7 +665,11 @@ impl Shell {
         if !self.enabled_connectors(cx).contains(&provider) {
             return;
         }
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(
+            self.app_pane_id(&AppPane::ConnectorItem(Box::new(item.clone()))),
+            window,
+            cx,
+        );
         self.leave_app_views(cx);
         let Some(id) = self.admit_app_pane(AppPane::ConnectorItem(Box::new(item.clone()))) else {
             return;
@@ -619,6 +717,15 @@ impl Shell {
     }
 
     pub(super) fn release_app_pane(&mut self, id: i64, cx: &mut Context<Self>) {
+        if self
+            .workspace
+            .app_panes
+            .get(&id)
+            .is_some_and(|pane| pane.content == AppPane::Review)
+            && !self.workspace.reviews.contains_key(&id)
+        {
+            self.workspace.app_panes.remove(&id);
+        }
         self.bot_pane_views.remove(&id);
         if let Some(view) = self.bot_document_tabs.remove(&id) {
             view.update(cx, |v, cx| v.set_active(false, cx));
@@ -652,7 +759,14 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(
+            self.app_pane_id(&AppPane::BotDocument {
+                bot: bot.clone(),
+                document: document.clone(),
+            }),
+            window,
+            cx,
+        );
         self.leave_app_views(cx);
         let Some(id) = self.admit_app_pane(AppPane::BotDocument {
             bot: bot.clone(),

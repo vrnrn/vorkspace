@@ -81,6 +81,11 @@ impl Shell {
     /// Channels occupy the same main surface as Bots, with the project rail
     /// still available. They do not invent a session or change its project.
     pub(crate) fn open_classic_channels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.prepare_app_view(
+            self.app_pane_id(&crate::workspace::AppPane::Channels),
+            window,
+            cx,
+        );
         self.leave_app_views(cx);
         self.leave_app_search(cx);
         self.close_preview(cx);

@@ -35,7 +35,14 @@ impl Shell {
             cx.notify();
             return;
         }
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(
+            self.app_pane_id(&crate::workspace::AppPane::Terminal {
+                id,
+                cwd: cwd.clone(),
+            }),
+            window,
+            cx,
+        );
         self.leave_app_views(cx);
         let terminal = self
             .terminal_tabs

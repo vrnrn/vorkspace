@@ -87,10 +87,7 @@ impl Shell {
     }
 
     pub(super) fn pane_layout_allowed(&self, before: &PaneNode, after: &PaneNode) -> bool {
-        let session = |id: i64| {
-            (id >= 0 || self.workspace.app_panes.contains_key(&id))
-                && !self.workspace.review_owners.contains_key(&id)
-        };
+        let session = |id| self.workspace.counts_toward_pane_limit(id);
         let old_stack = before.max_session_stack(session);
         let new_stack = after.max_session_stack(session);
         let stack_ok = new_stack <= MAX_SESSION_STACK

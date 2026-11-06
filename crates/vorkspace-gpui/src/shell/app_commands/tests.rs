@@ -1387,6 +1387,81 @@ fn operator_scopes_sessions_and_preserves_an_unsent_draft(cx: &mut TestAppContex
         .unwrap();
 }
 #[gpui::test]
+fn failed_todo_command_keeps_its_error_and_refreshes_recovery_controls(cx: &mut TestAppContext) {
+    let (window, caller, root) = command_window(cx);
+    let board =
+        vorkspace_core::todos::TodoBoard::Project(root.path().to_string_lossy().into_owned());
+    let view = window
+        .update(cx, |shell, _, cx| {
+            let view =
+                cx.new(|cx| crate::todos::TodoBoardView::new(shell.store.clone(), false, cx));
+            view.update(cx, |view, cx| view.set_board(Some(board.clone()), cx));
+            view
+        })
+        .unwrap();
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| assert!(view.items().is_empty()));
+    let (reply, rx) = std::sync::mpsc::channel();
+    window
+        .update(cx, |shell, _, cx| {
+            locked(&shell.store)
+                .unwrap()
+                .admit_app_command(
+                    caller,
+                    "failed-todo-write",
+                    "todos.update",
+                    &json!({"id":"github:test/project#5","title":"Saved edit"}),
+                )
+                .unwrap();
+            shell.app_background(
+                Call {
+                    session: caller,
+                    request_id: "failed-todo-write".into(),
+                    action: "todos.update".into(),
+                    input: json!({"id":"github:test/project#5","title":"Saved edit"}),
+                    reply,
+                },
+                move |store| {
+                    let store = locked(&store)?;
+                    let mut snapshot =
+                        store.add_todo(&board, "Issue", vorkspace_core::todos::TodoStatus::Todo)?;
+                    store.delete_todo(&board, &snapshot.id)?;
+                    snapshot.id = "github:test/project#5".into();
+                    snapshot.issue = Some(vorkspace_core::todos::TodoIssue {
+                        repo: "test/project".into(),
+                        number: 5,
+                        url: "https://github.com/test/project/issues/5".into(),
+                        labels: vec![],
+                        dependencies_truncated: false,
+                    });
+                    let attempt = store.begin_remote_todo_edit(
+                        &board,
+                        &snapshot,
+                        &json!({"title":"Saved edit"}),
+                    )?;
+                    store.uncertain_remote_todo_edit(&board, &snapshot.id, &attempt)?;
+                    Err("GitHub write unconfirmed".into())
+                },
+                cx,
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        Err("GitHub write unconfirmed".into())
+    );
+    view.read_with(cx, |view, _| {
+        let edit = view.items()[0]
+            .pending_edit
+            .as_ref()
+            .expect("recovery controls are available");
+        assert_eq!(edit.phase, vorkspace_core::todos::TodoSync::Uncertain);
+        assert_eq!(edit.input["title"], "Saved edit");
+    });
+}
+
+#[gpui::test]
 fn operators_manage_their_project_board_and_open_views_reload(cx: &mut TestAppContext) {
     let (window, caller, root) = command_window(cx);
     let project = root.path().to_string_lossy().into_owned();

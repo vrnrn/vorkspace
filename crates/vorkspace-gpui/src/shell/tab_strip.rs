@@ -53,11 +53,14 @@ impl Shell {
             .filter(|id| !review(id).is_some_and(|r| r.chat_hidden))
             .filter(|id| self.session_summaries.contains_key(id))
             .collect();
-        let app_focused = self.workspace.app_panes.contains_key(&focus);
-        let app_panes = leaves
-            .iter()
-            .filter(|id| self.workspace.app_panes.contains_key(*id))
-            .count();
+        let app = |id: &i64| {
+            self.workspace
+                .app_panes
+                .get(id)
+                .is_some_and(|pane| pane.content != crate::workspace::AppPane::Review)
+        };
+        let app_focused = app(&focus);
+        let app_panes = leaves.iter().filter(|id| app(id)).count();
         let mut files = Vec::new();
         for id in &leaves {
             if let Some(r) = review(id) {
@@ -116,7 +119,7 @@ impl Shell {
                     mark: PaneMark::Session(session.summary.provider.clone(), lit.then_some(id)),
                 });
             }
-            if self.workspace.app_panes.contains_key(&id) {
+            if app(&id) {
                 panes.push(TabPane {
                     key: (id, false),
                     title: self.pane_title(id, cx),
@@ -590,7 +593,8 @@ impl Shell {
         };
         // Tabs begin after the project rail and its optional left sidebar.
         let lead = if self.workspace.classic_layout {
-            self.classic_rail_width() + sidebar + self.strip_lead(window)
+            let divider = if sidebar > 0. { 1. } else { 0. };
+            self.classic_rail_width() + sidebar + divider + self.strip_lead(window)
         } else {
             self.navigation_width(window)
         };

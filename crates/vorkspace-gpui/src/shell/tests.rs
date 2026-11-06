@@ -470,13 +470,18 @@ fn tab_lifecycle_new_and_split_requests_do_not_undo_project_navigation(cx: &mut 
 }
 #[gpui::test]
 fn tab_lifecycle_closing_an_inactive_tab_keeps_notes_and_focus(cx: &mut TestAppContext) {
-    let (window, a, b) = window(cx);
+    let (window, a, _) = window(cx);
     window
         .update(cx, |shell, w, cx| {
             shell.open_notes(w, cx);
+            let pane = shell.workspace.active.unwrap();
+            let notes = shell.notes.clone().unwrap();
             shell.close(a, w, cx);
-            assert!(shell.notes.is_some());
-            assert_eq!(shell.workspace.active, Some(b));
+            assert_eq!(shell.workspace.tab_of(a), None);
+            assert_eq!(shell.workspace.active, Some(pane));
+            assert_eq!(shell.notes.as_ref(), Some(&notes));
+            assert_eq!(shell.active_app_view, Some(app_views::AppView::Notes));
+            assert!(notes.focus_handle(cx).contains_focused(w, cx));
             assert_eq!(shell.workspace.project, "/work/vorkspace");
         })
         .unwrap();
@@ -496,10 +501,14 @@ fn tab_lifecycle_closing_an_inactive_split_pane_keeps_notes(cx: &mut TestAppCont
             shell.workspace.split(c, SplitDir::Right);
             shell.open(b, w, cx);
             shell.open_notes(w, cx);
+            let pane = shell.workspace.active.unwrap();
+            let notes = shell.notes.clone().unwrap();
             shell.close_pane(a, w, cx);
-            assert!(shell.notes.is_some());
-            assert_eq!(shell.workspace.active, Some(b));
-            assert_eq!(shell.workspace.tabs, [c, b]);
+            assert_eq!(shell.workspace.active, Some(pane));
+            assert_eq!(shell.workspace.tabs, [c, b, pane]);
+            assert_eq!(shell.notes.as_ref(), Some(&notes));
+            assert_eq!(shell.active_app_view, Some(app_views::AppView::Notes));
+            assert!(notes.focus_handle(cx).contains_focused(w, cx));
             assert_eq!(shell.workspace.project, "/work/vorkspace");
         })
         .unwrap();
@@ -1315,13 +1324,13 @@ fn resizing_project_rail_with_working_session_marks_keeps_cached_paint_valid(
 }
 
 #[gpui::test]
-fn titlebar_panel_buttons_keep_window_bounds_for_single_and_double_clicks(cx: &mut TestAppContext) {
+fn rail_and_bot_island_buttons_keep_window_bounds_for_single_and_double_clicks(
+    cx: &mut TestAppContext,
+) {
     let (window, _, _) = window(cx);
     vorkspace_ui::clock::use_test_clock(cx);
-    window
-        .update(cx, |shell, w, cx| shell.focus_active(w, cx))
-        .unwrap();
     let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    cx.simulate_resize(gpui::size(px(1040.), px(800.)));
     window
         .update(cx, |shell, window, cx| {
             let manager = shell.bot_manager();
@@ -1333,44 +1342,49 @@ fn titlebar_panel_buttons_keep_window_bounds_for_single_and_double_clicks(cx: &m
         .unwrap();
     cx.run_until_parked();
     let original = window.update(cx, |_, w, _| w.window_bounds()).unwrap();
-    for selector in ["toggle-sidebar", "toggle-right-panel"] {
-        for click_count in [1, 2, 1, 2] {
-            let position = cx.debug_bounds(selector).unwrap().center();
-            cx.simulate_mouse_move(position, None, Default::default());
-            cx.run_until_parked();
-            let before = window
-                .update(cx, |shell, _, _| {
-                    (
-                        shell.workspace.project_rail_open,
-                        shell.workspace.right_panel_open,
-                    )
-                })
-                .unwrap();
-            cx.simulate_event(MouseDownEvent {
-                position,
-                button: MouseButton::Left,
-                click_count,
-                first_mouse: false,
-                modifiers: Default::default(),
-            });
-            cx.simulate_event(gpui::MouseUpEvent {
-                position,
-                button: MouseButton::Left,
-                click_count,
-                modifiers: Default::default(),
-            });
-            cx.run_until_parked();
-            window
-                .update(cx, |shell, w, _| {
-                    assert_eq!(w.window_bounds(), original);
-                    if selector == "toggle-sidebar" {
-                        assert_eq!(shell.workspace.project_rail_open, !before.0);
-                    } else {
-                        assert_eq!(shell.workspace.right_panel_open, !before.1);
-                    }
-                })
-                .unwrap();
-        }
+    assert!(cx.debug_bounds("toggle-right-panel").is_none());
+    let click = |cx: &mut gpui::VisualTestContext, selector, click_count| {
+        let position = cx.debug_bounds(selector).unwrap().center();
+        cx.simulate_mouse_move(position, None, Default::default());
+        cx.run_until_parked();
+        cx.simulate_event(MouseDownEvent {
+            position,
+            button: MouseButton::Left,
+            click_count,
+            first_mouse: false,
+            modifiers: Default::default(),
+        });
+        cx.simulate_event(gpui::MouseUpEvent {
+            position,
+            button: MouseButton::Left,
+            click_count,
+            modifiers: Default::default(),
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            window.update(cx, |_, w, _| w.window_bounds()).unwrap(),
+            original
+        );
+    };
+    for click_count in [1, 2, 1, 2] {
+        let before = window
+            .update(cx, |shell, _, _| shell.workspace.project_rail_open)
+            .unwrap();
+        click(cx, "toggle-sidebar", click_count);
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.workspace.project_rail_open, !before)
+            })
+            .unwrap();
+    }
+    for click_count in [1, 2] {
+        let chat = cx.debug_bounds("bot-chat-transcript").unwrap();
+        click(cx, "bot-island-toggle", click_count);
+        assert!(cx.debug_bounds("bot-island").is_some());
+        assert_eq!(cx.debug_bounds("bot-chat-transcript"), Some(chat));
+        click(cx, "bot-island-close", click_count);
+        assert!(cx.debug_bounds("bot-island").is_none());
+        assert_eq!(cx.debug_bounds("bot-chat-transcript"), Some(chat));
     }
 }
 
@@ -1475,14 +1489,13 @@ fn crowded_tabs_fit_and_hold_the_new_tab_button_still_while_one_opens(cx: &mut T
     settle(cx);
     settle(cx);
     let strip = cx.debug_bounds("title-tab-strip").unwrap();
-    // Keep the strip's 6px gap before the trailing controls, or before
-    // the open sidebar, whose header holds them instead.
-    let first_control = cx
-        .debug_bounds("sidebar-frame")
-        .or_else(|| cx.debug_bounds("project-diff-stat"))
-        .or_else(|| cx.debug_bounds("titlebar-file-search"))
-        .unwrap();
-    assert_eq!(strip.right(), first_control.left() - px(6.));
+    // The left sidebar's header holds project tools, leaving a 6px gap
+    // at the workspace's trailing edge.
+    let sidebar = cx.debug_bounds("sidebar-frame").unwrap();
+    let pane = cx.debug_bounds("main-pane-frame").unwrap();
+    assert_eq!(sidebar.right(), pane.left());
+    assert!(strip.left() >= pane.left());
+    assert_eq!(strip.right(), pane.right() - px(6.));
     let settled = cx.debug_bounds("new-tab").unwrap();
     assert!(settled.right() <= strip.right(), "every tab fits");
     let last = window
@@ -3024,25 +3037,21 @@ fn tab_delete_confirms_and_targets_the_original_session(cx: &mut TestAppContext)
         .unwrap();
 }
 #[gpui::test]
-fn pane_surfaces_follow_the_edge_at_a_constant_width(cx: &mut TestAppContext) {
+fn sidebar_and_review_surfaces_keep_their_width_during_motion(cx: &mut TestAppContext) {
     use std::time::Duration;
+    vorkspace_ui::clock::use_test_clock(cx);
     let (window, _, id) = window(cx);
     window
         .update(cx, |shell, w, cx| {
             shell.open(id, w, cx);
-            let manager = shell.bot_manager();
-            manager.update(cx, |manager, cx| {
-                manager.create_named(Vec::new(), w, cx);
-                manager.dismiss_settings(w, cx);
-            });
-            shell.toggle_right_panel(w, cx);
+            shell.set_sidebar_visible(false, cx);
         })
         .unwrap();
     for ms in [30, 65, 110, 170] {
         window
             .update(cx, |shell, _, cx| {
                 shell
-                    .right_slide
+                    .sidebar_slide
                     .as_ref()
                     .unwrap()
                     .freeze_elapsed(Duration::from_millis(ms));
@@ -3055,19 +3064,19 @@ fn pane_surfaces_follow_the_edge_at_a_constant_width(cx: &mut TestAppContext) {
         })
         .unwrap();
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        let clip = visual.debug_bounds("right-panel-frame").unwrap();
-        let content = visual.debug_bounds("right-panel-content").unwrap();
+        let clip = visual.debug_bounds("sidebar-frame").unwrap();
+        let content = visual.debug_bounds("sidebar-content").unwrap();
         assert!((content.left() - clip.left()).abs() < px(2.));
         let full = window
             .update(visual, |shell, _, _| shell.workspace.right_panel_width)
             .unwrap();
-        assert!((content.size.width - px(full - 1.)).abs() < px(1.));
+        assert!((content.size.width - px(full)).abs() < px(1.));
         assert!(content.size.width > clip.size.width);
     }
     window
         .update(cx, |shell, w, cx| {
             shell
-                .right_slide
+                .sidebar_slide
                 .as_ref()
                 .unwrap()
                 .elapsed(Duration::from_secs(1));
@@ -3123,7 +3132,7 @@ fn pane_surfaces_follow_the_edge_at_a_constant_width(cx: &mut TestAppContext) {
     window
         .update(cx, |shell, _, _| {
             let late = Duration::from_secs(2);
-            if let Some(slide) = &shell.right_slide {
+            if let Some(slide) = &shell.sidebar_slide {
                 slide.elapsed(late);
             }
             if let Some((_, slide, _)) = &shell.review_slide {
@@ -3138,7 +3147,7 @@ fn pane_surfaces_follow_the_edge_at_a_constant_width(cx: &mut TestAppContext) {
     .unwrap();
     window
         .update(cx, |shell, _, _| {
-            assert!(shell.right_slide.is_none());
+            assert!(shell.sidebar_slide.is_none());
             assert!(shell.review_slide.is_none());
         })
         .unwrap();

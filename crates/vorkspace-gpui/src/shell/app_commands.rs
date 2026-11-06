@@ -5,8 +5,6 @@ use vorkspace_core::bot::bridge::{Call, Server};
 
 enum Effect {
     None,
-    /// A board changed; open views reload.
-    Todos,
     Start(Box<AppStart>),
     Groups(String, vorkspace_core::session_groups::Groups),
 }
@@ -527,15 +525,20 @@ impl Shell {
         F: FnOnce(Database) -> Result<(Value, Effect), String> + Send + 'static,
     {
         let store = self.store.clone();
+        let refresh_todos = call.action.starts_with("todos.") && call.action != "todos.list";
         let work = cx.background_executor().spawn(async move { work(store) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                // A failed remote write can still publish a durable recovery
+                // receipt. Refresh after either outcome, preserving the error.
+                if refresh_todos {
+                    crate::todos::changed(cx);
+                }
                 let caller = call.session;
                 let result = result.and_then(|(result, effect)| {
                     match effect {
                         Effect::None => (),
-                        Effect::Todos => crate::todos::changed(cx),
                         Effect::Start(start) => {
                             this.app_install_start(caller, *start, window, cx)?;
                         }
@@ -691,8 +694,7 @@ impl Shell {
             }
             "todos.list" | "todos.add" | "todos.update" | "todos.remove" | "todos.publish" | "todos.reconcile" | "todos.retry" | "todos.reconcileEdit" | "todos.retryEdit" | "todos.discardEdit" | "todos.cancelPublish" => {
                 let board = vorkspace_core::todos::TodoBoard::Project(project.clone());
-                let effect = if action == "todos.list" { Effect::None } else { Effect::Todos };
-                self.app_background(call, move |store| Ok((crate::todos::todo_action(&store, &board, &action, &input)?, effect)), cx); return;
+                self.app_background(call, move |store| Ok((crate::todos::todo_action(&store, &board, &action, &input)?, Effect::None)), cx); return;
             }
             "folders.move" => {
                 let id = match session_id(&input, &self.store) { Ok(id) => id, Err(e) => { self.finish_app_call(call, Err(e)); return; } };

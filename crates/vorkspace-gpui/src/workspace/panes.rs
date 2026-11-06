@@ -12,9 +12,14 @@ pub(crate) enum AppPane {
     Terminal { id: u64, cwd: String },
     Search,
     Channels,
+    Review,
 }
 
 impl AppPane {
+    pub fn project_scoped(&self) -> bool {
+        matches!(self, Self::Bot(_) | Self::Review)
+    }
+
     pub fn same_resource(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::ConnectorItem(a), Self::ConnectorItem(b)) => a.key() == b.key(),
@@ -53,7 +58,7 @@ impl Workspace {
     pub fn app_pane(&mut self, content: AppPane, project: String, worktree: String) -> Option<i64> {
         if let Some(id) = self.app_panes.iter().find_map(|(&id, pane)| {
             (pane.content.same_resource(&content)
-                && (!matches!(&content, AppPane::Bot(_))
+                && (!content.project_scoped()
                     || (vorkspace_core::files::path_key(&pane.project)
                         == vorkspace_core::files::path_key(&project)
                         && vorkspace_core::files::path_key(&pane.worktree)
@@ -84,8 +89,12 @@ impl Workspace {
     /// Saved standalone destinations now use the same pane tree as sessions.
     /// Keep ordering and scope references while reserving each terminal ID.
     pub(super) fn restore_app_panes(&mut self) {
-        self.app_panes
-            .retain(|id, _| *id < 0 && !self.review_owners.contains_key(id));
+        self.app_panes.retain(|id, pane| {
+            *id < 0
+                && !self.review_owners.contains_key(id)
+                && (pane.content != AppPane::Review
+                    || self.reviews.get(id).is_some_and(|r| !r.tabs.is_empty()))
+        });
         let mut migrated = HashMap::new();
         let mut legacy = self.title_order.clone();
         let mut scopes = self.scope_focus.iter().collect::<Vec<_>>();
@@ -131,6 +140,15 @@ impl Workspace {
                 *tab = replacement.clone();
             }
         }
+    }
+
+    pub fn counts_toward_pane_limit(&self, id: i64) -> bool {
+        !self.review_owners.contains_key(&id)
+            && (id >= 0
+                || self
+                    .app_panes
+                    .get(&id)
+                    .is_some_and(|pane| pane.content != AppPane::Review))
     }
 
     /// Only saved title entries can open standalone app tabs. A scope's last

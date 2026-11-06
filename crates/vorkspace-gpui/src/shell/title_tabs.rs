@@ -232,6 +232,57 @@ impl Shell {
             .cloned()
             .collect()
     }
+    pub(super) fn prune_deleted_bot_tabs(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(bots) = self.bots.as_ref().map(|bots| bots.read(cx)) else {
+            return false;
+        };
+        // Unavailable and disabled rosters are not deletions.
+        if !bots.roster_loaded {
+            return false;
+        }
+        let missing = self
+            .workspace
+            .app_panes
+            .iter()
+            .filter_map(|(&pane, state)| match &state.content {
+                crate::workspace::AppPane::Bot(id)
+                | crate::workspace::AppPane::BotDocument { bot: id, .. }
+                    if bots.roster.get(id).is_none() =>
+                {
+                    Some(pane)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let keep = |tab: &TitleTab| !matches!(tab, TitleTab::Bot { id, .. } if bots.roster.get(id).is_none());
+        let before = (
+            self.workspace.title_order.len(),
+            self.workspace.scope_focus.len(),
+        );
+        self.workspace.title_order.retain(&keep);
+        self.workspace.scope_focus.retain(|_, tab| keep(tab));
+        let changed = !missing.is_empty()
+            || before
+                != (
+                    self.workspace.title_order.len(),
+                    self.workspace.scope_focus.len(),
+                );
+        for pane in missing {
+            // Remove only this leaf; unrelated sessions and drafts in the same
+            // tab retain their layout and ownership.
+            if !self.workspace.close_pane(pane) {
+                self.workspace.close(pane);
+            }
+            self.release_app_pane(pane, cx);
+            self.workspace.app_panes.remove(&pane);
+        }
+        if changed {
+            self.update_chat_visibility(cx);
+            self.invalidate_chrome(cx);
+        }
+        changed
+    }
+
     pub(super) fn active_title_tab(&self, _cx: &App) -> Option<TitleTab> {
         self.workspace.active_tab().map(TitleTab::Workspace)
     }

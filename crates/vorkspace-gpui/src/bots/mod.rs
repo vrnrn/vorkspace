@@ -98,6 +98,7 @@ pub(crate) struct Bots {
     root: PathBuf,
     prefs: vorkspace_ui::preferences::Preferences,
     pub(crate) roster: Roster,
+    pub(crate) roster_loaded: bool,
     pub(crate) active: Option<String>,
     chats: HashMap<String, Entity<Conversation>>,
     bridge: Option<bot::bridge::Server>,
@@ -451,6 +452,7 @@ impl Bots {
             root,
             prefs,
             roster,
+            roster_loaded: roster_error.is_none(),
             active: None,
             chats: HashMap::new(),
             bridge,
@@ -1887,6 +1889,7 @@ impl Bots {
         &mut self,
         id: &str,
         width: f32,
+        linked: Option<Entity<crate::notifications::linked_activity::LinkedActivity>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -1970,7 +1973,16 @@ impl Bots {
                             chat.set_bot_header_action(header_action);
                         });
                         d.child(div().flex_1().min_h_0().child(chat))
-                    }),
+                    })
+                    .children(linked.map(|notice| {
+                        div()
+                            .absolute()
+                            .top_3()
+                            .right(px(if show_island && !wide { 52. } else { 12. }))
+                            .w(px(320.))
+                            .max_w_full()
+                            .child(notice)
+                    })),
             )
             .when(show_island && wide, |d| d.child(self.island_lane(&bot, cx)))
             .when(show_island && !wide && !overlay, |d| {
@@ -2022,6 +2034,6 @@ impl gpui::Render for Bots {
         let Some(id) = self.active.clone() else {
             return div().into_any_element();
         };
-        self.render_bot_pane(&id, window.viewport_size().width.as_f32(), window, cx)
+        self.render_bot_pane(&id, window.viewport_size().width.as_f32(), None, window, cx)
     }
 }

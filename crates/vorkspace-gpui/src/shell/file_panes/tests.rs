@@ -5,33 +5,50 @@ use gpui::{EntityInputHandler, TestAppContext, VisualTestContext, point};
 #[gpui::test]
 fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppContext) {
     vorkspace_ui::clock::use_test_clock(cx);
+    check_bot_file_link(cx, 800., false);
+}
+
+#[gpui::test]
+fn bot_file_link_tiles_beside_its_chat_when_space_allows(cx: &mut TestAppContext) {
+    vorkspace_ui::clock::use_test_clock(cx);
+    check_bot_file_link(cx, 1500., true);
+}
+
+fn check_bot_file_link(cx: &mut TestAppContext, width: f32, tiled: bool) {
     let (window, _, session) = window(cx);
-    let folder =
-        std::env::temp_dir().join(format!("vorkspace-bot-file-link-{}", std::process::id()));
-    std::fs::create_dir_all(&folder).unwrap();
-    let path = folder.join("README.md").to_string_lossy().into_owned();
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder
+        .path()
+        .join("README.md")
+        .to_string_lossy()
+        .into_owned();
     std::fs::write(&path, "# Heading\nsecond line\nthird line\n").unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(gpui::size(px(width), px(800.)));
     window
-        .update(cx, |shell, w, cx| {
+        .update(visual, |shell, w, cx| {
             shell
                 .bot_manager()
                 .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
         })
         .unwrap();
-    cx.run_until_parked();
+    visual.run_until_parked();
     let (bot, chat) = window
-        .update(cx, |shell, _, cx| {
+        .update(visual, |shell, w, cx| {
             assert!(shell.bot_active(cx));
-            let bot = shell.active_title_tab(cx).unwrap();
-            let chat = shell.bot_manager().read(cx).chat().unwrap();
+            let bot = shell.workspace.active.unwrap();
+            let manager = shell.bot_manager();
+            assert!(manager.update(cx, |m, cx| m.dismiss_settings(w, cx)));
+            let chat = manager.read(cx).chat().unwrap();
+            assert!(chat.read(cx).input.focus_handle(cx).is_focused(w));
             chat.read(cx).input.clone().update(cx, |input, cx| {
                 input.set_text("Keep my Bot draft".into(), cx)
             });
             (bot, chat)
         })
         .unwrap();
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-settings-dialog").is_none());
     assert!(
         visual.debug_bounds("composer-box").is_some(),
         "the action starts in the visible Bot"
@@ -49,16 +66,28 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
         visual.debug_bounds("review-tab-strip").is_some(),
         "the file pane is rendered"
     );
-    assert!(visual.debug_bounds("composer-box").is_none());
+    if tiled {
+        let composer = visual
+            .debug_bounds("composer-box")
+            .expect("Bot remains visible");
+        let review = visual.debug_bounds("review-frame").unwrap();
+        assert!(composer.right() <= review.left());
+    } else {
+        assert!(visual.debug_bounds("composer-box").is_none());
+    }
     let (pane, editor) = window
         .update(visual, |shell, w, cx| {
             assert!(!shell.bot_active(cx));
             let pane = shell.workspace.active.unwrap();
-            assert_ne!(pane, session, "the file has its own title tab");
-            assert_eq!(shell.workspace.session_for_pane(pane), Some(session));
+            assert_eq!(shell.workspace.session_for_pane(pane), None);
+            let expected_tab = if tiled { bot } else { pane };
+            assert_eq!(shell.workspace.tab_of(pane), Some(expected_tab));
+            if tiled {
+                assert_eq!(shell.workspace.layout(bot).leaf_ids(), [bot, pane]);
+            }
             assert!(
-                shell.visible_tabs(cx).contains(&bot),
-                "the Bot tab stays beside its file tab"
+                shell.visible_tabs(cx).contains(&TitleTab::Workspace(bot)),
+                "the Bot stays open"
             );
             assert!(
                 shell
@@ -84,7 +113,11 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
             editor.read(cx).input.clone().update(cx, |input, cx| {
                 input.replace_text_in_range(None, "unsaved", w, cx)
             });
-            shell.open_title_tab(&bot, w, cx);
+            shell.open(bot, w, cx);
+            assert!(
+                chat.read(cx).input.focus_handle(cx).is_focused(w),
+                "opening the Bot requests composer focus (tiled={tiled})"
+            );
             (pane, editor)
         })
         .unwrap();
@@ -92,7 +125,7 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
     assert!(visual.debug_bounds("composer-box").is_some());
     window
         .update(visual, |shell, w, cx| {
-            assert_eq!(shell.active_title_tab(cx), Some(bot.clone()));
+            assert_eq!(shell.workspace.active, Some(bot));
             let restored = shell.bot_manager().read(cx).chat().unwrap();
             assert_eq!(
                 restored, chat,
@@ -102,6 +135,13 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
                 restored.read(cx).input.read(cx).content.as_ref(),
                 "Keep my Bot draft"
             );
+            assert!(
+                restored.read(cx).input.focus_handle(cx).is_focused(w),
+                "the returning Bot composer receives focus (tiled={tiled}, focused={:?})",
+                w.focused(cx)
+            );
+            shell.close_pane(pane, w, cx);
+            assert_eq!(shell.workspace.tab_of(pane), None);
             assert!(restored.read(cx).input.focus_handle(cx).is_focused(w));
             w.dispatch_action(Box::new(crate::file_link::OpenPath(path.clone())), cx);
         })
@@ -123,12 +163,11 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
             assert!(reopened.read(cx).dirty);
             assert!(reopened.read(cx).focus_handle(cx).contains_focused(w, cx));
             assert!(
-                shell.visible_tabs(cx).contains(&bot),
-                "the Bot tab stays beside its file tab"
+                shell.visible_tabs(cx).contains(&TitleTab::Workspace(bot)),
+                "reopening the file keeps the Bot"
             );
         })
         .unwrap();
-    std::fs::remove_dir_all(folder).unwrap();
 }
 
 #[gpui::test]

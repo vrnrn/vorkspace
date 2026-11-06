@@ -464,8 +464,68 @@ pub fn validate_create(root: &Path, expected_repo: &str, item: &TodoItem) -> Res
     pinned(root, expected_repo)?;
     clean_title(&item.title)?;
     clean_description(&item.description)?;
-    attachment_inputs(root, &item.attachments)?;
+    let (files, _) = attachment_inputs(root, &item.attachments)?;
     dependency_refs(&item.dependencies, expected_repo)?;
+    let mut flags = Vec::new();
+    if !files.is_empty() {
+        flags.push("--attach");
+    }
+    if !item.dependencies.is_empty() {
+        flags.push("--blocked-by");
+    }
+    check_cli_options(root, "create", &flags)?;
+    Ok(())
+}
+
+/// Preflight capabilities before recording an attempted external write. Older
+/// GitHub CLIs must leave the local draft editable rather than make it uncertain.
+pub fn validate_update(root: &Path, expected_repo: &str, input: &Value) -> Result<(), String> {
+    pinned(root, expected_repo)?;
+    let attachments = input
+        .get("attachments")
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or("attachments must be an array")?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or("attachments must contain strings")
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let (files, _) = attachment_inputs(root, &attachments)?;
+    let mut flags = Vec::new();
+    if !files.is_empty() {
+        flags.push("--attach");
+    }
+    if input.get("dependencies").is_some() {
+        flags.extend(["--add-blocked-by", "--remove-blocked-by"]);
+    }
+    check_cli_options(root, "edit", &flags)
+}
+
+fn check_cli_options(root: &Path, command: &str, flags: &[&str]) -> Result<(), String> {
+    if flags.is_empty() {
+        return Ok(());
+    }
+    let help = run_gh(root, &["issue", command, "--help"], false)?;
+    require_cli_options(&help, flags)
+}
+
+fn require_cli_options(help: &str, flags: &[&str]) -> Result<(), String> {
+    for flag in flags {
+        if !help.lines().any(|line| {
+            line.trim_start().starts_with(flag)
+                && line.trim_start()[flag.len()..].starts_with(char::is_whitespace)
+        }) {
+            return Err(format!("Update GitHub CLI to use {flag}, or remove that attachment/dependency. No GitHub change was sent."));
+        }
+    }
     Ok(())
 }
 
@@ -765,6 +825,21 @@ fn submission_number(rows: &[Value], token: &str) -> Result<Option<i64>, String>
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn unsupported_cli_flags_fail_before_publication() {
+        let old_help = "FLAGS\n  -b, --body string  Issue body\n      --attach-preview  Unrelated flag\nExamples mention --attach in prose";
+        assert!(require_cli_options(old_help, &["--attach"]).is_err());
+        assert!(require_cli_options(old_help, &[]).is_ok());
+        let current_help = "FLAGS\n      --attach stringArray  Upload files\n      --add-blocked-by stringArray  Add dependencies\n      --remove-blocked-by stringArray  Remove dependencies\n";
+        assert!(require_cli_options(
+            current_help,
+            &["--attach", "--add-blocked-by", "--remove-blocked-by"]
+        )
+        .is_ok());
+        assert!(require_cli_options(current_help, &["--blocked-by"]).is_err());
+    }
+
     #[test]
     fn origins_are_strict_and_repo_scoped() {
         assert_eq!(
