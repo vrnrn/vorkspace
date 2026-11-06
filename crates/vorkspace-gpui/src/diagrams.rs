@@ -22,6 +22,17 @@ pub(crate) enum DiagramKind {
     Mermaid,
 }
 
+/// The workspace owns presentation of an expanded diagram. Inline rendering
+/// only publishes this intent, so it does not depend on the image viewer.
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = diagrams, no_json)]
+pub(crate) struct Open {
+    pub kind: DiagramKind,
+    pub source: SharedString,
+    pub natural: gpui::Size<gpui::Pixels>,
+    pub alt: SharedString,
+}
+
 impl DiagramKind {
     /// The fenced code languages drawn as diagrams.
     pub(crate) fn for_language(language: &str) -> Option<Self> {
@@ -630,14 +641,11 @@ impl gpui::RenderOnce for Diagram {
             return (self.fallback)();
         };
         retain(&self.key, &image, window.current_view(), cx);
-        let open = crate::image_lightbox::Open {
-            source: crate::image_lightbox::Source::Diagram {
-                kind: self.key.0,
-                source: self.key.1,
-                natural: image.size(0).map(|side| gpui::px(side.0 as f32 / 2.)),
-            },
+        let open = Open {
+            kind: self.key.0,
+            source: self.key.1,
+            natural: image.size(0).map(|side| gpui::px(side.0 as f32 / 2.)),
             alt: self.label.clone(),
-            draft_session: None,
         };
         let click = open.clone();
         // Pointer actions belong to this diagram's dispatch path, even when

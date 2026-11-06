@@ -7,6 +7,8 @@ mod bot_tests;
 mod card_tests;
 mod cards;
 pub(crate) mod dates;
+#[cfg(test)]
+mod diagram_tests;
 mod drafts;
 mod follow;
 #[cfg(test)]
@@ -18,8 +20,6 @@ mod response_bar;
 mod row_bodies;
 mod row_render;
 mod streaming_frames;
-#[cfg(test)]
-mod diagram_tests;
 pub(crate) use history::PreparedHistory;
 mod links;
 mod live_phase;
