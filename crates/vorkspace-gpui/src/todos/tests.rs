@@ -705,8 +705,8 @@ fn publishing_requires_saving_the_open_or_reopened_detail_draft(cx: &mut TestApp
                     ["https://example.com/design"]
                 );
                 assert_eq!(
-                    TodoBoardView::dependency_values(&editor.dependencies, cx),
-                    [dependency.id.clone()]
+                    TodoBoardView::dependency_values(&editor.dependencies, cx).as_slice(),
+                    std::slice::from_ref(&dependency.id)
                 );
             })
             .unwrap();
