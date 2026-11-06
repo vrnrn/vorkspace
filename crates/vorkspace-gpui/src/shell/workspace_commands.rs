@@ -573,6 +573,11 @@ impl Shell {
                 })
             })
         });
+        if let Some(tab) = existing.and_then(|id| self.workspace.tab_of(id)) {
+            // A reusable app resource can bring its entire tiled layout forward.
+            // Validate every sibling before navigation changes the selected scope.
+            self.check_workspace_tab(tab, project, cx)?;
+        }
         let target_before = if let Some((target, edge)) = target {
             self.check_workspace_pane(target, project, cx)?;
             // A not-yet-open file uses the same exempt placeholder as a file

@@ -3,6 +3,7 @@ use crate::search::{Event, SearchView, Sources};
 use vorkspace_core::search::Target;
 
 pub(super) struct Open {
+    cwd: String,
     pub(super) view: Entity<SearchView>,
     _events: Subscription,
 }
@@ -18,26 +19,24 @@ impl Shell {
         self.close_app_resource(crate::workspace::AppPane::Search, window, cx);
     }
     pub(super) fn open_app_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.app_search.is_some() || self.parked_search.is_some() {
-            self.prepare_app_view(window, cx);
-            self.leave_app_views(cx);
-            self.app_search = self.parked_search.take();
+        self.prepare_app_view(
+            self.app_pane_id(&crate::workspace::AppPane::Search),
+            window,
+            cx,
+        );
+        self.leave_app_views(cx);
+        let cwd = self.working_copy().to_owned();
+        if let Some(search) = self.parked_search.take().filter(|search| search.cwd == cwd) {
+            self.app_search = Some(search);
             self.admit_app_pane(crate::workspace::AppPane::Search);
             self.finish_app_pane_open(window, cx);
             return;
         }
-        // Only restore focus captured from the conversation surface. Leaving a
-        // sidebar page parks its focused input, so that handle is no longer visible.
-        self.close_menu(cx);
-        self.close_preview(cx);
-        self.leave_app_views(cx);
+        // A different working copy needs its own file index and content-search
+        // owner. prepare_app_view retained the query before dropping the old view.
         if let Some(bots) = &self.bots {
             bots.update(cx, |m, cx| m.close(cx));
         }
-        if self.settings.is_some() {
-            self.close_settings(window, cx);
-        }
-        self.navigation_revision += 1;
         let conversations = self
             .sessions
             .values()
@@ -70,7 +69,6 @@ impl Shell {
                 )
             })
             .collect();
-        let cwd = self.working_copy().to_owned();
         let store = self.store.clone();
         let projects = self.workspace.projects.clone();
         let recent = self
@@ -81,7 +79,7 @@ impl Shell {
             .unwrap_or_default();
         let view = cx.new(|cx| {
             SearchView::new(
-                cwd,
+                cwd.clone(),
                 store,
                 Sources {
                     summaries,
@@ -101,46 +99,51 @@ impl Shell {
         if let Some(draft) = self.saved_search.clone() {
             view.update(cx, |v, cx| v.restore_draft(draft, cx));
         }
-        let events = cx.subscribe_in(
-            &view,
-            window,
-            |this, _, event: &Event, window, cx| match event {
-                Event::Close => this.close_app_search(window, cx),
-                Event::Open(target, query) => {
-                    this.leave_app_search(cx);
-                    match target {
-                        Target::Conversation(id) => this.open_search_session(*id, None, window, cx),
-                        Target::Message { session, row } => this.open_search_session(
-                            *session,
-                            Some((*row, query.clone())),
-                            window,
-                            cx,
-                        ),
-                        Target::File { path, location } => {
-                            let cwd = this.working_copy().to_owned();
-                            this.open_review(
-                                crate::git_tools::review::ReviewTab::File {
-                                    cwd,
-                                    path: path.clone(),
-                                },
+        let source_cwd = cwd.clone();
+        let events =
+            cx.subscribe_in(
+                &view,
+                window,
+                move |this, _, event: &Event, window, cx| match event {
+                    Event::Close => this.close_app_search(window, cx),
+                    Event::Open(target, query) => {
+                        this.leave_app_search(cx);
+                        match target {
+                            Target::Conversation(id) => {
+                                this.open_search_session(*id, None, window, cx)
+                            }
+                            Target::Message { session, row } => this.open_search_session(
+                                *session,
+                                Some((*row, query.clone())),
                                 window,
                                 cx,
-                            );
-                            if let Some((line, column)) = location
-                                && let Some(pane) = this.active_review(cx)
-                            {
-                                pane.update(cx, |p, cx| {
-                                    p.navigate_file(*line as usize, *column as usize, cx)
-                                });
+                            ),
+                            Target::File { path, location } => {
+                                let cwd = source_cwd.clone();
+                                this.open_review(
+                                    crate::git_tools::review::ReviewTab::File {
+                                        cwd,
+                                        path: path.clone(),
+                                    },
+                                    window,
+                                    cx,
+                                );
+                                if let Some((line, column)) = location
+                                    && let Some(pane) = this.active_review(cx)
+                                {
+                                    pane.update(cx, |p, cx| {
+                                        p.navigate_file(*line as usize, *column as usize, cx)
+                                    });
+                                }
                             }
+                            Target::Project(path) => this.select_project(path.clone(), window, cx),
                         }
-                        Target::Project(path) => this.select_project(path.clone(), window, cx),
                     }
-                }
-            },
-        );
+                },
+            );
         window.focus(&view.focus_handle(cx), cx);
         self.app_search = Some(Open {
+            cwd,
             view,
             _events: events,
         });
@@ -255,6 +258,50 @@ impl Shell {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn parked_search_rebuilds_for_a_new_working_copy_and_opens_its_own_file(
+        cx: &mut TestAppContext,
+    ) {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        for (root, text) in [(a.path(), "Project A"), (b.path(), "Project B")] {
+            std::fs::write(root.join("same.txt"), text).unwrap();
+        }
+        let (window, _, _) = crate::shell::tests::window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.select_project(a.path().to_string_lossy().into_owned(), w, cx);
+                shell.open_app_search(w, cx);
+                let first = shell.app_search.as_ref().unwrap().view.clone();
+                first.update(cx, |view, cx| {
+                    view.restore_draft(("same".into(), vorkspace_core::search::Scope::Files), cx)
+                });
+                shell.select_project(b.path().to_string_lossy().into_owned(), w, cx);
+                shell.open_app_search(w, cx);
+                let search = shell.app_search.as_ref().unwrap();
+                assert_ne!(search.view, first);
+                assert_eq!(search.cwd, b.path().to_string_lossy());
+                assert_eq!(search.view.read(cx).draft(cx).0, "same");
+                search.view.update(cx, |_, cx| {
+                    cx.emit(Event::Open(
+                        Target::File {
+                            path: "same.txt".into(),
+                            location: None,
+                        },
+                        "same".into(),
+                    ))
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window.update(cx, |shell, _, cx| {
+            let review = shell.active_review(cx).unwrap();
+            assert!(matches!(&review.read(cx).state.tabs[review.read(cx).state.active], crate::git_tools::review::ReviewTab::File { cwd, path } if cwd == b.path().to_string_lossy().as_ref() && path == "same.txt"));
+            assert_eq!(review.read(cx).active_editor().unwrap().read(cx).path, b.path().join("same.txt").to_string_lossy());
+        }).unwrap();
+    }
+
     #[gpui::test]
     fn app_search_restores_draft_and_opens_cross_project_result(cx: &mut TestAppContext) {
         cx.update(|cx| {

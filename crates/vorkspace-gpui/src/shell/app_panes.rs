@@ -175,6 +175,56 @@ impl Shell {
         }
     }
 
+    /// A global resource may be tiled beside a project-bound leaf. Restore that
+    /// layout's project and working copy before configuring the resource view.
+    pub(super) fn restore_app_layout_scope(&mut self, pane: i64, cx: &App) {
+        let Some(tab) = self.workspace.tab_of(pane) else {
+            return;
+        };
+        let leaves = self.workspace.layout(tab).leaf_ids();
+        let scope = leaves.iter().find_map(|&id| {
+            if let Some(owner) = self.workspace.session_for_pane(id) {
+                if !self.session_summaries.contains_key(&owner) {
+                    return None;
+                }
+                let project = self.session_metadata(owner, cx).summary.cwd.clone();
+                let worktree = self
+                    .workspace
+                    .tab_workspaces
+                    .get(&tab)
+                    .cloned()
+                    .unwrap_or_else(|| self.session_working_copy(id, cx).to_owned());
+                return Some((project, worktree));
+            }
+            self.workspace
+                .app_panes
+                .get(&id)
+                .filter(|state| matches!(state.content, AppPane::Bot(_)))
+                .map(|state| (state.project.clone(), state.worktree.clone()))
+        });
+        let Some((project, worktree)) = scope else {
+            return;
+        };
+        self.workspace.project = project.clone();
+        if vorkspace_core::files::path_key(self.working_copy())
+            != vorkspace_core::files::path_key(&worktree)
+        {
+            if vorkspace_core::files::path_key(&project)
+                == vorkspace_core::files::path_key(&worktree)
+            {
+                self.worktree_focus.remove(&project);
+            } else {
+                self.worktree_focus.insert(
+                    project,
+                    crate::git_tools::worktree_switcher::WorktreeFocus {
+                        path: worktree,
+                        branch: None,
+                    },
+                );
+            }
+        }
+    }
+
     pub(super) fn app_pane_id(&self, content: &AppPane) -> Option<i64> {
         self.workspace.app_panes.iter().find_map(|(&id, pane)| {
             (pane.content.same_resource(content) && self.workspace.tab_of(id).is_some())
@@ -339,7 +389,7 @@ impl Shell {
             return;
         };
         if !self.app_pane_available(&pane.content, cx) {
-            self.prepare_app_view(window, cx);
+            self.prepare_app_view(Some(id), window, cx);
             self.leave_app_views(cx);
             self.workspace.open(id);
             self.finish_app_pane_open(window, cx);
@@ -353,7 +403,7 @@ impl Shell {
                 self.open_bot_document(bot, document, window, cx)
             }
             AppPane::Bot(bot) => {
-                self.prepare_app_view(window, cx);
+                self.prepare_app_view(Some(id), window, cx);
                 self.leave_app_views(cx);
                 self.workspace.project = pane.project;
                 self.workspace.open(id);
@@ -498,7 +548,7 @@ impl Shell {
         }
         let previous = self.workspace.active;
         let previously_open = self.app_pane_id(&AppPane::Note(note.clone())).is_some();
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(self.app_pane_id(&AppPane::Note(note.clone())), window, cx);
         self.leave_app_views(cx);
         let Some(id) = self.admit_app_pane(AppPane::Note(note.clone())) else {
             return;
@@ -571,7 +621,11 @@ impl Shell {
         if !self.enabled_connectors(cx).contains(&provider) {
             return;
         }
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(
+            self.app_pane_id(&AppPane::ConnectorItem(Box::new(item.clone()))),
+            window,
+            cx,
+        );
         self.leave_app_views(cx);
         let Some(id) = self.admit_app_pane(AppPane::ConnectorItem(Box::new(item.clone()))) else {
             return;
@@ -652,7 +706,14 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(
+            self.app_pane_id(&AppPane::BotDocument {
+                bot: bot.clone(),
+                document: document.clone(),
+            }),
+            window,
+            cx,
+        );
         self.leave_app_views(cx);
         let Some(id) = self.admit_app_pane(AppPane::BotDocument {
             bot: bot.clone(),

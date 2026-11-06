@@ -47,7 +47,15 @@ impl Shell {
         }
     }
 
-    pub(super) fn prepare_app_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn prepare_app_view(
+        &mut self,
+        pane: Option<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(pane) = pane {
+            self.restore_app_layout_scope(pane, cx);
+        }
         self.selected_sessions.clear();
         self.selection_anchor = None;
         self.sidebar_target = None;
@@ -116,7 +124,11 @@ impl Shell {
             self.open_settings(crate::settings::Section::Notes, window, cx);
             return;
         }
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(
+            self.app_pane_id(&crate::workspace::AppPane::App(AppView::Notes)),
+            window,
+            cx,
+        );
         if self.notes.is_none() {
             let view = cx.new(|cx| notes::Notes::new(self.store.clone(), cx));
             self.subscribe_notes(&view, window, cx);
@@ -142,7 +154,11 @@ impl Shell {
             self.open_settings(crate::settings::Section::Todos, window, cx);
             return;
         }
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(
+            self.app_pane_id(&crate::workspace::AppPane::App(AppView::Todos)),
+            window,
+            cx,
+        );
         if self.todos_page.is_none() {
             let view = cx.new(|cx| crate::todos::TodosPage::new(self.store.clone(), cx));
             self.app_view_events.push(cx.subscribe_in(
@@ -232,7 +248,13 @@ impl Shell {
             self.open_settings(crate::settings::Section::Connectors, window, cx);
             return;
         }
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(
+            self.app_pane_id(&crate::workspace::AppPane::App(AppView::Connector(
+                provider,
+            ))),
+            window,
+            cx,
+        );
         if !self.connector_pages.contains_key(&provider) {
             let owner = self.inbox.as_ref().unwrap().clone();
             let view = owner.update(cx, |owner, cx| owner.connector_page(provider.id(), cx));
@@ -379,7 +401,11 @@ impl Shell {
             self.initialize_automations(cx);
             return;
         };
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(
+            self.app_pane_id(&crate::workspace::AppPane::App(AppView::Automations)),
+            window,
+            cx,
+        );
         if self.automations.is_none() {
             let cwd = self.workspace.project.clone();
             let projects = self.workspace.projects.clone();

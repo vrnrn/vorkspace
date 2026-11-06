@@ -2,6 +2,59 @@ use super::*;
 use crate::shell::tests::window;
 use gpui::TestAppContext;
 
+#[gpui::test]
+fn reopening_a_mixed_app_layout_restores_scope_and_cli_rejects_foreign_siblings(
+    cx: &mut TestAppContext,
+) {
+    let (window, other, session) = window(cx);
+    window
+        .update(cx, |shell, w, cx| {
+            shell.sessions[&other].update(cx, |view, cx| view.enable_mode("operator", cx));
+            shell.open(session, w, cx);
+            let project = shell.workspace.project.clone();
+            let worktree = format!("{project}/tree");
+            shell.worktree_focus.insert(
+                project.clone(),
+                crate::git_tools::worktree_switcher::WorktreeFocus {
+                    path: worktree.clone(),
+                    branch: None,
+                },
+            );
+            shell
+                .workspace
+                .tab_workspaces
+                .insert(session, worktree.clone());
+            shell.open_notes(w, cx);
+            let notes = shell.workspace.active.unwrap();
+            shell.workspace.place(notes, session, Edge::Right);
+            shell.select_project("/work/another-project".into(), w, cx);
+            let before = shell.workspace.active;
+            let result = shell.app_workspace_action(
+                other,
+                "/work/another-project",
+                "workspace.open",
+                &serde_json::json!({"kind":"notes"}),
+                w,
+                cx,
+            );
+            assert!(result.is_err());
+            assert_eq!(shell.workspace.project, "/work/another-project");
+            assert_eq!(shell.workspace.active, before);
+            shell.worktree_focus.remove(&project);
+            shell.open_notes(w, cx);
+            assert_eq!(shell.workspace.active, Some(notes));
+            assert_eq!(shell.workspace.project, project);
+            assert_eq!(shell.working_copy(), worktree);
+            assert!(
+                shell
+                    .visible_tabs(cx)
+                    .contains(&TitleTab::Workspace(session))
+            );
+            assert_eq!(shell.workspace.layout(session).leaf_ids(), [session, notes]);
+        })
+        .unwrap();
+}
+
 #[test]
 #[ignore = "Requires Metal and VORKSPACE_PAGES_SCREEN_DIR"]
 fn native_mixed_workspace_capture() {

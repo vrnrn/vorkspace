@@ -3607,8 +3607,14 @@ fn sidebar_options_lead_to_settings_where_appearance_is_edited(cx: &mut TestAppC
         s.manager
             .read_with(visual, |m, _| m.menu.is_none() && m.background.is_some())
     );
-    assert!(visual.debug_bounds("bot-settings-dialog").is_none(), "the background editor owns this modal transition");
-    assert!(s.manager.read_with(visual, |m, _| m.settings == Some(SettingsSection::General)));
+    assert!(
+        visual.debug_bounds("bot-settings-dialog").is_none(),
+        "the background editor owns this modal transition"
+    );
+    assert!(
+        s.manager
+            .read_with(visual, |m, _| m.settings == Some(SettingsSection::General))
+    );
     let effect_trigger = visual.debug_bounds("project-background-effect").unwrap();
     visual.simulate_click(effect_trigger.center(), Default::default());
     visual.run_until_parked();
@@ -3632,7 +3638,10 @@ fn sidebar_options_lead_to_settings_where_appearance_is_edited(cx: &mut TestAppC
     visual.simulate_click(close_bg.center(), Default::default());
     visual.run_until_parked();
     assert!(s.manager.read_with(visual, |m, _| m.background.is_none()));
-    assert!(visual.debug_bounds("bot-settings-dialog").is_some(), "closing the child restores settings");
+    assert!(
+        visual.debug_bounds("bot-settings-dialog").is_some(),
+        "closing the child restores settings"
+    );
 }
 
 #[gpui::test]
