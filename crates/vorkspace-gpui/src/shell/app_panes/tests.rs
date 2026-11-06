@@ -41,7 +41,14 @@ fn remote_session_restores_beside_app_panes_and_uses_the_same_stack_limit(cx: &m
     let store = Arc::new(Mutex::new(store));
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
-            cx.new(|cx| Shell::new(store, vec![session], "/local".into(), Some(saved), cx))
+            cx.new(|cx| {
+                let shell = Shell::new(store, vec![session], "/local".into(), Some(saved), cx);
+                if let Some(chat) = shell.sessions.get(&id) {
+                    // This fixture owns the pane identity and has no host connection.
+                    chat.update(cx, |chat, _| chat.mark_remote_snapshot_loaded_for_test());
+                }
+                shell
+            })
         })
         .unwrap()
     });
