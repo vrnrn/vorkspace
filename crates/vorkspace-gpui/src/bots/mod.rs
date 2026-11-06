@@ -1,4 +1,4 @@
-//! Bot workspaces: one runtime per identity, shared by the rail, pages,
+//! Bot workspaces: one runtime per identity, shared by the rail, tabs,
 //! overview and settings.
 pub(crate) use crate::avatar;
 pub(crate) mod cards;
@@ -92,6 +92,7 @@ pub(crate) struct Bots {
     root: PathBuf,
     prefs: vorkspace_ui::preferences::Preferences,
     pub(crate) roster: Roster,
+    pub(crate) roster_loaded: bool,
     pub(crate) active: Option<String>,
     chats: HashMap<String, Entity<Conversation>>,
     bridge: Option<bot::bridge::Server>,
@@ -171,7 +172,7 @@ impl EventEmitter<Changed> for Bots {}
 impl EventEmitter<TabOpened> for Bots {}
 impl EventEmitter<ShowDetails> for Bots {}
 impl Bots {
-    fn presentation_bot(&self, id: &str) -> Option<Bot> {
+    pub(crate) fn presentation_bot(&self, id: &str) -> Option<Bot> {
         let mut actor = self.roster.effective_bot(id)?;
         if let Some(parent) = self.roster.parent_of(id) {
             actor.color = parent.color;
@@ -433,6 +434,7 @@ impl Bots {
             root,
             prefs,
             roster,
+            roster_loaded: roster_error.is_none(),
             active: None,
             chats: HashMap::new(),
             bridge,

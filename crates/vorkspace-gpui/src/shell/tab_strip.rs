@@ -893,28 +893,30 @@ impl Shell {
                     Some((id, element))
                 })
                 .collect();
-        let elements: Vec<AnyElement> = tabs
+        let mut live: HashMap<TitleTab, AnyElement> = tabs
             .iter()
             .enumerate()
-            .filter_map(|(ix, tab)| match tab {
-                TitleTab::Session(id) => session_elements.remove(id),
-                TitleTab::Terminal { id, cwd } => {
-                    let element = self
-                        .terminal_title_tab(*id, cwd, tab_width(tab), cx)
-                        .left(shifts[ix]);
-                    Some(if dragged.as_ref() == Some(tab) {
-                        gpui::deferred(element).with_priority(1).into_any_element()
-                    } else {
-                        element.into_any_element()
-                    })
-                }
-                TitleTab::Search | TitleTab::App(_) | TitleTab::Bot { .. } => None,
+            .filter_map(|(ix, tab)| {
+                let element = match tab {
+                    TitleTab::Session(id) => session_elements.remove(id)?,
+                    TitleTab::Terminal { .. } | TitleTab::Bot { .. } => {
+                        let element = self
+                            .simple_title_tab(tab, tab_width(tab), cx)?
+                            .left(shifts[ix]);
+                        if dragged.as_ref() == Some(tab) {
+                            gpui::deferred(element).with_priority(1).into_any_element()
+                        } else {
+                            element.into_any_element()
+                        }
+                    }
+                    TitleTab::Search | TitleTab::App(_) => return None,
+                };
+                Some((tab.clone(), element))
             })
             .collect();
         if moving || opening || switching {
             window.request_animation_frame();
         }
-        let mut live: HashMap<TitleTab, AnyElement> = tabs.iter().cloned().zip(elements).collect();
         // TabWidthMotion: the slot's width eases while the tab keeps its own.
         let slot = |tab: &TitleTab, open: f32| {
             let (w, give) = slot_size(tab, open);

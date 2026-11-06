@@ -6,17 +6,17 @@ settings page in the Connectors group. GitHub uses the
 GitHub CLI's active authentication. GitLab and Jira store connection details
 locally; see [Jira Cloud connector](jira.md) for Jira setup and filtering.
 
-Each source has its own switch. Notes, Meetings and To-dos have switches in the
-same list and dedicated settings pages. Turning one off preserves its saved
-data. Turning
-one off removes its sidebar button and page, connection actions, unread counts, polling,
-and automation trigger choices. Saved connection details, filters, read
+Each source has its own switch. Notes and To-dos have switches in the
+same list and dedicated settings pages; meeting recording is part of Notes.
+Turning one off preserves its saved data while removing its settings page,
+sidebar button and page, connection actions, unread counts, polling, and
+automation trigger choices. Saved connection details, filters, read
 state, and default Bot choices remain available when it is enabled again.
 Disabling a source does not log out of GitHub CLI or delete credentials.
 
 Enabled connectors each have a sidebar button in expanded and compact layouts.
 Clicking a button opens that provider's page in the main pane. Like Search, Notes,
-Automations and Bots, connector pages are sidebar pages: they hide the title strip
+and Automations, connector pages are sidebar pages: they hide the title strip
 and are not saved as tabs. Authentication does not determine availability.
 Each page remains pinned to its provider, including setup and failure states.
 

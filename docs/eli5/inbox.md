@@ -2,8 +2,9 @@
 
 Connectors bring GitHub, GitLab, and Jira Cloud work into Vorkspace. In
 **Settings → Connectors → Plugins**, turn on the services and features you use.
-GitHub, GitLab, Jira, Notes, Meetings, and To-dos each have their own page in
-that Settings group. Turning one off keeps its saved data.
+GitHub, GitLab, Jira, Notes and To-dos each have their own page in
+that Settings group while enabled. Meeting recording is part of Notes.
+Turning one off hides its settings and keeps its saved data.
 
 Open the sidebar's options menu to hide shortcuts or drag their handles into a
 different order. This includes enabled connectors, Notes and Automations.
@@ -13,7 +14,7 @@ so there is no separate Activity section or Compact view switch.
 
 Each enabled service has its own sidebar button. Click GitHub, GitLab or Jira to
 open its page in the main area; the tab bar hides while it is open, and choosing a
-project brings that project's tabs back. Switching away keeps your search, selected
+project brings that project's session, terminal and Bot tabs back. Switching away keeps your search, selected
 item, scroll and unfinished reply in place during this run. A disconnected service shows its own setup instructions.
 
 Turning a service off hides it and stops checking it. Your saved login details

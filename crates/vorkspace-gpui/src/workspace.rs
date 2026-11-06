@@ -125,7 +125,7 @@ impl SidebarNavigation {
 }
 
 /// Navigation destinations, including sidebar pages and legacy saved entries.
-/// Only sessions and terminals participate in the title strip.
+/// Sessions, terminals and Bots participate in the title strip.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum TitleTab {
     Session(i64),
@@ -147,10 +147,13 @@ pub(crate) enum TitleTab {
 }
 
 impl TitleTab {
-    /// Only a project's sessions and terminals are tabs; Search, app views
-    /// and Bots are sidebar pages. Older workspaces may still list them.
+    /// Search and app views are sidebar pages. Older workspaces may still
+    /// list them alongside session, terminal and Bot tabs.
     pub fn in_strip(&self) -> bool {
-        matches!(self, Self::Session(_) | Self::Terminal { .. })
+        matches!(
+            self,
+            Self::Session(_) | Self::Terminal { .. } | Self::Bot { .. }
+        )
     }
     pub fn session(&self) -> Option<i64> {
         match self {

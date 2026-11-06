@@ -247,6 +247,10 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
             let bots = manager.read(cx);
             let id = bots.active.clone().unwrap();
             let chat = bots.chat().unwrap();
+            assert_eq!(
+                shell.visible_tabs(cx),
+                [TitleTab::Session(session), shell.bot_tab(id.clone())]
+            );
             chat.update(cx, |chat, cx| {
                 chat.busy = true;
                 chat.input.update(cx, |input, cx| {
@@ -261,6 +265,12 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
     window
         .update(cx, |shell, w, cx| {
             assert!(!shell.bot_active(cx));
+            assert!(
+                !shell
+                    .workspace
+                    .title_order
+                    .contains(&shell.bot_tab(bot.clone()))
+            );
             assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(session)));
             assert!(
                 shell.sessions[&session]
@@ -278,8 +288,81 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
     window
         .update(cx, |shell, _, cx| {
             assert_eq!(shell.bot_manager().read(cx).chat(), Some(chat.clone()));
+            assert_eq!(
+                shell.visible_tabs(cx).len(),
+                2,
+                "reopening creates one Bot tab"
+            );
             assert!(chat.read(cx).busy);
             assert_eq!(chat.read(cx).input.read(cx).content, "unsent bot draft");
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn bot_tabs_restore_order_selection_and_project_scope(cx: &mut TestAppContext) {
+    let (window, _, session) = window(cx);
+    window
+        .update(cx, |shell, w, cx| {
+            shell.bot_manager().update(cx, |m, cx| {
+                m.create_named(vec!["/work/vorkspace".into()], w, cx);
+                m.dismiss_settings(w, cx);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let bot = window
+        .update(cx, |shell, _, cx| {
+            let bot = shell.active_title_tab(cx).unwrap();
+            shell.reorder_title_tab(&bot, 0, cx);
+            shell.persist(cx);
+            bot
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let (store, summaries, saved) = window
+        .update(cx, |shell, _, _| {
+            let db = locked(&shell.store).unwrap();
+            (
+                shell.store.clone(),
+                db.sessions().unwrap(),
+                db.ui_state().unwrap(),
+            )
+        })
+        .unwrap();
+    let reopened = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(store, summaries, "/work/vorkspace".into(), saved, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    reopened
+        .update(cx, |shell, w, cx| {
+            assert_eq!(
+                shell.visible_tabs(cx),
+                [bot.clone(), TitleTab::Session(session)]
+            );
+            assert_eq!(shell.active_title_tab(cx), Some(bot.clone()));
+            let chat = shell.bot_manager().read(cx).chat().unwrap();
+            assert!(chat.read(cx).input.focus_handle(cx).is_focused(w));
+            shell.open(session, w, cx);
+            shell.select_project("/work/another-project".into(), w, cx);
+            assert!(!shell.visible_tabs(cx).contains(&bot));
+            assert!(shell.workspace.title_order.contains(&bot));
+            shell.select_project("/work/vorkspace".into(), w, cx);
+            assert_eq!(
+                shell.visible_tabs(cx),
+                [bot.clone(), TitleTab::Session(session)]
+            );
+            shell.open_title_tab(&bot, w, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    reopened
+        .update(cx, |shell, _, cx| {
+            assert_eq!(shell.active_title_tab(cx), Some(bot.clone()));
+            assert_eq!(shell.visible_tabs(cx), [bot, TitleTab::Session(session)]);
         })
         .unwrap();
 }
@@ -311,6 +394,129 @@ fn rapid_new_tabs_follow_request_order(cx: &mut TestAppContext) {
                 );
             }
             assert_eq!(shell.active_title_tab(cx).as_ref(), tabs.last());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn project_round_trip_restores_the_selected_bot(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    window
+        .update(cx, |shell, window, cx| {
+            shell.bot_manager().update(cx, |bots, cx| {
+                bots.create_named(vec!["/work/vorkspace".into()], window, cx);
+                bots.dismiss_settings(window, cx);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let selected = window
+        .update(cx, |shell, window, cx| {
+            let selected = shell.active_title_tab(cx).unwrap();
+            assert!(matches!(selected, TitleTab::Bot { .. }));
+            shell.select_project("/work/another-project".into(), window, cx);
+            selected
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, window, cx| {
+            shell.select_project("/work/vorkspace".into(), window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, _, cx| {
+            assert_eq!(shell.active_title_tab(cx), Some(selected.clone()));
+            assert_eq!(
+                shell.workspace.scope_focus.get(&shell.tab_scope()),
+                Some(&selected)
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn deleting_a_bot_prunes_its_saved_tabs(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    window
+        .update(cx, |shell, window, cx| {
+            shell.bot_manager().update(cx, |bots, cx| {
+                bots.create_named(vec!["/work/vorkspace".into()], window, cx);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let selected = window
+        .update(cx, |shell, _, cx| {
+            let selected = shell.active_title_tab(cx).unwrap();
+            assert!(matches!(selected, TitleTab::Bot { .. }));
+            selected
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    let delete = visual.debug_bounds("bot-delete").unwrap();
+    visual.simulate_click(delete.center(), Default::default());
+    visual.run_until_parked();
+    visual.simulate_prompt_answer("Delete");
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, cx| {
+            assert!(!shell.visible_tabs(cx).contains(&selected));
+            assert!(!shell.workspace.title_order.contains(&selected));
+            assert!(
+                !shell
+                    .workspace
+                    .scope_focus
+                    .values()
+                    .any(|tab| tab == &selected)
+            );
+            let raw = locked(&shell.store).unwrap().ui_state().unwrap().unwrap();
+            let saved: Workspace = serde_json::from_str(&raw).unwrap();
+            assert!(!saved.title_order.contains(&selected));
+            assert!(!saved.scope_focus.values().any(|tab| tab == &selected));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn bot_tab_reconciliation_preserves_hidden_and_unavailable_rosters(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    window
+        .update(cx, |shell, window, cx| {
+            shell.bot_manager().update(cx, |bots, cx| {
+                bots.create_named(vec!["/work/vorkspace".into()], window, cx);
+                bots.dismiss_settings(window, cx);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, _, cx| {
+            let selected = shell.active_title_tab(cx).unwrap();
+            shell.workspace.preferences.bots = false;
+            assert!(!shell.prune_deleted_bot_tabs(cx));
+            assert!(shell.workspace.title_order.contains(&selected));
+            let stale = shell.bot_tab("deleted-bot".into());
+            shell.remember_title_tab(stale.clone());
+            shell
+                .bot_manager()
+                .update(cx, |bots, _| bots.roster_loaded = false);
+            assert!(!shell.prune_deleted_bot_tabs(cx));
+            assert!(shell.workspace.title_order.contains(&stale));
+            shell
+                .bot_manager()
+                .update(cx, |bots, _| bots.roster_loaded = true);
+            assert!(shell.prune_deleted_bot_tabs(cx));
+            assert!(shell.workspace.title_order.contains(&selected));
+            assert!(!shell.workspace.title_order.contains(&stale));
+            assert!(
+                !shell
+                    .workspace
+                    .scope_focus
+                    .values()
+                    .any(|tab| tab == &stale)
+            );
         })
         .unwrap();
 }

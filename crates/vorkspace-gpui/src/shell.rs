@@ -278,7 +278,7 @@ fn adjacent<T: PartialEq + Clone>(items: &[T], current: Option<&T>, step: isize)
 #[derive(Clone, PartialEq)]
 pub(crate) enum MenuTarget {
     Tab(i64),
-    TerminalTitleTab(TitleTab),
+    TitleTab(TitleTab),
     Session(i64),
     Folder(String),
     /// The sidebar project header's menu.
@@ -1043,6 +1043,9 @@ impl Shell {
         }
         this.observations.push(
             cx.subscribe(&bots, |this, _, _: &crate::bots::Changed, cx| {
+                if this.prune_deleted_bot_tabs(cx) {
+                    this.persist(cx);
+                }
                 // Restored legacy panes share the durable classification even
                 // when their original project-session view is still cached.
                 for view in this.sessions.values() {
@@ -1099,6 +1102,7 @@ impl Shell {
                 }
             }));
         this.bots = Some(bots);
+        this.prune_deleted_bot_tabs(cx);
         let voice_owner: crate::vox::Host = std::rc::Rc::new(cx.weak_entity());
         crate::vox::set_workspace_toggle(
             |cx| {
@@ -1982,6 +1986,14 @@ impl Shell {
             cx.notify();
             return;
         }
+        // Reselecting the visible Bot's project keeps its live detail editor.
+        if path == self.workspace.project
+            && !self.tabless_page(cx)
+            && let Some(tab @ TitleTab::Bot { .. }) = self.active_title_tab(cx)
+            && self.workspace.scope_focus.get(&self.tab_scope()) == Some(&tab)
+        {
+            return;
+        }
         self.selected_sessions.clear();
         self.selection_anchor = None;
         self.sidebar_target = None;
@@ -1998,13 +2010,9 @@ impl Shell {
         self.sidebar_search
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.workspace.collapsed.remove(&path);
-        // Choosing a project restores its last conversation or terminal.
-        // Global Bot/app surfaces still require explicit navigation.
-        if matches!(
-            self.workspace.scope_focus.get(&self.tab_scope()),
-            Some(TitleTab::Session(_) | TitleTab::Terminal { .. })
-        ) && self.restore_scope_tab(window, cx)
-        {
+        // Bots are scoped tabs too; restore the user's last selection before
+        // a session fallback can replace it.
+        if self.restore_scope_tab(window, cx) {
             return;
         }
         self.workspace.active = self
@@ -2695,8 +2703,9 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &OpenProject, _, cx| this.open_project(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 if this.settings.is_none()
-                    && this.active_terminal_tab.is_some()
                     && let Some(tab) = this.active_title_tab(cx)
+                    && matches!(tab, TitleTab::Terminal { .. } | TitleTab::Bot { .. })
+                    && !this.tabless_page(cx)
                 {
                     this.close_title_tabs(&[tab], None, window, cx);
                     return;

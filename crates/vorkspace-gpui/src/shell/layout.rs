@@ -172,8 +172,7 @@ impl Shell {
     /// collapsed navigation keeps a drag row above them for its overhang.
     /// Settings keeps its own header over any page.
     pub(super) fn bare_page(&self, cx: &gpui::App) -> bool {
-        self.settings.is_none()
-            && (self.active_app_view.is_some() || self.app_search.is_some() || self.bot_active(cx))
+        self.settings.is_none() && self.tabless_page(cx)
     }
     /// Bot details retain the window corner; project tools have their own header.
     pub(super) fn corner_room(&self, cx: &gpui::App) -> f32 {
