@@ -606,7 +606,7 @@ mod tests {
                 TodoStatus::Todo,
                 "",
                 &[],
-                &[dependency.id.clone()],
+                std::slice::from_ref(&dependency.id),
             )
             .unwrap();
         let view = cx.new(|cx| {
