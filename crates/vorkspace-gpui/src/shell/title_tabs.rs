@@ -4,6 +4,143 @@ use crate::workspace::TitleTab;
 use vorkspace_core::files::path_key;
 
 impl Shell {
+    /// Bot and terminal tabs share their controls and geometry. The Bot
+    /// runtime stays with its manager when this tab is switched or closed.
+    pub(super) fn simple_title_tab(
+        &self,
+        tab: &TitleTab,
+        width: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        let (identity, label, description, mark) = match tab {
+            TitleTab::Terminal { id, cwd } => (
+                format!("terminal-title-tab-{id}"),
+                format!("Terminal · {}", project_name(cwd)),
+                cwd.clone(),
+                icon("terminal", 14.).into_any_element(),
+            ),
+            TitleTab::Bot { id, worktree, .. } => {
+                let bot = self.bots.as_ref()?.read(cx).presentation_bot(id)?;
+                (
+                    format!("bot-title-tab-{id}"),
+                    bot.label(),
+                    worktree.clone(),
+                    crate::avatar::bot_avatar(&bot, "idle", 16., true),
+                )
+            }
+            _ => return None,
+        };
+        let tab = tab.clone();
+        let active = self.active_title_tab(cx).as_ref() == Some(&tab);
+        let close_identity = format!("close-{identity}");
+        let pill = format!("tool:{identity}");
+        let close_label = format!("Close {label}");
+        let close_tab = tab.clone();
+        let drag_tab = tab.clone();
+        let menu_tab = tab.clone();
+        let middle_tab = tab.clone();
+        let close = active || width >= TAB_CLOSE_MIN_WIDTH;
+        Some(
+            div()
+                .id(SharedString::from(identity.clone()))
+                .debug_selector(move || identity.clone())
+                .group("simple-title-tab")
+                .role(Role::Tab)
+                .aria_label(label.clone())
+                .aria_description(description)
+                .aria_selected(active)
+                .cursor(CursorStyle::Arrow)
+                .w(px(width))
+                .h(px(TITLE_BAR_HEIGHT))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .relative()
+                .child(
+                    title_tab_plate(active, false)
+                        .relative()
+                        .child(self.tab_liquid.row(pill, active))
+                        .text_color(content(if active { 1. } else { 0.5 }))
+                        .w_full()
+                        .min_w_0()
+                        .when(close && width >= TAB_CLOSE_MIN_WIDTH, |d| d.pr_7())
+                        .when(width < 30., |d| d.px(px(((width - 14.) / 2.).max(0.))))
+                        .gap(px(6.))
+                        .group_hover("simple-title-tab", |s| s.text_color(content(1.)))
+                        .child(mark)
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_size(px(TITLE_TAB_TEXT_SIZE))
+                                .child(label),
+                        ),
+                )
+                .when(close, |d| {
+                    d.child(
+                        div()
+                            .id(SharedString::from(close_identity.clone()))
+                            .debug_selector(move || close_identity.clone())
+                            .role(Role::Button)
+                            .aria_label(close_label)
+                            .absolute()
+                            .right_1()
+                            .top(px(10. + TAB_LABEL_DROP))
+                            .size(px(20.))
+                            .rounded_sm()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .opacity(0.)
+                            .group_hover("simple-title-tab", |s| s.opacity(1.))
+                            .hover(|s| s.bg(content(0.1)))
+                            .child(icon("close", 12.))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.close_title_tabs(
+                                    std::slice::from_ref(&close_tab),
+                                    None,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event, _, cx| {
+                        this.start_tab_drag(drag_tab.clone(), event, cx)
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        this.open_menu(
+                            MenuTarget::TitleTab(menu_tab.clone()),
+                            Anchor::Point(event.position),
+                            window,
+                            cx,
+                        )
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.close_title_tabs(std::slice::from_ref(&middle_tab), None, window, cx);
+                    }),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if std::mem::take(&mut this.skip_tab_click) {
+                        return;
+                    }
+                    this.open_title_tab(&tab, window, cx);
+                })),
+        )
+    }
+
     /// The workspace keys a tab by one of its sessions. Replacing that session
     /// changes the key, but the same slot and selected width stay on screen.
     pub(super) fn replace_title_tab_key(&mut self, from: i64, to: i64) {
@@ -74,7 +211,20 @@ impl Shell {
                             && self.in_worktree_scope(id, cx)
                     }
                 }
-                TitleTab::Search | TitleTab::App(_) | TitleTab::Bot { .. } => false,
+                TitleTab::Bot {
+                    id,
+                    project,
+                    worktree,
+                } => {
+                    path_key(project) == path_key(&self.workspace.project)
+                        && path_key(worktree) == path_key(self.working_copy())
+                        && self.workspace.preferences.bots
+                        && self
+                            .bots
+                            .as_ref()
+                            .is_some_and(|m| m.read(cx).roster.get(id).is_some())
+                }
+                TitleTab::Search | TitleTab::App(_) => false,
             })
             .cloned()
             .collect()
@@ -115,7 +265,12 @@ impl Shell {
 
     /// Sidebar pages fill the pane without a tab strip.
     pub(super) fn tabless_page(&self, cx: &App) -> bool {
-        self.active_app_view.is_some() || self.app_search.is_some() || self.bot_active(cx)
+        self.active_app_view.is_some()
+            || self.app_search.is_some()
+            || self
+                .bots
+                .as_ref()
+                .is_some_and(|m| m.read(cx).classic_channels_open())
     }
 
     pub(super) fn remember_title_tab(&mut self, tab: TitleTab) {

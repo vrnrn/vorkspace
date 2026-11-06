@@ -1,4 +1,4 @@
-//! Bot workspaces: one runtime per identity, shared by the rail, pages,
+//! Bot workspaces: one runtime per identity, shared by the rail, tabs,
 //! overview and settings.
 pub(crate) use crate::avatar;
 pub(crate) mod cards;
@@ -171,7 +171,7 @@ impl EventEmitter<Changed> for Bots {}
 impl EventEmitter<TabOpened> for Bots {}
 impl EventEmitter<ShowDetails> for Bots {}
 impl Bots {
-    fn presentation_bot(&self, id: &str) -> Option<Bot> {
+    pub(crate) fn presentation_bot(&self, id: &str) -> Option<Bot> {
         let mut actor = self.roster.effective_bot(id)?;
         if let Some(parent) = self.roster.parent_of(id) {
             actor.color = parent.color;

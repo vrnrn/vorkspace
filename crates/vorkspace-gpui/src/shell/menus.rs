@@ -118,10 +118,21 @@ impl Shell {
         match target {
             // Answered by terminal_menu_items above.
             MenuTarget::TerminalTab(_) => ("".into(), Vec::new(), 160., MenuStyle::Explorer),
-            MenuTarget::Tab(_) | MenuTarget::TerminalTitleTab(_) => {
+            MenuTarget::Tab(_) | MenuTarget::TitleTab(_) => {
                 let (tab, label) = match target {
                     MenuTarget::Tab(id) => (TitleTab::Session(*id), title(id)),
-                    MenuTarget::TerminalTitleTab(tab) => (tab.clone(), "Terminal".into()),
+                    MenuTarget::TitleTab(tab) => {
+                        let label = match tab {
+                            TitleTab::Bot { id, .. } => self
+                                .bots
+                                .as_ref()
+                                .and_then(|m| m.read(cx).roster.get(id))
+                                .map(|bot| bot.label())
+                                .unwrap_or_else(|| "Bot".into()),
+                            _ => "Terminal".into(),
+                        };
+                        (tab.clone(), label)
+                    }
                     _ => unreachable!(),
                 };
                 let tabs = self.visible_tabs(cx);
@@ -426,7 +437,7 @@ impl Shell {
             MenuTarget::Tab(id) => {
                 self.run_title_tab_menu(TitleTab::Session(id), action, window, cx)
             }
-            MenuTarget::TerminalTitleTab(tab) => self.run_title_tab_menu(tab, action, window, cx),
+            MenuTarget::TitleTab(tab) => self.run_title_tab_menu(tab, action, window, cx),
             MenuTarget::Session(id) => self.run_session_menu(id, action, window, cx),
             MenuTarget::Folder(folder) => self.run_folder_menu(folder, action, window, cx),
             MenuTarget::Header => {

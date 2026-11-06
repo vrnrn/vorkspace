@@ -106,10 +106,10 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
         .update(cx, |shell, _, _| {
             assert_eq!(shell.workspace.active, Some(session));
             assert_eq!(shell.workspace.project, "/work/vorkspace");
-            assert_ne!(
+            assert_eq!(
                 shell.workspace.scope_focus.get(&shell.tab_scope()),
                 Some(&bot),
-                "a Bot page is never remembered as a tab"
+                "the selected Bot tab is remembered in this workspace"
             );
         })
         .unwrap();
@@ -143,11 +143,11 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
                 );
             }
             assert_eq!(shell.selected_sessions.len(), 2);
-            shell.open_title_tab(&bot, w, cx);
         })
         .unwrap();
     cx.run_until_parked();
     cx.refresh().unwrap();
+    click(&format!("bot-title-tab-{id}"), cx);
     window
         .update(cx, |shell, _, _| {
             assert!(shell.selected_sessions.is_empty());
@@ -164,7 +164,7 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
             "the Bot surface hides session row {selector}"
         );
     }
-    click(&project_row, cx);
+    click(&format!("title-tab-{session}"), cx);
     assert!(sidebar_highlight(window, session_row, cx));
     assert!(!pill_at(window, &bot_key, cx));
     assert!(!sidebar_highlight(
@@ -172,4 +172,114 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
         format!("sidebar-session-{other}"),
         cx
     ));
+}
+
+#[gpui::test]
+fn bot_tabs_share_drag_keyboard_and_close_commands_with_other_tabs(cx: &mut TestAppContext) {
+    vorkspace_ui::clock::use_test_clock(cx);
+    let (window, other, session) = window(cx);
+    let manager = window
+        .update(cx, |shell, w, cx| {
+            let manager = shell.bot_manager();
+            manager.update(cx, |m, cx| {
+                m.create_named(vec!["/work/vorkspace".into()], w, cx);
+                m.dismiss_settings(w, cx);
+            });
+            manager
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let (bot, terminal, chat) = window
+        .update(cx, |shell, w, cx| {
+            let bot = shell.active_title_tab(cx).unwrap();
+            let chat = manager.read(cx).chat().unwrap();
+            shell.open_terminal_tab(w, cx);
+            let terminal = shell.active_title_tab(cx).unwrap();
+            shell.open(session, w, cx);
+            assert_eq!(
+                shell.visible_tabs(cx),
+                [TitleTab::Session(session), bot.clone(), terminal.clone()]
+            );
+            (bot, terminal, chat)
+        })
+        .unwrap();
+    let TitleTab::Bot { id, .. } = &bot else {
+        unreachable!()
+    };
+    let selector = Box::leak(format!("bot-title-tab-{id}").into_boxed_str());
+    let session_selector = Box::leak(format!("title-tab-{session}").into_boxed_str());
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    visual.run_until_parked();
+    vorkspace_ui::clock::settle_animations(window, visual);
+    let from = visual.debug_bounds(selector).unwrap();
+    let to = visual.debug_bounds(session_selector).unwrap();
+    visual.simulate_mouse_down(from.center(), MouseButton::Left, Default::default());
+    visual.simulate_mouse_move(to.center(), MouseButton::Left, Default::default());
+    visual.simulate_mouse_up(to.center(), MouseButton::Left, Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, w, cx| {
+            assert_eq!(
+                shell.visible_tabs(cx),
+                [bot.clone(), TitleTab::Session(session), terminal.clone()]
+            );
+            shell.activate_tab(0, w, cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, w, cx| {
+            assert_eq!(shell.active_title_tab(cx), Some(bot.clone()));
+            assert_eq!(manager.read(cx).chat(), Some(chat.clone()));
+            shell.cycle(1, w, cx);
+            assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(session)));
+            shell.cycle(1, w, cx);
+            assert_eq!(shell.active_title_tab(cx), Some(terminal));
+        })
+        .unwrap();
+    visual.run_until_parked();
+    vorkspace_ui::clock::settle_animations(window, visual);
+    // A Bot's menu closes the same ordered set, even while another tab is active.
+    let bounds = visual.debug_bounds(selector).unwrap();
+    visual.simulate_mouse_down(bounds.center(), MouseButton::Right, Default::default());
+    visual.run_until_parked();
+    let others = visual.debug_bounds("menu-action-others").unwrap();
+    visual.simulate_click(others.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, cx| {
+            assert_eq!(
+                shell.visible_tabs(cx).as_slice(),
+                std::slice::from_ref(&bot)
+            );
+            assert_eq!(shell.active_title_tab(cx), Some(bot.clone()));
+            assert!(
+                shell.workspace.tabs.contains(&other),
+                "another project's tabs stay open"
+            );
+            assert_eq!(manager.read(cx).chat(), Some(chat.clone()));
+        })
+        .unwrap();
+    vorkspace_ui::clock::settle_animations(window, visual);
+    let close_selector = Box::leak(format!("close-bot-title-tab-{id}").into_boxed_str());
+    let close = visual.debug_bounds(close_selector).unwrap();
+    visual.simulate_mouse_move(close.center(), None, Default::default());
+    visual.simulate_click(close.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, cx| {
+            assert!(!shell.workspace.title_order.contains(&bot));
+            assert!(!shell.bot_active(cx));
+            assert!(matches!(
+                shell.active_title_tab(cx),
+                Some(TitleTab::Session(_))
+            ));
+            assert_eq!(
+                shell.visible_tabs(cx).len(),
+                1,
+                "closing the last tab restores a session"
+            );
+        })
+        .unwrap();
 }

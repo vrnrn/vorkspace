@@ -278,7 +278,7 @@ fn adjacent<T: PartialEq + Clone>(items: &[T], current: Option<&T>, step: isize)
 #[derive(Clone, PartialEq)]
 pub(crate) enum MenuTarget {
     Tab(i64),
-    TerminalTitleTab(TitleTab),
+    TitleTab(TitleTab),
     Session(i64),
     Folder(String),
     /// The sidebar project header's menu.
@@ -2695,8 +2695,9 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &OpenProject, _, cx| this.open_project(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 if this.settings.is_none()
-                    && this.active_terminal_tab.is_some()
                     && let Some(tab) = this.active_title_tab(cx)
+                    && matches!(tab, TitleTab::Terminal { .. } | TitleTab::Bot { .. })
+                    && !this.tabless_page(cx)
                 {
                     this.close_title_tabs(&[tab], None, window, cx);
                     return;

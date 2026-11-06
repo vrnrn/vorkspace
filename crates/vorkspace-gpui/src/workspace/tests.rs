@@ -27,9 +27,17 @@ fn archived_project_is_not_reopened_by_active_session_or_stale_metadata() {
 fn terminal_legacy_restore_preserves_other_tabs_and_upgrades_scope_identity() {
     let raw = r#"{"tabs":[42],"active":42,"project":"/work","title_order":[{"Session":42},{"terminal":{"cwd":"/work"}},{"App":"Notes"},{"App":"Plugins"},{"terminal":{"cwd":"/work"}},{"terminal":{"id":700,"cwd":"/work"}},{"terminal":{"cwd":"/other"}},"Search",{"Bot":{"id":"bot","project":"/work","worktree":"/work"}}],"scope_focus":{"first":{"terminal":{"cwd":"/work"}},"also-first":{"terminal":{"cwd":"/work"}},"other":{"terminal":{"cwd":"/other"}},"modern":{"terminal":{"id":700,"cwd":"/work"}}}}"#;
     let workspace = Workspace::restore(Some(raw), &[(42, "/work".into())], "/work");
-    // Search, app views and Bots are sidebar pages now, never tabs.
-    assert_eq!(workspace.title_order.len(), 5);
+    // Search and app pages are dropped; Bots retain their place in the strip.
+    assert_eq!(workspace.title_order.len(), 6);
     assert_eq!(workspace.title_order[0], TitleTab::Session(42));
+    assert_eq!(
+        workspace.title_order[5],
+        TitleTab::Bot {
+            id: "bot".into(),
+            project: "/work".into(),
+            worktree: "/work".into(),
+        }
+    );
     assert!(workspace.title_order.iter().all(TitleTab::in_strip));
     assert_eq!(workspace.active, Some(42));
     let terminals: Vec<_> = workspace

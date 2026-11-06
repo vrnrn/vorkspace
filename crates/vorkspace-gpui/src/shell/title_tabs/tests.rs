@@ -247,6 +247,10 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
             let bots = manager.read(cx);
             let id = bots.active.clone().unwrap();
             let chat = bots.chat().unwrap();
+            assert_eq!(
+                shell.visible_tabs(cx),
+                [TitleTab::Session(session), shell.bot_tab(id.clone())]
+            );
             chat.update(cx, |chat, cx| {
                 chat.busy = true;
                 chat.input.update(cx, |input, cx| {
@@ -261,6 +265,12 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
     window
         .update(cx, |shell, w, cx| {
             assert!(!shell.bot_active(cx));
+            assert!(
+                !shell
+                    .workspace
+                    .title_order
+                    .contains(&shell.bot_tab(bot.clone()))
+            );
             assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(session)));
             assert!(
                 shell.sessions[&session]
@@ -278,8 +288,81 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
     window
         .update(cx, |shell, _, cx| {
             assert_eq!(shell.bot_manager().read(cx).chat(), Some(chat.clone()));
+            assert_eq!(
+                shell.visible_tabs(cx).len(),
+                2,
+                "reopening creates one Bot tab"
+            );
             assert!(chat.read(cx).busy);
             assert_eq!(chat.read(cx).input.read(cx).content, "unsent bot draft");
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn bot_tabs_restore_order_selection_and_project_scope(cx: &mut TestAppContext) {
+    let (window, _, session) = window(cx);
+    window
+        .update(cx, |shell, w, cx| {
+            shell.bot_manager().update(cx, |m, cx| {
+                m.create_named(vec!["/work/vorkspace".into()], w, cx);
+                m.dismiss_settings(w, cx);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let bot = window
+        .update(cx, |shell, _, cx| {
+            let bot = shell.active_title_tab(cx).unwrap();
+            shell.reorder_title_tab(&bot, 0, cx);
+            shell.persist(cx);
+            bot
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let (store, summaries, saved) = window
+        .update(cx, |shell, _, _| {
+            let db = locked(&shell.store).unwrap();
+            (
+                shell.store.clone(),
+                db.sessions().unwrap(),
+                db.ui_state().unwrap(),
+            )
+        })
+        .unwrap();
+    let reopened = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(store, summaries, "/work/vorkspace".into(), saved, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    reopened
+        .update(cx, |shell, w, cx| {
+            assert_eq!(
+                shell.visible_tabs(cx),
+                [bot.clone(), TitleTab::Session(session)]
+            );
+            assert_eq!(shell.active_title_tab(cx), Some(bot.clone()));
+            let chat = shell.bot_manager().read(cx).chat().unwrap();
+            assert!(chat.read(cx).input.focus_handle(cx).is_focused(w));
+            shell.open(session, w, cx);
+            shell.select_project("/work/another-project".into(), w, cx);
+            assert!(!shell.visible_tabs(cx).contains(&bot));
+            assert!(shell.workspace.title_order.contains(&bot));
+            shell.select_project("/work/vorkspace".into(), w, cx);
+            assert_eq!(
+                shell.visible_tabs(cx),
+                [bot.clone(), TitleTab::Session(session)]
+            );
+            shell.open_title_tab(&bot, w, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    reopened
+        .update(cx, |shell, _, cx| {
+            assert_eq!(shell.active_title_tab(cx), Some(bot.clone()));
+            assert_eq!(shell.visible_tabs(cx), [bot, TitleTab::Session(session)]);
         })
         .unwrap();
 }
