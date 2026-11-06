@@ -895,6 +895,12 @@ impl TodoBoardView {
             cx.notify();
             return;
         }
+        if !details.url.read(cx).content.trim().is_empty() {
+            self.change_error =
+                Some("Add or clear the unfinished attachment link before saving.".into());
+            cx.notify();
+            return;
+        }
         let title = details.title.read(cx).content.to_string();
         let description = details.description.read(cx).content.to_string();
         let attachments = Self::reference_lines(&details.attachments, cx);

@@ -217,6 +217,11 @@ impl BotsHost for gpui::WeakEntity<Shell> {
     fn open_channels(&self, window: &mut Window, cx: &mut App) {
         let _ = self.update(cx, |shell, cx| shell.open_classic_channels(window, cx));
     }
+    fn close_channels(&self, window: &mut Window, cx: &mut App) {
+        let _ = self.update(cx, |shell, cx| {
+            shell.close_app_resource(crate::workspace::AppPane::Channels, window, cx);
+        });
+    }
     fn project_appearance(&self, project: &str, cx: &App) -> Option<ProjectAppearance> {
         self.upgrade().and_then(|shell| {
             let appearance = &shell.read(cx).workspace.project_appearance;

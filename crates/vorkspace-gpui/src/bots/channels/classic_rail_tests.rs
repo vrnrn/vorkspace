@@ -14,19 +14,21 @@ fn rail_opens_channels_without_a_selected_bot_and_returns_to_the_workspace(
         Store::open(&root.join("native.sqlite")).unwrap(),
     ));
     let project = root.to_string_lossy().into_owned();
+    let saved = json!({"preferences": {"channels": true}}).to_string();
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
-            cx.new(|cx| Shell::new(store, Vec::new(), project, None, cx))
+            cx.new(|cx| Shell::new(store, Vec::new(), project, Some(saved), cx))
         })
         .unwrap()
     });
     cx.run_until_parked();
-    let manager = window
-        .update(cx, |shell, _, _| shell.bot_manager())
+    let (manager, workspace_pane) = window
+        .update(cx, |shell, _, _| {
+            (shell.bot_manager(), shell.workspace.active.unwrap())
+        })
         .unwrap();
     manager.update(cx, |manager, cx| {
         assert!(manager.active.is_none());
-        manager.prefs.channels = true;
         manager.roster.bots.push(Bot {
             id: "reader".into(),
             name: "Reader".into(),
@@ -62,6 +64,10 @@ fn rail_opens_channels_without_a_selected_bot_and_returns_to_the_workspace(
     assert!(visual.debug_bounds("channel-unread-team").is_some());
     visual.simulate_click(channel.center(), Default::default());
     visual.run_until_parked();
+    let channel_pane = window
+        .update(visual, |shell, _, _| shell.workspace.active.unwrap())
+        .unwrap();
+    assert_ne!(channel_pane, workspace_pane);
     manager.read_with(visual, |manager, _| {
         assert!(manager.classic_channels_open());
         assert!(manager.active.is_none());
@@ -111,10 +117,21 @@ fn rail_opens_channels_without_a_selected_bot_and_returns_to_the_workspace(
     visual.run_until_parked();
     assert!(!manager.read_with(visual, |manager, _| manager.classic_channels_open()));
     assert!(visual.debug_bounds("sidebar-frame").is_some());
+    window
+        .update(visual, |shell, _, _| {
+            assert_eq!(shell.workspace.active, Some(workspace_pane));
+            assert!(shell.workspace.tab_of(channel_pane).is_some());
+        })
+        .unwrap();
 
     let add = visual.debug_bounds("classic-add-channel").unwrap();
     visual.simulate_click(add.center(), Default::default());
     visual.run_until_parked();
+    window
+        .update(visual, |shell, _, _| {
+            assert_eq!(shell.workspace.active, Some(channel_pane));
+        })
+        .unwrap();
     manager.read_with(visual, |manager, _| {
         assert!(manager.classic_channels_open());
         assert!(manager.channels.selected.is_none());
@@ -127,11 +144,17 @@ fn rail_opens_channels_without_a_selected_bot_and_returns_to_the_workspace(
             "focused-channel-name"
         );
     });
-    let project = visual.debug_bounds("classic-project-0").unwrap();
-    visual.simulate_click(project.center(), Default::default());
+    let cancel = visual.debug_bounds("close-channels").unwrap();
+    visual.simulate_click(cancel.center(), Default::default());
     visual.run_until_parked();
     assert!(!manager.read_with(visual, |manager, _| manager.classic_channels_open()));
     assert!(visual.debug_bounds("sidebar-frame").is_some());
+    window
+        .update(visual, |shell, _, _| {
+            assert_eq!(shell.workspace.active, Some(workspace_pane));
+            assert!(shell.workspace.tab_of(channel_pane).is_none());
+        })
+        .unwrap();
 
     // Right-clicking a channel in the sidebar opens its appearance options menu.
     let channel = visual.debug_bounds("classic-channel-team").unwrap();
