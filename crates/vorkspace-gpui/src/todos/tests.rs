@@ -982,6 +982,12 @@ fn external_publication_preserves_open_and_stashed_task_drafts(cx: &mut TestAppC
             .unwrap()
             .add_todo(&board, "Stored task", TodoStatus::Todo)
             .unwrap();
+        let alternate = (stashed && linked_draft).then(|| {
+            locked(&store)
+                .unwrap()
+                .add_todo(&board, "Another local task", TodoStatus::Todo)
+                .unwrap()
+        });
         let mut issue = task.clone();
         issue.id = "github:example/Project#12".into();
         issue.title = "Published task".into();
@@ -1031,7 +1037,7 @@ fn external_publication_preserves_open_and_stashed_task_drafts(cx: &mut TestAppC
                     // An earlier list can expose the issue before it sees
                     // the publication receipt. Retain that distinct draft too.
                     view.install_snapshot(service::BoardSnapshot::project(
-                        vec![task.clone()],
+                        locked(&store).unwrap().list_todos(&board).unwrap(),
                         vec![],
                         Some(vec![issue.clone()]),
                     ));
@@ -1043,6 +1049,16 @@ fn external_publication_preserves_open_and_stashed_task_drafts(cx: &mut TestAppC
                         .update(cx, |input, cx| {
                             input.set_text("Earlier GitHub draft".into(), cx)
                         });
+                }
+                if let Some(alternate) = &alternate {
+                    view.open_details(alternate, cx);
+                    let editor = view.details.as_ref().unwrap();
+                    editor.title.update(cx, |input, cx| {
+                        input.set_text("Another local draft".into(), cx)
+                    });
+                    editor.description.update(cx, |input, cx| {
+                        input.set_text("Another unfinished description".into(), cx)
+                    });
                 }
                 view.present_details(&task, window, cx);
                 view.detail_editing = true;
@@ -1067,10 +1083,14 @@ fn external_publication_preserves_open_and_stashed_task_drafts(cx: &mut TestAppC
 
         let snapshot = {
             let store = locked(&store).unwrap();
-            store
-                .begin_todo_publish(&board, &task.id, "example/project", task.updated_at)
-                .unwrap();
-            store.finish_todo_publish(&board, &task.id, &issue).unwrap();
+            for local in std::iter::once(&task).chain(alternate.iter()) {
+                store
+                    .begin_todo_publish(&board, &local.id, "example/project", local.updated_at)
+                    .unwrap();
+                store
+                    .finish_todo_publish(&board, &local.id, &issue)
+                    .unwrap();
+            }
             service::BoardSnapshot::project(
                 store.list_todos(&board).unwrap(),
                 vec![],
@@ -1099,7 +1119,7 @@ fn external_publication_preserves_open_and_stashed_task_drafts(cx: &mut TestAppC
                 cx.notify();
             })
             .unwrap();
-        if stashed && linked_draft {
+        if let Some(alternate) = &alternate {
             let assert_linked_draft = |view: &TodoBoardView, cx: &App| {
                 let editor = view.details.as_ref().unwrap();
                 assert_eq!(editor.id, issue.id);
@@ -1117,20 +1137,41 @@ fn external_publication_preserves_open_and_stashed_task_drafts(cx: &mut TestAppC
             let switch = |visual: &mut gpui::VisualTestContext| {
                 let bounds = visual.debug_bounds("todo-switch-draft").unwrap();
                 visual.simulate_click(bounds.center(), Default::default());
+                window
+                    .update(visual, |view, _, cx| {
+                        assert!(view.detail_editing);
+                        let editor = view.details.as_ref().unwrap();
+                        if editor.id == issue.id {
+                            assert_linked_draft(view, cx);
+                        } else if editor.id == alternate.id {
+                            assert_eq!(editor.revision, alternate.updated_at);
+                            assert!(!editor.matches_revision(view.open_detail_item().unwrap()));
+                            assert_eq!(
+                                editor.title.read(cx).content.as_ref(),
+                                "Another local draft"
+                            );
+                            assert_eq!(
+                                editor.description.read(cx).content.as_ref(),
+                                "Another unfinished description"
+                            );
+                        } else {
+                            assert_draft(view, cx);
+                        }
+                        editor.id.clone()
+                    })
+                    .unwrap()
             };
-            switch(visual);
-            window
-                .update(visual, |view, _, cx| {
-                    assert!(view.detail_editing);
-                    assert_draft(view, cx);
-                })
-                .unwrap();
-            switch(visual);
-            window
-                .update(visual, |view, _, cx| assert_linked_draft(view, cx))
-                .unwrap();
+            let first = switch(visual);
+            assert!(first == task.id || first == alternate.id);
+            let second = switch(visual);
+            assert!(second == task.id || second == alternate.id);
+            assert_ne!(first, second);
+            assert_eq!(switch(visual), issue.id);
             assert!(visual.debug_bounds("todo-reload-details").is_none());
-            switch(visual);
+            assert_eq!(switch(visual), first);
+            if first != task.id {
+                assert_eq!(switch(visual), task.id);
+            }
         }
 
         window
