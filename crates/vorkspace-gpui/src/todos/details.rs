@@ -206,7 +206,7 @@ impl TodoBoardView {
                                 .child(page::label().child("Depends on"))
                                 .children(item.dependencies.iter().enumerate().map(
                                     |(index, reference)| {
-                                        let target = self.dependency_item(reference).cloned();
+                                        let target = self.dependency_item(item, reference).cloned();
                                         div()
                                             .id(("todo-detail-dependency", index))
                                             .flex()
@@ -215,7 +215,7 @@ impl TodoBoardView {
                                             .child(icon("git-branch", 14.))
                                             .child(
                                                 page::meta()
-                                                    .child(self.dependency_label(reference)),
+                                                    .child(self.dependency_label(item, reference)),
                                             )
                                             .when_some(target, |d, target| {
                                                 d.cursor_pointer()

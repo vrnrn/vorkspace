@@ -557,7 +557,7 @@ impl Shell {
             }
             "automations" => Some(AppPane::App(AppView::Automations)),
             "channels" => {
-                if !self.workspace.preferences.channels {
+                if !self.app_pane_available(&AppPane::Channels, cx) {
                     return Err("Channels are disabled".into());
                 }
                 Some(AppPane::Channels)
