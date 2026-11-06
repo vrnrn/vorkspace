@@ -8,6 +8,12 @@ pub(super) struct Open {
     _events: Subscription,
 }
 
+impl Open {
+    pub(super) fn matches_working_copy(&self, cwd: &str) -> bool {
+        vorkspace_core::files::path_key(&self.cwd) == vorkspace_core::files::path_key(cwd)
+    }
+}
+
 impl Shell {
     pub(super) fn leave_app_search(&mut self, cx: &mut Context<Self>) {
         if let Some(search) = self.app_search.take() {
@@ -26,7 +32,11 @@ impl Shell {
         );
         self.leave_app_views(cx);
         let cwd = self.working_copy().to_owned();
-        if let Some(search) = self.parked_search.take().filter(|search| search.cwd == cwd) {
+        if let Some(search) = self
+            .parked_search
+            .take()
+            .filter(|search| search.matches_working_copy(&cwd))
+        {
             self.app_search = Some(search);
             self.admit_app_pane(crate::workspace::AppPane::Search);
             self.finish_app_pane_open(window, cx);
@@ -263,11 +273,16 @@ mod tests {
     fn parked_search_rebuilds_for_a_new_working_copy_and_opens_its_own_file(
         cx: &mut TestAppContext,
     ) {
+        vorkspace_ui::clock::use_test_clock(cx);
         let a = tempfile::tempdir().unwrap();
         let b = tempfile::tempdir().unwrap();
-        for (root, text) in [(a.path(), "Project A"), (b.path(), "Project B")] {
+        let b_tree = b.path().join("checkout");
+        std::fs::create_dir(&b_tree).unwrap();
+        for (root, text) in [(a.path(), "Project A"), (b_tree.as_path(), "Project B")] {
             std::fs::write(root.join("same.txt"), text).unwrap();
         }
+        let b_project = b.path().to_string_lossy().into_owned();
+        let b_cwd = b_tree.to_string_lossy().into_owned();
         let (window, _, _) = crate::shell::tests::window(cx);
         window
             .update(cx, |shell, w, cx| {
@@ -277,11 +292,18 @@ mod tests {
                 first.update(cx, |view, cx| {
                     view.restore_draft(("same".into(), vorkspace_core::search::Scope::Files), cx)
                 });
-                shell.select_project(b.path().to_string_lossy().into_owned(), w, cx);
+                shell.select_project(b_project.clone(), w, cx);
+                shell.worktree_focus.insert(
+                    b_project.clone(),
+                    crate::git_tools::worktree_switcher::WorktreeFocus {
+                        path: b_cwd.clone(),
+                        branch: None,
+                    },
+                );
                 shell.open_app_search(w, cx);
                 let search = shell.app_search.as_ref().unwrap();
                 assert_ne!(search.view, first);
-                assert_eq!(search.cwd, b.path().to_string_lossy());
+                assert_eq!(search.cwd, b_cwd);
                 assert_eq!(search.view.read(cx).draft(cx).0, "same");
                 search.view.update(cx, |_, cx| {
                     cx.emit(Event::Open(
@@ -295,11 +317,99 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        window.update(cx, |shell, _, cx| {
-            let review = shell.active_review(cx).unwrap();
-            assert!(matches!(&review.read(cx).state.tabs[review.read(cx).state.active], crate::git_tools::review::ReviewTab::File { cwd, path } if cwd == b.path().to_string_lossy().as_ref() && path == "same.txt"));
-            assert_eq!(review.read(cx).active_editor().unwrap().read(cx).path, b.path().join("same.txt").to_string_lossy());
-        }).unwrap();
+        let (pane, review) = window
+            .update(cx, |shell, w, cx| {
+                let pane = shell.workspace.active.unwrap();
+                let review = shell.active_review(cx).unwrap();
+                assert_eq!(
+                    review.read(cx).state.tabs,
+                    [crate::git_tools::review::ReviewTab::File {
+                        cwd: b_cwd.clone(),
+                        path: "same.txt".into(),
+                    }]
+                );
+                let editor = review.read(cx).active_editor().unwrap();
+                assert_eq!(
+                    editor.read(cx).path,
+                    b_tree.join("same.txt").to_string_lossy()
+                );
+                assert_eq!(editor.read(cx).input.read(cx).content, "Project B");
+                shell.select_project(a.path().to_string_lossy().into_owned(), w, cx);
+                assert!(!shell.visible_tabs(cx).contains(&TitleTab::Workspace(pane)));
+                shell.open(pane, w, cx);
+                assert_eq!(shell.workspace.project, b_project);
+                assert_eq!(shell.working_copy(), b_cwd);
+                assert_eq!(shell.active_review(cx), Some(review.clone()));
+                (pane, review)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let (store, summaries, saved) = window
+            .update(cx, |shell, _, _| {
+                let store = locked(&shell.store).unwrap();
+                (
+                    shell.store.clone(),
+                    store.sessions().unwrap(),
+                    store.ui_state().unwrap(),
+                )
+            })
+            .unwrap();
+        let restored = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| Shell::new(store, summaries, b_project.clone(), saved, cx))
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        restored
+            .update(cx, |shell, _, cx| {
+                assert_eq!(shell.workspace.active, Some(pane));
+                assert_eq!(shell.workspace.project, b_project);
+                assert_eq!(shell.working_copy(), b_cwd);
+                let reopened = shell.active_review(cx).unwrap();
+                assert_ne!(reopened, review);
+                let editor = reopened.read(cx).active_editor().unwrap();
+                assert_eq!(
+                    editor.read(cx).path,
+                    b_tree.join("same.txt").to_string_lossy()
+                );
+                assert_eq!(editor.read(cx).input.read(cx).content, "Project B");
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn restoring_a_mixed_layout_rebuilds_search_for_its_working_copy(cx: &mut TestAppContext) {
+        let checkout = tempfile::tempdir().unwrap();
+        let cwd = checkout.path().to_string_lossy().into_owned();
+        let (window, _, session) = crate::shell::tests::window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open(session, w, cx);
+                shell.open_app_search(w, cx);
+                let search = shell.workspace.active.unwrap();
+                let previous = shell.app_search.as_ref().unwrap().view.clone();
+                previous.update(cx, |view, cx| {
+                    view.restore_draft(
+                        ("keep this".into(), vorkspace_core::search::Scope::Files),
+                        cx,
+                    )
+                });
+                shell.workspace.place(search, session, Edge::Right);
+                shell.workspace.tab_workspaces.insert(session, cwd.clone());
+                shell.open(session, w, cx);
+
+                assert_eq!(shell.workspace.active, Some(session));
+                assert_eq!(
+                    shell.workspace.layout(session).leaf_ids(),
+                    [session, search]
+                );
+                let rebuilt = shell.parked_search.as_ref().unwrap();
+                assert_ne!(rebuilt.view, previous);
+                assert_eq!(rebuilt.cwd, cwd);
+                assert_eq!(rebuilt.view.read(cx).draft(cx).0, "keep this");
+            })
+            .unwrap();
     }
 
     #[gpui::test]

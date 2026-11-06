@@ -35,7 +35,7 @@ impl Shell {
                                 && manager.document_for_pane(bot, document).is_some()
                         })
                 }
-                AppPane::Bot(_) | AppPane::Terminal { .. } => {
+                AppPane::Bot(_) | AppPane::Terminal { .. } | AppPane::Review => {
                     path_key(&pane.project) == path_key(project)
                         && path_key(&pane.worktree) == path_key(self.working_copy())
                         && self.pane_in_scope(id, cx)
@@ -83,6 +83,7 @@ impl Shell {
             }
             AppPane::Search => json!({"kind":"search","title":self.pane_title(id,cx)}),
             AppPane::Channels => json!({"kind":"channels","title":self.pane_title(id,cx)}),
+            AppPane::Review => json!({"kind":"file","title":self.pane_title(id,cx)}),
         }
     }
 
@@ -689,6 +690,7 @@ impl Shell {
                 }
                 AppPane::Search => self.open_app_search(window, cx),
                 AppPane::Channels => self.open_classic_channels(window, cx),
+                AppPane::Review => return Err("Choose a file to open".into()),
             }
         }
         let id = file_pane
@@ -942,6 +944,9 @@ mod tests {
     #[gpui::test]
     fn file_admission_keeps_the_stack_exemption_and_path_boundary(cx: &mut TestAppContext) {
         let (window, _, caller) = super::super::tests::window(cx);
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("report.txt");
+        std::fs::write(&file, "A file opened from an app pane").unwrap();
         window
             .update(cx, |shell, window, cx| {
                 shell.sessions[&caller]
@@ -984,6 +989,35 @@ mod tests {
                 "kind":"file","path":"../escape","placement":"down","targetPaneId":caller
             }), window, cx).unwrap_err(), "File path must stay within the working copy");
                 assert_eq!(shell.workspace.layout(tab), before);
+                shell.open_app_search(window, cx);
+                shell.open_review(
+                    crate::git_tools::review::ReviewTab::File {
+                        cwd: project.clone(),
+                        path: file.to_string_lossy().into_owned(),
+                    },
+                    window,
+                    cx,
+                );
+                let review = shell.workspace.active.unwrap();
+                assert!(shell.placement_allowed(DragSource::Pane(review), caller, Edge::Bottom));
+                let snapshot = shell
+                    .app_workspace_action(
+                        caller,
+                        &project,
+                        "workspace.list",
+                        &json!({}),
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+                assert!(snapshot["tabs"].as_array().unwrap().iter().any(|tab| {
+                    tab["panes"].as_array().unwrap().iter().any(|pane| {
+                        pane["paneId"] == json!(review)
+                            && pane["kind"] == "file"
+                            && pane["title"] == "report.txt"
+                            && pane.get("sessionId").is_none()
+                    })
+                }));
             })
             .unwrap();
     }

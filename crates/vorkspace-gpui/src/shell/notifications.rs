@@ -454,15 +454,10 @@ impl Shell {
                     else {
                         return false;
                     };
-                    self.bots.as_ref().is_some_and(|manager| {
-                        let manager = manager.read(cx);
-                        manager
-                            .roster
-                            .get(bot)
-                            .is_some_and(|actor| actor.session_id == Some(id))
-                            && (manager.active.as_deref() != Some(bot.as_str())
-                                || manager.active_notification_session(cx) == Some(id))
-                    })
+                    self.workspace.preferences.bots
+                        && self.bots.as_ref().is_some_and(|manager| {
+                            manager.read(cx).pane_notification_session(bot, cx) == Some(id)
+                        })
                 })
         })
     }
@@ -1199,8 +1194,7 @@ impl Shell {
         }
     }
 
-    /// The pane host positions the returned card at top/right 12px, clipped to
-    /// the exact session surface, so split chats and Bot sessions stay scoped.
+    /// The pane host places the card inside the corresponding chat surface.
     pub(super) fn linked_notice(
         &mut self,
         id: i64,

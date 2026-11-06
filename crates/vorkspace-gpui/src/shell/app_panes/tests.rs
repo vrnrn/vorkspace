@@ -3,6 +3,111 @@ use crate::shell::tests::window;
 use gpui::TestAppContext;
 
 #[gpui::test]
+fn linked_github_activity_stays_with_each_visible_bot_pane(cx: &mut TestAppContext) {
+    use crate::notifications::github_activity::Card;
+    use vorkspace_core::session_groups::WorkItem;
+
+    vorkspace_ui::clock::use_test_clock(cx);
+    let (window, _, chat) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(gpui::size(px(1500.), px(1000.)));
+    let mut bots = Vec::new();
+    for number in [41, 42] {
+        window
+            .update(visual, |shell, w, cx| {
+                shell.bot_manager().update(cx, |manager, cx| {
+                    manager.create_named(vec!["/work/vorkspace".into()], w, cx);
+                    manager.dismiss_settings(w, cx);
+                });
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let (pane, session) = window
+            .update(visual, |shell, _, cx| {
+                let pane = shell.workspace.active.unwrap();
+                let session = shell
+                    .bot_manager()
+                    .read(cx)
+                    .chat()
+                    .unwrap()
+                    .read(cx)
+                    .summary
+                    .id;
+                let card = Card {
+                    session,
+                    item: WorkItem {
+                        kind: "pr".into(),
+                        repo: "example/project".into(),
+                        number,
+                        url: format!("https://github.com/example/project/pull/{number}"),
+                    },
+                    title: format!("Review feedback {number}"),
+                    state: "open".into(),
+                    updated_at: vorkspace_core::time::now_ms() as i64,
+                    entries: vec![],
+                    details_error: false,
+                    truncated: false,
+                };
+                shell.notification_state.github.update(cx, |feed, _| {
+                    feed.cards.insert(session, card);
+                });
+                cx.notify();
+                (pane, session)
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let notice =
+            Box::leak(format!("linked-work-item-update-notice-{session}").into_boxed_str());
+        assert!(
+            visual.debug_bounds(notice).is_some(),
+            "the lone Bot hosts its card"
+        );
+        bots.push((pane, session, notice as &'static str));
+    }
+    let [
+        (first, first_session, first_notice),
+        (second, _, second_notice),
+    ] = bots[..]
+    else {
+        unreachable!()
+    };
+    assert!(visual.debug_bounds(first_notice).is_none());
+
+    window
+        .update(visual, |shell, w, cx| {
+            shell.workspace.place(first, chat, Edge::Left);
+            shell.open(chat, w, cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds(first_notice).is_some(),
+        "the mixed tab shows the Bot's card"
+    );
+    assert!(visual.debug_bounds(second_notice).is_none());
+
+    window
+        .update(visual, |shell, w, cx| {
+            shell.workspace.place(second, first, Edge::Bottom);
+            shell.open(second, w, cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let first_bounds = visual.debug_bounds(first_notice).unwrap();
+    let second_bounds = visual.debug_bounds(second_notice).unwrap();
+    assert!(
+        first_bounds.bottom() < second_bounds.top(),
+        "each card stays inside its Bot pane"
+    );
+    let dismiss = Box::leak(format!("dismiss-linked-activity-{first_session}").into_boxed_str());
+    let dismiss = visual.debug_bounds(dismiss).unwrap().center();
+    visual.simulate_click(dismiss, Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds(first_notice).is_none());
+    assert!(visual.debug_bounds(second_notice).is_some());
+}
+
+#[gpui::test]
 fn reopening_a_mixed_app_layout_restores_scope_and_cli_rejects_foreign_siblings(
     cx: &mut TestAppContext,
 ) {

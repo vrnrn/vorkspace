@@ -272,6 +272,19 @@ impl Shell {
         }) {
             return Err("Close this project's conversations and file panes and stop active work. Cached conversations may require reopening the app before deletion.".into());
         }
+        if self.workspace.app_panes.iter().any(|(&id, pane)| {
+            pane.content == crate::workspace::AppPane::Review
+                && (within(&pane.project, path) || within(&pane.worktree, path))
+                && (self.workspace.tab_of(id).is_some()
+                    || self
+                        .reviews
+                        .get(&id)
+                        .is_some_and(|review| review.read(cx).unsaved_files(cx)))
+        }) {
+            return Err(
+                "Save your edits and close this project's file panes before deleting it.".into(),
+            );
+        }
         let Some(service) = &self.automation_state.service else {
             return Err(
                 "Automations are not ready; project ownership cannot be checked yet.".into(),

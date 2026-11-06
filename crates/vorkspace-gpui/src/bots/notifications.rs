@@ -30,11 +30,11 @@ impl Bots {
             .cloned()
             .collect()
     }
-    pub(crate) fn active_notification_session(&self, cx: &App) -> Option<i64> {
-        if self.settings.is_some() {
+    pub(crate) fn pane_notification_session(&self, bot: &str, cx: &App) -> Option<i64> {
+        if self.active.as_deref() == Some(bot) && self.settings.is_some() {
             return None;
         }
-        self.chat().map(|chat| chat.read(cx).summary.id)
+        self.chats.get(bot).map(|chat| chat.read(cx).summary.id)
     }
     pub(crate) fn notification_entity(&self, id: i64, cx: &App) -> Option<Entity<Conversation>> {
         self.chats

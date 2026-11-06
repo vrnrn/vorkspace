@@ -28,6 +28,8 @@ Long indexed Bot chats opened from the Bot panel first show their newest message
 
 Bots, sessions, terminals, notes, GitHub/GitLab/Jira items, Search, Automations, To-dos and Channels open in tabs. Different notes and items can stay open independently. Opening the same item again takes you back to its existing tab and unfinished work.
 
+Files opened from Search or a Bot link stay with the working copy they came from. A new file pane opens beside the Bot when there is room, or in its own tab. Closing and reopening the file tab keeps unfinished edits while the app is open. GitHub activity appears in the Bot chat it belongs to.
+
 Drag a tab onto another pane’s edge to put them beside or above one another. Drag a pane’s small header to move it, or back to the tab bar to give it its own tab. You can resize the space between panes. The same limits apply throughout: each column needs 420 points of width, and up to three content panes can be stacked vertically. Existing file-pane exceptions stay the same. When you shrink the window, an older large layout scrolls instead of throwing away panes.
 
 Click a session or document in a Bot’s floating island to open it beside the Bot. If there is not enough room, it opens in its own tab. The island stays inside that Bot’s pane. On narrow panes, click the Bot face or the small button at the top right to open it. The island’s Bot settings button opens settings, including Habits. Bot diffs are not shown. Closing a Bot tab keeps its conversation, unsent draft and running work. Your tab order, layouts and selected panes are remembered after restarting.

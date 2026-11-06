@@ -96,7 +96,7 @@ impl ReviewTab {
     /// `editorTabKey`: one Changes tab per checkout and side, one per commit.
     pub(crate) fn same_tab(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::File { path: a, .. }, Self::File { path: b, .. }) => a == b,
+            (Self::File { .. }, Self::File { .. }) => self.file_path() == other.file_path(),
             (
                 Self::Changes {
                     cwd: a,
@@ -122,6 +122,20 @@ impl ReviewTab {
             ) => a == b && x == y,
             _ => false,
         }
+    }
+
+    fn file_path(&self) -> Option<String> {
+        let Self::File { cwd, path } = self else {
+            return None;
+        };
+        Some(
+            vorkspace_core::files::document::resolve_path(
+                std::path::Path::new(path),
+                std::path::Path::new(cwd),
+            )
+            .to_string_lossy()
+            .into_owned(),
+        )
     }
 }
 
@@ -415,19 +429,20 @@ impl ReviewPane {
             this.diff_event(ix, event, cx);
         });
         let editor_mode = matches!(tab, ReviewTab::File { .. });
-        let editor_path = match &tab {
-            ReviewTab::File { path, .. } => Some(path),
-            _ => None,
+        let editor = if let ReviewTab::File { cwd, .. } = &tab {
+            let path = tab.file_path().unwrap();
+            Some(cx.new(|cx| {
+                FileEditor::new_in_working_copy(
+                    path,
+                    cwd.clone(),
+                    self.git.clone(),
+                    self.deferred,
+                    cx,
+                )
+            }))
+        } else {
+            None
         };
-        let editor = editor_path.map(|path| {
-            cx.new(|cx| {
-                if self.deferred || !editor_mode {
-                    FileEditor::new_deferred(path.clone(), self.git.clone(), cx)
-                } else {
-                    FileEditor::new(path.clone(), self.git.clone(), cx)
-                }
-            })
-        });
         let editor_events = editor.as_ref().map(|editor| {
             cx.subscribe(editor, |this, editor, event: &FileEvent, cx| {
                 if matches!(event, FileEvent::Dirty) {
@@ -478,8 +493,7 @@ impl ReviewPane {
     pub(crate) fn open(&mut self, tab: ReviewTab, cx: &mut Context<Self>) {
         self.remember_body_focus(cx);
         self.tab_drag = None;
-        if matches!(&tab, ReviewTab::File { path, .. } if self.preview_path.as_ref() == Some(path))
-        {
+        if self.preview_path.is_some() && self.preview_path == tab.file_path() {
             self.preview_path = None;
         }
         if let Some(ix) = self.sources.iter().position(|s| s.tab.same_tab(&tab)) {
@@ -510,16 +524,15 @@ impl ReviewPane {
     }
     /// Single-clicked search matches reuse a clean preview; explicit opens pin it.
     pub(crate) fn open_file(&mut self, tab: ReviewTab, pin: bool, cx: &mut Context<Self>) {
-        let ReviewTab::File { path, .. } = &tab else {
-            self.open(tab, cx);
-            return;
-        };
         if pin {
             self.open(tab, cx);
             return;
         }
+        let Some(path) = tab.file_path() else {
+            self.open(tab, cx);
+            return;
+        };
         self.remember_body_focus(cx);
-        let path = path.clone();
         let existing = self.sources.iter().any(|source| source.tab.same_tab(&tab));
         let keep_preview = self.preview_path.as_ref() == Some(&path)
             && !self.sources.iter().any(|source| {
@@ -531,9 +544,10 @@ impl ReviewPane {
             });
         if !existing
             && let Some(preview) = self.preview_path.take()
-            && let Some(ix) = self.sources.iter().position(
-                |source| matches!(&source.tab, ReviewTab::File { path, .. } if path == &preview),
-            )
+            && let Some(ix) = self
+                .sources
+                .iter()
+                .position(|source| source.tab.file_path().as_ref() == Some(&preview))
             && self.pending_close.is_none()
             && !self.sources[ix]
                 .editor
@@ -751,9 +765,10 @@ impl ReviewPane {
     fn sync_state(&mut self) {
         self.state.tabs = self.sources.iter().map(|s| s.tab.clone()).collect();
         if self.preview_path.as_ref().is_some_and(|preview| {
-            !self.sources.iter().any(
-                |source| matches!(&source.tab, ReviewTab::File { path, .. } if path == preview),
-            )
+            !self
+                .sources
+                .iter()
+                .any(|source| source.tab.file_path().as_ref() == Some(preview))
         }) {
             self.preview_path = None;
         }
@@ -1608,7 +1623,8 @@ impl ReviewPane {
             .map(|(ix, source)| {
                 let active = ix == self.state.active;
                 let hovered = self.hovered_tab == Some(ix);
-                let preview = matches!(&source.tab, ReviewTab::File { path, .. } if self.preview_path.as_ref() == Some(path));
+                let preview =
+                    self.preview_path.is_some() && self.preview_path == source.tab.file_path();
                 let label: SharedString = source.tab.label().into();
                 div()
                     .id(("review-tab", ix))
@@ -1701,17 +1717,19 @@ impl ReviewPane {
                                 source.editor.as_ref().is_some_and(|e| e.read(cx).dirty),
                                 |d| d.child(div().size(px(6.)).rounded_full().bg(content(0.7))),
                             )
-                            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                                if std::mem::take(&mut this.skip_tab_click) {
-                                    return;
-                                }
-                                if preview && event.click_count() == 2 {
-                                    this.preview_path = None;
-                                    cx.notify();
-                                }
-                                this.select(ix, cx);
-                                this.focus_active(window, cx);
-                            })),
+                            .on_click(cx.listener(
+                                move |this, event: &gpui::ClickEvent, window, cx| {
+                                    if std::mem::take(&mut this.skip_tab_click) {
+                                        return;
+                                    }
+                                    if preview && event.click_count() == 2 {
+                                        this.preview_path = None;
+                                        cx.notify();
+                                    }
+                                    this.select(ix, cx);
+                                    this.focus_active(window, cx);
+                                },
+                            )),
                     )
                     .child(
                         div()

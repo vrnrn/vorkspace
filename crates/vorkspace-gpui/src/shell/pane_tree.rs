@@ -165,18 +165,13 @@ impl Shell {
         let view_width = view_width.max(1.);
         let view_height = view_height.max(1.);
         let width = view_width.max(layout.width_for_minimum(MIN_CHAT_WIDTH));
-        let stack = layout.max_session_stack(|id| {
-            (id >= 0 || self.workspace.app_panes.contains_key(&id))
-                && !self.workspace.review_owners.contains_key(&id)
-        });
+        let stack = layout.max_session_stack(|id| self.workspace.counts_toward_pane_limit(id));
         let height = if stack > MAX_SESSION_STACK {
-            view_height.max(layout.height_for_minimum(
-                view_height / MAX_SESSION_STACK as f32,
-                |id| {
-                    (id >= 0 || self.workspace.app_panes.contains_key(&id))
-                        && !self.workspace.review_owners.contains_key(&id)
-                },
-            ))
+            view_height.max(
+                layout.height_for_minimum(view_height / MAX_SESSION_STACK as f32, |id| {
+                    self.workspace.counts_toward_pane_limit(id)
+                }),
+            )
         } else {
             view_height
         };
@@ -611,7 +606,12 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.workspace.app_panes.contains_key(&id) {
+        if self
+            .workspace
+            .app_panes
+            .get(&id)
+            .is_some_and(|pane| pane.content != crate::workspace::AppPane::Review)
+        {
             let body = self
                 .app_pane_body(id, window, cx)
                 .unwrap_or_else(|| div().into_any_element());

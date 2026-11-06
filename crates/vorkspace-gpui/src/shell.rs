@@ -2564,15 +2564,6 @@ impl Render for Shell {
                         window,
                         cx,
                     );
-                    // Bots render above the session pane tree. Give its file
-                    // an independent visible tab using the normal navigation
-                    // path, which retains the Bot tab and live conversation.
-                    if this.bot_active(cx)
-                        && let Some(owner) = this.workspace.active
-                        && let Some(pane) = this.independent_file_pane(owner, cx)
-                    {
-                        this.open_file_pane(pane, window, cx);
-                    }
                     if let Some((line, column)) = location
                         && let Some(pane) = this.active_review(cx)
                     {
