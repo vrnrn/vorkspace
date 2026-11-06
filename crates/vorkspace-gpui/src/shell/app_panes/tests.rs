@@ -535,10 +535,21 @@ fn standalone_channels_restore_as_active_without_replacing_the_project_tab(
             shell.select_project(project, w, cx);
             assert_eq!(shell.workspace.active, Some(session));
             assert_eq!(shell.workspace.tab_of(channels), Some(channels));
+            // A new project has no remembered tab. The global Channels tab
+            // also stays out of the fallback that picks its first session.
+            shell.open(channels, w, cx);
+            shell.select_project("/work/channels-empty".into(), w, cx);
         })
         .unwrap();
     visual.run_until_parked();
     assert!(visual.debug_bounds("channel-surface").is_none());
+    restored
+        .update(visual, |shell, _, _| {
+            let active = shell.workspace.active.unwrap();
+            assert_eq!(shell.session_summaries[&active].cwd, "/work/channels-empty");
+            assert_eq!(shell.workspace.tab_of(channels), Some(channels));
+        })
+        .unwrap();
 }
 
 #[gpui::test]

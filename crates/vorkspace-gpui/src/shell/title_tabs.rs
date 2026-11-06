@@ -313,7 +313,7 @@ impl Shell {
 
     /// The Channels browser has its own tab. Clicking a project resumes its
     /// workspace unless Channels are tiled into that workspace's layout.
-    fn is_standalone_channels_tab(&self, tab: &TitleTab) -> bool {
+    pub(super) fn is_standalone_channels_tab(&self, tab: &TitleTab) -> bool {
         tab.session().is_some_and(|id| {
             self.workspace
                 .app_panes

@@ -2058,6 +2058,7 @@ impl Shell {
                 self.visible_tabs(cx)
                     .iter()
                     .rev()
+                    .filter(|tab| !self.is_standalone_channels_tab(tab))
                     .find_map(|tab| tab.session())
                     .map(|tab| self.workspace.tab_focus(tab))
             });
